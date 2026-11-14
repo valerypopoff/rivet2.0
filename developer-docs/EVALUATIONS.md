@@ -19,6 +19,27 @@ and predecessor-rollback details.
 
 ## Ownership boundaries
 
+The Studio Server HTTP entry point is
+`packages/studio-server-api/src/routes/workflows/evaluation-runs.ts`. It retains
+the router, general and recording body parsers, existing schema exports and
+run/history/evidence handlers. `hosted-evaluation-http.ts` registers admission,
+state, cancel and retry controls; `evaluation-library-http.ts` registers shared
+library reads, mutations, imports and its event stream. Both register directly
+on the original router. Stores, scheduling, notification delivery and execution
+keep their existing owners. The
+[HTTP separation record](studio-server/evaluation-http-separation-plan.md)
+documents the compatibility checks; adding an HTTP handler must not introduce
+another scheduler or execution owner.
+
+Library notification setup must listen before reading its initial revision.
+It retains at most the newest notification while the read is pending, including
+epoch resets, then switches to live events without an asynchronous gap. Keep the
+snapshot-read race and failed/disconnected setup tests when changing this seam.
+Opening snapshot and reset observations stay separate state events; do not
+replace a snapshot's revision with an earlier notification or mark an opening
+reset as an ignorable self-change. Close must drop the pending listener even
+while its snapshot read is unfinished.
+
 Library creation, reassignment and field/resource removal belong to
 `evaluationLibraryCommands.ts`, not the rendering component. These operations
 evaluate current library state when accepted, including dependencies or running

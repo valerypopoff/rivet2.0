@@ -4,6 +4,39 @@ This document records intentional architecture and cleanup changes that future m
 
 It is not a changelog. Keep entries focused on why a refactor happened, which ownership boundary changed, and which verification paths should be kept alive.
 
+## 2026-11-15 - Evaluation HTTP Ownership
+
+The Evaluation API previously combined shared-library operations, hosted job
+controls and run evidence in one file. `hosted-evaluation-http.ts` and
+`evaluation-library-http.ts` now register their five handlers each on the
+original router. The parent keeps thirteen run/evidence handlers, both parsers
+and five existing exports. Stores, scheduling, notifications and workflow
+execution are unchanged; registration occurs only at startup.
+
+Full-app HTTP tests cover authorization before parsing, hosted admission/error
+translation, disabled submissions with accessible state/cancel, and coordinator
+ownership of deletion. A real filesystem-library scenario checks revision
+conflicts, ordered notifications, idempotent imports and an accepted mutation
+finishing exactly once after its client disconnects. Preserve these behavior
+checks rather than introducing permanent source-shape tests. Suite normalization,
+in-use dataset rejection and atomic suite/dataset removal also run through the
+real HTTP route; invalid hosted-state queries must not reach the coordinator. The
+[separation record](evaluation-http-separation-plan.md) holds local verification
+and timing evidence.
+
+An adjacent review found an older stream-opening race: a library mutation could
+finish between the initial revision read and notification subscription. The
+stream owner now subscribes before that read and retains only the latest event
+until handover, with epoch and failed/disconnected-read handling. This correction
+uses one snapshot read and changes no workflow execution path.
+
+Keep library import/conflict coverage in the real HTTP library fixture and the
+incremental-run fixture focused on start, progress and finalization. Shared
+profile tests own authentication coverage. Stream races use complete parsed
+events and controlled handoffs; isolated event tests retain only reset/error
+cases that cannot be exercised conveniently through normal HTTP. Avoid copying
+the same setup or adding sleeps to prove ordering.
+
 ## 2026-11-14 - App Settings Upgrade And Migration HTTP Ownership
 
 `local-upgrade-http.ts` owns sixteen local-upgrade handlers and their download

@@ -73,8 +73,34 @@ function writeEvent(response: Response, type: string, event: object): boolean {
   }
 }
 
-/** Opens an authenticated, notification-only stream; clients fetch snapshots separately. */
-export function openEvaluationLibraryEventStream(request: Request, response: Response, initialRevision: number): void {
+/** Listen before loading the initial revision so an in-flight read cannot lose a change. */
+export async function openEvaluationLibraryEventStream(
+  request: Request,
+  response: Response,
+  readInitialRevision: () => Promise<number>,
+): Promise<void> {
+  const openingEpoch = notifier.state(0).epoch;
+  let latest: EvaluationLibraryChangeEvent | undefined;
+  const stopCollecting = notifier.subscribe((event) => {
+    if (!latest || event.epoch !== latest.epoch || event.revision > latest.revision) latest = event;
+  });
+  response.once('close', stopCollecting);
+  try {
+    const initialRevision = await readInitialRevision();
+    if (response.destroyed || response.writableEnded) return;
+    openStream(request, response, { epoch: openingEpoch, revision: initialRevision }, latest);
+  } finally {
+    response.off('close', stopCollecting);
+    stopCollecting();
+  }
+}
+
+function openStream(
+  request: Request,
+  response: Response,
+  initial: { epoch: string; revision: number },
+  pending: EvaluationLibraryChangeEvent | undefined,
+): void {
   response.status(200);
   response.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
   response.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
@@ -99,7 +125,12 @@ export function openEvaluationLibraryEventStream(request: Request, response: Res
   unsubscribe = notifier.subscribe((event) => {
     if (!writeEvent(response, 'library-changed', event)) close();
   });
-  writeEvent(response, 'library-state', notifier.state(initialRevision));
+  writeEvent(response, 'library-state', initial);
+  // A reset and its snapshot cannot be collapsed into one revision: the read
+  // may belong to either epoch. Deliver the reset so clients refetch normally.
+  if (pending && (pending.epoch !== initial.epoch || pending.revision > initial.revision)) {
+    writeEvent(response, 'library-state', { epoch: pending.epoch, revision: pending.revision });
+  }
   heartbeat = setInterval(() => {
     if (response.destroyed || response.writableEnded) {
       close();

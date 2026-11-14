@@ -511,6 +511,19 @@ their existing shared job state. Authentication order, bounded parsing and
 streamed download settlement remain unchanged. The
 [HTTP separation record](app-settings-http-separation-plan.md) documents checks.
 
+The Evaluation API keeps one router in `routes/workflows/evaluation-runs.ts`,
+with its two body parsers, compatibility exports and thirteen run/evidence
+handlers. Startup registration attaches five hosted-control handlers from
+`hosted-evaluation-http.ts` and five shared-library handlers from
+`evaluation-library-http.ts`. The existing stores, coordinator and library
+notifier still own operations and lifetime; these modules only handle HTTP.
+No nested router or request-time forwarding is added. See the
+[Evaluation HTTP separation record](evaluation-http-separation-plan.md).
+The library notification stream subscribes before its initial revision read and
+carries the newest observed revision into its opening state. A concurrent save
+cannot fall between the read and subscription. Failed reads and disconnected
+clients release the temporary listener; this adds no workflow execution work.
+
 Workflow contracts live in `routes/workflows/data-backend.ts`, independently of
 the PostgreSQL implementation. Project IO, publication, execution sources and
 recording repositories are separate interfaces; `WorkflowDataBackend` composes

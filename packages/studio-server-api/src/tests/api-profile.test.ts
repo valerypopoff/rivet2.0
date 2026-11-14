@@ -19,6 +19,7 @@ import { buildDeploymentStatus, getDeploymentTopology } from '../deployment-stat
 import { isWebAppSocketRouteEnabled } from '../web-app-action-websocket.js';
 import { createHttpError } from '../utils/httpError.js';
 import { MAX_LOCAL_EDITOR_RECORDING_REQUEST_BYTES } from '../routes/workflows/local-editor-recording-limits.js';
+import { MAX_EVALUATION_RECORDING_BYTES } from '../routes/workflows/evaluation-runs.js';
 import { writeWorkflowEndpointAuthSettings } from '../workflow-endpoint-auth-settings.js';
 import { enterVmMigrationMaintenance, leaveVmMigrationMaintenance } from '../vm-migration-maintenance.js';
 import { LocalMetadataTransitionJournal } from '../local-metadata/transition-journal.js';
@@ -213,6 +214,11 @@ for (const profile of ['control', 'combined', 'execution', 'evaluation'] as cons
           ['/projects/web-apps', 'GET', undefined, 400, 'Missing relativePath'],
           ['/projects/web-apps/publish', 'POST', '{', 400, undefined],
           ['/projects/publish', 'POST', '{', 400, undefined],
+          ['/evaluation-runs?projectId=project-a', 'GET', undefined, 200, undefined],
+          ['/evaluation-runs/history', 'GET', undefined, 400, 'Invalid evaluation history query.'],
+          ['/evaluation-runs/hosted', 'POST', '{', 400, undefined],
+          ['/evaluation-runs/library/mutations', 'POST', '{', 400, undefined],
+          ['/evaluation-runs/recordings/missing', 'PUT', '{', 400, undefined],
         ] as const) {
           for (const headers of [{}, trustedProxyHeaders(), operator]) {
             const response = await fetch(`${server.baseUrl}/api/workflows${pathname}`, {
@@ -225,6 +231,7 @@ for (const profile of ['control', 'combined', 'execution', 'evaluation'] as cons
             assert.equal(response.status, expectedStatus, `${method} ${pathname}`);
             const result = await response.json();
             if (expectedError) assert.deepEqual(result, { error: expectedError });
+            else if (expectedStatus === 200) assert.deepEqual(result, []);
             else assert.equal(typeof result.error, 'string');
           }
         }
@@ -256,6 +263,8 @@ for (const profile of ['control', 'combined', 'execution', 'evaluation'] as cons
             ],
             ['/projects/published-versions', 'POST', '{', 404, 'Not found'],
             ['/projects/publish', 'POST', '{}', 400, 'Missing relativePath'],
+            ['/evaluation-runs/unknown/path', 'GET', undefined, 404, 'Not found'],
+            ['/evaluation-runs/library', 'POST', '{', 404, 'Not found'],
           ] as const) {
             const response = await fetch(`${server.baseUrl}/api/workflows${pathname}`, {
               method,
@@ -1331,34 +1340,38 @@ test('local editor replay uploads are authenticated before their elevated reques
   });
 });
 
-test('local editor replay uploads reject oversized Content-Length before receiving the body', async () => {
+test('recording uploads reject oversized Content-Length before receiving the body', async () => {
   await withApiEnv({}, async () => {
     const server = await startServer('control');
     try {
-      // The route must reject from headers alone. Sending 48 MiB here races
-      // the server's intentional early connection close and obscures the 413.
-      const status = await new Promise<number | undefined>((resolve, reject) => {
-        const request = http.request(
-          `${server.baseUrl}/api/workflows/local-editor-recordings/`,
-          {
-            method: 'POST',
-            headers: {
-              ...trustedProxyHeaders(),
-              'content-type': 'application/json',
-              'content-length': String(MAX_LOCAL_EDITOR_RECORDING_REQUEST_BYTES + 1),
+      // Reject from headers alone; sending a large body races the early close.
+      for (const [route, method, limit] of [
+        ['/api/workflows/local-editor-recordings/', 'POST', MAX_LOCAL_EDITOR_RECORDING_REQUEST_BYTES],
+        ['/api/workflows/evaluation-runs/recordings/large', 'PUT', MAX_EVALUATION_RECORDING_BYTES],
+      ] as const) {
+        const status = await new Promise<number | undefined>((resolve, reject) => {
+          const request = http.request(
+            `${server.baseUrl}${route}`,
+            {
+              method,
+              headers: {
+                ...trustedProxyHeaders(),
+                'content-type': 'application/json',
+                'content-length': String(limit + 1),
+              },
+              signal: AbortSignal.timeout(5_000),
             },
-            signal: AbortSignal.timeout(5_000),
-          },
-          (response) => {
-            response.once('error', reject);
-            response.once('end', () => resolve(response.statusCode));
-            response.resume();
-          },
-        );
-        request.once('error', reject);
-        request.end();
-      });
-      assert.equal(status, 413);
+            (response) => {
+              response.once('error', reject);
+              response.once('end', () => resolve(response.statusCode));
+              response.resume();
+            },
+          );
+          request.once('error', reject);
+          request.end();
+        });
+        assert.equal(status, 413, route);
+      }
     } finally {
       await server.close();
     }

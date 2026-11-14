@@ -62,6 +62,7 @@ commands; the guides below describe implementation and verification.
 - [Recording HTTP Separation Plan](./studio-server/recording-http-separation-plan.md)
 - [Publication HTTP Separation Plan](./studio-server/publication-http-separation-plan.md)
 - [App Settings HTTP Separation Plan](./studio-server/app-settings-http-separation-plan.md)
+- [Evaluation HTTP Separation Plan](./studio-server/evaluation-http-separation-plan.md)
 - [Editor Bridge](./studio-server/editor-bridge.md)
 - [Workflow Publication](./studio-server/workflow-publication.md)
 - [Recording Search Performance And Scope](./studio-server/recording-search-performance.md)

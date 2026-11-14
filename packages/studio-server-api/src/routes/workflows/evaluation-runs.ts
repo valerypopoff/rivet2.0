@@ -1,60 +1,46 @@
-import { Router, type Response } from 'express';
+import { Router } from 'express';
 import { Buffer } from 'node:buffer';
-import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import type { ProjectId } from '@valerypopoff/rivet2-node';
 import {
-  deserializeEvaluationProjectData,
   fingerprintEvaluationDataset,
-  normalizeEvaluationLibrary,
   validateEvaluationDataset,
   type EvaluationDatasetSnapshot,
   type EvaluationRunEvent,
   type EvaluationQualityReasonCode,
   type EvaluationQualityStatus,
   type EvaluationRecordingArtifact,
-  type EvaluationLibraryMutation,
   type EvaluationRun,
 } from '@valerypopoff/rivet2-evaluations';
-
 import { asyncHandler } from '../../utils/asyncHandler.js';
-import { badRequest, conflict, createHttpError } from '../../utils/httpError.js';
+import { badRequest, createHttpError } from '../../utils/httpError.js';
 import { validateBody } from '../../middleware/validate.js';
 import { createControlPlaneJsonBodyParser, createJsonBodyParser } from '../../middleware/body-parsers.js';
 import { getEvaluationStore, getHostedEvaluationCoordinator } from './storage-backend.js';
-import {
-  EvaluationLibraryConflictError,
-  EvaluationLibraryMutationValidationError,
-  EvaluationLibraryResourceConflictError,
-} from '../../evaluation-runs/store.js';
-import { notifyEvaluationLibraryChanged, openEvaluationLibraryEventStream } from './evaluation-library-events.js';
-import {
-  HostedEvaluationCapacityError,
-  HostedEvaluationRetryConflictError,
-  HostedEvaluationRunConflictError,
-} from '../../evaluation-runs/hosted-coordinator.js';
+import { registerHostedEvaluationHttpRoutes } from './hosted-evaluation-http.js';
+import { registerEvaluationLibraryHttpRoutes } from './evaluation-library-http.js';
+
+export { hostedSubmissionSchema } from './hosted-evaluation-http.js';
 
 export const evaluationRunsRouter = Router();
+
 /** Keeps evaluation replay artifacts below the API's broader 100 MiB JSON limit. */
 export const MAX_EVALUATION_RECORDING_BYTES = 24 * 1024 * 1024;
+
 const jsonBody = createControlPlaneJsonBodyParser();
+
 const evaluationRecordingJsonBody = createJsonBodyParser(() => MAX_EVALUATION_RECORDING_BYTES);
 
-function sendHostedEvaluationCapacityError(res: Response, error: HostedEvaluationCapacityError): void {
-  res.set('Retry-After', String(error.retryAfterSeconds));
-  res.status(429).json({
-    error: error.message,
-    code: 'evaluation_batch_capacity_exceeded',
-    limit: error.limit,
-  });
-}
-
 const projectSchema = z.object({ projectId: z.string().min(1) }).strict();
+
 const listSchema = projectSchema.extend({
   suiteId: z.string().min(1).optional(),
 });
+
 const evaluationExecutionStatusSchema = z.enum(['queued', 'running', 'completed', 'canceled', 'error']);
+
 const evaluationTrialExecutionStatusSchema = z.enum(['completed', 'error', 'canceled']);
+
 const evaluationQualityStatuses = [
   'passed',
   'failed',
@@ -62,10 +48,13 @@ const evaluationQualityStatuses = [
   'not-evaluated',
   'unable-to-evaluate',
 ] as const satisfies readonly EvaluationQualityStatus[];
+
 type Assert<T extends true> = T;
+
 type EvaluationQualityStatusContractIsExhaustive = Assert<
   [Exclude<EvaluationQualityStatus, (typeof evaluationQualityStatuses)[number]>] extends [never] ? true : false
 >;
+
 const evaluationQualityStatusSchema = z.enum(evaluationQualityStatuses);
 
 const evaluationQualityReasonCodes = [
@@ -84,16 +73,20 @@ const evaluationQualityReasonCodes = [
   'canceled',
   'no-completed-trials',
 ] as const satisfies readonly EvaluationQualityReasonCode[];
+
 type EvaluationQualityReasonCodeContractIsExhaustive = Assert<
   [Exclude<EvaluationQualityReasonCode, (typeof evaluationQualityReasonCodes)[number]>] extends [never] ? true : false
 >;
+
 const evaluationQualityReasonSchema = z
   .object({
     code: z.enum(evaluationQualityReasonCodes),
     message: z.string(),
   })
   .strict();
+
 const evaluationMetricsSchema = z.object({ durationMs: z.number().finite().nonnegative() }).passthrough();
+
 const evaluationTrialSchema = z
   .object({
     id: z.string().min(1),
@@ -123,6 +116,7 @@ const evaluationTrialSchema = z
       });
     }
   });
+
 const evaluationAggregateSchema = z
   .object({
     trialCount: z.number().int().nonnegative(),
@@ -142,6 +136,7 @@ const evaluationAggregateSchema = z
     metrics: z.record(z.string(), z.number().finite()),
   })
   .passthrough();
+
 const evaluationThresholdResultSchema = z
   .object({
     id: z.string().min(1),
@@ -195,9 +190,13 @@ export const evaluationRunSchema = z
       });
     }
   });
+
 const putSchema = z.object({ projectId: z.string().min(1), run: evaluationRunSchema }).strict();
+
 const deleteSchema = z.object({ projectId: z.string().min(1), runId: z.string().min(1) }).strict();
+
 const renameRunSchema = projectSchema.extend({ name: z.string().optional() }).strict();
+
 const recordingReferenceSchema = z
   .object({
     id: z.string().min(1),
@@ -221,6 +220,7 @@ const recordingReferenceSchema = z
       });
     }
   });
+
 export const evaluationRecordingSchema = z
   .object({
     projectId: z.string().min(1),
@@ -243,7 +243,9 @@ export const evaluationRecordingSchema = z
       });
     }
   });
+
 const recordingScopeSchema = z.object({ projectId: z.string().min(1), recordingId: z.string().min(1) }).strict();
+
 const updateRecordingSchema = recordingScopeSchema
   .extend({
     retention: z.enum(['temporary', 'failure', 'baseline', 'retained']),
@@ -266,7 +268,9 @@ const updateRecordingSchema = recordingScopeSchema
       });
     }
   });
+
 const baselineSchema = z.object({ projectId: z.string().min(1), runId: z.string().min(1) }).strict();
+
 const datasetSnapshotSchema = z
   .object({
     projectId: z.string().min(1),
@@ -275,82 +279,9 @@ const datasetSnapshotSchema = z
     createdAt: z.string().datetime(),
   })
   .strict();
+
 const datasetSnapshotScopeSchema = z.object({ projectId: z.string().min(1), fingerprint: z.string().min(1) }).strict();
-export const hostedSubmissionSchema = z
-  .object({
-    projectContents: z.string().min(1),
-    projectPath: z.string().min(1),
-    datasetsContents: z.string().min(1).optional(),
-    evaluationData: z.unknown(),
-    dataset: z.unknown(),
-    suiteId: z.string().min(1),
-    purpose: z.enum(['evaluation', 'execution-benchmark']),
-    contextValues: z.record(z.string(), z.unknown()).optional(),
-    runId: z.string().min(1).optional(),
-  })
-  .strict();
-const hostedRunScopeSchema = projectSchema.extend({ runId: z.string().min(1) }).strict();
-const hostedRetrySchema = hostedRunScopeSchema
-  .extend({ jobIds: z.array(z.string().min(1).max(1_024)).min(1).max(100_000) })
-  .strict();
 
-async function getConfiguredHostedCoordinator() {
-  const coordinator = await getHostedEvaluationCoordinator();
-  if (!coordinator) throw conflict('Hosted Evaluations require managed workflow storage.');
-  return coordinator;
-}
-
-async function requireHostedSubmissionCoordinator() {
-  const coordinator = await getConfiguredHostedCoordinator();
-  if (!coordinator.getStatus().enabled) {
-    throw conflict('Hosted Evaluations are not enabled for this Studio Server.');
-  }
-  return coordinator;
-}
-
-const evaluationLibrarySchema = z
-  .object({
-    version: z.literal(1),
-    data: z
-      .object({
-        version: z.literal(1),
-        suites: z.array(z.unknown()),
-        baselines: z.array(z.unknown()),
-      })
-      .passthrough(),
-    datasets: z.array(z.unknown()),
-    migratedLegacyProjectIds: z.array(z.string()),
-  })
-  .passthrough();
-const replaceLibrarySchema = z
-  .object({
-    expectedRevision: z.number().int().nonnegative(),
-    library: evaluationLibrarySchema,
-  })
-  .strict();
-const libraryMutationChangeSchema = z.discriminatedUnion('kind', [
-  z
-    .object({
-      kind: z.literal('put-suite'),
-      id: z.string().min(1),
-      expectedVersion: z.string().min(1).nullable(),
-      suite: z.unknown(),
-      baselines: z.array(z.unknown()),
-    })
-    .strict(),
-  z.object({ kind: z.literal('delete-suite'), id: z.string().min(1), expectedVersion: z.string().min(1) }).strict(),
-  z
-    .object({
-      kind: z.literal('put-dataset'),
-      id: z.string().min(1),
-      expectedVersion: z.string().min(1).nullable(),
-      dataset: z.unknown(),
-    })
-    .strict(),
-  z.object({ kind: z.literal('delete-dataset'), id: z.string().min(1), expectedVersion: z.string().min(1) }).strict(),
-]);
-const libraryMutationSchema = z.object({ changes: z.array(libraryMutationChangeSchema).min(1).max(256) }).strict();
-const importLibrarySchema = z.object({ library: evaluationLibrarySchema }).strict();
 const runEventSchema = z.discriminatedUnion('type', [
   z
     .object({
@@ -380,215 +311,9 @@ const runEventSchema = z.discriminatedUnion('type', [
     .strict(),
 ]);
 
-function normalizeLibraryMutation(input: z.infer<typeof libraryMutationSchema>): EvaluationLibraryMutation {
-  return {
-    changes: input.changes.map((change) => {
-      if (change.kind === 'put-suite') {
-        const data = deserializeEvaluationProjectData({
-          version: 1,
-          suites: [change.suite],
-          baselines: change.baselines,
-        });
-        const suite = data.suites[0];
-        if (!suite || suite.id !== change.id || data.baselines.some((baseline) => baseline.suiteId !== change.id)) {
-          throw badRequest('Evaluation suite mutation payload does not match its resource ID.');
-        }
-        return { ...change, suite, baselines: data.baselines };
-      }
-      if (change.kind === 'put-dataset') {
-        const dataset = validateEvaluationDataset(change.dataset);
-        if (dataset.id !== change.id) {
-          throw badRequest('Evaluation dataset mutation payload does not match its resource ID.');
-        }
-        return { ...change, dataset };
-      }
-      return change;
-    }),
-  };
-}
+registerHostedEvaluationHttpRoutes(evaluationRunsRouter, jsonBody);
 
-evaluationRunsRouter.get(
-  '/hosted/capability',
-  asyncHandler(async (_req, res) => {
-    const coordinator = await getHostedEvaluationCoordinator();
-    res.json(coordinator?.getStatus() ?? { enabled: false, workerEnabled: false, workerConcurrency: 0 });
-  }),
-);
-
-evaluationRunsRouter.post(
-  '/hosted',
-  jsonBody,
-  validateBody(hostedSubmissionSchema),
-  asyncHandler(async (req, res) => {
-    const input = req.body as z.infer<typeof hostedSubmissionSchema>;
-    const coordinator = await requireHostedSubmissionCoordinator();
-    const evaluationData = deserializeEvaluationProjectData(input.evaluationData);
-    const dataset = validateEvaluationDataset(input.dataset);
-    try {
-      const run = await coordinator.submit({
-        ...input,
-        evaluationData,
-        dataset,
-        contextValues: input.contextValues as
-          | Record<string, import('@valerypopoff/rivet2-evaluations').PortableJson>
-          | undefined,
-      });
-      res.status(202).json(run);
-    } catch (error) {
-      if (error instanceof HostedEvaluationRunConflictError) throw conflict(error.message);
-      if (!(error instanceof HostedEvaluationCapacityError)) throw error;
-      sendHostedEvaluationCapacityError(res, error);
-    }
-  }),
-);
-
-evaluationRunsRouter.get(
-  '/:runId/hosted-state',
-  asyncHandler(async (req, res) => {
-    const parsed = hostedRunScopeSchema.safeParse({ projectId: req.query.projectId, runId: req.params.runId });
-    if (!parsed.success) throw badRequest('projectId query parameter is required.');
-    const coordinator = await getConfiguredHostedCoordinator();
-    const state = await coordinator.getRunState({
-      projectId: parsed.data.projectId as ProjectId,
-      runId: parsed.data.runId,
-    });
-    if (!state) {
-      res.status(404).json({ error: 'Hosted Evaluation run not found.' });
-      return;
-    }
-    res.json(state);
-  }),
-);
-
-evaluationRunsRouter.post(
-  '/:runId/cancel-hosted',
-  jsonBody,
-  validateBody(hostedRunScopeSchema),
-  asyncHandler(async (req, res) => {
-    const input = req.body as z.infer<typeof hostedRunScopeSchema>;
-    if (String(req.params.runId ?? '') !== input.runId)
-      throw badRequest('The evaluation run ID must match the request path.');
-    const run = await (
-      await getConfiguredHostedCoordinator()
-    ).requestCancel({ projectId: input.projectId as ProjectId, runId: input.runId });
-    if (!run) {
-      res.status(404).json({ error: 'Hosted Evaluation run not found.' });
-      return;
-    }
-    res.json(run);
-  }),
-);
-
-evaluationRunsRouter.post(
-  '/:runId/retry-interrupted',
-  jsonBody,
-  validateBody(hostedRetrySchema),
-  asyncHandler(async (req, res) => {
-    const input = req.body as z.infer<typeof hostedRetrySchema>;
-    if (String(req.params.runId ?? '') !== input.runId)
-      throw badRequest('The evaluation run ID must match the request path.');
-    try {
-      const run = await (
-        await requireHostedSubmissionCoordinator()
-      ).retryInterrupted({
-        projectId: input.projectId as ProjectId,
-        runId: input.runId,
-        jobIds: input.jobIds,
-      });
-      if (!run) {
-        res.status(404).json({ error: 'Hosted Evaluation run not found.' });
-        return;
-      }
-      res.json(run);
-    } catch (error) {
-      if (error instanceof HostedEvaluationRetryConflictError) throw conflict(error.message);
-      if (!(error instanceof HostedEvaluationCapacityError)) throw error;
-      sendHostedEvaluationCapacityError(res, error);
-    }
-  }),
-);
-evaluationRunsRouter.get(
-  '/library/events',
-  asyncHandler(async (req, res) => {
-    const snapshot = await (await getEvaluationStore()).getLibrarySyncSnapshot();
-    openEvaluationLibraryEventStream(req, res, snapshot.revision);
-  }),
-);
-
-evaluationRunsRouter.get(
-  '/library',
-  asyncHandler(async (_req, res) => {
-    res.json(await (await getEvaluationStore()).getLibrarySyncSnapshot());
-  }),
-);
-
-evaluationRunsRouter.put(
-  '/library',
-  jsonBody,
-  validateBody(replaceLibrarySchema),
-  asyncHandler(async (req, res) => {
-    const input = req.body as z.infer<typeof replaceLibrarySchema>;
-    const store = await getEvaluationStore();
-    try {
-      const snapshot = await store.replaceLibrary({
-        expectedRevision: input.expectedRevision,
-        library: normalizeEvaluationLibrary(input.library),
-      });
-      if (snapshot.revision !== input.expectedRevision) notifyEvaluationLibraryChanged(req, snapshot.revision);
-      res.json(await store.getLibrarySyncSnapshot());
-    } catch (error) {
-      if (error instanceof EvaluationLibraryConflictError) {
-        throw conflict(error.message);
-      }
-      throw error;
-    }
-  }),
-);
-
-evaluationRunsRouter.post(
-  '/library/mutations',
-  jsonBody,
-  validateBody(libraryMutationSchema),
-  asyncHandler(async (req, res) => {
-    const store = await getEvaluationStore();
-    const before = await store.getLibrarySyncSnapshot();
-    try {
-      const snapshot = await store.mutateLibrary(
-        normalizeLibraryMutation(req.body as z.infer<typeof libraryMutationSchema>),
-      );
-      if (snapshot.revision !== before.revision) notifyEvaluationLibraryChanged(req, snapshot.revision);
-      res.json(snapshot);
-    } catch (error) {
-      if (error instanceof EvaluationLibraryResourceConflictError) {
-        res.status(409).json({
-          error: error.message,
-          code: 'evaluation_library_resource_conflict',
-          conflicts: error.conflicts,
-          snapshot: await store.getLibrarySyncSnapshot(),
-        });
-        return;
-      }
-      if (error instanceof EvaluationLibraryMutationValidationError) throw badRequest(error.message);
-      throw error;
-    }
-  }),
-);
-
-evaluationRunsRouter.post(
-  '/library/import',
-  jsonBody,
-  validateBody(importLibrarySchema),
-  asyncHandler(async (req, res) => {
-    const store = await getEvaluationStore();
-    const before = await store.getLibrarySnapshot();
-    const { library: rawLibrary } = req.body as z.infer<typeof importLibrarySchema>;
-    const library = normalizeEvaluationLibrary(rawLibrary);
-    const sourceFingerprint = createHash('sha256').update(JSON.stringify(library)).digest('hex');
-    const snapshot = await store.importLegacyLibrary({ sourceFingerprint, library });
-    if (snapshot.revision !== before.revision) notifyEvaluationLibraryChanged(req, snapshot.revision);
-    res.json(await store.getLibrarySyncSnapshot());
-  }),
-);
+registerEvaluationLibraryHttpRoutes(evaluationRunsRouter, jsonBody);
 
 evaluationRunsRouter.put(
   '/events/:runId',
@@ -604,6 +329,7 @@ evaluationRunsRouter.put(
     res.status(204).end();
   }),
 );
+
 evaluationRunsRouter.get(
   '/history',
   asyncHandler(async (req, res) => {

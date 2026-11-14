@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { once } from "node:events";
 import fs from "node:fs/promises";
 import http from "node:http";
 import os from "node:os";
@@ -10,9 +9,11 @@ import test from "node:test";
 import type { Pool, PoolClient } from "pg";
 import type { ProjectId } from "@valerypopoff/rivet2-node";
 import {
+  deserializeEvaluationProjectData,
   fingerprintEvaluationDataset,
   normalizeEvaluationLibrary,
   normalizeEvaluationRun,
+  validateEvaluationDataset,
   type EvaluationDatasetSnapshot,
   type EvaluationLibrary,
   type EvaluationLibrarySyncIssue,
@@ -38,6 +39,19 @@ import {
 import { createHttpEvaluationStore } from "../../../studio-server-shared/evaluationRunHttpStore.js";
 import { createApiApp } from "../app.js";
 import { evaluationHistoryPageQuery, type EvaluationHistoryRow } from "../evaluation-runs/history-page.js";
+import { getExpectedProxyAuthToken, getExpectedUiSessionToken } from '../auth.js';
+import {
+  HostedEvaluationCapacityError,
+  HostedEvaluationRetryConflictError,
+  HostedEvaluationRunConflictError,
+  type HostedEvaluationCoordinator,
+  type HostedEvaluationRunState,
+} from '../evaluation-runs/hosted-coordinator.js';
+import { WorkflowStorageServices, type ManagedWorkflowResources } from '../routes/workflows/storage-services.js';
+import { disposeWorkflowStorage } from '../routes/workflows/storage-backend.js';
+import { invalidateAppSettingsRepositories } from '../app-settings/settings-repository.js';
+import { listenTestServer } from './helpers/http-server-harness.js';
+import { seedDeploymentStorageSettings } from './helpers/seed-deployment-storage.js';
 
 const projectA = "project-a" as ProjectId;
 const projectB = "project-b" as ProjectId;
@@ -196,23 +210,6 @@ test("evaluation history pages are compact, stable across equal timestamps and s
   } finally {
     await store.dispose();
     await fs.rm(root, { recursive: true, force: true });
-  }
-});
-
-test("evaluation history API is behind the global control-plane authentication boundary", async () => {
-  const server = http.createServer(createApiApp("control"));
-  server.listen(0, "127.0.0.1");
-  await once(server, "listening");
-  const address = server.address();
-  assert.ok(address && typeof address !== "string");
-  try {
-    const response = await fetch(
-      `http://127.0.0.1:${address.port}/api/workflows/evaluation-runs?projectId=${projectA}`,
-    );
-    assert.equal(response.status, 403);
-  } finally {
-    server.close();
-    await once(server, "close");
   }
 });
 
@@ -758,13 +755,21 @@ test('hosted HTTP evaluation store returns confirmed recording-retention outcome
   }
 });
 
-test("hosted HTTP evaluation store migrates legacy libraries and serializes writes", async () => {
+test("hosted HTTP evaluation store migrates legacy libraries and serializes writes", { timeout: 5000 }, async () => {
   const originalFetch = globalThis.fetch;
   let revision = 0;
   let currentLibrary = normalizeEvaluationLibrary(undefined);
   const expectedRevisions: number[] = [];
   let importRequests = 0;
   let importClientId: string | null = null;
+  let releaseFirstWrite!: () => void;
+  const firstWriteGate = new Promise<void>((resolve) => {
+    releaseFirstWrite = resolve;
+  });
+  let firstWriteStarted!: () => void;
+  const firstWriteReady = new Promise<void>((resolve) => {
+    firstWriteStarted = resolve;
+  });
 
   globalThis.fetch = async (input, init) => {
     const requestUrl = new URL(String(input), "https://rivet.example");
@@ -794,7 +799,10 @@ test("hosted HTTP evaluation store migrates legacy libraries and serializes writ
           { status: 409 },
         );
       }
-      await new Promise((resolve) => setTimeout(resolve, 5));
+      if (expectedRevisions.length === 1) {
+        firstWriteStarted();
+        await firstWriteGate;
+      }
       currentLibrary = normalizeEvaluationLibrary(body.library);
       revision += 1;
       return Response.json({ revision, library: currentLibrary });
@@ -824,7 +832,11 @@ test("hosted HTTP evaluation store migrates legacy libraries and serializes writ
 
     const second = library("second-http-suite", "second-http-dataset");
     const third = library("third-http-suite", "third-http-dataset");
-    await Promise.all([store.putLibrary(second), store.putLibrary(third)]);
+    const pending = Promise.all([store.putLibrary(second), store.putLibrary(third)]);
+    void pending.catch(() => {});
+    await firstWriteReady;
+    releaseFirstWrite();
+    await pending;
 
     assert.deepEqual(expectedRevisions, [1, 2]);
     assert.equal(revision, 3);
@@ -833,6 +845,7 @@ test("hosted HTTP evaluation store migrates legacy libraries and serializes writ
       "third-http-suite",
     );
   } finally {
+    releaseFirstWrite();
     globalThis.fetch = originalFetch;
   }
 });
@@ -2522,4 +2535,237 @@ test("managed evaluation store normalizes legacy run history at its read boundar
   assert.equal("verdict" in (normalized ?? {}), false);
   assert.equal("status" in (normalized?.trials[0] ?? {}), false);
   assert.deepEqual(normalized?.thresholdResults, []);
+});
+
+test('hosted HTTP controls preserve admission, results, error envelopes and deletion ownership', async (t) => {
+  await disposeWorkflowStorage();
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-evaluation-http-'));
+  const originalEnv = { ...process.env };
+  let server: Awaited<ReturnType<typeof listenTestServer>> | undefined;
+  t.after(async () => {
+    try {
+      await server?.close();
+    } finally {
+      try {
+        await disposeWorkflowStorage();
+      } finally {
+        t.mock.restoreAll();
+        for (const key of Object.keys(process.env)) if (!(key in originalEnv)) delete process.env[key];
+        Object.assign(process.env, originalEnv);
+        invalidateAppSettingsRepositories();
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    }
+  });
+  for (const key of Object.keys(process.env)) if (key.startsWith('RIVET_')) delete process.env[key];
+  Object.assign(process.env, {
+    RIVET_APP_DATA_ROOT: path.join(root, 'app-data'),
+    RIVET_WORKSPACE_ROOT: root,
+    RIVET_WORKFLOWS_ROOT: path.join(root, 'workflows'),
+    RIVET_WORKFLOW_RECORDINGS_ROOT: path.join(root, 'recordings'),
+    RIVET_RUNTIME_LIBRARIES_ROOT: path.join(root, 'libraries'),
+    RIVET_SERVER_UI_AUTH_MODE: 'key',
+    RIVET_KEY: 'evaluation-http-fixture',
+  });
+  invalidateAppSettingsRepositories();
+  await seedDeploymentStorageSettings({
+    storageMode: 'managed',
+    databaseMode: 'managed',
+    databaseConnectionString: 'postgresql://fixture:fixture@127.0.0.1:1/unused',
+    storageUrl: 'https://unused-fixture.s3.us-east-1.amazonaws.com',
+    storageAccessKeyId: 'fixture',
+    storageAccessKey: 'fixture',
+  });
+  const saved = run(projectA, 'hosted-http');
+  const state: HostedEvaluationRunState = { status: 'queued', cancelRequested: false, jobs: [] };
+  const calls: Array<{ method: string; input: unknown }> = [];
+  let enabled = true;
+  let missing = false;
+  let failure: Error | undefined;
+  const capture = (method: string, input: unknown) => {
+    calls.push({ method, input });
+    if (failure) throw failure;
+  };
+  const coordinator: Pick<
+    HostedEvaluationCoordinator,
+    'getStatus' | 'submit' | 'getRunState' | 'requestCancel' | 'retryInterrupted' | 'deleteRun'
+  > = {
+    getStatus: () => ({
+      enabled,
+      workerEnabled: false,
+      workerConcurrency: 1,
+      maxJobsPerRun: 20,
+      maxOutstandingJobs: 40,
+    }),
+    submit: async (input) => {
+      capture('submit', input);
+      return saved;
+    },
+    getRunState: async (input) => {
+      capture('state', input);
+      return missing ? undefined : state;
+    },
+    requestCancel: async (input) => {
+      capture('cancel', input);
+      return missing ? undefined : saved;
+    },
+    retryInterrupted: async (input) => {
+      capture('retry', input);
+      return missing ? undefined : saved;
+    },
+    deleteRun: async (input) => {
+      capture('delete', input);
+    },
+  };
+  // Only the resource boundary is stubbed; requests use the actual full app.
+  t.mock.method(
+    WorkflowStorageServices.prototype,
+    'getManaged',
+    async () =>
+      ({
+        getHostedEvaluationCoordinator: async () => coordinator,
+        getEvaluationStore: async () => {
+          throw new Error('Generic store must not own hosted deletion.');
+        },
+      }) as unknown as ManagedWorkflowResources,
+  );
+  t.mock.method(console, 'error', () => {});
+  server = await listenTestServer(http.createServer(createApiApp('control')));
+  const base = `${server.baseUrl}/api/workflows/evaluation-runs`;
+  const headers = {
+    'x-rivet-proxy-auth': getExpectedProxyAuthToken(),
+    cookie: `rivet_ui_token=${getExpectedUiSessionToken()}`,
+    'content-type': 'application/json',
+  };
+  const send = async (method: string, route: string, body?: unknown) => {
+    const response = await fetch(base + route, {
+      method,
+      headers,
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      signal: AbortSignal.timeout(5000),
+    });
+    const payload: unknown = response.status === 204 ? undefined : await response.json();
+    return { status: response.status, payload, retryAfter: response.headers.get('retry-after') };
+  };
+  const input = {
+    projectContents: 'fixture',
+    projectPath: '/workflows/Fixture.rivet-project',
+    datasetsContents: 'version: 1\ndatasets: []\n',
+    evaluationData: { version: 1, suites: [], baselines: [] },
+    dataset: { id: 'dataset', name: 'Dataset', fields: [], cases: [] },
+    suiteId: 'suite',
+    purpose: 'evaluation',
+    contextValues: { profile: 'fixture' },
+    runId: saved.id,
+  };
+  const scope = { projectId: projectA, runId: saved.id };
+  const retry = { ...scope, jobIds: ['job-1'] };
+  assert.deepEqual(await send('GET', '/hosted/capability'), {
+    status: 200,
+    payload: coordinator.getStatus(),
+    retryAfter: null,
+  });
+  assert.deepEqual(await send('POST', '/hosted', input), { status: 202, payload: saved, retryAfter: null });
+  assert.deepEqual(calls.pop(), {
+    method: 'submit',
+    input: {
+      ...input,
+      evaluationData: deserializeEvaluationProjectData(input.evaluationData),
+      dataset: validateEvaluationDataset(input.dataset),
+    },
+  });
+  for (const [route, method, expected, call] of [
+    [`/${saved.id}/hosted-state?projectId=${projectA}`, 'GET', state, 'state'],
+    [`/${saved.id}/cancel-hosted`, 'POST', saved, 'cancel'],
+    [`/${saved.id}/retry-interrupted`, 'POST', saved, 'retry'],
+  ] as const) {
+    assert.deepEqual(await send(method, route, method === 'GET' ? undefined : call === 'retry' ? retry : scope), {
+      status: 200,
+      payload: expected,
+      retryAfter: null,
+    });
+    assert.deepEqual(calls.pop(), { method: call, input: call === 'retry' ? retry : scope });
+  }
+  for (const operation of ['cancel-hosted', 'retry-interrupted']) {
+    const body = operation === 'cancel-hosted' ? scope : retry;
+    assert.deepEqual(await send('POST', `/${saved.id}/${operation}`, { ...body, runId: 'wrong' }), {
+      status: 400,
+      payload: { error: 'The evaluation run ID must match the request path.' },
+      retryAfter: null,
+    });
+  }
+  assert.equal((await send('DELETE', `/${saved.id}`, { ...scope, runId: 'wrong' })).status, 400);
+  assert.equal(calls.length, 0, 'scope errors must not reach the coordinator');
+  for (const query of ['', '?projectId=', `?projectId=${projectA}&projectId=${projectB}`]) {
+    assert.deepEqual(await send('GET', `/${saved.id}/hosted-state${query}`), {
+      status: 400,
+      payload: { error: 'projectId query parameter is required.' },
+      retryAfter: null,
+    });
+  }
+  assert.equal(calls.length, 0, 'invalid state queries must not reach the coordinator');
+  enabled = false;
+  for (const [route, body] of [
+    ['/hosted', input],
+    [`/${saved.id}/retry-interrupted`, retry],
+  ] as const) {
+    assert.deepEqual(await send('POST', route, body), {
+      status: 409,
+      payload: { error: 'Hosted Evaluations are not enabled for this Studio Server.' },
+      retryAfter: null,
+    });
+  }
+  assert.equal(calls.length, 0);
+  assert.equal((await send('GET', `/${saved.id}/hosted-state?projectId=${projectA}`)).status, 200);
+  assert.equal((await send('POST', `/${saved.id}/cancel-hosted`, scope)).status, 200);
+  assert.deepEqual(
+    calls.splice(0).map((call) => call.method),
+    ['state', 'cancel'],
+  );
+  enabled = true;
+  missing = true;
+  for (const [method, route, body] of [
+    ['GET', `/${saved.id}/hosted-state?projectId=${projectA}`, undefined],
+    ['POST', `/${saved.id}/cancel-hosted`, scope],
+    ['POST', `/${saved.id}/retry-interrupted`, retry],
+  ] as const) {
+    assert.deepEqual(await send(method, route, body), {
+      status: 404,
+      payload: { error: 'Hosted Evaluation run not found.' },
+      retryAfter: null,
+    });
+  }
+  calls.length = 0;
+  missing = false;
+  for (const [route, body, error, status] of [
+    ['/hosted', input, new HostedEvaluationRunConflictError(), 409],
+    [`/${saved.id}/retry-interrupted`, retry, new HostedEvaluationRetryConflictError('stale selection'), 409],
+    ['/hosted', input, new HostedEvaluationCapacityError('per-run', 'per-run full'), 429],
+    ['/hosted', input, new HostedEvaluationCapacityError('outstanding', 'queue full'), 429],
+    [`/${saved.id}/retry-interrupted`, retry, new HostedEvaluationCapacityError('outstanding', 'queue full'), 429],
+    ['/hosted', input, new Error('internal fixture details'), 500],
+  ] as const) {
+    failure = error;
+    assert.deepEqual(await send('POST', route, body), {
+      status,
+      payload:
+        error instanceof HostedEvaluationCapacityError
+          ? { error: error.message, code: 'evaluation_batch_capacity_exceeded', limit: error.limit }
+          : { error: status === 500 ? 'Internal server error' : error.message },
+      retryAfter: status === 429 ? '5' : null,
+    });
+    assert.equal(calls.length, 1);
+    calls.length = 0;
+  }
+  failure = undefined;
+  assert.deepEqual(await send('POST', '/hosted', { ...input, evaluationData: {} }), {
+    status: 500,
+    payload: { error: 'Internal server error' },
+    retryAfter: null,
+  });
+  assert.equal(calls.length, 0);
+  assert.equal((await send('POST', '/hosted', { ...input, datasetsContents: '' })).status, 400);
+  assert.equal(calls.length, 0);
+  assert.deepEqual(await send('DELETE', `/${saved.id}`, scope), { status: 204, payload: undefined, retryAfter: null });
+  assert.deepEqual(calls, [{ method: 'delete', input: scope }]);
 });
