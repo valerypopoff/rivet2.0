@@ -1284,6 +1284,14 @@ Compose stack described below. See [development watch ownership](server-stack.md
 for source-mount boundaries, startup budgets and changes requiring recreation.
 No tunnel launcher or additional frontend-mode variable is required.
 
+The API, executor and web dependency stages install the checked-in Yarn release
+as `/usr/local/lib/rivet-yarn.cjs` and bind both `yarn` and `yarnpkg` to it before
+configuration or installation. Direct commands and nested build scripts therefore
+use the repository pin without a Corepack download. Copying `.yarnrc.yml` with
+`yarnPath` alone is insufficient: Corepack resolves `packageManager` before Yarn
+reads that file. Ordinary dependency downloads still use the configured network
+and caches. Corepack remains available for the separately configured pnpm tool.
+
 Use `yarn studio-server:dev:tunnel` when forwarding the browser port through a
 VS Code tunnel. Forward the same proxy port as ordinary dev (for example 8081),
 not the private API or frontend service ports. `yarn studio-server:dev` switches

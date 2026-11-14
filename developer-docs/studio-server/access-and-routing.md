@@ -506,6 +506,14 @@ The route prefixes are owned by `Settings` -> `Workflow endpoints` -> `Routes` f
 
 The wrapper intentionally uses the lower-level upstream web-app helpers instead of the single Fetch-style handler so route ownership, browser/session auth, timing headers, code-runner setup, dataset providers, project-reference loading, and response envelopes stay consistent with the existing endpoint execution stack.
 
+`routes/workflows/web-app-http.ts` owns these HTML, JSON and HTTP-action routes,
+including browser authorization and action preflight. Workflow endpoints remain
+in `execution.ts`, which re-exports the same web-app router instances for existing
+callers. The shared HTTP support module preserves the distinct workflow and
+web-app error contracts; it does not wrap the handlers or add request work.
+The app's dynamic path dispatch, OAuth callback ordering and profile mounts are
+unchanged. See the [HTTP separation record](web-app-http-separation-plan.md).
+
 Web-app action requests use the same `ManagedCodeRunner`, dataset provider, project path, project-reference loader, and browser request `context.headers` shape as published workflow execution, but the wrapper strips sensitive browser/session headers before graph execution. In particular, `cookie`, `authorization`, `proxy-authorization`, `x-forwarded-authorization`, `x-rivet-proxy-auth`, and `x-rivet-token-free-host` are not exposed to web-app action graphs or the Fetch-style action request. The wrapper does not pass `inputs` for web-app actions; Rivet maps the declarative UI state into graph inputs according to the clicked button's action definition.
 
 The wrapper's legacy HTTP action adapter also preserves upstream web-app stored-value semantics: it validates the browser's `storage` snapshot, supplies a per-action snapshot store to `createProcessor`, and returns the resulting `storagePatch`. WebSocket actions use the same behavior through upstream `prepareRivetWebAppAction`. This browser-scoped storage is separate from project datasets and is never treated as trusted server-side state.

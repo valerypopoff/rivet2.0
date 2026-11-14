@@ -473,9 +473,18 @@ mode-specific web-app binding/path mapping remain deliberate.
 Web-app preparation, request-context normalization, runtime options and recording
 identity live in `web-app-execution.ts`, shared by HTTP and WebSocket adapters.
 Authentication HTML belongs to `web-app-auth-presentation.ts`; HTTP routing,
-redirects, body admission and response delivery remain in `execution.ts`.
+redirects, action body admission and web-app response delivery belong to
+`web-app-http.ts`. `execution.ts` owns the four workflow endpoint routers and
+retains compatibility re-exports for both web-app routers and shared helpers.
+`execution-http-support.ts` holds the existing common HTTP response, timing,
+telemetry and published-admission helpers without registering routes or adding
+request work. The web-app module owns one preflight counter and prepared-action
+map shared by its published/latest routers; app mounts and their middleware
+ordering remain unchanged.
 WebSocket origin checks, session fencing and early-response behavior remain
 transport-specific. Neither adapter acquires a second run-session owner.
+The [web-app HTTP separation plan](web-app-http-separation-plan.md) records the
+extraction scope, compatibility contracts and verification evidence.
 
 Workflow contracts live in `routes/workflows/data-backend.ts`, independently of
 the PostgreSQL implementation. Project IO, publication, execution sources and

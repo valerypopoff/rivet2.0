@@ -4,6 +4,45 @@ This document records intentional architecture and cleanup changes that future m
 
 It is not a changelog. Keep entries focused on why a refactor happened, which ownership boundary changed, and which verification paths should be kept alive.
 
+## 2026-11-14 - Web-app HTTP And Workflow Endpoint Ownership
+
+### Why
+
+One module owned six routers, mixing workflow bearer authorization and execution
+with web-app browser authorization, action preparation and HTML rendering. The
+shared runtime/session owners already existed; combining HTTP and WebSocket
+execution would change their deliberate lifecycle differences.
+
+### Ownership
+
+- `web-app-http.ts` owns published/latest web-app HTTP routes, including one
+  shared action-preflight counter and prepared-request map.
+- `execution.ts` owns workflow endpoints and keeps all compatibility exports.
+- `execution-http-support.ts` owns common response/timing/telemetry functions
+  and published capacity acquisition. Function bodies and request ordering are
+  preserved apart from removing the unreachable missing-graph branch after
+  successful preflight; this is not another middleware or execution framework.
+- App mounts, shared runtime options, `ExecutionSession`, storage adapters and
+  the WebSocket gateway remain unchanged.
+
+### Verification To Preserve
+
+- Profile and body-admission tests retain authorization-before-parsing, dynamic
+  paths and distinct error envelopes. Web-app HTTP/Socket tests cover revisions,
+  browser storage, context filtering and recordings. A missing draft UI graph
+  must still reject malformed action JSON with 404 before parsing, while its
+  published snapshot remains executable.
+- `workflow-async-process.test.ts` retains real early-response, client-loss,
+  concurrent-request and shutdown coverage; registry unit tests alone do not
+  prove that routes hold their permits through physical completion.
+- The [separation record](web-app-http-separation-plan.md) tracks local checks
+  and paired HTTP measurements. Timing measurements count complete responses
+  and persisted recordings; queue drain alone cannot prove recording success.
+- Published/latest HTML and JSON snapshot checks share a fixture while asserting
+  each surface separately. Coordinator and preflight unit tests advance controlled
+  clocks; actual HTTP, WebSocket and process-shutdown tests retain their real
+  transport coverage.
+
 ## 2026-11-14 - Workflow Storage Compatibility Facade
 
 ### Why

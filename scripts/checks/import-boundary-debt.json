@@ -190,7 +190,6 @@
     "packages/studio-server-api/src/routes/workflows/bundle-merge-suggestions.ts\t../../../../studio-server-shared/workflow-mutation-contract.js",
     "packages/studio-server-api/src/routes/workflows/data-backend.ts\t../../../../studio-server-shared/workflow-recording-types.js",
     "packages/studio-server-api/src/routes/workflows/data-backend.ts\t../../../../studio-server-shared/workflow-types.js",
-    "packages/studio-server-api/src/routes/workflows/execution.ts\t../../../../studio-server-shared/workflow-recording-types.js",
     "packages/studio-server-api/src/routes/workflows/index.ts\t../../../../studio-server-shared/workflow-recording-types.js",
     "packages/studio-server-api/src/routes/workflows/index.ts\t../../../../studio-server-shared/workflow-types.js",
     "packages/studio-server-api/src/routes/workflows/legacy-workflow-commands.ts\t../../../../studio-server-shared/workflow-types.js",

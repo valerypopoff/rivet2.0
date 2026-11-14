@@ -1,17 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { setImmediate } from 'node:timers/promises';
 import type { Pool } from 'pg';
 
 import { PostgresRivetWebAppRunCoordinator } from '../web-app-action-coordinator.js';
-import { awaitWebAppActionPreflight } from '../routes/workflows/execution.js';
-
-async function waitFor(condition: () => boolean, timeoutMs = 250): Promise<void> {
-  const deadline = performance.now() + timeoutMs;
-  while (!condition()) {
-    assert.ok(performance.now() < deadline, 'Timed out waiting for the expected coordinator poll.');
-    await new Promise((resolve) => setTimeout(resolve, 5));
-  }
-}
+import { awaitWebAppActionPreflight } from '../routes/workflows/web-app-execution.js';
 
 test('durably accepted cancellation stays successful when PostgreSQL notification delivery fails', async () => {
   const queries: string[] = [];
@@ -52,9 +45,11 @@ test('durably accepted cancellation stays successful when PostgreSQL notificatio
   }
 });
 
-test('coordinator polling does not rebroadcast an unchanged latest event', async () => {
+test('coordinator polling delivers each new sequence once', async (t) => {
+  t.mock.timers.enable({ apis: ['setInterval'] });
   let eventReads = 0;
   let delivered = 0;
+  let sequence = 1;
   const pool = {
     async query(text: string) {
       if (text.includes('SELECT DISTINCT ON')) {
@@ -62,13 +57,13 @@ test('coordinator polling does not rebroadcast an unchanged latest event', async
         return {
           rows: [{
             run_id: 'run-a',
-            sequence: 1,
+            sequence,
             event: {
               type: 'action.progress',
               progress: 0.5,
               requestId: 'request-a',
               runId: 'run-a',
-              sequence: 1,
+              sequence,
             },
           }],
         };
@@ -93,26 +88,28 @@ test('coordinator polling does not rebroadcast an unchanged latest event', async
       },
       onUnavailable: () => undefined,
     });
-    await waitFor(() => eventReads >= 2);
-    assert.equal(delivered, 1);
+    for (const nextSequence of [1, 1, 2, 2]) {
+      sequence = nextSequence;
+      t.mock.timers.tick(10);
+      await setImmediate();
+      assert.equal(delivered, nextSequence);
+    }
+    assert.equal(eventReads, 4);
   } finally {
     await coordinator.dispose();
   }
 });
 
-test('web-app action preflight times out the client without releasing the underlying operation', async () => {
+test('web-app action preflight reports its timeout and observes late completion', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
   const abortController = new AbortController();
-  // The production timeout is intentionally unref'd so it cannot keep a
-  // shutting-down API alive. A real request socket is an active handle; model
-  // that ownership here so Node's test runner does not end the process first.
-  const activeRequest = setInterval(() => undefined, 60_000);
-  let finishOperation: (() => void) | undefined;
+  let finishOperation!: () => void;
   const operation = new Promise<void>((resolve) => {
     finishOperation = resolve;
   });
 
   try {
-    await assert.rejects(
+    const rejected = assert.rejects(
       () => awaitWebAppActionPreflight(operation, abortController, 5),
       (error: Error & { code?: string; retryAfterSeconds?: number; status?: number }) => {
         assert.equal(error.status, 503);
@@ -121,13 +118,11 @@ test('web-app action preflight times out the client without releasing the underl
         return true;
       },
     );
+    t.mock.timers.tick(5);
+    await rejected;
     assert.equal(abortController.signal.aborted, true);
-
-    // The caller timed out, but the operation remains independently owned. Its
-    // completion is observed by the middleware that still holds the permit.
-    finishOperation?.();
-    await operation;
   } finally {
-    clearInterval(activeRequest);
+    finishOperation();
+    await operation;
   }
 });
