@@ -32,8 +32,12 @@ import {
 import {
   initializeWorkflowStorage,
   disposeWorkflowStorage,
+  getWorkflowTree,
   loadHostedProject,
   saveHostedProject,
+  executeWorkflowPublicationCommandWithBackend,
+  resolvePublishedExecutionProject,
+  resolveLatestExecutionProject,
 } from '../../routes/workflows/storage-backend.js';
 import { fingerprintVmMigrationSource } from '../../scripts/vm-migration-source-manifest.js';
 import { createLocalCatalogNativeApi } from '../../local-metadata/execution-io.js';
@@ -1604,12 +1608,50 @@ try {
       const original = await loadHostedProject(path.join(localMetadataSourceRoots().workflows, 'story.rivet-project'));
       const [project, attached] = loadProjectAndAttachedDataFromString(original.contents);
       project.metadata.description = 'saved-in-selected-sqlite';
-      await saveHostedProject({
+      const saved = await saveHostedProject({
         projectPath: path.join(localMetadataSourceRoots().workflows, 'story.rivet-project'),
         contents: serializeProject(project, attached) as string,
         datasetsContents: null,
         expectedRevisionId: original.revisionId,
       });
+      assert.ok(saved.project);
+      assert.ok(saved.revisionId);
+      assert.equal((await getWorkflowTree()).capabilities.explicitBundles, false);
+      const published = await executeWorkflowPublicationCommandWithBackend({
+        kind: 'publish-endpoint',
+        relativePath: saved.project.relativePath,
+        endpointName: 'sqlite-facade',
+        preconditions: {
+          expectedProjectId: saved.project.projectMetadataId!,
+          expectedPublicationVersion: saved.project.settings.publicationVersion!,
+          expectedDraftRevisionId: saved.revisionId,
+        },
+      });
+      project.metadata.description = 'saved-in-selected-sqlite-after-publication';
+      await saveHostedProject({
+        projectPath: saved.path,
+        contents: serializeProject(project, attached) as string,
+        datasetsContents: null,
+        expectedRevisionId: saved.revisionId,
+      });
+      assert.equal(
+        (await resolvePublishedExecutionProject('sqlite-facade', true))?.project.metadata.description,
+        'saved-in-selected-sqlite',
+      );
+      assert.equal(
+        (await resolveLatestExecutionProject('sqlite-facade', true))?.project.metadata.description,
+        project.metadata.description,
+      );
+      assert.equal((await loadHostedProject(saved.path)).contents.includes(project.metadata.description), true);
+      await executeWorkflowPublicationCommandWithBackend({
+        kind: 'unpublish-endpoint',
+        relativePath: published.relativePath,
+        preconditions: {
+          expectedProjectId: published.projectMetadataId!,
+          expectedPublicationVersion: published.settings.publicationVersion!,
+        },
+      });
+      assert.equal(await resolvePublishedExecutionProject('sqlite-facade', true), null);
       const native = createLocalCatalogNativeApi();
       assert.match(
         await native.readTextFile(path.join(localMetadataSourceRoots().workflows, 'story.rivet-project')),

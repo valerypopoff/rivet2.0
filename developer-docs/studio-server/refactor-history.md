@@ -4,6 +4,70 @@ This document records intentional architecture and cleanup changes that future m
 
 It is not a changelog. Keep entries focused on why a refactor happened, which ownership boundary changed, and which verification paths should be kept alive.
 
+## 2026-11-14 - Workflow Storage Compatibility Facade
+
+### Why
+
+The workflow storage facade mixed routing with filesystem transactions, project
+materialization and repeated publication dispatch. SQL backends already shared
+narrow repository contracts; forcing legacy filesystem storage into the same
+combined adapter would hide real result and path differences.
+
+### Ownership
+
+- `legacy-project-storage.ts` owns filesystem tree/hosted IO and identity-safe
+  save orchestration around the existing transaction helper. Derived statistics
+  remain post-commit, with execution invalidation guaranteed by `finally`.
+- `legacy-execution-storage.ts` owns filesystem execution/reference loading and
+  cache/policy invalidation. One web-app loader handles published snapshots and
+  saved drafts without duplicating materialization. `filesystem-project-identity.ts`
+  shares the physical ID scan between save reconciliation and Subgraph resolution.
+- `storage-backend.ts` keeps compatibility exports and shared routing/policy.
+  One publication-selector callback replaces seven private dispatch helpers.
+  Command snapshots, invalid-command error precedence and legacy writer admission
+  retain their existing timing. Recording persistence reuses its existing option
+  contract and remains asynchronous.
+- `WorkflowStorageServices` and serving/offline resource composition are
+  unchanged. No schema, stored format, protocol, cache design or feature changed.
+
+### Verification To Preserve
+
+- `hosted-project-title.test.ts` checks legacy save result shape, save identity
+  and request capture before waiting and after file promotion. Returned and tree
+  revisions must describe the stored project/dataset pair. Stale-save conflicts
+  cover project-only and dataset-only edits independently; fixture cleanup has
+  one suite owner.
+- The hosted Save As browser case verifies new project identity and a subsequent
+  in-place save against disposable PostgreSQL/MinIO. Its forwarded browser routes
+  drain before the API fixture closes, preserving failure evidence and cleanup.
+- `workflow-publication-filesystem.test.ts` covers snapshots, unknown-command
+  rejection before storage construction and writer ordering against a later read.
+- Existing execution/cache, tree, web-app, SQLite, recording and owner suites
+  remain the behavior checks. `test:async-managed` exercises actual managed
+  serving with local PostgreSQL/MinIO; mocked browser cases prove UI compatibility.
+- The existing local-upgrade runtime's ordinary SQLite serving case checks the
+  real facade's save, publish, published/latest split and unpublish, while the
+  parent checks that the retained legacy files are unchanged. Adapter-only tests
+  do not replace this routing coverage.
+- `workflow-execution-filesystem.test.ts` verifies saved graphs are refreshed
+  without rebuilding the routing index, including after statistics writes fail.
+  Equal-size edits retain the original file timestamp so metadata revalidation
+  cannot conceal missing invalidation. Assert returned graphs instead of private
+  cache-method calls.
+- Backup status tests create only private control storage. Archive tests add real
+  source files and fingerprint them; status-only cases need no recording payload
+  or source-tree scan.
+- See [workflow-storage-routing-plan.md](./workflow-storage-routing-plan.md) for
+  the selected browser checks and paired endpoint measurements.
+
+Final verification also isolated an existing Windows local-upgrade defect:
+status readers could make atomic progress-file replacement fail with `EPERM`.
+The separate control-record fix retries only the same frozen record's promotion,
+with a small Windows-only bound; preparation, backup status and repair-journal
+writers share that primitive. It never repeats work or changes endpoint IO.
+Real-handle regressions fail before the repair and pass afterward. Backup-status
+failure also cleans its owned temporary file while preserving prior evidence.
+
 ## 2026-09-03 - Crash-Safe Filesystem Project Saves
 
 ### Why
@@ -13,7 +77,7 @@ The filesystem hosted-save path previously replaced `.rivet-project` before writ
 ### Ownership
 
 - `filesystem-project-transactions.ts` owns validation, exclusive staging, checksummed journals, backup/promotion order, the durable committed marker, cleanup, startup and path-specific recovery, the storage capability probe, and the shared filesystem read/write coordinator.
-- `storage-backend.ts` keeps hosted identity validation and cache invalidation, but canonical project/dataset persistence crosses the transaction helper. Derived project statistics update only after the committed marker and are never recovery evidence.
+- `legacy-project-storage.ts` now keeps hosted identity validation and calls the injected execution invalidator; `storage-backend.ts` selects it for filesystem IO. Canonical project/dataset persistence crosses the transaction helper. Derived project statistics update only after the committed marker and are never recovery evidence.
 - Server startup does not listen until recovery completes. Ambiguous evidence fails closed and remains on disk. Shutdown drains the coordinator, while hard-stop correctness comes from journal recovery.
 - The Kubernetes chart remains managed-storage-only and singleton at the backend. Its StatefulSet uses ordered, single-ordinal rolling replacement—the StatefulSet equivalent of a no-overlap Recreate rollout—and execution replicas remain the scaling boundary.
 - This closes mixed filesystem project/dataset generations. Stale-revision conflict detection between administrators remains separate work; the save-target identity check prevents cross-project writes but does not reject two edits based on the same older revision.

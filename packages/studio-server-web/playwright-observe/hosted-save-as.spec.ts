@@ -171,7 +171,7 @@ test('hosted Save As opens a separate identity and the next save updates only th
     void initializationError.catch(() => {});
     await page.goto('/hosted-save-copy-harness', { waitUntil: 'domcontentloaded' });
     await Promise.race([
-      page.waitForFunction(() => Boolean((window as any).copyHost), { timeout: 120_000 }),
+      page.waitForFunction(() => Boolean((window as any).copyHost), undefined, { timeout: 120_000 }),
       initializationError,
     ]);
     expect(await page.evaluate((p) => (window as any).copyHost.openProjectPath(p), source.absolutePath)).toBe(true);
@@ -206,6 +206,14 @@ test('hosted Save As opens a separate identity and the next save updates only th
     expect((await load(copyPath)).revisionId).not.toBe(copy.revisionId);
     expect(await load(source.absolutePath)).toEqual(before);
   } finally {
-    await runtime.close();
+    try {
+      await page.unrouteAll({ behavior: 'wait' });
+    } finally {
+      try {
+        await context.close();
+      } finally {
+        await runtime.close();
+      }
+    }
   }
 });

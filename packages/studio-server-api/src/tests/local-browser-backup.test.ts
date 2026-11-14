@@ -20,19 +20,38 @@ import { publishEmptyRuntimeRelease } from '@valerypopoff/rivet-studio-server-bo
 import { readSourceRuntimeSelection } from '../scripts/migrate-runtime-libraries.js';
 
 // test-style: fixture-read: verifies generated backups and restored fixtures only.
+async function statusFixture(run: (control: string, state: BrowserBackup) => Promise<void>) {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-browser-backup-'));
+  const control = path.join(root, 'control');
+  try {
+    await fs.mkdir(control);
+    await run(control, {
+      id: randomUUID(),
+      revision: 1,
+      pausedAt: 'paused-fixture',
+      phase: 'creating',
+      archiveHash: null,
+      bytes: 0,
+      createdAt: new Date().toISOString(),
+      sourceFingerprint: 'a'.repeat(64),
+    });
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+}
+
 async function fixture(
   run: (source: LocalMetadataSourceRoots, control: string, state: BrowserBackup) => Promise<void>,
 ) {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-browser-backup-'));
-  const control = path.join(root, 'control');
-  const source: LocalMetadataSourceRoots = {
-    workflows: path.join(root, 'workflows'),
-    recordings: path.join(root, 'recordings'),
-    appData: path.join(root, 'appData'),
-    runtimeLibraries: path.join(root, 'runtimeLibraries'),
-  };
-  try {
-    for (const directory of [control, ...Object.values(source)]) await fs.mkdir(directory);
+  await statusFixture(async (control, state) => {
+    const root = path.dirname(control);
+    const source: LocalMetadataSourceRoots = {
+      workflows: path.join(root, 'workflows'),
+      recordings: path.join(root, 'recordings'),
+      appData: path.join(root, 'appData'),
+      runtimeLibraries: path.join(root, 'runtimeLibraries'),
+    };
+    for (const directory of Object.values(source)) await fs.mkdir(directory);
     await fs.mkdir(path.join(source.workflows, 'empty'));
     await fs.writeFile(path.join(source.workflows, 'a.rivet-project'), 'project fixture');
     await fs.mkdir(path.join(source.appData, 'settings'));
@@ -45,19 +64,9 @@ async function fixture(
       await fs.chmod(path.join(source.workflows, 'empty'), 0o1777);
       await fs.symlink('index.js', path.join(source.runtimeLibraries, 'entry.js'));
     }
-    await run(source, control, {
-      id: randomUUID(),
-      revision: 1,
-      pausedAt: 'paused-fixture',
-      phase: 'creating',
-      archiveHash: null,
-      bytes: 0,
-      createdAt: new Date().toISOString(),
-      sourceFingerprint: await fingerprintVmMigrationSource(source),
-    });
-  } finally {
-    await fs.rm(root, { recursive: true, force: true });
-  }
+    state.sourceFingerprint = await fingerprintVmMigrationSource(source);
+    await run(source, control, state);
+  });
 }
 
 test('browser backup restores the downloadable archive, preserves source bytes and leaves only the verified archive', async () => {
@@ -124,6 +133,60 @@ test('full backups preserve retained cache history as well as the selected empty
   });
 });
 
+test(
+  'Windows backup status replacement tolerates an overlapping reader',
+  { skip: process.platform !== 'win32' },
+  async (t) => {
+    await statusFixture(async (control, state) => {
+      await saveBrowserBackup(control, state);
+      const file = path.join(control, 'browser-backup.json');
+      let reader: Awaited<ReturnType<typeof fs.open>> | undefined = await fs.open(file, 'r');
+      const rename = fs.rename;
+      const sources: string[] = [];
+      t.mock.method(fs, 'rename', async (...args: Parameters<typeof fs.rename>) => {
+        if (String(args[1]) !== file) return rename(...args);
+        sources.push(String(args[0]));
+        try {
+          return await rename(...args);
+        } catch (error) {
+          assert.equal((error as NodeJS.ErrnoException).code, 'EPERM');
+          await reader?.close();
+          reader = undefined;
+          throw error;
+        }
+      });
+      try {
+        const next = { ...state, phase: 'failed' as const };
+        await saveBrowserBackup(control, next);
+        assert.deepEqual(await readBrowserBackup(control), next);
+        assert.equal(sources.length, 2);
+        assert.equal(new Set(sources).size, 1);
+        assert.deepEqual(await fs.readdir(control), ['browser-backup.json']);
+      } finally {
+        await reader?.close();
+      }
+    });
+  },
+);
+
+test('failed backup status publication preserves prior evidence and removes its temporary file', async (t) => {
+  await statusFixture(async (control, state) => {
+    await saveBrowserBackup(control, state);
+    const file = path.join(control, 'browser-backup.json');
+    const rename = fs.rename;
+    let attempts = 0;
+    t.mock.method(fs, 'rename', async (...args: Parameters<typeof fs.rename>) => {
+      if (String(args[1]) !== file) return rename(...args);
+      attempts++;
+      throw Object.assign(new Error('Fixture backup status write failed'), { code: 'EIO' });
+    });
+    await assert.rejects(saveBrowserBackup(control, { ...state, phase: 'failed' }), { code: 'EIO' });
+    assert.equal(attempts, 1);
+    assert.deepEqual(await readBrowserBackup(control), state);
+    assert.deepEqual(await fs.readdir(control), ['browser-backup.json']);
+  });
+});
+
 test('backup refuses absent maintenance, changed source and overlapping authorities without certifying anything', async () => {
   await fixture(async (source, control, state) => {
     await assert.rejects(
@@ -175,7 +238,7 @@ test('backup rejects source drift during copying and never publishes ready state
 });
 
 test('backup status rejects corrupt metadata, inconsistent readiness and archive links', async () => {
-  await fixture(async (_source, control, state) => {
+  await statusFixture(async (control, state) => {
     await fs.writeFile(path.join(control, 'browser-backup.json'), '{broken');
     await assert.rejects(readBrowserBackup(control));
     await assert.rejects(hashBackupArchive(path.join(control, 'browser-backup.json', 'bad')));
@@ -187,7 +250,7 @@ test('backup status rejects corrupt metadata, inconsistent readiness and archive
 });
 
 test('invalidating obsolete backup evidence preserves corrupt status and archives without requiring a read', async () => {
-  await fixture(async (_source, control, state) => {
+  await statusFixture(async (control, state) => {
     await invalidateBrowserBackup(control);
     const directory = browserBackupDirectory(control, state.id);
     await fs.mkdir(directory, { recursive: true });

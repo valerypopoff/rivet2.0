@@ -4,6 +4,7 @@ import type {
   AttachedData,
   CombinedDataset,
   Project,
+  ProjectId,
   NodeDatasetProvider,
   ProjectReferenceLoader,
   ResolvedSubgraphProject,
@@ -43,6 +44,35 @@ import type {
   WorkflowProjectReferenceSnapshot,
   WorkflowProjectReferenceCatalogEntry,
 } from './project-reference-snapshots.js';
+
+/** Hosted IO compatibility retains filesystem responses without widening SQL contracts. */
+export type HostedProjectSaveIntent = 'in-place' | 'save-as';
+export type HostedProjectStorageSaveOptions = {
+  projectPath: string;
+  contents: string;
+  datasetsContents: string | null;
+  expectedRevisionId?: string | null;
+  projectId?: ProjectId;
+  saveIntent?: HostedProjectSaveIntent;
+  structuralMutation?: import('@valerypopoff/rivet-studio-server-shared/workflow-mutation-contract.js').StructuralMutation;
+};
+export type HostedProjectStorageLoadResult = {
+  contents: string;
+  datasetsContents: string | null;
+  revisionId: string | null;
+};
+export type HostedProjectStorageSaveResult = {
+  path: string;
+  revisionId: string | null;
+  project: WorkflowProjectItem | null;
+  created: boolean;
+};
+export type WorkflowWebAppAccessPolicy = {
+  projectVirtualPath: string;
+  uiGraphId: string;
+  allowedEmails: string[];
+  bindingId: string;
+};
 
 export type HostedProjectSaveOptions = {
   projectPath: string;

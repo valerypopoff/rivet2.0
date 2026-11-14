@@ -140,6 +140,11 @@ combined adapter. This is a TypeScript dependency boundary, not authorization or
 a new backend instance. Filesystem migration compatibility remains in its legacy
 adapter; do not delete it as unused serving code.
 
+The [workflow storage routing refactor](./workflow-storage-routing-plan.md)
+separates filesystem project IO and execution loading from the compatibility
+facade. It preserves these resource owners and intentional backend differences.
+The plan records the preservation requirements and local verification.
+
 The serving composition root injects `managed/operations.ts` to create shared
 profile-health/Evaluation stores and the optional Evaluation coordinator with
 narrow execution-source callbacks. Construction occurs once during owned backend
@@ -443,10 +448,27 @@ to the existing authoritative tree reconciler rather than retaining an overflow
 queue or replaying uncertain mutations.
 
 `legacy-workflow-commands.ts` owns legacy project/publication locking and
-post-mutation invalidation. The compatibility facade selects an adapter; it no
-longer duplicates those command bodies. Hosted IO and legacy execution lookup
-retain their existing specialized paths. This is not a generic repository or
-SQL framework.
+post-mutation invalidation hooks. `legacy-project-storage.ts` owns filesystem
+tree/hosted IO, identity-safe saves and post-commit statistics. It receives the
+execution invalidator from composition in the compatibility facade. Hosted saves
+capture their input before adapter acquisition or writer waits; filesystem saves
+reuse the normalized written contents for statistics and the returned revision.
+`legacy-execution-storage.ts` owns filesystem execution/reference loaders,
+targeted web-app access-policy reads and cache/policy invalidation; the existing
+execution cache and source implementations remain unchanged. Published and
+latest web-app loads share one implementation after selecting the executable
+file; source paths and publication bindings still identify the saved project.
+`filesystem-project-identity.ts` supplies the physical ID scan shared by saves
+and cross-project Subgraphs, independently of UI/tree projections.
+
+`storage-backend.ts` retains mode selection, compatibility exports, capability
+guards, indexed-reference admission/deadlines and shared recording policy.
+Publication dispatch selects one narrow repository inside each supported command
+case, after synchronously capturing the reviewed command. Unsupported commands
+reject before opening storage; filesystem commands enter their existing writer
+without another await. Short project/recording delegations remain explicit. This
+is not a universal repository or SQL framework; legacy IO result nullability and
+mode-specific web-app binding/path mapping remain deliberate.
 
 Web-app preparation, request-context normalization, runtime options and recording
 identity live in `web-app-execution.ts`, shared by HTTP and WebSocket adapters.

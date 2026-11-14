@@ -237,7 +237,20 @@ rechecked checkbox. Independent authoritative backup/recovery status stays usabl
 One bounded (1 MiB), schema-validated `preparation.json` record is retained in the
 private control root with mode 0600, atomic replacement and fsync. It holds stage,
 inventory/fingerprint result and fixed failure text, never raw exceptions or
-credentials. Oversized informational results are discarded so a bounded failure
+credentials. On Windows, an open status reader can make replacement fail with
+`EPERM`. Preparation, backup-status and project-ID repair journal writers share
+`replaceControlFile` in `filesystem-transaction-primitives.ts`. Only promotion of
+the same frozen temporary record is retried: at most five attempts with four
+delays totaling 150 ms, plus filesystem time. Other errors propagate immediately;
+a persistent sharing/permission failure still fails. Source inspection, backup
+creation, project repair and workflow execution are never repeated by this retry.
+Each caller keeps its schema, fsync and ownership rules and removes its temporary
+record after success or failure. Failed backup-status publication preserves the
+previous evidence. Moving an obsolete backup status to a new name is unchanged;
+it does not have the same destination-replacement failure.
+Overlapping-reader regressions use real open Windows files; admission regressions
+verify persistent `EPERM` and `EIO` never start work.
+Oversized informational results are discarded so a bounded failure
 can still be retained. Status binds each record read to the admission/worker
 activity revision and rereads once if that lifecycle changes during IO. Repeated
 changes report unavailable preparation status rather than a false interruption;

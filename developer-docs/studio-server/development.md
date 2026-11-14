@@ -432,6 +432,28 @@ then the hosted `jev-nodes.spec.ts` observer when changing these integrations.
   tasks may use existing stores during drain, but may not create new resources.
   Obtain health/Evaluation stores from the owner rather than repeating mode
   dispatch in consumers; managed owners must never create their local counterparts.
+- Keep filesystem project IO in `legacy-project-storage.ts` and execution lookup
+  in `legacy-execution-storage.ts`. Share only the physical ID scan through
+  `filesystem-project-identity.ts`; do not use the UI tree to reconcile a moved
+  save target. Hosted save invalidation runs even if post-commit derived
+  statistics fail. Tree queries retain their maintenance-specific root lookup.
+  Capture hosted-save options at the facade entry point, before lazy backend
+  acquisition. Reuse the filesystem transaction's normalized contents for its
+  statistics and response revision; a caller changing its object during IO must
+  not change submitted bytes or produce a revision for unsaved edits.
+  Published/latest web-app loaders select the executable project and its dataset
+  together; keep their source path and app binding tied to the saved project.
+  The facade's hosted-IO compatibility types in `data-backend.ts` preserve legacy
+  nulls and branded IDs without widening SQL repository results.
+  When changing SQL routing, retain the `local-upgrade-runtime.test.ts` ordinary
+  SQLite serving scenario as well as direct-adapter contracts: it publishes and
+  loads both versions through the actual facade after a real storage selection.
+- Keep publication selection callback-based. Snapshot the command, reject unknown
+  kinds before storage acquisition, and enter the legacy writer without an
+  additional await. Do not replace short explicit project/recording dispatch with
+  a generic registry. New files use public shared-package type imports rather
+  than adding deep-relative import allowances. See the
+  [storage routing plan](./workflow-storage-routing-plan.md) for verification.
 - Extend `hosted-runtime-policy.ts` when adding execution dependencies. Supply
   explicit loaders for hosted Evaluation execution as well as serving runs.
   Keep transport credentials and request-context filtering in their owning
@@ -3330,6 +3352,18 @@ For packages/studio-server-web changes:
 3. if the change affects browser-visible behavior, run `PLAYWRIGHT_HEADLESS=1`, `PLAYWRIGHT_SLOW_MO=0`, then `yarn studio-server:ui:observe`
 4. if the Playwright coverage needs real workflow mutations in Storage-tab `Object storage` mode, set `PLAYWRIGHT_ALLOW_MANAGED_MUTATIONS=1` deliberately and keep cleanup explicit; prefer mocked API/browser tests for modal and controller coverage when storage mutation is not the point
 5. if the change lives under `packages/studio-server-web/overrides/` or affects hosted editor save/hotkey behavior, also verify with `yarn studio-server:prod:custom`; `yarn studio-server:prod` deliberately pulls already-published images instead of using your local workspace changes
+
+Source-host observer cases, including hosted Save As, require a Vite source server;
+a static web build cannot serve their `/@fs` imports. Let dependency optimization
+settle before collecting a result: changing optimized React modules during page
+initialization can produce duplicate React instances. Pass `waitForFunction`
+timeouts in its third argument (options), after the optional page-data argument;
+otherwise the intended startup deadline is silently treated as page data.
+For cases forwarding browser requests into an owned API fixture, drain routes
+and close the browser context
+before closing the fixture, including when an assertion or page initialization
+fails. Otherwise teardown can replace the original failure with a connection reset
+and interrupt cleanup of disposable services.
 
 For workflow-library mutations that change on-disk project state:
 

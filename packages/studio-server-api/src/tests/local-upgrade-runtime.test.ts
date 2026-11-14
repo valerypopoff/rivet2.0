@@ -112,7 +112,10 @@ test('a visible failed preparation retains admission ownership until cleanup set
     assert.equal((await jobs.status())?.phase, 'failed');
     assert.equal(jobs.running, true);
     assert.equal(jobs.stage, 'inspect');
-    await assert.rejects(jobs.start({ ...input, id: randomUUID() }, async () => {}), /already running/);
+    await assert.rejects(
+      jobs.start({ ...input, id: randomUUID() }, async () => {}),
+      /already running/,
+    );
     hold = false;
     release();
     await jobs.settled();
@@ -177,6 +180,84 @@ test('preparation status rereads completion instead of reporting an interrupted 
     await fs.rm(root, { recursive: true, force: true });
   }
 });
+
+test(
+  'Windows preparation completion tolerates an overlapping status reader without repeating work',
+  { skip: process.platform !== 'win32' },
+  async (t) => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-preparation-reader-'));
+    const jobs = new LocalUpgradePreparationJobs(root);
+    const file = path.join(root, 'preparation.json');
+    let finish!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    let executions = 0;
+    let reader: Awaited<ReturnType<typeof fs.open>> | undefined;
+    const attemptedSources: string[] = [];
+    try {
+      await jobs.start({ id: randomUUID(), kind: 'inspect', revision: 1 }, async () => {
+        executions++;
+        await gate;
+      });
+      reader = await fs.open(file, 'r');
+      const rename = fs.rename;
+      t.mock.method(fs, 'rename', async (...args: Parameters<typeof fs.rename>) => {
+        if (String(args[1]) !== file) return rename(...args);
+        attemptedSources.push(String(args[0]));
+        try {
+          return await rename(...args);
+        } catch (error) {
+          assert.equal((error as NodeJS.ErrnoException).code, 'EPERM');
+          await reader?.close();
+          reader = undefined;
+          throw error;
+        }
+      });
+      finish();
+      await jobs.settled();
+      assert.equal((await jobs.status())?.phase, 'ready');
+      assert.equal(executions, 1);
+      assert.equal(attemptedSources.length, 2);
+      assert.equal(new Set(attemptedSources).size, 1, 'retry must promote the same frozen status file');
+    } finally {
+      finish();
+      await reader?.close();
+      await jobs.settled();
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  },
+);
+
+for (const code of ['EPERM', 'EIO']) {
+  test(`preparation admission retains a permanent ${code} failure without starting work`, async (t) => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-preparation-rename-'));
+    const jobs = new LocalUpgradePreparationJobs(root);
+    let attempts = 0;
+    let executions = 0;
+    const rename = fs.rename;
+    t.mock.method(fs, 'rename', async (...args: Parameters<typeof fs.rename>) => {
+      if (String(args[1]) !== path.join(root, 'preparation.json')) return rename(...args);
+      attempts++;
+      throw Object.assign(new Error('Fixture rename denied'), { code });
+    });
+    try {
+      await assert.rejects(
+        jobs.start({ id: randomUUID(), kind: 'inspect', revision: 1 }, async () => {
+          executions++;
+        }),
+        { code },
+      );
+      assert.equal(attempts, code === 'EPERM' && process.platform === 'win32' ? 5 : 1);
+      assert.equal(executions, 0);
+      assert.equal(jobs.running, false);
+      assert.deepEqual(await fs.readdir(root), []);
+    } finally {
+      await jobs.settled();
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+}
 
 test('preparation failure is redacted, retry uses a new identity and invalid retained files fail closed', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-preparation-failure-'));

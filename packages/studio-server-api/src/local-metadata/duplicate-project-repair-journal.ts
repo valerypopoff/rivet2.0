@@ -4,7 +4,11 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
-import { syncDirectory, writeDurableExclusive } from '../routes/workflows/filesystem-transaction-primitives.js';
+import {
+  replaceControlFile,
+  syncDirectory,
+  writeDurableExclusive,
+} from '../routes/workflows/filesystem-transaction-primitives.js';
 import { createHttpError } from '../utils/httpError.js';
 
 const name = z.string().min(1).max(4096);
@@ -79,7 +83,7 @@ export async function saveDuplicateRepairJournal(control: string, journal: Dupli
   const temporary = path.join(control, `repair-${randomUUID()}.tmp`);
   try {
     await writeDurableExclusive(temporary, contents, 0o600);
-    await fs.rename(temporary, path.join(control, 'duplicate-project-repair.json'));
+    await replaceControlFile(temporary, path.join(control, 'duplicate-project-repair.json'));
     await syncDirectory(control);
   } finally {
     await fs.rm(temporary, { force: true });

@@ -13,7 +13,11 @@ import {
 } from '../scripts/migrate-workflow-storage-lib.js';
 import { migrationTargetIdentity } from '../vm-migration-target-gate.js';
 import { fingerprintVmMigrationSource } from '../scripts/vm-migration-source-manifest.js';
-import { createSourceArchive, readSourceManifest } from '../scripts/migrate-runtime-libraries.js';
+import {
+  createRuntimeLibraryDirectoryArchive,
+  createSourceArchive,
+  readSourceManifest,
+} from '../scripts/migrate-runtime-libraries.js';
 
 test('frozen VM source manifest detects owned-file drift but ignores the migration job marker', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-migration-manifest-'));
@@ -90,7 +94,7 @@ test('runtime-library archive rejects links to unarchived siblings even inside t
       }
       throw error;
     }
-    await assert.rejects(createSourceArchive(root), /escapes.*archived release/);
+    await assert.rejects(createRuntimeLibraryDirectoryArchive(path.join(root, 'current')), /escapes.*archived release/);
   } finally {
     await fs.rm(root, { recursive: true, force: true });
   }
@@ -102,6 +106,10 @@ test('runtime-library archive remains loadable after relocation with internal np
     const source = path.join(root, 'source');
     const packageRoot = path.join(source, 'current', 'node_modules', 'example');
     await fs.mkdir(packageRoot, { recursive: true });
+    await fs.writeFile(
+      path.join(source, 'manifest.json'),
+      JSON.stringify({ packages: { example: { name: 'example', version: '1.0.0' } } }),
+    );
     await fs.writeFile(path.join(source, 'current', 'package.json'), '{}');
     await fs.writeFile(path.join(packageRoot, 'value.cjs'), 'module.exports = 42;', { mode: 0o755 });
     try {
@@ -140,7 +148,7 @@ test('runtime-library source inspection rejects a dangling legacy release instea
       }
       throw error;
     }
-    await assert.rejects(readSourceManifest(root), /legacy active-release/);
+    await assert.rejects(readSourceManifest(root), /legacy.*reconciliation/);
   } finally {
     await fs.rm(root, { recursive: true, force: true });
   }

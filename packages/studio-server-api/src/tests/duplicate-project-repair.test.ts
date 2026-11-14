@@ -122,6 +122,49 @@ test('guided identity repair preserves all projects, attached data, datasets and
   }
 });
 
+test(
+  'Windows repair completion tolerates a reader of the retained recovery journal',
+  { skip: process.platform !== 'win32' },
+  async (t) => {
+    const f = await fixture();
+    const journal = path.join(f.control, 'duplicate-project-repair.json');
+    let reader: Awaited<ReturnType<typeof fs.open>> | undefined;
+    const rename = fs.rename;
+    const promotions: string[] = [];
+    const applied: string[] = [];
+    t.mock.method(fs, 'rename', async (...args: Parameters<typeof fs.rename>) => {
+      if (String(args[1]) !== journal || !reader) return rename(...args);
+      promotions.push(String(args[0]));
+      try {
+        return await rename(...args);
+      } catch (error) {
+        assert.equal((error as NodeJS.ErrnoException).code, 'EPERM');
+        await reader.close();
+        reader = undefined;
+        throw error;
+      }
+    });
+    try {
+      await repairDuplicateProjectIds({
+        ...f.options,
+        choices: await f.choices(),
+        checkpoint: async (point) => {
+          if (point === 'repair:prepared') reader = await fs.open(journal, 'r');
+          if (point.startsWith('repair:applied:')) applied.push(point);
+        },
+      });
+      assert.equal((await duplicateRepairStatus(f.control))?.phase, 'complete');
+      assertNoPendingDuplicateRepair(f.control);
+      assert.equal(promotions.length, 1, 'the held reader must exercise a real failed replacement');
+      assert.equal(applied.length, 3);
+      assert.equal(new Set(applied).size, 3, 'project/history mutations must not be repeated');
+    } finally {
+      await reader?.close();
+      await fs.rm(f.root, { recursive: true, force: true });
+    }
+  },
+);
+
 test('stale or incomplete ownership cannot change source files', async () => {
   const f = await fixture();
   try {
