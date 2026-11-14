@@ -1,5 +1,14 @@
 # Recording input search performance
 
+## HTTP ownership
+
+`routes/workflows/recording-http.ts` owns recording browsing/search, replay,
+deletion and statistics HTTP handlers. It registers directly on the existing
+workflow router, after its cache policy and behind the app's operator-auth
+boundary. Search/cache/storage algorithms stay in their existing modules.
+The [separation record](recording-http-separation-plan.md) documents the preserved
+cancellation, pagination and response contracts and local validation.
+
 ## Request-ID search improvements — November 11, 2026
 
 The [implementation plan and measurements](recording-request-id-search-plan.md)

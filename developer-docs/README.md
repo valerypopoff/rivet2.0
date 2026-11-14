@@ -59,6 +59,7 @@ commands; the guides below describe implementation and verification.
 - [Development And Verification](./studio-server/development.md)
 - [Access And Routing](./studio-server/access-and-routing.md)
 - [Web-app HTTP Separation Plan](./studio-server/web-app-http-separation-plan.md)
+- [Recording HTTP Separation Plan](./studio-server/recording-http-separation-plan.md)
 - [Editor Bridge](./studio-server/editor-bridge.md)
 - [Workflow Publication](./studio-server/workflow-publication.md)
 - [Recording Search Performance And Scope](./studio-server/recording-search-performance.md)

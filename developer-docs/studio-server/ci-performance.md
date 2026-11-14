@@ -19,6 +19,12 @@ to distinguish real failures from expected negative-test errors, downstream
 refusals and unstarted jobs. This is a local preparation aid, not another CI gate
 or cloud-test requirement.
 
+The pinned-Yarn API shard smoke test accepts both TAP and spec-reporter summary
+prefixes. Node's default reporter can vary with the output stream; a successful
+selected shard must report a nonzero passing count, zero failures and exit zero,
+without invoking the intentionally broken global Yarn shim. A reporter-prefix
+difference alone must not fail this check.
+
 ## Browser shard budget and hosted variability
 
 [Verify Studio Server 43434671248, editor shard 3](https://github.com/valerypopoff/rivet2.0/actions/runs/43434671248/job/131919256700)

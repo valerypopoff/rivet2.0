@@ -4,6 +4,28 @@ This document records intentional architecture and cleanup changes that future m
 
 It is not a changelog. Keep entries focused on why a refactor happened, which ownership boundary changed, and which verification paths should be kept alive.
 
+## 2026-11-14 - Recording And Run-statistics HTTP Ownership
+
+The workflow parent router mixed recording browsing, input search, replay and
+statistics with unrelated project mutations and publication routes.
+`recording-http.ts` now owns the ten recording/statistics registrations and
+their six schemas. A single registration call keeps the existing router,
+middleware instances and ordering; no extra router traversal or execution work
+is introduced. Search, storage and execution implementations remain unchanged.
+
+`api-profile.test.ts` checks route exposure and operator access in all four
+profiles; remaining shared validation branches run once on the control profile.
+`workflow-recordings-http.test.ts` uses the control API harness and directly
+persisted fixtures for browsing and deletion. Actual execution-to-recording tests
+keep the execution harness. Its cancellation test checks that disconnecting one
+of two searches cancels only its input read, retains accepted work until
+completion and forwards ordinary failures. Completion checks use the accepted-work
+drain rather than an event-loop timing assumption.
+The [implementation record](recording-http-separation-plan.md) contains the
+structural comparison, compiled measurements and browser verification. Keep
+that distinction: mocked browser journeys prove UI compatibility; actual API
+tests and compiled probes exercise the handlers.
+
 ## 2026-11-14 - Web-app HTTP And Workflow Endpoint Ownership
 
 ### Why

@@ -1,11 +1,18 @@
 import assert from 'node:assert/strict';
 // test-style: fixture-read: reads serialized project fixtures and test-owned persisted artifacts, never implementation source.
 import fs from 'node:fs/promises';
+import http from 'node:http';
 import path from 'node:path';
 import test from 'node:test';
 import { gzipSync } from 'node:zlib';
+import express from 'express';
+import type { NextFunction, Request, Response as ExpressResponse } from 'express';
 import { getExpectedProxyAuthToken } from '../auth.js';
 import { WORKFLOW_RECORDING_CREATED_AT_HEADER } from '../../../studio-server-shared/workflow-recording-time.js';
+import type {
+  WorkflowRecordingRunsPageResponse,
+  WorkflowRecordingStatus,
+} from '../../../studio-server-shared/workflow-recording-types.js';
 import type { ChartNode, GraphId, NodeConnection, PortId, ProcessEvents } from '@valerypopoff/rivet2-node';
 import { writeWorkflowProjectStatsCacheFromContents } from '../routes/workflows/project-stats.js';
 import {
@@ -16,6 +23,9 @@ import {
 } from './helpers/workflow-api-harness.js';
 import { createFilesystemWorkflowSuiteHarness } from './helpers/workflow-filesystem-suite-harness.js';
 import { createExhaustedProfileGraph, EXHAUSTION_PROVIDER_ORIGIN } from './helpers/llm-exhaustion-fixture.js';
+import { listenTestServer } from './helpers/http-server-harness.js';
+import { AcceptedWork } from '../../../studio-server-shared/process-retirement.js';
+import { createRequestWorkBarrier } from '../request-work.js';
 
 const {
   workflowsRoot,
@@ -25,14 +35,43 @@ const {
   workflowStorageBackend,
   workflowExecution,
   rivetNode,
+  withWorkflowApiServer,
   withWorkflowExecutionServer,
   resetAndEnsureWorkflowsRoot,
   cleanupWorkflowSuite,
 } = await createFilesystemWorkflowSuiteHarness();
 const { writeRunRecordingsSettings, runRecordingsSettingsRepository } = await import('../routes/workflows/recordings-config.js');
+const { workflowsRouter } = await import('../routes/workflows/index.js');
+const { workflowRecordingInputCache } = await import('../routes/workflows/recording-input-cache.js');
 
 test.beforeEach(resetAndEnsureWorkflowsRoot);
 test.after(cleanupWorkflowSuite);
+
+async function persistFixtureRecordings(projectPath: string, statuses: readonly WorkflowRecordingStatus[]) {
+  const [project, attachedData] = await rivetNode.loadProjectAndAttachedDataFromFile(projectPath);
+  const recordingSerialized = new rivetNode.ExecutionRecorder().serialize();
+  const firstCreatedAt = Date.now() - statuses.length;
+  const ids: string[] = [];
+  for (const [index, status] of statuses.entries()) {
+    const id = await workflowRecordings.persistWorkflowExecutionRecording({
+      workflowsRoot,
+      sourceProject: project,
+      sourceProjectPath: projectPath,
+      executedProject: project,
+      executedAttachedData: attachedData,
+      executedDatasets: [],
+      endpointName: 'recording-fixture',
+      recordingSerialized,
+      runKind: 'published',
+      status,
+      durationMs: 1,
+      createdAt: new Date(firstCreatedAt + index).toISOString(),
+    });
+    assert.ok(id);
+    ids.push(id);
+  }
+  return { project, ids };
+}
 
 for (const caught of [false, true]) {
   test(`exhausted LLM profiles retain published/latest recordings with the actual root outcome (caught=${caught})`, async (t) => {
@@ -114,7 +153,7 @@ test('stale retention and a post-save notification failure cannot erase an index
 });
 
 test('recordings catalog reports server timing and keeps the compatibility alias', async () => {
-  await withWorkflowExecutionServer(async ({ apiBaseUrl }) => {
+  await withWorkflowApiServer(async (apiBaseUrl) => {
     for (const endpoint of ['/recordings/workflows', '/recordings']) {
       const response = await fetch(`${apiBaseUrl}${endpoint}`);
       assert.equal(response.status, 200);
@@ -128,6 +167,121 @@ test('recordings catalog reports server timing and keeps the compatibility alias
     }
   });
 });
+
+test(
+  'recording requests clean up abort listeners and only suppress a disconnected AbortError',
+  { timeout: 10_000 },
+  async (t) => {
+    const item = await workflowMutations.createWorkflowProjectItem('', 'Cancelled search');
+    await persistFixtureRecordings(item.absolutePath, ['succeeded']);
+    await workflowStorageBackend.initializeWorkflowStorage();
+    const app = express();
+    const work = new AcceptedWork();
+    app.use(createRequestWorkBarrier(work));
+    const forwarded: Error[] = [];
+    const observed: Array<{
+      req: Request;
+      res: ExpressResponse;
+      abortedListeners: ReturnType<Request['listeners']>;
+      closeListeners: ReturnType<ExpressResponse['listeners']>;
+    }> = [];
+    app.use((req, res, next) => {
+      observed.push({ req, res, abortedListeners: req.listeners('aborted'), closeListeners: res.listeners('close') });
+      next();
+    });
+    app.use('/api/workflows', workflowsRouter);
+    app.use((error: Error, _req: Request, res: ExpressResponse, _next: NextFunction) => {
+      forwarded.push(error);
+      if (!res.destroyed)
+        res.status((error as Error & { status?: number }).status ?? 500).json({ error: error.message });
+    });
+    const server = await listenTestServer(http.createServer(app));
+    try {
+      const invalid = await fetch(`${server.baseUrl}/api/workflows/recordings/runs?inputAfter=invalid`);
+      assert.equal(invalid.status, 400);
+      assert.match((await invalid.json()).error, /requires an input filter/);
+      forwarded.length = 0;
+
+      const page = await fetch(`${server.baseUrl}/api/workflows/recordings/runs`);
+      assert.equal(page.status, 200);
+      assert.equal((await page.json()).totalRuns, 1);
+
+      const pending: Array<{ signal: AbortSignal | undefined; reject(error: Error): void }> = [];
+      const abortError = Object.assign(new Error('cancelled input read'), { name: 'AbortError' });
+      let stopping = false;
+      let notifyEntered!: () => void;
+      const entered = new Promise<void>((resolve, reject) => {
+        notifyEntered = resolve;
+        t.signal.addEventListener('abort', () => reject(t.signal.reason), { once: true });
+      });
+      t.mock.method(
+        workflowRecordingInputCache,
+        'getOrLoad',
+        (...[_key, _load, signal]: Parameters<typeof workflowRecordingInputCache.getOrLoad>) => {
+          if (stopping) return Promise.reject(abortError);
+          return new Promise<never>((_resolve, reject) => {
+            pending.push({ signal, reject });
+            if (pending.length === 2) notifyEntered();
+          });
+        },
+      );
+      const url = `${server.baseUrl}/api/workflows/recordings/runs?inputPath=$.request_id`;
+      const cancelled = http.get(`${url}&case=cancelled`);
+      cancelled.on('error', () => {}); // The test deliberately closes this socket.
+      const errorController = new AbortController();
+      const errorResponse = fetch(url, { signal: AbortSignal.any([errorController.signal, t.signal]) }).then(
+        async (response) => ({
+          status: response.status,
+          body: await response.json(),
+        }),
+      );
+      void errorResponse.catch(() => {}); // Observe early transport failure until the explicit assertion below.
+      const readError = new Error('input read failed');
+      try {
+        await entered;
+        assert.equal(work.count, 2);
+        assert.ok(
+          pending.every(({ signal }) => signal && !signal.aborted),
+          'Each active search receives a live abort signal.',
+        );
+        const cancelledResponse = observed.find(({ req }) => req.query.case === 'cancelled')!.res;
+        const closed = new Promise<void>((resolve) => cancelledResponse.once('close', resolve));
+        cancelled.destroy();
+        await closed;
+        assert.equal(
+          pending.filter(({ signal }) => signal?.aborted).length,
+          1,
+          'Disconnect reaches only its input read.',
+        );
+        assert.equal(work.count, 2, 'Accepted reads stay owned until they settle.');
+        pending.forEach(({ signal, reject }) => reject(signal?.aborted ? abortError : readError));
+        assert.deepEqual(await errorResponse, { status: 500, body: { error: readError.message } });
+      } finally {
+        stopping = true;
+        cancelled.destroy();
+        errorController.abort();
+        const drained = work.drain();
+        pending.forEach(({ reject }) => reject(abortError));
+        await errorResponse.catch(() => {});
+        await drained;
+      }
+      assert.equal(work.count, 0);
+      assert.deepEqual(forwarded, [readError], 'Only the disconnected AbortError is suppressed.');
+      for (const { req, res, abortedListeners, closeListeners } of observed) {
+        assert.ok(
+          req.listeners('aborted').every((listener) => abortedListeners.includes(listener)),
+          'Request abort listeners were cleaned up.',
+        );
+        assert.ok(
+          res.listeners('close').every((listener) => closeListeners.includes(listener)),
+          'Response abort listeners were cleaned up.',
+        );
+      }
+    } finally {
+      await server.close();
+    }
+  },
+);
 
 for (const isSplitSequential of [false, true]) {
   test(`headless ${isSplitSequential ? 'sequential' : 'parallel'} pruned calls persist replayable per-item recordings`, async () => {
@@ -569,55 +723,25 @@ test('recordings list keeps once-published workflows after unpublish', async () 
 
 test('workflow recording runs endpoint paginates and filters failed runs server-side', async () => {
   const created = await workflowMutations.createWorkflowProjectItem('', 'Paged');
-  await workflowMutations.publishWorkflowProjectItem(created.relativePath, {
-    endpointName: 'paged-endpoint',
-  });
+  const { project, ids } = await persistFixtureRecordings(created.absolutePath, ['succeeded', 'failed', 'suspicious']);
 
-  await withWorkflowExecutionServer(async ({ apiBaseUrl, publishedBaseUrl }) => {
-    for (let index = 0; index < 3; index++) {
-      const response = await fetch(`${publishedBaseUrl}/paged-endpoint`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ value: index }),
-      });
-      assert.equal(response.ok, true);
-    }
-
-    const workflowsResponse = (await waitForRecordingWorkflows(
-      apiBaseUrl,
-      (workflows) => workflows[0]?.totalRuns === 3,
-    )) as {
-      workflows: Array<{ workflowId: string }>;
-    };
-    const workflowId = workflowsResponse.workflows[0]!.workflowId;
-
-    const pageOne = await readJson<{
-      page: number;
-      pageSize: number;
-      totalRuns: number;
-      runs: Array<{ id: string }>;
-    }>(
-      await fetch(
-        `${apiBaseUrl}/recordings/workflows/${encodeURIComponent(workflowId)}/runs?page=1&pageSize=2&status=all`,
-      ),
+  await withWorkflowApiServer(async (apiBaseUrl) => {
+    const url = `${apiBaseUrl}/recordings/workflows/${encodeURIComponent(project.metadata.id)}/runs`;
+    const pageOne = await readJson<WorkflowRecordingRunsPageResponse>(
+      await fetch(`${url}?page=1&pageSize=2&status=all`),
     );
-
     assert.equal(pageOne.page, 1);
     assert.equal(pageOne.pageSize, 2);
     assert.equal(pageOne.totalRuns, 3);
-    assert.equal(pageOne.runs.length, 2);
-
-    const failedOnly = await readJson<{
-      totalRuns: number;
-      runs: Array<{ status: string }>;
-    }>(
-      await fetch(
-        `${apiBaseUrl}/recordings/workflows/${encodeURIComponent(workflowId)}/runs?page=1&pageSize=20&status=failed`,
-      ),
+    assert.deepEqual(pageOne.runs.map((run) => run.id), [ids[2], ids[1]]);
+    const pageTwo = await readJson<WorkflowRecordingRunsPageResponse>(await fetch(`${url}?page=2&pageSize=2`));
+    assert.equal(pageTwo.page, 2);
+    assert.deepEqual(pageTwo.runs.map((run) => run.id), [ids[0]]);
+    const failedOnly = await readJson<WorkflowRecordingRunsPageResponse>(
+      await fetch(`${url}?pageSize=20&status=failed`),
     );
-
-    assert.equal(failedOnly.totalRuns, 0);
-    assert.equal(failedOnly.runs.length, 0);
+    assert.equal(failedOnly.totalRuns, 2);
+    assert.deepEqual(failedOnly.runs.map((run) => run.status), ['suspicious', 'failed']);
   });
 });
 
@@ -650,7 +774,7 @@ test('all-workflow recordings paginate, filter status and search inputs with sco
       }),
     });
   }
-  await withWorkflowExecutionServer(async ({ apiBaseUrl }) => {
+  await withWorkflowApiServer(async (apiBaseUrl) => {
     const get = async (query: string) =>
       readJson<import('../../../studio-server-shared/workflow-recording-types.js').WorkflowRecordingRunsPageResponse>(
         await fetch(`${apiBaseUrl}/recordings/runs?${query}`),
@@ -878,7 +1002,7 @@ test('workflow recording input filter evaluates JSON paths against the request i
   );
   const artifactPath = workflowFs.getWorkflowRecordingPath(path.join(recordingRoot, equalsBar.runs[0]!.id));
   const original = await fs.readFile(artifactPath);
-  await withWorkflowExecutionServer(async ({ apiBaseUrl }) => {
+  await withWorkflowApiServer(async (apiBaseUrl) => {
     const query = new URLSearchParams({ inputPath: '$.foo', inputOperator: '==', inputValue: 'bar' });
     const url = `${apiBaseUrl}/recordings/workflows/${workflowId}/runs?${query}`;
     try {
@@ -1035,7 +1159,7 @@ test('filesystem recording statistics use indexed identities for endpoint and we
   assert.equal(partialWebAppStatistics.current.runCount, 1);
   assert.equal(partialWebAppStatistics.current.medianDurationMs, 175);
 
-  await withWorkflowExecutionServer(async ({ apiBaseUrl }) => {
+  await withWorkflowApiServer(async (apiBaseUrl) => {
     const targetsResponse = await fetch(
       `${apiBaseUrl}/run-statistics/targets?${new URLSearchParams({ surface: 'web_app' })}`,
     );
@@ -1112,27 +1236,11 @@ test('filesystem recording statistics use indexed identities for endpoint and we
 
 test('workflow recording delete route removes a single recording and updates totals', async () => {
   const created = await workflowMutations.createWorkflowProjectItem('', 'DeleteOneRecording');
-  await workflowMutations.publishWorkflowProjectItem(created.relativePath, {
-    endpointName: 'delete-one-recording-endpoint',
-  });
+  await workflowMutations.publishWorkflowProjectItem(created.relativePath, { endpointName: 'recording-fixture' });
+  const { project } = await persistFixtureRecordings(created.absolutePath, ['succeeded', 'succeeded']);
 
-  await withWorkflowExecutionServer(async ({ apiBaseUrl, publishedBaseUrl }) => {
-    for (let index = 0; index < 2; index++) {
-      const response = await fetch(`${publishedBaseUrl}/delete-one-recording-endpoint`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ value: index }),
-      });
-      assert.equal(response.ok, true);
-    }
-
-    const workflowsResponse = (await waitForRecordingWorkflows(
-      apiBaseUrl,
-      (workflows) => workflows[0]?.totalRuns === 2,
-    )) as {
-      workflows: Array<{ workflowId: string; totalRuns: number }>;
-    };
-    const workflowId = workflowsResponse.workflows[0]!.workflowId;
+  await withWorkflowApiServer(async (apiBaseUrl) => {
+    const workflowId = project.metadata.id;
 
     const runsResponse = await readJson<{
       totalRuns: number;
@@ -1157,7 +1265,8 @@ test('workflow recording delete route removes a single recording and updates tot
       method: 'DELETE',
     });
 
-    assert.equal(deleteResponse.ok, true);
+    assert.equal(deleteResponse.status, 200);
+    assert.deepEqual(await deleteResponse.json(), { deleted: true });
 
     const updatedWorkflows = await readJson<{
       workflows: Array<{ workflowId: string; totalRuns: number }>;
@@ -1190,23 +1299,11 @@ test('workflow recording delete route removes the last unpublished recording fro
     endpointName: 'delete-last-recording-endpoint',
   });
 
-  await withWorkflowExecutionServer(async ({ apiBaseUrl, publishedBaseUrl }) => {
-    const response = await fetch(`${publishedBaseUrl}/delete-last-recording-endpoint`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ value: 'only-run' }),
-    });
-    assert.equal(response.ok, true);
+  const { project } = await persistFixtureRecordings(created.absolutePath, ['succeeded']);
+  await workflowMutations.unpublishWorkflowProjectItem(created.relativePath);
 
-    await workflowMutations.unpublishWorkflowProjectItem(created.relativePath);
-
-    const workflowsResponse = (await waitForRecordingWorkflows(
-      apiBaseUrl,
-      (workflows) => workflows[0]?.totalRuns === 1,
-    )) as {
-      workflows: Array<{ workflowId: string; totalRuns: number }>;
-    };
-    const workflowId = workflowsResponse.workflows[0]!.workflowId;
+  await withWorkflowApiServer(async (apiBaseUrl) => {
+    const workflowId = project.metadata.id;
 
     const runsResponse = await readJson<{
       totalRuns: number;
@@ -1231,7 +1328,8 @@ test('workflow recording delete route removes the last unpublished recording fro
     const deleteResponse = await fetch(`${apiBaseUrl}/recordings/${encodeURIComponent(deletedRecordingId)}`, {
       method: 'DELETE',
     });
-    assert.equal(deleteResponse.ok, true);
+    assert.equal(deleteResponse.status, 200);
+    assert.deepEqual(await deleteResponse.json(), { deleted: true });
 
     const updatedWorkflows = await readJson<{
       workflows: Array<{ workflowId: string; totalRuns: number }>;
@@ -1397,7 +1495,7 @@ test('local editor replay persistence links health evidence after a project rena
   const renamed = await workflowMutations.renameWorkflowProjectItem(created.relativePath, 'LocalHealthEvidenceRenamed');
   assert.notEqual(renamed.project.absolutePath, staleProjectPath);
 
-  await withWorkflowExecutionServer(async ({ apiBaseUrl }) => {
+  await withWorkflowApiServer(async (apiBaseUrl) => {
     const capability = await readJson<{ supported: boolean }>(
       await fetch(`${apiBaseUrl}/local-editor-recordings/capability`),
     );
@@ -1468,7 +1566,7 @@ test('local editor replay persistence resolves a nested relative path when the t
   const generatedCache = JSON.parse(await fs.readFile(sidecars.stats, 'utf8')) as Record<string, unknown>;
   await fs.writeFile(sidecars.stats, `${JSON.stringify({ ...generatedCache, projectMetadataId: null })}\n`, 'utf8');
 
-  await withWorkflowExecutionServer(async ({ apiBaseUrl }) => {
+  await withWorkflowApiServer(async (apiBaseUrl) => {
     const persistResponse = await fetch(`${apiBaseUrl}/local-editor-recordings`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1514,7 +1612,7 @@ test('editor parent and Subgraph uploads retain replay evidence with oversized d
     assets: {},
     strings: { diagnostic: errorMessage },
   });
-  await withWorkflowExecutionServer(async ({ apiBaseUrl }) => {
+  await withWorkflowApiServer(async (apiBaseUrl) => {
     for (const child of [false, true]) {
       const url = `${apiBaseUrl}/local-editor-recordings${child ? '/subgraph-run' : ''}`;
       const body = {
@@ -1557,7 +1655,7 @@ test('editor parent and Subgraph uploads retain replay evidence with oversized d
 test('editor and Subgraph uploads accept start-time headers while legacy bodies and invalid-header rejection remain safe', async () => {
   const item = await workflowMutations.createWorkflowProjectItem('', 'UploadTiming');
   const [project, attached] = await rivetNode.loadProjectAndAttachedDataFromFile(item.absolutePath);
-  await withWorkflowExecutionServer(async ({ apiBaseUrl }) => {
+  await withWorkflowApiServer(async (apiBaseUrl) => {
     const ids: string[] = [];
     const starts = [new Date(Date.now() - 20_000).toISOString(), new Date(Date.now() - 40_000).toISOString()];
     for (const child of [false, true]) {
@@ -1618,7 +1716,7 @@ test('hosted editor parent and Subgraph runs share discoverable recordings witho
     },
   ]);
 
-  await withWorkflowExecutionServer(async ({ apiBaseUrl }) => {
+  await withWorkflowApiServer(async (apiBaseUrl) => {
     const persist = async (datasetMode: 'none' | 'all') => {
       let recordingId = '';
       await withEnvOverride('RIVET_RECORDINGS_DATASET_MODE', datasetMode, async () => {

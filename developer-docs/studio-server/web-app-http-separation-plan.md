@@ -1,11 +1,13 @@
 # Web-app HTTP and workflow endpoint separation
 
-Status: complete and locally verified, with the Windows host-permission
-exception recorded below. Reviewed on 2026-11-14 against
-`853e735d9fbc45c4d02070f11c6d8e6fe7f0be28` in the `develop` checkout. Existing
-uncommitted Docker/Yarn bootstrap changes are separate work and must be preserved.
-All five implementation steps are complete. Committing and releasing the changes
-are separate from this refactor's local completion.
+Status: complete and committed on `develop` as
+`6cc0151dc856842951f4d94d65e55a870bc25dc5`. Locally verified on 2026-11-14,
+with the Windows host-permission exception recorded below. The implementation
+baseline was `853e735d9fbc45c4d02070f11c6d8e6fe7f0be28`; the accompanying
+Docker/Yarn bootstrap fix was reviewed separately and included in that commit.
+All five implementation steps are complete. Release qualification and deployment
+are separate from local completion. The subsequent recording extraction is documented
+in the [recording HTTP separation plan](recording-http-separation-plan.md).
 
 ## Goal and reassessed scope
 

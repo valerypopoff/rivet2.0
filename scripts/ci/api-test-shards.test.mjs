@@ -177,8 +177,9 @@ test('API runner executes its selected tests with pinned Yarn, not a global shim
     assert.equal(result.error, undefined);
     assert.equal(result.status, 0, result.stdout + result.stderr);
     assert.match(result.stdout, /1 files/);
-    assert.match(result.stdout, /# pass [1-9]\d*\b/);
-    assert.match(result.stdout, /# fail 0\b/);
+    // Node selects TAP or the spec reporter according to the host output stream.
+    assert.match(result.stdout, /^(?:#|ℹ) pass [1-9]\d*\b/m);
+    assert.match(result.stdout, /^(?:#|ℹ) fail 0\b/m);
     assert.doesNotMatch(result.stderr, /GLOBAL_YARN_USED/);
   } finally {
     fs.rmSync(shimDir, { recursive: true, force: true });

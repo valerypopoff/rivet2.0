@@ -486,6 +486,14 @@ transport-specific. Neither adapter acquires a second run-session owner.
 The [web-app HTTP separation plan](web-app-http-separation-plan.md) records the
 extraction scope, compatibility contracts and verification evidence.
 
+Recording catalogs, run search, replay downloads, deletion and run-statistics
+HTTP routes live in `routes/workflows/recording-http.ts`. Its registration
+function attaches the existing handlers directly to `workflowsRouter`; it
+receives the parent's timing middleware, JSON parser and request-abort helper.
+The parent retains GET cache headers, graph-reference cancellation and the
+compatibility exports. Storage, search, statistics and execution owners are
+unchanged. See the [recording HTTP separation record](recording-http-separation-plan.md).
+
 Workflow contracts live in `routes/workflows/data-backend.ts`, independently of
 the PostgreSQL implementation. Project IO, publication, execution sources and
 recording repositories are separate interfaces; `WorkflowDataBackend` composes

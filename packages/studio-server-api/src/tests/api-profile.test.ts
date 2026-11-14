@@ -25,6 +25,8 @@ import { LocalMetadataTransitionJournal } from '../local-metadata/transition-jou
 import { createProxySettingsSnapshot } from '../proxy-settings-snapshot.js';
 import { setLegacyRestorePaused, setLegacyRestoreWarmup } from '../legacy-restore/service.js';
 import { configureRequestReceiveDeadlines } from '../legacy-restore/receive-deadline.js';
+import { disposeWorkflowStorage } from '../routes/workflows/storage-backend.js';
+import { resetWorkflowRecordingStorageForTests } from '../routes/workflows/recordings.js';
 
 // test-style: fixture-read: Only the test-owned temporary SQLite journal is read to verify recovery requests leave its bytes unchanged.
 
@@ -32,6 +34,7 @@ const relevantEnvKeys = [
   'RIVET_KEY',
   'RIVET_CORS_ALLOWED_ORIGINS',
   'RIVET_WORKFLOWS_ROOT',
+  'RIVET_WORKFLOW_RECORDINGS_ROOT',
   'RIVET_APP_DATA_ROOT',
   'RIVET_RUNTIME_LIBRARIES_ROOT',
   'RIVET_WORKSPACE_ROOT',
@@ -122,6 +125,7 @@ async function withApiEnv(
   process.env.RIVET_KEY = 'phase4-shared-key';
   process.env.RIVET_WORKSPACE_ROOT = tempRoot;
   process.env.RIVET_WORKFLOWS_ROOT = path.join(tempRoot, 'workflows');
+  process.env.RIVET_WORKFLOW_RECORDINGS_ROOT = path.join(tempRoot, 'recordings');
   process.env.RIVET_APP_DATA_ROOT = path.join(tempRoot, 'app-data');
   process.env.RIVET_RUNTIME_LIBRARIES_ROOT = path.join(tempRoot, 'runtime-libraries');
 
@@ -181,6 +185,81 @@ function trustedProxyHeaders(): Record<string, string> {
   return {
     'x-rivet-proxy-auth': getExpectedProxyAuthToken(),
   };
+}
+
+for (const profile of ['control', 'combined', 'execution', 'evaluation'] as const) {
+  test(`${profile} preserves recording route exposure, operator authentication and validation`, async (t) => {
+    await withApiEnv({ RIVET_SERVER_UI_AUTH_MODE: 'key' }, async () => {
+      t.mock.method(console, 'error', () => {});
+      const server = await startServer(profile);
+      const exposed = profile === 'control' || profile === 'combined';
+      const operator = { ...trustedProxyHeaders(), cookie: `rivet_ui_token=${getExpectedUiSessionToken()}` };
+      try {
+        for (const [pathname, method, body, status, error] of [
+          ['/recordings/runs?page=0', 'GET', undefined, 500, 'Internal server error'],
+          ['/recordings/missing', 'DELETE', undefined, 404, 'Recording not found'],
+          ['/run-statistics/query', 'POST', '{', 400, undefined],
+        ] as const) {
+          for (const headers of [{}, trustedProxyHeaders(), operator]) {
+            const response = await fetch(`${server.baseUrl}/api/workflows${pathname}`, {
+              method,
+              headers: { ...headers, 'content-type': 'application/json' },
+              body,
+            });
+            const expectedStatus = !exposed ? 404 : headers === operator ? status : 403;
+            const expectedError = !exposed ? 'Not found' : headers === operator ? error : 'Forbidden';
+            assert.equal(response.status, expectedStatus, `${method} ${pathname}`);
+            const result = await response.json();
+            if (expectedError) assert.deepEqual(result, { error: expectedError });
+            else assert.equal(typeof result.error, 'string');
+          }
+        }
+        // Validation is shared; exercise its remaining branches on one mounted profile.
+        if (profile === 'control') {
+          for (const [pathname, method, body, status, message] of [
+            ['/run-statistics/targets?surface=invalid', 'GET', undefined, 500, 'Internal server error'],
+            ['/run-statistics/query', 'POST', '{}', 400, undefined],
+            [
+              '/run-statistics/query',
+              'POST',
+              JSON.stringify({
+                target: { surface: 'endpoint', workflowId: 'fixture' },
+                runKind: 'both',
+                period: { from: '2026-11-14T12:00:00Z', to: '2026-11-13T12:00:00Z' },
+              }),
+              400,
+              undefined,
+            ],
+            ['/recordings/runs', 'POST', '{', 404, 'Not found'],
+          ] as const) {
+            const response = await fetch(`${server.baseUrl}/api/workflows${pathname}`, {
+              method,
+              headers: { ...operator, 'content-type': 'application/json' },
+              body,
+            });
+            assert.equal(response.status, status, `${method} ${pathname}`);
+            const result = await response.json();
+            if (message) assert.deepEqual(result, { error: message });
+            else assert.equal(typeof result.error, 'string');
+          }
+        }
+        if (exposed) {
+          const response = await fetch(`${server.baseUrl}/api/workflows/recordings/runs?pageSize=1`, {
+            headers: operator,
+          });
+          assert.equal(response.status, 200);
+          assert.match(response.headers.get('cache-control') ?? '', /no-store/);
+          const page = await response.json();
+          assert.equal(page.totalRuns, 0);
+          assert.deepEqual(page.runs, []);
+        }
+      } finally {
+        await server.close();
+        await resetWorkflowRecordingStorageForTests();
+        await disposeWorkflowStorage();
+      }
+    });
+  });
 }
 
 test('graph reference review requires authentication and validates bounded JSON input', async () => {

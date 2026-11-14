@@ -12,6 +12,14 @@ control outcomes or readiness.
 
 This document describes the current external route families, the nginx gate, and the trust boundary between `proxy`, the control-plane API, the execution-plane API, and `executor`.
 
+Recording and run-statistics handlers under `/api/workflows` are registered by
+`routes/workflows/recording-http.ts` on the same workflow router. Control and
+combined profiles expose them behind `requireOperatorAuth`; execution and
+evaluation profiles do not. The parent's GET cache policy and shared middleware
+instances still apply. Query-schema errors keep the existing general error
+path, while statistics POST validation and invalid search filters retain their
+400 responses. The local-editor recording upload router remains separate.
+
 On a single VM, the optional Compose TLS listener terminates public HTTPS and
 forwards public HTTPS or private-host HTTP over loopback to this same nginx
 gate. It overwrites forwarded host, protocol, client IP, and Rivet trust
