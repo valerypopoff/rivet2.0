@@ -327,7 +327,7 @@ function coerceToChatMessageRaw(value: DataValue | undefined): ChatMessage | und
     'type' in value.value &&
     'message' in value.value &&
     typeof value.value.type === 'string' &&
-    typeof value.value.message === 'string'
+    (typeof value.value.message === 'string' || Array.isArray(value.value.message))
   ) {
     return value.value as ChatMessage;
   }

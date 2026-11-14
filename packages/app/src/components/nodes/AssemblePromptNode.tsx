@@ -15,7 +15,7 @@ const styles = css`
 
 const AssemblePromptNodeBody: FC<{ node: AssemblePromptNode }> = ({ node }) => (
   <div css={styles}>
-    {node.data.filterEmptyPrompts ? (
+    {node.data.filterEmptyPrompts !== false ? (
       <div>
         <span className="assemble-prompt-node-body-label">Filter empty prompts:</span> Enabled
       </div>

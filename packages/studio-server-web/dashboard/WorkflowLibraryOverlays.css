@@ -33,6 +33,10 @@
   height: 14px;
 }
 
+.workflow-bundle-submenu-arrow {
+  margin-left: auto;
+}
+
 .workflow-project-context-menu-item:hover,
 .workflow-project-context-menu-item:focus-visible {
   background: rgba(255, 255, 255, 0.08);

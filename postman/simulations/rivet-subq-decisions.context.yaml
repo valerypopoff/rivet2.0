@@ -1,0 +1,23 @@
+purpose:
+  stands_in_for: SubQ Decisions API using the existing repo-owned local Snap mock.
+  unblocks: Offline verification of Decision AI request models, pricing and failure handling.
+assumptions:
+  - id: snap-12-contract
+    status: supported
+    claim: Snap 1.2 uses model ID subq-snap-1.2 on the existing Decisions endpoint and costs USD0.04 per million input tokens with free output.
+    reason: The current official model catalog and Decisions API document the same endpoint, request fields and rates used by Rivet.
+    verification: Read both official pages on 2026-11-15. No paid provider request was made; legacy model availability was not tested live.
+    source: https://docs.subq.ai/using-the-api/models/; https://docs.subq.ai/endpoints/decisions-api/
+    updated_at: '2026-11-15'
+  - id: snap-12-local-client
+    status: supported
+    claim: In the modeled responses, inline and Profile nodes send Snap 1.2, retain typed images and question types, calculate Cost once and preserve existing failure behavior.
+    reason: The real node/provider code exercised the repo-owned mock over loopback HTTP; the mock did not call SubQ.
+    verification: On 2026-11-15 check-subq-simulation.mts passed nine HTTP requests covering both modes, images, three question types, Cost, 402, 403, identical rate-limit retry and timeout. Postman CLI 1.75.0 produced no ready event before it was stopped; the same mock was run directly on an ephemeral loopback port with Node24 instead. Owner mock discovery was not repeated because the existing repo-owned mock was reused.
+    source: packages/core/scripts/check-subq-simulation.mts; postman/mocks/subq-snap/default.js; artifacts/bundle-actions-refactor-20261115/snap12-http-test.log
+    updated_at: '2026-11-15'
+fingerprints:
+  - id: snap-12-local-2026-11-15
+    date: '2026-11-15'
+    commit: null
+    cli: Postman 1.75.0; direct mock verification with Node24

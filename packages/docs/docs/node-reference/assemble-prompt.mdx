@@ -14,6 +14,11 @@ An [LLM Chat Node](./llm-chat) takes a single Prompt input, which can be one mes
 
 If a string is connected to any of the inputs, it will be converted to a User type chat message with the string as the message.
 
+Empty and whitespace-only text messages are ignored by default. Ordinary message
+text is kept exactly as supplied. Image, document, URL, tool-exchange and reasoning
+messages remain intact even when they have no text. Turn off **Filter empty prompts**
+if you intentionally need empty messages; an explicitly saved Off setting is respected.
+
 ![Assemble Prompt Node Screenshot](./assets/assemble-prompt-node.png)
 
 <Tabs
@@ -51,11 +56,11 @@ If a string is connected to any of the inputs, it will be converted to a User ty
 
 ## Editor Settings
 
-| Setting                          | Description                                                                                                                                                                                            | Default |
-| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------- |
-| Compute Token Count              | Adds a `Token Count` output containing the token count of the final assembled prompt.                                                                                                                  | Off     |
-| Filter empty prompts             | Removes text-only messages whose content is empty or whitespace. Messages containing images, URLs, documents, assistant tool calls, or function responses are preserved even when their text is empty. | Off     |
-| Is Last Message Cache Breakpoint | For providers that support prompt caching, marks the final message of a prompt containing at least two messages as a cache breakpoint. When filtering is enabled, this uses the retained messages.     | Off     |
+| Setting                          | Description                                                                                                                                                                                        | Default |
+| -------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- |
+| Compute Token Count              | Adds a `Token Count` output containing the token count of the final assembled prompt.                                                                                                              | Off     |
+| Filter empty prompts             | Removes text-only messages whose content is empty or whitespace. Images, URLs, documents, tool exchanges and reasoning continuity are preserved even when their text is empty.                     | On      |
+| Is Last Message Cache Breakpoint | For providers that support prompt caching, marks the final message of a prompt containing at least two messages as a cache breakpoint. When filtering is enabled, this uses the retained messages. | Off     |
 
 </TabItem>
 
@@ -113,6 +118,6 @@ A: Yes, you can connect an Array Node to the Assemble Prompt Node. Each element 
 
 **Q: How does the Assemble Prompt Node handle empty strings or null values?**
 
-A: The Assemble Prompt Node ignores missing and null inputs. Empty chat messages are included by default for compatibility with existing graphs. Enable **Filter empty prompts** to remove messages whose content is empty or whitespace-only. Rich-content messages and tool-protocol messages are retained because they remain meaningful even without text.
+A: Missing and null inputs are ignored, including entries inside an Array node's output and deferred inputs that return no value. Text-only messages that are empty or whitespace-only are filtered by default, including messages inside arrays. Turn off **Filter empty prompts** to keep empty messages; an explicitly saved Off setting is preserved. Rich-content messages, tool exchanges and reasoning continuity remain meaningful without text and are retained, including when passed through Array.
 
 ## See Also

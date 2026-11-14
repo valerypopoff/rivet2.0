@@ -1,4 +1,9 @@
 import {
+  autoUpdate,
+  flip,
+  safePolygon,
+  useHover,
+  useClick,
   offset,
   shift,
   useDismiss,
@@ -11,7 +16,7 @@ import ArrowUpIcon from 'majesticons/line/arrow-up-line.svg?react';
 import DeleteBinIcon from 'majesticons/line/delete-bin-line.svg?react';
 import MergeIcon from 'majesticons/line/git-merge-line.svg?react';
 import PlusIcon from 'majesticons/line/plus-line.svg?react';
-import { useLayoutEffect, type FC } from 'react';
+import { useLayoutEffect, useState, type ReactNode, type KeyboardEvent, type FC } from 'react';
 import type { WorkflowFolderItem } from './types';
 import { BundleTransferIcon } from './BundleTransferIcon';
 import { WorkflowBundleIcon } from './WorkflowBundleIcon';
@@ -56,6 +61,80 @@ function createVirtualContextTarget(x: number, y: number): VirtualElement {
       };
     },
   };
+}
+
+function BundleActionsSubmenu({ children }: { children: ReactNode }) {
+  const [open, setOpen] = useState(false);
+  const { refs, floatingStyles, context } = useFloating({
+    open,
+    onOpenChange: setOpen,
+    placement: 'right-start',
+    strategy: 'fixed',
+    whileElementsMounted: autoUpdate,
+    middleware: [offset(4), flip(), shift({ padding: 8 })],
+  });
+  const hover = useHover(context, { handleClose: safePolygon() });
+  const click = useClick(context, { keyboardHandlers: false });
+  const role = useRole(context, { role: 'menu' });
+  const { getReferenceProps, getFloatingProps } = useInteractions([hover, click, role]);
+  const focusFirst = () =>
+    requestAnimationFrame(() =>
+      refs.floating.current?.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus(),
+    );
+  return (
+    <>
+      <button
+        type="button"
+        role="menuitem"
+        className="workflow-project-context-menu-item"
+        ref={refs.setReference}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        {...getReferenceProps({
+          onKeyDown(event: KeyboardEvent<HTMLButtonElement>) {
+            if (['ArrowRight', 'ArrowDown', 'Enter', ' '].includes(event.key)) {
+              event.preventDefault();
+              setOpen(true);
+              focusFirst();
+            }
+          },
+        })}
+      >
+        <WorkflowBundleIcon className="workflow-project-context-menu-item-icon" aria-hidden="true" />
+        <span>Bundle actions</span>
+        <span className="workflow-bundle-submenu-arrow" aria-hidden="true">
+          ›
+        </span>
+      </button>
+      {open ? (
+        <div
+          ref={refs.setFloating}
+          style={floatingStyles}
+          className="workflow-project-context-menu"
+          aria-label="Bundle actions"
+          {...getFloatingProps({
+            onKeyDown(event: KeyboardEvent<HTMLDivElement>) {
+              if (event.key === 'Escape' || event.key === 'ArrowLeft') {
+                event.preventDefault();
+                event.stopPropagation();
+                setOpen(false);
+                (refs.reference.current as HTMLButtonElement | null)?.focus();
+              } else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+                event.preventDefault();
+                const items = Array.from(
+                  event.currentTarget.querySelectorAll<HTMLButtonElement>('button:not(:disabled)'),
+                );
+                const index = items.indexOf(document.activeElement as HTMLButtonElement);
+                items[(index + (event.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length]?.focus();
+              }
+            },
+          })}
+        >
+          {children}
+        </div>
+      ) : null}
+    </>
+  );
 }
 
 export const WorkflowFolderContextMenu: FC<WorkflowFolderContextMenuProps> = ({
@@ -114,31 +193,27 @@ export const WorkflowFolderContextMenu: FC<WorkflowFolderContextMenuProps> = ({
       <button type="button" className="workflow-project-context-menu-item" role="menuitem" onClick={onRename}>
         <span>Rename {folder.bundleId ? 'bundle' : 'folder'}</span>
       </button>
-      {bundleActions ? (
-        <>
-          {folder.bundleId ? (
-            <button
-              type="button"
-              className="workflow-project-context-menu-item"
-              role="menuitem"
-              onClick={bundleActions.download}
-            >
-              <BundleTransferIcon direction="down" />
-              <span>Download bundle</span>
-            </button>
-          ) : null}
-          {folder.bundleId ? (
-            <button
-              type="button"
-              className="workflow-project-context-menu-item"
-              role="menuitem"
-              onClick={bundleActions.duplicate}
-              disabled={bundleActions.busy}
-            >
-              Duplicate bundle
-            </button>
-          ) : null}
-          {folder.bundleId && bundleActions.merge ? (
+      {bundleActions && folder.bundleId ? (
+        <BundleActionsSubmenu>
+          <button
+            type="button"
+            className="workflow-project-context-menu-item"
+            role="menuitem"
+            onClick={bundleActions.download}
+          >
+            <BundleTransferIcon direction="down" />
+            <span>Download bundle</span>
+          </button>
+          <button
+            type="button"
+            className="workflow-project-context-menu-item"
+            role="menuitem"
+            onClick={bundleActions.duplicate}
+            disabled={bundleActions.busy}
+          >
+            Duplicate bundle
+          </button>
+          {bundleActions.merge ? (
             <button
               type="button"
               className="workflow-project-context-menu-item"
@@ -150,7 +225,7 @@ export const WorkflowFolderContextMenu: FC<WorkflowFolderContextMenuProps> = ({
               Merge into another bundle…
             </button>
           ) : null}
-          {folder.bundleId && bundleActions.compare ? (
+          {bundleActions.compare ? (
             <button
               type="button"
               className="workflow-project-context-menu-item"
@@ -170,10 +245,21 @@ export const WorkflowFolderContextMenu: FC<WorkflowFolderContextMenuProps> = ({
               disabled={bundleActions.busy}
             >
               <WorkflowBundleIcon className="workflow-project-context-menu-item-icon" aria-hidden="true" />
-              <span>{folder.bundleId ? 'Convert to ordinary folder' : 'Convert to bundle'}</span>
+              <span>Convert to ordinary folder</span>
             </button>
           ) : null}
-        </>
+        </BundleActionsSubmenu>
+      ) : bundleActions?.canConvert ? (
+        <button
+          type="button"
+          className="workflow-project-context-menu-item"
+          role="menuitem"
+          onClick={bundleActions.convert}
+          disabled={bundleActions.busy}
+        >
+          <WorkflowBundleIcon className="workflow-project-context-menu-item-icon" aria-hidden="true" />
+          <span>Convert to bundle</span>
+        </button>
       ) : null}
       <div className="workflow-project-context-menu-separator" role="separator" aria-hidden="true" />
       <button type="button" className="workflow-project-context-menu-item" role="menuitem" onClick={onCreateFolder}>

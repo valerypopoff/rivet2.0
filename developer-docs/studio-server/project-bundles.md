@@ -35,9 +35,12 @@ but bundles cannot nest. Existing folders are not converted automatically.
 Conversion back to an ordinary folder removes grouping only. Projects, references
 and publications survive. Ordinary folders must be empty to delete; bundles have
 a separate recursive deletion flow.
-The bundle context menu keeps conversion last in its bundle-action section,
-uses a merge icon for merging, and puts New folder in its own section between
-separators, before the New project and upload actions.
+The bundle context menu groups Download, Duplicate, Merge, Compare and conversion
+under **Bundle actions**, immediately after Rename bundle. The submenu opens
+with hover, click, Enter/Space or ArrowRight/ArrowDown. Keyboard opening focuses
+the first action; Escape/ArrowLeft returns to its trigger.
+It flips at the viewport edge. Busy/capability guards apply to its actions.
+Conversion remains last there; New folder retains its separate section.
 
 ### Comparing bundles
 
@@ -76,8 +79,25 @@ library's selected-descendant cue without reopening folders the user has closed.
 Comparison rows reuse the ordinary project's row sizing and neutral selection
 background, without an accent outline. Older uses half the selection opacity to
 distinguish it from editable Newer. Long names truncate within one row. The
-expected Paired status is omitted; Loading, Unavailable and one-sided statuses
-remain visible. The toolbar keeps the role labels and Exit without extra help text.
+expected Paired status is omitted. Newer shows Added in green, Removed in red
+and Changed in yellow. Older-only members also appear at their old relative
+locations under Newer as read-only Removed inspections; Older omits the old
+Only in older label. These rows never create or restore server projects.
+The toolbar keeps the role labels and Exit without extra help text.
+
+Changed is calculated by the read-only `/compare/changes` route using the
+reviewed project mapping, pinned Older revisions and current Newer drafts.
+It normalizes copied project IDs, internal reference labels and location hints,
+while preserving Subgraph version choices, graph/node IDs and attached data.
+Saved project titles, names and content differences count as changes; distinct revision IDs alone do
+not. Reads run in batches of four after releasing SQL connections, with the
+existing 30-second request deadline. Checks refresh after saves and are cancelled
+on session changes. Unsaved Newer projects also carry a Changed cue alongside
+their Unsaved indicator. A failed check is shown explicitly rather than treated
+as unchanged. No database migration or workflow execution changes are involved.
+The canonical serializer is shared with bundle merging. Its runtime import uses
+the API's existing relative source/compiled layout (reviewed in the import-boundary
+debt list); the source-only shared package has no emitted JavaScript entry point.
 Pair availability errors stay with the current reviewed versions and mapping;
 a new review clears errors from the previous review. Switching pairs alone retains
 other pairs' errors until they are reopened.

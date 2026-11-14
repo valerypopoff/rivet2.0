@@ -242,7 +242,9 @@ For a message array, wire text and image Parts into each Assemble Message, then
 combine its Message outputs with Assemble Prompt and connect Prompt directly to
 State (Array's Output is also supported). Assemble Prompt accepts scalar messages
 and message arrays, preserving numeric port order and content/message boundaries;
-its optional empty-message filter retains image-only messages. Classifier State
+its default-on empty-message filter retains image-only messages. An explicitly
+disabled filter remains disabled. Passing histories through Array preserves
+multipart messages and skips null/missing slots before assembling. Classifier State
 ignores Anthropic cache-breakpoint metadata, not the message's evidence. Static
 User Type and input-supplied `user` roles are supported. OpenAI Decisions accepts
 only User messages (not the Chat/Responses role set); unsupported assembled roles
@@ -270,7 +272,8 @@ aligned with its labels. Only the exact legacy default in the classifier family
 is aliased; padded/custom names and raw recording metadata remain unchanged.
 SubQ Snap uses the same registry-driven provider/settings/environment controls,
 with `subqApiKey` / `SUBQ_API_KEY` on the executor and default model
-`subq-snap-1.1`. Core owns the separate typed-base64 image mapping and limits;
+`subq-snap-1.2`. Its shared picker retains Snap 1.1 with a deprecated label without
+rewriting saved models. Core owns the separate typed-base64 image mapping and limits;
 hosted wrappers must not duplicate it. See [SubQ integration](../CLASSIFIER-NODES.md#subq-snap-decisions)
 for pricing, retention and local verification boundaries.
 Decision AI HTTP 403 diagnostics distinguish denied model/key access from HTTP

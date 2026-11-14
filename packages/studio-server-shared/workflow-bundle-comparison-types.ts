@@ -19,6 +19,12 @@ export type BundleComparisonManifest = {
   capturedAt: string;
 };
 export type BundleComparisonPair = { olderId: string | null; newerId: string | null };
+export type BundleComparisonChangesRequest = {
+  olderId: string;
+  newerId: string;
+  pairs: Array<{ olderId: string; newerId: string; olderRevisionId: string }>;
+};
+export type BundleComparisonChanges = { changedNewerIds: string[] };
 export type BundleComparisonReference = { bundleId: string; projectId: string; revisionId: string };
 export type BundleComparisonCurrent = { bundleId: string; projectId: string };
 export type BundleComparisonPairRequest = {

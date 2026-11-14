@@ -1,7 +1,12 @@
 import { expect, test } from '@playwright/test';
 import { serializeProject, type ProjectId, type Project } from '@valerypopoff/rivet2-core';
 import { projectBundleFixture } from '../../studio-server-api/src/tests/helpers/project-bundle-fixture';
-import { authenticateIfNeeded, mockHostedEditorBootstrap, waitForDashboardReady } from './helpers/hostedEditorObserve';
+import {
+  openBundleActions,
+  authenticateIfNeeded,
+  mockHostedEditorBootstrap,
+  waitForDashboardReady,
+} from './helpers/hostedEditorObserve';
 
 test('Subgraph source separates same-bundle members from ordinary projects and excludes other bundles', async ({
   page,
@@ -213,6 +218,7 @@ test('Subgraph source separates same-bundle members from ordinary projects and e
   );
   await picker.press('Escape');
   await page.getByRole('button', { name: 'Collapse Feature bundle', exact: true }).click({ button: 'right' });
+  await openBundleActions(page);
   page.once('dialog', (dialog) => dialog.accept());
   await page.getByRole('menuitem', { name: 'Convert to ordinary folder', exact: true }).click();
   await expect(source.getByRole('button', { name: 'Same bundle', exact: true })).toHaveCount(0);

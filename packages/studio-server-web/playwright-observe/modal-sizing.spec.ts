@@ -101,3 +101,73 @@ test('dashboard dialogs share responsive dimensions, including nested schedule e
     await expect(modal).toHaveCount(0);
   }
 });
+
+test('project settings uses vertical sections on wide and narrow viewports', async ({ page }, testInfo) => {
+  const project = {
+    id: 'vertical-sections',
+    projectMetadataId: 'vertical-sections',
+    revisionId: 'saved-1',
+    name: 'Vertical sections',
+    fileName: 'Vertical sections.rivet-project',
+    relativePath: 'Vertical sections.rivet-project',
+    absolutePath: '/workflows/Vertical sections.rivet-project',
+    updatedAt: '',
+    settings: {
+      status: 'unpublished',
+      publicationVersion: '0',
+      endpointName: '',
+      lastPublishedAt: null,
+      publishedWebApps: [],
+    },
+  };
+  await page.route(
+    (url) => url.pathname.startsWith('/api/'),
+    (route) => {
+      const path = new URL(route.request().url()).pathname;
+      if (path === '/api/workflows/tree')
+        return route.fulfill({ json: { root: '/workflows', folders: [], projects: [project] } });
+      if (path === '/api/workflows/projects/web-apps')
+        return route.fulfill({
+          json: {
+            project,
+            projectId: project.id,
+            draftRevisionId: project.revisionId,
+            publicationVersion: '0',
+            hasMainGraph: true,
+            savedLatestSubgraphProjectIds: [],
+            webApps: [],
+          },
+        });
+      return route.fulfill({ status: 503, json: { error: 'Isolated sizing fixture' } });
+    },
+  );
+  await mockHostedEditorBootstrap(page);
+  await page.goto('/');
+  await authenticateIfNeeded(page);
+  await waitForDashboardReady(page);
+  await page.locator('.project-row', { hasText: project.name }).click();
+  await page.locator('.active-project-more-button').click();
+  const modal = page.getByTestId('workflow-project-settings-modal');
+  await expect(modal).toBeVisible();
+  for (const viewport of [
+    { width: 1600, height: 900 },
+    { width: 620, height: 900 },
+    { width: 1200, height: 400 },
+    { width: 620, height: 400 },
+  ]) {
+    await page.setViewportSize(viewport);
+    const tabs = modal.getByRole('tablist', { name: 'Project settings sections' });
+    await expect(tabs).toHaveAttribute('aria-orientation', 'vertical');
+    await modal.getByRole('tab', { name: 'Danger zone', exact: true }).click();
+    const deleteProject = modal.getByRole('button', { name: 'Delete project', exact: true });
+    await deleteProject.scrollIntoViewIfNeeded();
+    await expect(deleteProject).toBeInViewport();
+    await modal.getByRole('tab', { name: 'Endpoint', exact: true }).click();
+    const endpoint = modal.getByRole('textbox', { name: 'Workflow endpoint path' });
+    await endpoint.scrollIntoViewIfNeeded();
+    await expect(endpoint).toBeInViewport();
+    await expect(modal.getByRole('button', { name: 'Close project settings', exact: true })).toBeInViewport();
+    expect(await modal.evaluate((element) => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1);
+    await page.screenshot({ path: testInfo.outputPath(`project-settings-${viewport.width}-${viewport.height}.png`) });
+  }
+});

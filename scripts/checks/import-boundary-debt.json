@@ -186,6 +186,7 @@
     "packages/studio-server-api/src/routes/deployment-status.ts\t../../../studio-server-shared/deployment-status-types.js",
     "packages/studio-server-api/src/routes/runtime-library-job-stream.ts\t../../../studio-server-shared/runtime-library-types.js",
     "packages/studio-server-api/src/routes/workflows/bundle-merge-plan.ts\t../../../../studio-server-shared/workflow-bundle-types.js",
+    "packages/studio-server-api/src/routes/workflows/bundle-comparison.ts\t../../../../studio-server-shared/workflow-mutation-contract.js",
     "packages/studio-server-api/src/routes/workflows/bundle-merge-suggestions.ts\t../../../../studio-server-shared/workflow-bundle-types.js",
     "packages/studio-server-api/src/routes/workflows/bundle-merge-suggestions.ts\t../../../../studio-server-shared/workflow-mutation-contract.js",
     "packages/studio-server-api/src/routes/workflows/data-backend.ts\t../../../../studio-server-shared/workflow-recording-types.js",

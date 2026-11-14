@@ -52,13 +52,6 @@
   min-height: 32px;
 }
 
-.project-settings-section-switcher {
-  flex-wrap: wrap;
-  width: fit-content;
-  max-width: 100%;
-  flex: 0 0 auto;
-}
-
 .project-settings-title-display {
   display: inline-flex;
   align-items: flex-start;
@@ -140,6 +133,61 @@
   border: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: 8px;
   background: rgba(255, 255, 255, 0.035);
+}
+
+.project-settings-sections-layout {
+  display: grid;
+  grid-template-columns: 188px minmax(0, 1fr);
+  gap: 18px;
+  min-height: min(360px, calc(100vh - 164px));
+  max-height: calc(100vh - 164px);
+  overflow: hidden;
+}
+
+.project-settings-sections-layout > aside {
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.project-settings-vertical-tabs {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  gap: 4px;
+  padding: 5px;
+}
+
+.project-settings-vertical-tabs .project-settings-tab {
+  width: 100%;
+  min-height: 34px;
+  height: auto;
+  padding: 7px 10px;
+  text-align: left;
+}
+
+.project-settings-section-content {
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+@media (max-width: 760px) {
+  .project-settings-sections-layout {
+    grid-template-columns: 1fr;
+    overflow-y: auto;
+  }
+  .project-settings-vertical-tabs {
+    max-width: 260px;
+  }
+  .project-settings-sections-layout > aside {
+    overflow: visible;
+  }
+  .project-settings-section-content {
+    overflow: visible;
+  }
 }
 
 .project-settings-tab {

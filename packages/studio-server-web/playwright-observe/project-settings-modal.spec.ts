@@ -1385,10 +1385,15 @@ test.describe('Project settings modal', () => {
 
     const { modal } = await openProjectSettingsModal(page, project);
     const projectSettingsSections = modal.getByRole('tablist', { name: 'Project settings sections' });
-    await expect(projectSettingsSections).toHaveClass(/segmented-control/);
-    await expect(modal.locator('.project-settings-modal-header-row').getByRole('tablist')).toHaveCount(1);
-    await expect(modal.locator('.project-settings-modal-content').getByRole('tablist')).toHaveCount(0);
-    await expect(projectSettingsSections.getByRole('tab', { name: 'Endpoint' })).toHaveCSS('height', '28px');
+    await expect(projectSettingsSections).toHaveAttribute('aria-orientation', 'vertical');
+    await expect(modal.locator('.project-settings-modal-header-row').getByRole('tablist')).toHaveCount(0);
+    await expect(modal.locator('.project-settings-modal-content').getByRole('tablist')).toHaveCount(1);
+    const tabs = projectSettingsSections.getByRole('tab');
+    const first = (await tabs.nth(0).boundingBox())!;
+    const second = (await tabs.nth(1).boundingBox())!;
+    expect(second.y).toBeGreaterThan(first.y + first.height);
+    expect(second.x).toBeCloseTo(first.x);
+    expect(second.width).toBeCloseTo(first.width);
     await expect(projectSettingsSections.getByRole('tab', { name: 'Endpoint' })).toHaveAttribute(
       'aria-selected',
       'true',

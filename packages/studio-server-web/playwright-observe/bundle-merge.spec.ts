@@ -5,7 +5,12 @@ import type {
   BundleMergeResult,
 } from '../../studio-server-shared/workflow-bundle-types';
 import type { WorkflowFolderItem } from '../dashboard/types';
-import { authenticateIfNeeded, mockHostedEditorBootstrap, waitForDashboardReady } from './helpers/hostedEditorObserve';
+import {
+  openBundleActions,
+  authenticateIfNeeded,
+  mockHostedEditorBootstrap,
+  waitForDashboardReady,
+} from './helpers/hostedEditorObserve';
 
 test.use({ actionTimeout: 10_000 });
 
@@ -125,6 +130,7 @@ async function openLibrary(page: Page, mergeEnabled = true) {
 async function openMerge(page: Page) {
   await openLibrary(page);
   await page.getByRole('button', { name: 'Expand Working bundle', exact: true }).click({ button: 'right' });
+  await openBundleActions(page);
   await page.getByRole('menuitem', { name: 'Merge into another bundle…', exact: true }).click();
   await select(page, 'Destination bundle', 'Original — Original');
   return page.getByRole('dialog', { name: 'Merge bundle', exact: true });
@@ -185,6 +191,7 @@ test('bundle drag feedback uses the menu merge icon only over a merge target and
   const targetRow = page.getByRole('button', { name: 'Expand Original bundle', exact: true });
   await expect(sourceRow).toHaveAttribute('draggable', 'true');
   await sourceRow.click({ button: 'right' });
+  await openBundleActions(page);
   const menuIcon = await page
     .getByRole('menuitem', { name: 'Merge into another bundle…', exact: true })
     .locator('svg')
@@ -258,6 +265,7 @@ test('dragging one bundle onto another opens its merge review without moving or 
   await modal.getByRole('button', { name: 'Cancel', exact: true }).click();
   await expect(targetRow).toBeFocused();
   await sourceRow.click({ button: 'right' });
+  await openBundleActions(page);
   await page.getByRole('menuitem', { name: 'Merge into another bundle…', exact: true }).click();
   await expect(modal.getByText('Choose a bundle…', { exact: true })).toBeVisible();
   await expect(modal.getByRole('button', { name: 'Merge projects', exact: true })).toBeDisabled();
@@ -339,6 +347,7 @@ for (const outcome of ['success', 'recovered with failed refresh'] as const) {
     await authenticateIfNeeded(page);
     await waitForDashboardReady(page);
     await page.getByRole('button', { name: 'Expand Working bundle', exact: true }).click({ button: 'right' });
+    await openBundleActions(page);
     await page.getByRole('menuitem', { name: 'Merge into another bundle…', exact: true }).click();
     const modal = page.getByRole('dialog', { name: 'Merge bundle', exact: true });
     await expect(modal.getByRole('button', { name: 'Merge projects', exact: true })).toBeDisabled();
@@ -421,6 +430,7 @@ test('an obsolete preview cannot enable merging after project selection changes'
   await authenticateIfNeeded(page);
   await waitForDashboardReady(page);
   await page.getByRole('button', { name: 'Expand Working bundle', exact: true }).click({ button: 'right' });
+  await openBundleActions(page);
   await page.getByRole('menuitem', { name: 'Merge into another bundle…', exact: true }).click();
   await select(page, 'Destination bundle', 'Original — Original');
   const modal = page.getByRole('dialog', { name: 'Merge bundle', exact: true });
@@ -538,6 +548,7 @@ test('an older managed API keeps existing bundle actions without advertising uns
   await authenticateIfNeeded(page);
   await waitForDashboardReady(page);
   await page.getByRole('button', { name: 'Expand Working bundle', exact: true }).click({ button: 'right' });
+  await openBundleActions(page);
   await expect(page.getByRole('menuitem', { name: 'Duplicate bundle', exact: true })).toBeVisible();
   await expect(page.getByRole('menuitem', { name: 'Merge into another bundle…', exact: true })).toHaveCount(0);
 });
@@ -839,6 +850,7 @@ test('bundle menus separate creation actions and finish bundle operations with c
   await modal.getByRole('button', { name: 'Cancel', exact: true }).click();
   for (const name of ['Working', 'Original']) {
     await page.getByRole('button', { name: `Expand ${name} bundle`, exact: true }).click({ button: 'right' });
+    await openBundleActions(page);
     const menu = page.getByRole('menu', { name: `Actions for ${name}`, exact: true });
     const actions = await menu
       .locator(':scope > [role="menuitem"], :scope > [role="separator"]')
@@ -849,10 +861,7 @@ test('bundle menus separate creation actions and finish bundle operations with c
       );
     expect(actions).toEqual([
       'Rename bundle',
-      'Download bundle',
-      'Duplicate bundle',
-      'Merge into another bundle…',
-      'Convert to ordinary folder',
+      expect.stringContaining('Bundle actions'),
       'separator',
       'New folder',
       'separator',
@@ -860,6 +869,12 @@ test('bundle menus separate creation actions and finish bundle operations with c
       'Upload project',
       'separator',
       'Delete bundle',
+    ]);
+    await expect(page.getByRole('menu', { name: 'Bundle actions', exact: true }).getByRole('menuitem')).toHaveText([
+      'Download bundle',
+      'Duplicate bundle',
+      'Merge into another bundle…',
+      'Convert to ordinary folder',
     ]);
     await expect(
       menu.getByRole('menuitem', { name: 'Merge into another bundle…', exact: true }).locator('svg'),
@@ -891,6 +906,7 @@ test('a missing destination explains how to create one without issuing a preview
   await authenticateIfNeeded(page);
   await waitForDashboardReady(page);
   await page.getByRole('button', { name: 'Expand Working bundle', exact: true }).click({ button: 'right' });
+  await openBundleActions(page);
   await page.getByRole('menuitem', { name: 'Merge into another bundle…', exact: true }).click();
   const modal = page.getByRole('dialog', { name: 'Merge bundle', exact: true });
   await expect(modal.getByRole('combobox', { name: 'Destination bundle', exact: true })).toBeFocused();

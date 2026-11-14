@@ -2,7 +2,8 @@
 
 Status: implemented in the local `F:/Programming/Rivet2.0` checkout and validated
 locally on 2026-11-12, with the simplified controls and explicit-exit lifecycle
-updated on 2026-11-13. This document retains the current design and acceptance scope.
+updated on 2026-11-13, and saved-change statuses updated on 2026-11-15.
+This document retains the current design and acceptance scope.
 Commit, publication and deployment remain separate actions; no database/schema
 change, migration, backfill or cloud operation is part of this implementation.
 
@@ -126,10 +127,15 @@ logical pairs and updates labels, retaining the user's decisions.
   Collapsed ancestors show the normal library's selected-descendant cue without
   overriding the user's collapsed folders.
   Clicking an Older row does not make that side editable.
-- Show all members, omitting the default Paired label. Show Only in older, Only in newer or a located
-  Unavailable status. These labels describe correspondence, not ancestry or
-  proof that a project was historically added/deleted. A failure affects its
-  pair, not the whole feature.
+- Show all members, omitting the default Paired label. Older has no Only in older
+  label. Newer shows Added in green for unmatched Newer members and Removed in red
+  for read-only inspections of unmatched Older members at their old relative paths.
+  These rows do not create or restore server projects. Changed in yellow marks
+  saved-content differences against the pinned Older revision, or unsaved Newer
+  edits. These labels compare the selected bundles, not historical ancestry.
+  Located availability errors affect their pair, not the whole feature. Pending
+  change checks show Checking; a failed check shows Check failed rather than
+  silently treating projects as unchanged. Neither blocks pair navigation.
 - The comparison sidebar provides only **Exit comparison**. Swap and matching
   remain in the setup modal. Existing tabs and Newer dirty indicators stay available.
 - Comparison-tree rows are navigation controls. Do not wire projected rows to
@@ -292,6 +298,7 @@ Add a small read service beside the existing managed bundle service:
 | ---------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `POST /api/workflows/bundles/compare/manifest` | Accept two distinct bundle IDs. In one short consistent metadata snapshot, return roots/folders, member project IDs/names/paths, Saved latest revision IDs and optional published revision IDs, plus capture time. No project blobs.                                                                                                                                  |
 | `POST /api/workflows/bundles/compare/pair`     | Accept explicit Older reference descriptor or null, and Newer project descriptor or null, with at least one side present. Validate both memberships/identities in a short metadata read, return exact Older project contents when present and authoritative current Newer binding metadata when present. No Newer content download, arbitrary path/blob key or write. |
+| `POST /api/workflows/bundles/compare/changes`  | Accept the reviewed one-to-one mapping and pinned Older revision IDs. Validate membership and revision ownership, then compare matched saved contents against current Newer drafts. Return changed Newer IDs without modifying either bundle.                                                                                                                         |
 
 Return the validated current Newer binding with the pair read, including actual
 project identity, path and bundle membership. This is a metadata read, not a
@@ -311,6 +318,14 @@ cancellation-aware storage and asynchronous deserialization, with existing
 artifact limits and located failures. Never scan the whole library/history,
 run merge preview, construct execution closures or eagerly load legacy datasets
 merely to compare.
+
+The background changes read checks only reviewed matched pairs, in batches of
+four after releasing SQL connections, under the existing 30-second request
+deadline. It normalizes copied project IDs, internal reference labels and location
+hints while retaining authored titles, names, graph/node IDs, Subgraph version
+choices and attached data. Distinct revision IDs alone do not imply changes.
+Refresh after Newer saves; cancel superseded requests and ignore stale results.
+See [Project bundles](project-bundles.md) for the current status contract.
 
 The pair read's Older descriptor is bundle/project/captured revision; its Newer
 descriptor is bundle/project. Both descriptors are required fields whose explicit
@@ -540,8 +555,11 @@ Each step delivers its tests before the next dependent step. Implement in
   abandoned pool waiters or stale UI callbacks.
 - **Compatibility / cost of opening:** older API without bundleCompare hides the
   action. Ordinary project comparison, merge/download and normal preview tabs
-  retain behavior. Request counts show lightweight catalog plus selected-pair
-  work, not eager whole-bundle/library/dataset or execution-closure downloads.
+  retain behavior. Pair opening downloads only the selected Older content;
+  background saved-change checks read reviewed matched pairs with bounded
+  concurrency. Neither scans the library/history, downloads dataset blobs or
+  constructs execution closures. Check failures remain visible without blocking
+  comparison, and Removed inspections never restore projects.
 
 Run targeted Core/API/App/web tests through their existing package test owners,
 affected type/lint checks, shared-export/bridge validation and test registration,

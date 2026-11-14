@@ -122,7 +122,12 @@ export const WorkflowLibraryPanel: FC<WorkflowLibraryPanelProps> = ({
   routeConfig,
   onRouteConfigChange,
 }) => {
-  const comparison = useWorkflowBundleComparison(sendBundleComparison, bundleComparisonState, editorInstanceId);
+  const comparison = useWorkflowBundleComparison(
+    sendBundleComparison,
+    bundleComparisonState,
+    editorInstanceId,
+    projectSaveSequence,
+  );
   const bodyRef = useRef<HTMLDivElement>(null);
   const libraryScroll = useRef(0);
   const comparing = useRef(false);
@@ -278,8 +283,14 @@ export const WorkflowLibraryPanel: FC<WorkflowLibraryPanelProps> = ({
         selected={comparison.selected}
         pending={comparison.pending}
         errors={comparison.errors}
+        changedProjects={comparison.changedProjects}
+        changeError={comparison.changeError}
         dirtyProjects={
-          new Set(controller.allProjects.filter((p) => projectUnsavedChangesByPath[p.absolutePath]).map((p) => p.id))
+          new Set(
+            controller.allProjects
+              .filter((p) => projectUnsavedChangesByPath[p.absolutePath])
+              .map((p) => p.projectMetadataId ?? p.id),
+          )
         }
         onSelect={comparison.select}
       />

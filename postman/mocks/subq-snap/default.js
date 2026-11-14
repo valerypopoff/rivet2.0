@@ -1,4 +1,4 @@
-// Local-only contract subset: https://docs.subq.ai/endpoints/decisions-api/ (2026-10-24).
+// Local-only contract subset: https://docs.subq.ai/endpoints/decisions-api/ (2026-11-15).
 // No credentials/upstream calls. ?fixture=... is local fault injection, never a vendor field.
 const { createServer } = require('node:http');
 let rateLimitRequests = 0;
@@ -18,7 +18,13 @@ createServer(async (req, res) => {
       for await (const chunk of req) chunks.push(chunk);
       body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
     } else if (typeof body === 'string') body = JSON.parse(body);
-    if (body.model !== 'subq-snap-1.1' || body.state === undefined || !body.questions || body.messages || body.assets)
+    if (
+      !['subq-snap-1.2', 'subq-snap-1.1'].includes(body.model) ||
+      body.state === undefined ||
+      !body.questions ||
+      body.messages ||
+      body.assets
+    )
       return fail(422, 'validation_error', 'Invalid request shape');
     const entries = Object.entries(body.questions);
     if (!entries.length || entries.length > 128 || entries.some(([id]) => [...id].length > 100))

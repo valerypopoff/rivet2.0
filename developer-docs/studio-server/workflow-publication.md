@@ -1,5 +1,15 @@
 # Workflow Publication
 
+Project Settings uses the same sidebar navigation pattern as Rivet Server
+settings. Endpoint, Web apps, profile suspension, history and Danger zone stay
+in a vertical tab list with their existing actions and busy locks. Wide dialogs
+scroll the selected panel independently; narrow dialogs stack navigation above
+the panel and scroll the layout so controls remain reachable.
+Short windows constrain the layout's minimum height and scroll its sidebar as
+needed, keeping the close control in view.
+The regular editor CI suite covers this layout in `modal-sizing.spec.ts`,
+including narrow and 400-pixel-high windows.
+
 Workflows can be published as HTTP endpoints, and project-contained Rivet web apps can be published as browser pages. This document describes the current publication, execution, app-serving, and recording model.
 
 Publication and saved-version HTTP routes live in

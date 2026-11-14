@@ -2,6 +2,7 @@ import { strict as assert } from 'node:assert';
 import { describe, it } from 'node:test';
 import {
   AssemblePromptNodeImpl,
+  ArrayNodeImpl,
   type ChatMessage,
   type DataValue,
   type InternalProcessContext,
@@ -17,22 +18,25 @@ const processContext = {
 } as unknown as InternalProcessContext;
 
 describe('AssemblePromptNode', () => {
-  it('exposes filtering as an opt-in setting and only shows it in the body when enabled', () => {
+  it('enables filtering by default and only shows it in the body when enabled', () => {
     const created = AssemblePromptNodeImpl.create();
     const node = new AssemblePromptNodeImpl(created);
     const filterEditor = node.getEditors().find((editor) => editor.dataKey === 'filterEmptyPrompts');
     const cacheBreakpointEditor = node.getEditors().find((editor) => editor.dataKey === 'isLastMessageCacheBreakpoint');
 
-    assert.equal(created.data.filterEmptyPrompts, false);
+    assert.equal(created.data.filterEmptyPrompts, true);
     assert.deepEqual(filterEditor, {
       type: 'toggle',
       label: 'Filter empty prompts',
       dataKey: 'filterEmptyPrompts',
-      defaultValue: false,
+      defaultValue: true,
       helperMessage:
-        'Removes text-only messages whose content is empty or whitespace. Rich-content and tool-protocol messages are preserved.',
+        'Removes text-only messages whose content is empty or whitespace. Rich content, tool exchanges and reasoning continuity are preserved.',
     });
     assert.equal(cacheBreakpointEditor?.useInputToggleDataKey, 'useIsLastMessageCacheBreakpointInput');
+    assert.equal(node.getBody(), 'Filter empty prompts: Enabled');
+
+    created.data.filterEmptyPrompts = false;
     assert.equal(node.getBody(), '');
 
     created.data.filterEmptyPrompts = true;
@@ -45,8 +49,8 @@ describe('AssemblePromptNode', () => {
     assert.equal(node.getBody(), 'Filter empty prompts: Enabled\nLast message cache breakpoint: From input');
   });
 
-  it('preserves empty chat messages when the setting is absent or disabled', async () => {
-    for (const filterEmptyPrompts of [undefined, false]) {
+  it('filters empty messages when unset or enabled and honors an explicit opt-out', async () => {
+    for (const filterEmptyPrompts of [undefined, true, false]) {
       const chartNode = AssemblePromptNodeImpl.create();
       chartNode.data.filterEmptyPrompts = filterEmptyPrompts;
       const node = new AssemblePromptNodeImpl(chartNode);
@@ -59,11 +63,16 @@ describe('AssemblePromptNode', () => {
         processContext,
       );
 
-      assert.deepEqual(result.prompt?.value, [
-        { type: 'user', message: '' },
-        { type: 'user', message: '' },
-        { type: 'user', message: 'kept' },
-      ]);
+      assert.deepEqual(
+        result.prompt?.value,
+        filterEmptyPrompts === false
+          ? [
+              { type: 'user', message: '' },
+              { type: 'user', message: '' },
+              { type: 'user', message: 'kept' },
+            ]
+          : [{ type: 'user', message: 'kept' }],
+      );
     }
   });
 
@@ -124,6 +133,64 @@ describe('AssemblePromptNode', () => {
     assert.deepEqual(result.prompt, { type: 'chat-message[]', value: [] });
   });
 
+  it('keeps original text, rich content, tool exchanges and reasoning-only messages intact', async () => {
+    const chartNode = AssemblePromptNodeImpl.create();
+    chartNode.data.filterEmptyPrompts = true;
+    const kept: ChatMessage[] = [
+      { type: 'user', message: '  Keep this spacing\n' },
+      { type: 'user', message: '0' },
+      { type: 'user', message: ['', { type: 'image', mediaType: 'image/png', data: new Uint8Array([1]) }] },
+      {
+        type: 'user',
+        message: [
+          {
+            type: 'document',
+            mediaType: 'application/pdf',
+            data: new Uint8Array([2]),
+            title: 'File',
+            context: undefined,
+            enableCitations: true,
+          },
+        ],
+      },
+      {
+        type: 'assistant',
+        message: '',
+        function_call: { id: 'call-legacy', name: 'lookup', arguments: '{}' },
+        function_calls: undefined,
+      },
+      { type: 'function', name: 'lookup', toolName: 'lookup', message: '' },
+      {
+        type: 'assistant',
+        message: [],
+        function_call: undefined,
+        function_calls: undefined,
+        openRouterReasoningDetails: [{ type: 'reasoning.encrypted', data: 'opaque-fixture' }],
+      },
+    ];
+    const result = await new AssemblePromptNodeImpl(chartNode).process(
+      {
+        message1: {
+          type: 'chat-message[]',
+          value: [
+            {
+              type: 'assistant',
+              message: ' ',
+              function_call: undefined,
+              function_calls: [],
+              openRouterReasoningDetails: [],
+            },
+            ...kept,
+          ],
+        },
+      },
+      processContext,
+    );
+    assert.deepEqual(result.prompt?.value, kept);
+    const output = result.prompt?.value as ChatMessage[];
+    kept.forEach((value, index) => assert.equal(output[index], value));
+  });
+
   it('orders numbered inputs numerically instead of lexicographically', async () => {
     const node = new AssemblePromptNodeImpl(AssemblePromptNodeImpl.create());
 
@@ -141,6 +208,59 @@ describe('AssemblePromptNode', () => {
       { type: 'user', message: 'Two' },
       { type: 'user', message: 'Ten' },
     ]);
+  });
+
+  it('ignores null and missing Array entries before coercing or filtering messages', async () => {
+    const array = await new ArrayNodeImpl(ArrayNodeImpl.create()).process({
+      input1: { type: 'any', value: null },
+      input2: undefined,
+      input3: message({ type: 'user', message: 'Kept' }),
+      input4: { type: 'string', value: '  ' },
+    });
+    const node = new AssemblePromptNodeImpl(AssemblePromptNodeImpl.create());
+    const result = await node.process({ message1: array.output }, processContext);
+    assert.deepEqual(result.prompt?.value, [{ type: 'user', message: 'Kept' }]);
+  });
+
+  it('preserves multipart and reasoning-only messages passed through Array', async () => {
+    const kept: ChatMessage[] = [
+      { type: 'user', message: ['Caption', { type: 'image', mediaType: 'image/png', data: new Uint8Array([1]) }] },
+      {
+        type: 'assistant',
+        message: [],
+        function_call: undefined,
+        function_calls: undefined,
+        openRouterReasoningDetails: [{ type: 'reasoning.encrypted', data: 'opaque-fixture' }],
+      },
+    ];
+    const array = await new ArrayNodeImpl(ArrayNodeImpl.create()).process({
+      input1: { type: 'chat-message[]', value: kept },
+    });
+    const node = new AssemblePromptNodeImpl(AssemblePromptNodeImpl.create());
+    const result = await node.process({ message1: array.output }, processContext);
+    assert.deepEqual(result.prompt?.value, kept);
+  });
+
+  it('ignores deferred empty inputs and evaluates each one once', async () => {
+    for (const value of [null, undefined, []]) {
+      let calls = 0;
+      const node = new AssemblePromptNodeImpl(AssemblePromptNodeImpl.create());
+      const result = await node.process(
+        {
+          message1: {
+            type: 'fn<any>',
+            value: () => {
+              calls++;
+              return value;
+            },
+          },
+          message2: message({ type: 'user', message: 'Kept' }),
+        },
+        processContext,
+      );
+      assert.deepEqual(result.prompt?.value, [{ type: 'user', message: 'Kept' }]);
+      assert.equal(calls, 1);
+    }
   });
 
   it('applies cache breakpoints and token counting to the filtered prompt', async () => {

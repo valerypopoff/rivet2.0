@@ -55,7 +55,7 @@ try {
               type: 'classifier-config' as const,
               value: {
                 version: 1 as const,
-                configuration: { provider: 'subq', model: 'subq-snap-1.1' },
+                configuration: { provider: 'subq', model: 'subq-snap-1.2' },
                 credential: { value: 'fixture-key' },
               },
             },
@@ -69,6 +69,7 @@ try {
     } as InternalProcessContext;
     fixture = '';
     const output = await new ClassifierEvaluateNodeImpl(node).process(inputs, ctx);
+    assert.equal((output.requestBody!.value as Record<string, unknown>).model, 'subq-snap-1.2');
     assert.deepEqual(output.cost, { type: 'number', value: 0.00004 });
     assert.equal(Object.keys(output.answers!.value as object).length, 3);
     assert.deepEqual((output.requestBody!.value as Record<string, unknown>).images, [

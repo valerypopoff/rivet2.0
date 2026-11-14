@@ -183,6 +183,7 @@ export function createManagedBundleService(context: ManagedWorkflowContext) {
   return {
     compareManifest: comparison.manifest,
     comparePair: comparison.pair,
+    compareChanges: comparison.changes,
     mergePreview: merge.preview,
     merge: merge.commit,
     async delete(id: string, confirmation: { name: string; relativePath: string }, mutation?: StructuralMutation) {

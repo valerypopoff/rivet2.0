@@ -35,7 +35,7 @@ const comparisonPair = z
   })
   .strict()
   .refine((value) => value.older !== null || value.newer !== null, 'Select a project to compare.');
-for (const operation of ['manifest', 'pair'] as const) {
+for (const operation of ['manifest', 'pair', 'changes'] as const) {
   bundlesRouter.post(
     `/compare/${operation}`,
     asyncHandler(async (req, res) => {
@@ -50,6 +50,26 @@ for (const operation of ['manifest', 'pair'] as const) {
         if (operation === 'manifest') {
           const body = z.object({ olderId: id, newerId: id }).strict().parse(req.body);
           res.json(await service.compareManifest(body.olderId, body.newerId, signal));
+        } else if (operation === 'changes') {
+          const body = z
+            .object({
+              olderId: id,
+              newerId: id,
+              pairs: z
+                .array(
+                  z
+                    .object({
+                      olderId: projectId,
+                      newerId: projectId,
+                      olderRevisionId: projectId,
+                    })
+                    .strict(),
+                )
+                .max(256),
+            })
+            .strict()
+            .parse(req.body);
+          res.json(await service.compareChanges(body, signal));
         } else res.json(await service.comparePair(comparisonPair.parse(req.body), signal));
       } finally {
         res.off('close', close);

@@ -1,5 +1,10 @@
 import { test, expect, type Page } from '@playwright/test';
-import { authenticateIfNeeded, mockHostedEditorBootstrap, waitForDashboardReady } from './helpers/hostedEditorObserve';
+import {
+  openBundleActions,
+  authenticateIfNeeded,
+  mockHostedEditorBootstrap,
+  waitForDashboardReady,
+} from './helpers/hostedEditorObserve';
 import type { WorkflowFolderItem, WorkflowProjectItem } from '../dashboard/types';
 import { serializeProject, type ProjectId } from '@valerypopoff/rivet2-core';
 import { projectBundleFixture } from '../../studio-server-api/src/tests/helpers/project-bundle-fixture';
@@ -122,6 +127,7 @@ test('a delayed bundle deletion preserves an unsaved replacement project at the 
   const save = page.getByRole('button', { name: 'Save current project', exact: true });
   await expect(save).toBeVisible();
   await page.getByRole('button', { name: /^(Expand|Collapse) Feature bundle$/ }).click({ button: 'right' });
+  await openBundleActions(page);
   await page.getByRole('menuitem', { name: 'Delete bundle', exact: true }).click();
   const modal = page.getByRole('dialog', { name: 'Delete bundle', exact: true });
   await modal.getByRole('textbox', { name: 'Bundle name', exact: true }).fill('Feature');
@@ -199,6 +205,7 @@ test('bundle deletion closes a member whose earlier open is still loading', asyn
     await page.locator('.project-row').filter({ hasText: 'Loading member' }).dblclick();
     await expect.poll(() => loadStarted).toBe(true);
     await folder.click({ button: 'right' });
+    await openBundleActions(page);
     await page.getByRole('menuitem', { name: 'Delete bundle', exact: true }).click();
     const modal = page.getByRole('dialog', { name: 'Delete bundle', exact: true });
     await modal.getByRole('textbox', { name: 'Bundle name', exact: true }).fill('Feature');
@@ -326,6 +333,7 @@ for (const outcome of ['success', 'blocked', 'lost response', 'refresh failure',
     await waitForDashboardReady(page);
     if (outcome === 'success') {
       await page.getByRole('button', { name: 'Expand Ordinary', exact: true }).click({ button: 'right' });
+      await openBundleActions(page);
       await expect(page.getByRole('menuitem', { name: 'Delete folder', exact: true })).toBeDisabled();
       await page.keyboard.press('Escape');
     }
@@ -340,6 +348,7 @@ for (const outcome of ['success', 'blocked', 'lost response', 'refresh failure',
     await expect(editorTab).toBeVisible();
     const openDelete = async () => {
       await page.getByRole('button', { name: 'Collapse Feature bundle', exact: true }).click({ button: 'right' });
+      await openBundleActions(page);
       await expect(page.getByRole('menuitem', { name: 'Delete folder', exact: true })).toHaveCount(0);
       await page.getByRole('menuitem', { name: 'Delete bundle', exact: true }).click();
     };
@@ -460,6 +469,7 @@ test('compact bundle deletion stays usable with a long name on a narrow short vi
   await page
     .getByRole('button', { name: `Expand ${name} bundle`, exact: true })
     .click({ button: 'right', position: { x: 20, y: 10 } });
+  await openBundleActions(page);
   await page.getByRole('menuitem', { name: 'Delete bundle', exact: true }).click();
   await page.setViewportSize({ width: 360, height: 430 });
   const modal = page.getByRole('dialog', { name: 'Delete bundle', exact: true });
@@ -681,20 +691,24 @@ test('folder conversion and one-click duplication preserve the tree without a mo
   await page.getByRole('button', { name: '+ New folder', exact: true }).click();
   await page.getByRole('button', { name: 'Collapse Feature', exact: true }).click();
   await page.getByRole('button', { name: 'Expand Feature', exact: true }).click({ button: 'right' });
+  await openBundleActions(page);
   await expect(page.getByRole('menuitem', { name: 'New bundle', exact: true })).toHaveCount(0);
   page.once('dialog', (dialog) => dialog.accept());
   await page.getByRole('menuitem', { name: 'Convert to bundle', exact: true }).click();
   const row = page.getByRole('button', { name: 'Expand Feature bundle', exact: true });
   await row.click({ button: 'right' });
+  await openBundleActions(page);
   await expect(page.getByRole('menuitem', { name: 'New bundle', exact: true })).toHaveCount(0);
   await page.getByRole('menuitem', { name: 'Duplicate bundle', exact: true }).click();
   await expect(page.getByRole('dialog', { name: 'Duplicate bundle', exact: true })).toHaveCount(0);
   await expect(page.locator('.Toastify__toast--error')).toContainText('The bundle changed');
   expect(duplicateAttempts).toBe(1); // A failed or lost response is never automatically retried.
   await row.click({ button: 'right' });
+  await openBundleActions(page);
   await page.getByRole('menuitem', { name: 'Duplicate bundle', exact: true }).click();
   await expect(page.getByRole('status').filter({ hasText: 'Duplicating Feature from saved versions' })).toBeVisible();
   await row.click({ button: 'right' });
+  await openBundleActions(page);
   await expect(page.getByRole('menuitem', { name: 'Duplicate bundle', exact: true })).toBeDisabled();
   expect(duplicateAttempts).toBe(2);
   await page.keyboard.press('Escape');
@@ -704,6 +718,7 @@ test('folder conversion and one-click duplication preserve the tree without a mo
   await expect(page.locator('.Toastify__toast--success')).toContainText('duplicated from saved versions');
   page.once('dialog', (dialog) => dialog.accept());
   await row.click({ button: 'right' });
+  await openBundleActions(page);
   await page.getByRole('menuitem', { name: 'Convert to ordinary folder', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Expand Feature', exact: true })).toBeVisible();
   expect(directCreations).toBe(0);
@@ -749,6 +764,7 @@ for (const failure of ['tree refresh', 'lost response'] as const) {
     await waitForDashboardReady(page);
     const row = page.getByRole('button', { name: `Expand ${name} bundle`, exact: true });
     await row.click({ button: 'right' });
+    await openBundleActions(page);
     await page.getByRole('menuitem', { name: 'Duplicate bundle', exact: true }).click();
     try {
       await expect(page.getByRole('status').filter({ hasText: `Duplicating ${name}` })).toBeVisible();
@@ -767,6 +783,7 @@ for (const failure of ['tree refresh', 'lost response'] as const) {
     await expect(row).toBeVisible();
     await expect(page.getByRole('status').filter({ hasText: `Duplicating ${name}` })).toHaveCount(0);
     await row.click({ button: 'right' });
+    await openBundleActions(page);
     await expect(page.getByRole('menuitem', { name: 'Duplicate bundle', exact: true })).toBeEnabled();
     expect(attempts).toBe(1);
     await expect(page.getByRole('dialog', { name: 'Duplicate bundle', exact: true })).toHaveCount(0);
@@ -809,6 +826,7 @@ for (const enabled of [true, false]) {
     await waitForDashboardReady(page);
     const row = page.getByRole('button', { name: `Expand Feature${enabled ? '' : ' bundle'}`, exact: true });
     await row.click({ button: 'right' });
+    await openBundleActions(page);
     page.once('dialog', (dialog) => dialog.accept());
     await page
       .getByRole('menuitem', { name: enabled ? 'Convert to bundle' : 'Convert to ordinary folder', exact: true })
@@ -821,6 +839,7 @@ for (const enabled of [true, false]) {
     await expect(page.getByRole('dialog', { name: /Could not (create|convert) bundle/ })).toHaveCount(0);
     expect(attempts).toBe(1);
     await row.click({ button: 'right' });
+    await openBundleActions(page);
     await expect(
       page.getByRole('menuitem', { name: enabled ? 'Convert to bundle' : 'Convert to ordinary folder', exact: true }),
     ).toBeEnabled();
@@ -949,6 +968,7 @@ for (const action of ['duplication', 'conversion'] as const) {
       await page
         .getByRole('button', { name: `Collapse Feature${folderSuffix}`, exact: true })
         .click({ button: 'right' });
+      await openBundleActions(page);
       if (action === 'conversion') page.once('dialog', (dialog) => dialog.accept());
       const actionName = action === 'duplication' ? 'Duplicate bundle' : 'Convert to bundle';
       await page.getByRole('menuitem', { name: actionName, exact: true }).click();
@@ -956,6 +976,7 @@ for (const action of ['duplication', 'conversion'] as const) {
       await expect(page.locator('.bundle-action-status')).toBeVisible();
       const guardRow = page.getByRole('button', { name: 'Expand Unchanged bundle', exact: true });
       await guardRow.click({ button: 'right' });
+      await openBundleActions(page);
       await expect(page.getByRole('menuitem', { name: 'Duplicate bundle', exact: true })).toBeDisabled();
       await expect(page.getByRole('menuitem', { name: 'Convert to ordinary folder', exact: true })).toBeDisabled();
       await expect(page.getByRole('menuitem', { name: 'Delete bundle', exact: true })).toBeDisabled();
@@ -977,6 +998,7 @@ for (const action of ['duplication', 'conversion'] as const) {
       }
       await expect(otherRow).toHaveClass(/\bactive\b/);
       await guardRow.click({ button: 'right' });
+      await openBundleActions(page);
       await expect(page.getByRole('menuitem', { name: 'Duplicate bundle', exact: true })).toBeEnabled();
       await expect(page.getByRole('menuitem', { name: 'Convert to ordinary folder', exact: true })).toBeEnabled();
       await expect(page.getByRole('menuitem', { name: 'Delete bundle', exact: true })).toBeEnabled();
@@ -1017,6 +1039,7 @@ test('large bundle definition warnings stay concise on a short screen', async ({
   await authenticateIfNeeded(page);
   await waitForDashboardReady(page);
   await page.getByRole('button', { name: 'Expand Feature bundle', exact: true }).click({ button: 'right' });
+  await openBundleActions(page);
   await page.getByRole('menuitem', { name: 'Duplicate bundle', exact: true }).click();
   const notice = page.locator('.Toastify__toast--warning');
   await expect(notice).toBeVisible();
@@ -1071,6 +1094,7 @@ test('rejected cross-bundle conversion opens an actionable modal and leaves an o
   page.on('dialog', (dialog) => void dialog.accept());
   const row = page.getByRole('button', { name: 'Expand Feature', exact: true });
   await row.click({ button: 'right' });
+  await openBundleActions(page);
   await page.getByRole('menuitem', { name: 'Convert to bundle', exact: true }).click();
   const modal = page.getByRole('dialog', { name: 'Could not create bundle', exact: true });
   await expect(modal).toBeVisible();
@@ -1086,6 +1110,7 @@ test('rejected cross-bundle conversion opens an actionable modal and leaves an o
   await modal.getByRole('button', { name: 'Close', exact: true }).click();
   await expect(modal).toHaveCount(0);
   await row.click({ button: 'right' });
+  await openBundleActions(page);
   await expect(page.getByRole('menuitem', { name: 'Download bundle', exact: true })).toHaveCount(0);
   await expect(page.getByRole('menuitem', { name: 'Convert to bundle', exact: true })).toBeVisible();
   await page.getByRole('menuitem', { name: 'Convert to bundle', exact: true }).click();
@@ -1124,6 +1149,7 @@ test('uncertain conversion failure shows connection guidance without claiming no
   await waitForDashboardReady(page);
   page.on('dialog', (dialog) => void dialog.accept());
   await page.getByRole('button', { name: 'Expand Feature', exact: true }).click({ button: 'right' });
+  await openBundleActions(page);
   await page.getByRole('menuitem', { name: 'Convert to bundle', exact: true }).click();
   const modal = page.getByRole('dialog', { name: 'Could not create bundle', exact: true });
   await expect(modal).toBeVisible();
@@ -1169,6 +1195,7 @@ test('folder menus offer conversion, never nested creation or bundle upload', as
     await page
       .getByRole('button', { name: `${name === 'Parent' ? 'Collapse' : 'Expand'} ${name}`, exact: true })
       .click({ button: 'right' });
+    await openBundleActions(page);
     await expect(page.getByRole('menuitem', { name: 'New bundle', exact: true })).toHaveCount(0);
     await expect(page.getByRole('menuitem', { name: 'Upload bundle', exact: true })).toBeVisible();
     if (name === 'Feature sibling') {
@@ -1181,6 +1208,7 @@ test('folder menus offer conversion, never nested creation or bundle upload', as
   await page.getByRole('button', { name: 'Expand Feature bundle', exact: true }).click();
   for (const name of ['Collapse Feature bundle', 'Expand Nested']) {
     await page.getByRole('button', { name, exact: true }).click({ button: 'right' });
+    await openBundleActions(page);
     await expect(page.getByRole('menuitem', { name: 'New bundle', exact: true })).toHaveCount(0);
     await expect(page.getByRole('menuitem', { name: 'Upload bundle', exact: true })).toHaveCount(0);
     await expect(page.getByRole('menuitem', { name: 'Upload project', exact: true })).toBeVisible();
@@ -1289,6 +1317,7 @@ for (const editCheck of ['complete', 'predecessor editor', 'saving project'] as 
     await page.mouse.up();
     await expect(tab).toHaveClass(/has-unsaved-changes/);
     await page.getByRole('button', { name: 'Collapse Feature bundle', exact: true }).click({ button: 'right' });
+    await openBundleActions(page);
     await page.getByRole('menuitem', { name: 'Duplicate bundle', exact: true }).click();
     const notification = page.locator(
       editCheck === 'predecessor editor' ? '.Toastify__toast--warning' : '.Toastify__toast--success',

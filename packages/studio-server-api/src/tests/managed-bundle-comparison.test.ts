@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { serializeProject, type Project } from '@valerypopoff/rivet2-node';
+import { serializeProject, type Project, type ProjectId, type GraphId, type NodeId } from '@valerypopoff/rivet2-node';
 import { createManagedBundleComparisonService } from '../routes/workflows/bundle-comparison.js';
 import type { ManagedWorkflowContext } from '../routes/workflows/managed/context.js';
 import type { RevisionRow } from '../routes/workflows/managed/types.js';
@@ -22,8 +22,11 @@ function fixture() {
     { side: 'older', project: old, revision: { workflow_id: 'old', revision_id: 'pinned-old' }, bundle_id: 'older' },
     { side: 'newer', project: newer, revision: null, bundle_id: 'newer' },
   ];
-  let contents = serializeProject({ metadata: { id: 'old', title: 'Old' }, graphs: {} } as Project) as string;
-  const read: unknown[] = [],
+  let contents: string | ((revision: RevisionRow) => string) = serializeProject({
+    metadata: { id: 'old', title: 'Old' },
+    graphs: {},
+  } as Project) as string;
+  const read: RevisionRow[] = [],
     queries: string[] = [];
   let released = false;
   const service = createManagedBundleComparisonService({
@@ -45,7 +48,7 @@ function fixture() {
         assert.equal(released, true, 'SQL lease is released before blob IO');
         assert.equal(options.signal, abort.signal);
         read.push(revision);
-        return contents;
+        return typeof contents === 'function' ? contents(revision) : contents;
       },
       readRevisionContents: () => {
         throw new Error('Comparison must not load datasets');
@@ -65,7 +68,7 @@ function fixture() {
     rows: (value: unknown[]) => {
       rows = value;
     },
-    contents: (value: string) => {
+    contents: (value: string | ((revision: RevisionRow) => string)) => {
       contents = value;
     },
   };
@@ -139,4 +142,69 @@ void test('newer-only reads never fetch an Older artifact and cancellation does 
   const previous = f.queries.length;
   await assert.rejects(f.service.pair(f.input, f.abort.signal), /abort/i);
   assert.equal(f.queries.length, previous);
+});
+
+void test('change indicators compare pinned content with current drafts using the reviewed ID mapping', async () => {
+  const f = fixture();
+  const older = { ...member('old'), name: 'Project' };
+  const newer = { ...member('new', newRoot), name: 'Project' };
+  f.rows([
+    { project: older, revision: { workflow_id: 'old', revision_id: 'pinned-old' } },
+    { project: newer, revision: { workflow_id: 'new', revision_id: 'draft-new' } },
+  ]);
+  let changed: 'description' | 'title' | 'version' | null = null;
+  f.contents(
+    (revision) =>
+      serializeProject({
+        metadata: {
+          id: revision.workflow_id as ProjectId,
+          title: changed === 'title' && revision.workflow_id === 'new' ? 'New title' : 'Project',
+          description: changed === 'description' && revision.workflow_id === 'new' ? 'Edited' : '',
+          path: '/different/' + revision.workflow_id,
+        },
+        graphs: {
+          ['main' as GraphId]: {
+            metadata: { id: 'main' as GraphId, name: 'Main' },
+            nodes: [
+              {
+                id: 'call' as NodeId,
+                type: 'subGraph',
+                title: 'Call',
+                data: {
+                  targetProjectId: revision.workflow_id,
+                  graphId: 'main',
+                  targetVersion: changed === 'version' && revision.workflow_id === 'new' ? 'latest' : 'published',
+                },
+                visualData: { x: 0, y: 0, width: 200 },
+              },
+            ],
+            connections: [],
+          },
+        },
+        references: [{ id: revision.workflow_id as ProjectId, hintPaths: ['/different/' + revision.workflow_id] }],
+      }) as string,
+  );
+  const input = {
+    olderId: 'older',
+    newerId: 'newer',
+    pairs: [{ olderId: 'old', newerId: 'new', olderRevisionId: 'pinned-old' }],
+  };
+  assert.deepEqual(await f.service.changes(input, f.abort.signal), { changedNewerIds: [] });
+  changed = 'description';
+  assert.deepEqual(await f.service.changes(input, f.abort.signal), { changedNewerIds: ['new'] });
+  assert.ok(f.queries.every((q) => !/INSERT|UPDATE|DELETE|COMMIT/.test(q)));
+  assert.deepEqual(
+    f.read.map((r) => r.revision_id),
+    ['pinned-old', 'draft-new', 'pinned-old', 'draft-new'],
+  );
+  for (const field of ['title', 'version'] as const) {
+    changed = field;
+    assert.deepEqual(await f.service.changes(input, f.abort.signal), { changedNewerIds: ['new'] }, field);
+  }
+  await assert.rejects(
+    f.service.changes({ ...input, pairs: [...input.pairs, ...input.pairs] }, f.abort.signal),
+    /one-to-one/,
+  );
+  f.rows([{ project: older, revision: null }]);
+  await assert.rejects(f.service.changes(input, f.abort.signal), /unavailable/);
 });

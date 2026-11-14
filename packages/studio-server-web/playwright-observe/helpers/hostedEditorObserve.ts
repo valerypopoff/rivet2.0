@@ -10,6 +10,15 @@ type Point = {
   y: number;
 };
 
+/** Open the bundle-only submenu when the current folder menu provides it. */
+export async function openBundleActions(page: Page): Promise<void> {
+  const trigger = page.getByRole('menuitem', { name: 'Bundle actions', exact: true });
+  if (await trigger.count()) {
+    await trigger.hover();
+    await expect(page.getByRole('menu', { name: 'Bundle actions', exact: true })).toBeVisible();
+  }
+}
+
 export async function authenticateIfNeeded(page: Page) {
   const gateInput = page.locator('#gate-key');
   if ((await gateInput.count()) === 0) {

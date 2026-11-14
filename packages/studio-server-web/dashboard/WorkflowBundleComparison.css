@@ -72,6 +72,15 @@
   flex: 0 0 auto;
   white-space: nowrap;
 }
+.bundle-comparison-tree .comparison-project-status[data-change='removed'] {
+  color: #ff8f8f;
+}
+.bundle-comparison-tree .comparison-project-status[data-change='added'] {
+  color: #84d6a0;
+}
+.bundle-comparison-tree .comparison-project-status[data-change='changed'] {
+  color: #ffe08a;
+}
 .bundle-comparison-tree .comparison-folder {
   padding-left: 14px;
 }

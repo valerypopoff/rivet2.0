@@ -15,6 +15,8 @@ export function WorkflowBundleComparisonTree({
   pending,
   errors,
   dirtyProjects,
+  changedProjects,
+  changeError,
   onSelect,
 }: {
   older: BundleComparisonCatalog;
@@ -24,13 +26,25 @@ export function WorkflowBundleComparisonTree({
   pending: string | null;
   errors: Record<string, string>;
   dirtyProjects: ReadonlySet<string>;
+  changedProjects: ReadonlySet<string> | null;
+  changeError: string;
   onSelect(pair: BundleComparisonPair): void;
 }) {
   const [closed, setClosed] = useState<Record<string, boolean>>({});
-  const selectedPair = pairs.find((pair) => bundleComparisonPairKey(pair) === selected);
   const render = (catalog: BundleComparisonCatalog, role: 'Older' | 'Newer') => {
     const memberKey = role === 'Older' ? 'olderId' : 'newerId';
-    const selectedProject = catalog.projects.find((p) => p.projectId === selectedPair?.[memberKey]);
+    const members = catalog.projects.map((project) => ({
+      project,
+      pair: pairs.find((pair) => pair[memberKey] === project.projectId)!,
+      removed: false,
+    }));
+    if (role === 'Newer')
+      for (const pair of pairs)
+        if (pair.olderId && !pair.newerId) {
+          const project = older.projects.find((p) => p.projectId === pair.olderId);
+          if (project) members.push({ project, pair, removed: true });
+        }
+    const selectedProject = members.find((member) => bundleComparisonPairKey(member.pair) === selected)?.project;
     const folder = (path: string, root = false): React.ReactNode => {
       const key = `${catalog.bundleId}:${path}`;
       const prefix = path ? path + '/' : '';
@@ -40,11 +54,11 @@ export function WorkflowBundleComparisonTree({
           .filter((p) => p.startsWith(prefix) && p !== path)
           .map((p) => p.slice(prefix.length).split('/')[0]!),
       );
-      for (const p of catalog.projects)
+      for (const { project: p } of members)
         if (p.relativePath.startsWith(prefix) && p.relativePath.slice(prefix.length).includes('/'))
           children.add(p.relativePath.slice(prefix.length).split('/')[0]!);
-      const projects = catalog.projects.filter(
-        (p) => p.relativePath.startsWith(prefix) && !p.relativePath.slice(prefix.length).includes('/'),
+      const projects = members.filter(
+        ({ project: p }) => p.relativePath.startsWith(prefix) && !p.relativePath.slice(prefix.length).includes('/'),
       );
       return (
         <details
@@ -61,41 +75,52 @@ export function WorkflowBundleComparisonTree({
             {containsSelection ? <span className="bundle-comparison-sr-only"> · Contains selected project</span> : null}
           </summary>
           {[...children].sort().map((name) => folder(prefix + name))}
-          {projects.map((p) => {
-            const pair = pairs.find((pair) => pair[memberKey] === p.projectId)!;
+          {projects.map(({ project: p, pair, removed }) => {
             const pairKey = bundleComparisonPairKey(pair);
-            const status =
-              pending === pairKey
-                ? 'Loading…'
-                : errors[pairKey]
-                  ? 'Unavailable'
-                  : pair.olderId && pair.newerId
-                    ? null
-                    : role === 'Older'
-                      ? 'Only in older'
-                      : 'Only in newer';
+            const changeStatus =
+              role === 'Older'
+                ? null
+                : removed
+                  ? 'Removed'
+                  : !pair.olderId
+                    ? 'Added'
+                    : dirtyProjects.has(p.projectId) || changedProjects?.has(p.projectId)
+                      ? 'Changed'
+                      : changeError
+                        ? 'Check failed'
+                        : changedProjects === null
+                          ? 'Checking…'
+                          : null;
+            const status = pending === pairKey ? 'Loading…' : errors[pairKey] ? 'Unavailable' : changeStatus;
             return (
               <button
                 type="button"
                 key={p.projectId}
                 className={`project-row comparison-project-row${selected === pairKey ? ' active' : ''}`}
                 data-comparison-role={role.toLowerCase()}
-                aria-label={`Compare ${role} project ${p.name}${catalog.projects.filter((member) => member.name === p.name).length > 1 ? ` (${displayBundleMergePath(p.relativePath)})` : ''}`}
+                aria-label={`Compare ${role} project ${p.name}${members.filter(({ project }) => project.name === p.name).length > 1 ? ` (${displayBundleMergePath(p.relativePath)})` : ''}`}
                 aria-current={selected === pairKey ? 'true' : undefined}
                 onClick={() => onSelect(pair)}
-                title={errors[pairKey] || displayBundleMergePath(p.relativePath)}
+                title={
+                  errors[pairKey] ||
+                  (changeError && pair.newerId && pair.olderId ? changeError : displayBundleMergePath(p.relativePath))
+                }
               >
                 <span className="comparison-project-name">
                   {p.name}
-                  {dirtyProjects.has(p.projectId) ? (
+                  {!removed && dirtyProjects.has(p.projectId) ? (
                     <small> · {role === 'Newer' ? 'Unsaved' : 'Unsaved edits excluded'}</small>
                   ) : null}
                 </span>
-                {status ? <small className="comparison-project-status">{status}</small> : null}
+                {status ? (
+                  <small className="comparison-project-status" data-change={status.toLowerCase()}>
+                    {status}
+                  </small>
+                ) : null}
               </button>
             );
           })}
-          {root && !catalog.projects.length ? <p className="state">No projects</p> : null}
+          {root && !members.length ? <p className="state">No projects</p> : null}
         </details>
       );
     };

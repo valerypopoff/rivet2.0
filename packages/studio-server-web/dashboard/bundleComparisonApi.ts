@@ -1,6 +1,6 @@
 import { parseJsonResponse } from './apiRequest';
 export async function readBundleComparison<T>(
-  kind: 'manifest' | 'pair',
+  kind: 'manifest' | 'pair' | 'changes',
   body: unknown,
   signal?: AbortSignal,
 ): Promise<T> {
