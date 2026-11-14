@@ -42,7 +42,9 @@ export type PrototypeEvent =
   | { kind: 'node'; nodeId: string }
   | { kind: 'foreground'; json: string | undefined };
 
-export type ParentMessage = { kind: 'run'; id: number; request: PrototypeRequest } | { kind: 'abort'; id: number };
+export type ParentMessage =
+  | { kind: 'run'; id: number; request: PrototypeRequest; hostStore: boolean }
+  | { kind: 'abort'; id: number };
 
 export type WorkerMessage =
   | { kind: 'ready' }

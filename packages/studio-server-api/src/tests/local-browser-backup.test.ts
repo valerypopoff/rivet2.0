@@ -16,6 +16,8 @@ import {
 } from '../local-metadata/browser-backup.js';
 import { fingerprintVmMigrationSource } from '../scripts/vm-migration-source-manifest.js';
 import type { LocalMetadataSourceRoots } from '../local-metadata/source-identity.js';
+import { publishEmptyRuntimeRelease } from '@valerypopoff/rivet-studio-server-bootstrap/runtime-release-cache';
+import { readSourceRuntimeSelection } from '../scripts/migrate-runtime-libraries.js';
 
 // test-style: fixture-read: verifies generated backups and restored fixtures only.
 async function fixture(
@@ -88,6 +90,37 @@ test('browser backup restores the downloadable archive, preserves source bytes a
       assert.equal(await fs.readlink(path.join(restored, 'runtimeLibraries', 'entry.js')), 'index.js');
     }
     await assert.rejects(createBrowserBackupArchive({ source, control, state, assertFrozen: async () => {} }));
+  });
+});
+
+test('full backups preserve retained cache history as well as the selected empty release', async () => {
+  await fixture(async (source, control, state) => {
+    const old = await publishEmptyRuntimeRelease(source.runtimeLibraries, {
+      packages: {},
+      updatedAt: '',
+      activeReleaseId: 'old',
+    });
+    await fs.writeFile(path.join(old.snapshot.directory, 'history.txt'), 'retained source bytes');
+    const active = await publishEmptyRuntimeRelease(source.runtimeLibraries, {
+      packages: {},
+      updatedAt: '',
+      activeReleaseId: 'active',
+    });
+    state.sourceFingerprint = await fingerprintVmMigrationSource(source);
+    await createBrowserBackupArchive({ source, control, state, assertFrozen: async () => {} });
+    const restored = path.join(control, 'with-history');
+    await fs.mkdir(restored);
+    await restoreBrowserBackupArchive(path.join(browserBackupDirectory(control, state.id), 'backup.tar.gz'), restored);
+    const libraries = path.join(restored, 'runtimeLibraries');
+    assert.equal(
+      await fs.readFile(path.join(libraries, path.basename(old.snapshot.directory), 'history.txt'), 'utf8'),
+      'retained source bytes',
+    );
+    assert.equal((await readSourceRuntimeSelection(libraries)).manifest.activeReleaseId, 'active');
+    assert.equal((await fs.readdir(libraries)).filter((name) => name.startsWith('cache-')).length, 2);
+    assert.notEqual(old.snapshot.directory, active.snapshot.directory);
+    await fs.writeFile(path.join(old.snapshot.directory, 'history.txt'), 'changed history');
+    assert.notEqual(await fingerprintVmMigrationSource(source), state.sourceFingerprint);
   });
 });
 

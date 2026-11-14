@@ -321,16 +321,29 @@ Kubernetes rehearsal or a new browser run.
 The [hosted execution isolation plan](./hosted-execution-isolation-plan.md)
 tracks the Code-family event-loop blocking problem and unfinished production
 integration. The prototype under `src/scripts/hosted-isolation/` is excluded from
-production compiler inputs; serving defaults are unchanged and the no-regression
-performance gate has not passed. The [local Gate A results](./hosted-execution-isolation-gate-a.md)
+production compiler inputs; serving defaults are unchanged. The accepted latency
+budget is 1 ms added p95 on small fixtures, with a separate frozen 5 ms bound on
+the local 8 MiB fixture. These workload checks do not qualify capacity or serving
+integration. The [local Gate A results](./hosted-execution-isolation-gate-a.md)
 record functional/performance evidence, limits and reproduction commands.
 
 `hosted-isolation:test` runs fast input/limit contracts in ordinary API CI without
 bootstrapping the graph engine. `hosted-isolation:verify` builds current sources
 and exercises real workers, prepared actions, held background work, cancellation,
-replacement and cleanup. Benchmarks accept a sample only after its root/capture
-settles successfully. Production socket/debugger integration remains planned;
+replacement and cleanup. Its narrow parent host-store proof preserves accepting
+request context and tracks accepted writes through worker exit/drain without
+replay. Benchmarks accept a sample only after its root/capture settles successfully,
+report nearest-rank p95 against frozen additive limits, and distinguish insufficient
+samples from meeting a workload budget. Production socket/debugger integration remains planned;
 retain the existing Node handler/gateway suites as the transport coverage owner.
+
+Runtime-library preparation returns a verified physical snapshot. API and editor
+root runs retain that binding through later nodes, Subgraphs and background work;
+activating a new release never clears another run's modules or removes its files.
+See [Runtime Libraries](./runtime-libraries.md#on-disk-layout-and-execution-snapshots)
+for cache recovery, retention and the first-upgrade precautions. The shared
+bootstrap helper is packaged with both consumers; its local descriptor is not a
+portable project or archive setting.
 
 The [execution error-policy plan](./execution-error-policy-plan.md) records the
 confirmed public-error inconsistencies and the proposed compatible fix. It is a
@@ -1475,6 +1488,7 @@ API-only edit checks watcher separation, not a live API/executor execution path.
 See also: [Mistakes and Misconceptions](./mistakes-and-misconceptions.md)
 See also: [Repo structure](./repo-structure.md)
 See also: [Wrapper ManagedCodeRunner Speed Plan](./wrapper-managed-code-runner-speed-plan.md)
+See also: [Runtime-library execution snapshots](./runtime-library-snapshot-plan.md)
 See also: [Local metadata storage upgrade](./local-metadata-upgrade.md)
 
 ## Local metadata conversion verification

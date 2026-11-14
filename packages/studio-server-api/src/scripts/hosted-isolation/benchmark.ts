@@ -5,14 +5,15 @@ import fs from 'node:fs/promises';
 import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { setTimeout as delay } from 'node:timers/promises';
 import type { PrototypePool } from './pool.js';
 import type { PrototypeDefinition, PrototypeRequest } from './protocol.js';
 import { assemblePrototypeInput } from './request.js';
+import { evaluateLatencyBudget, percentile } from './latency-budget.js';
+import type { RivetStoredValue, RivetStoredValueStore } from '@valerypopoff/rivet2-node';
 
-type Case = 'no-code' | 'trivial' | 'sequential' | 'large-input' | 'recording';
-const CASES: Case[] = ['no-code', 'trivial', 'sequential', 'large-input', 'recording'];
-const percentile = (values: number[], rank: number) =>
-  [...values].sort((a, b) => a - b)[Math.min(values.length - 1, Math.floor(values.length * rank))]!;
+type Case = 'no-code' | 'trivial' | 'sequential' | 'large-input' | 'recording' | 'host-storage';
+const CASES: Case[] = ['no-code', 'trivial', 'sequential', 'large-input', 'recording', 'host-storage'];
 const summarize = (values: number[]) => ({ medianMs: percentile(values, 0.5), p95Ms: percentile(values, 0.95) });
 
 /** The optional definition is used only by the local lifecycle regression. */
@@ -21,11 +22,8 @@ export async function serve(
   wire: 'clone' | 'transfer',
   fixture?: { definition: PrototypeDefinition; context?: PrototypeRequest['context'] },
 ) {
-  const [{ isolationFixture, IDENTITY_CODE }, { PrototypePool }, { runPrototypeRoot }] = await Promise.all([
-    import('./fixtures.js'),
-    import('./pool.js'),
-    import('./runtime.js'),
-  ]);
+  const [{ isolationFixture, IDENTITY_CODE, addIsolationStoredValue }, { PrototypePool }, { runPrototypeRoot }] =
+    await Promise.all([import('./fixtures.js'), import('./pool.js'), import('./runtime.js')]);
   if (!process.connected) throw new Error('Benchmark server requires its controlling IPC connection.');
   const inputCode =
     name === 'large-input' ? 'return { result: { type: "number", value: inputs.input.value.length } };' : IDENTITY_CODE;
@@ -37,6 +35,17 @@ export async function serve(
     runtimeLibrariesRoot: '/local-prototype/no-libraries',
     executionEnvironment: {},
   };
+  let storedValue: RivetStoredValue | undefined;
+  const storedValueStore: RivetStoredValueStore | undefined =
+    name === 'host-storage'
+      ? {
+          get: () => storedValue,
+          set: (_key, value) => {
+            storedValue = value;
+          },
+        }
+      : undefined;
+  if (storedValueStore) addIsolationStoredValue(definition.project, definition.project.metadata.mainGraphId!);
   const rssBeforeThreads = process.memoryUsage.rss();
   const startup = performance.now();
   const pool = new PrototypePool(definition, { size: 1, lifecycle: 'reuse', maxQueuedBytes: 64 * 1024 * 1024 });
@@ -80,7 +89,7 @@ export async function serve(
       };
       const result =
         req.url === '/direct'
-          ? await runPrototypeRoot(definition, request, new AbortController().signal, onEvent)
+          ? await runPrototypeRoot(definition, request, new AbortController().signal, onEvent, storedValueStore)
           : await (
               req.url === '/retire'
                 ? (retired ??= new PrototypePool(definition, {
@@ -89,7 +98,7 @@ export async function serve(
                     maxQueuedBytes: 64 * 1024 * 1024,
                   }))
                 : pool
-            ).run(request, { onEvent, retainedBytes: input.retainedBytes, timeoutMs: 60_000 });
+            ).run(request, { onEvent, retainedBytes: input.retainedBytes, timeoutMs: 60_000, storedValueStore });
       assert.equal(result.status, 'succeeded', result.failure?.message ?? 'Benchmark graph failed.');
       assert.equal(result.failure, undefined, result.failure?.message);
       assert.equal(result.captureError, undefined, result.captureError?.message);
@@ -169,6 +178,7 @@ async function measureCase(
   retirement: boolean,
   inputBytes: number,
   wire: 'clone' | 'transfer',
+  intervalMs: number,
 ) {
   const child = fork(fileURLToPath(import.meta.url), ['serve', name, wire], {
     stdio: ['ignore', 'ignore', 'pipe', 'ipc'],
@@ -227,7 +237,10 @@ async function measureCase(
     const block = async (mode: 'direct' | 'reuse' | 'retire', count: number) => {
       await sample();
       const values: number[] = [];
+      let nextRequest = performance.now();
       for (let index = 0; index < count; index++) {
+        const remaining = nextRequest - performance.now();
+        if (remaining > 0) await delay(remaining);
         const start = performance.now();
         const response = await fetch(`${ready.url}/${mode}`, {
           method: 'POST',
@@ -240,6 +253,9 @@ async function measureCase(
         expected ??= json;
         assert.equal(json, expected, 'Direct and worker responses must match.');
         values.push(performance.now() - start);
+        // No catch-up burst after a slow response. Both paths receive the same
+        // offered rate with at most one outstanding HTTP request.
+        nextRequest = start + intervalMs;
       }
       return { ...summarize(values), samplesMs: values, resources: await sample() };
     };
@@ -262,10 +278,18 @@ async function measureCase(
     const deltas = paired.map((entry) => 100 * (entry.reuse.medianMs / entry.direct.medianMs - 1));
     const consistent = deltas.every((delta) => delta > 0);
     const retired = retirement ? await block('retire', 2) : undefined;
+    const latencyBudget = evaluateLatencyBudget(
+      paired.flatMap((entry) => entry.direct.samplesMs),
+      paired.flatMap((entry) => entry.reuse.samplesMs),
+      name === 'large-input' ? 5 : 1,
+    );
     return {
       case: name,
       wire,
       requestBytes: Buffer.byteLength(body),
+      intervalMs,
+      loadProfile: intervalMs > 0 ? 'paced-serial' : 'saturation-diagnostic',
+      latencyBudget,
       ready,
       baseline,
       paired,
@@ -275,7 +299,7 @@ async function measureCase(
         Math.min(...baseline.map((entry) => entry.medianMs)),
         Math.max(...baseline.map((entry) => entry.medianMs)),
       ],
-      verdict: consistent ? 'slower-in-every-paired-block' : 'mixed-measurements-not-a-performance-pass',
+      medianTrend: consistent ? 'isolated-higher-in-every-paired-block' : 'mixed',
       medianDirectMs: percentile(
         paired.map((entry) => entry.direct.medianMs),
         0.5,
@@ -312,7 +336,7 @@ async function main() {
         return [key!, option];
       }),
   );
-  const runs = Number(flags.get('runs') ?? 50),
+  const runs = Number(flags.get('runs') ?? 100),
     blocks = Number(flags.get('blocks') ?? 3);
   if (!Number.isInteger(runs) || runs < 10 || runs > 500 || !Number.isInteger(blocks) || blocks < 2 || blocks > 5)
     throw new Error('Use --runs=10..500 --blocks=2..5.');
@@ -331,10 +355,12 @@ async function main() {
   for (const filename of [
     'benchmark.js',
     'fixtures.js',
+    'latency-budget.js',
     'pool.js',
     'protocol.js',
     'request.js',
     'runtime.js',
+    'stored-values.js',
     'worker.js',
   ])
     compiledHash.update(filename).update(await fs.readFile(new URL(filename, import.meta.url)));
@@ -345,6 +371,8 @@ async function main() {
     compiledSha256: string;
     runs: number;
     blocks: number;
+    requestedCases: Case[];
+    complete: boolean;
     cases: Awaited<ReturnType<typeof measureCase>>[];
   } = {
     runtime: process.version,
@@ -352,14 +380,20 @@ async function main() {
     compiledSha256: compiledHash.digest('hex'),
     runs,
     blocks,
+    requestedCases: selected,
+    complete: false,
     scope:
       'Local generated fixtures; separate HTTP client/server processes, fixed snapshot services. Not production adapter/capacity or packaged-image acceptance.',
     cases: [],
   };
   await fs.mkdir(path.dirname(output), { recursive: true });
   for (const name of selected) {
-    const entry = await measureCase(name, runs, blocks, flags.has('retire'), inputBytes, wire);
+    const intervalMs = Number(flags.get('interval-ms') ?? (name === 'large-input' ? 100 : 10));
+    if (!Number.isFinite(intervalMs) || intervalMs < 0 || intervalMs > 1000)
+      throw new Error('Use --interval-ms=0..1000. Zero is a saturation diagnostic.');
+    const entry = await measureCase(name, runs, blocks, flags.has('retire'), inputBytes, wire, intervalMs);
     report.cases.push(entry);
+    report.complete = report.cases.length === selected.length;
     const pending = `${output}.${process.pid}.tmp`;
     try {
       await fs.writeFile(pending, JSON.stringify(report, null, 2) + '\n');
@@ -372,7 +406,8 @@ async function main() {
         case: name,
         directMedianMs: entry.medianDirectMs,
         isolatedMedianMs: entry.medianIsolatedMs,
-        verdict: entry.verdict,
+        medianTrend: entry.medianTrend,
+        latencyBudget: entry.latencyBudget,
       }),
     );
   }

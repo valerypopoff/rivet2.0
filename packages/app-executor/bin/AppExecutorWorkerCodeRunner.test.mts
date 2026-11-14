@@ -10,7 +10,6 @@ import {
   type CodeRunnerOptions,
   GraphProcessor,
   GraphInputNodeImpl,
-  TextNodeImpl,
   createBuiltInRegistry,
   type ChartNode,
   type DataValue,
@@ -28,6 +27,7 @@ import {
 import { AppExecutorWorkerCodeRunner } from './AppExecutorWorkerCodeRunner.mjs';
 import { AppExecutorCodeWorkerPool, shutdownSharedAppExecutorCodeWorkerPool } from './codeRunnerWorkerPool.mjs';
 import { createProcessor as createNodeProcessor } from '@valerypopoff/rivet2-node';
+import type { CodeWorkerRunRequest } from './codeRunnerWorkerHost.mjs';
 
 const tokenizer: Tokenizer = {
   on: () => undefined,
@@ -79,17 +79,6 @@ function makeCodeNewNode(code: string): ChartNode {
   node.data = {
     ...node.data,
     code,
-  };
-  return node;
-}
-
-function makeTextNode(): ChartNode {
-  const node = TextNodeImpl.create();
-  node.id = 'text-node' as NodeId;
-  node.title = 'Text';
-  node.data = {
-    ...node.data,
-    text: 'ready',
   };
   return node;
 }
@@ -177,28 +166,13 @@ void after(async () => {
 });
 
 void describe('AppExecutorWorkerCodeRunner', () => {
-  void it('runs synchronous code in a worker and returns outputs', async () => {
-    const runner = new AppExecutorWorkerCodeRunner();
-
-    const outputs = await runner.runCode(
-      `
-        const end = Date.now() + 25;
-        while (Date.now() < end) {}
-        return { output1: { type: 'string', value: 'done' } };
-      `,
+  void it('executes authored code on a worker thread', async () => {
+    const outputs = await new AppExecutorWorkerCodeRunner().runCode(
+      'return {output1:{type:"boolean",value:require("node:worker_threads").isMainThread}};',
       {},
-      {
-        includeConsole: false,
-        includeFetch: false,
-        includeProcess: false,
-        includeRequire: false,
-        includeRivet: false,
-      },
+      defaultCodeRunnerOptions({ includeRequire: true }),
     );
-
-    assert.deepEqual(outputs, {
-      output1: { type: 'string', value: 'done' },
-    });
+    assert.deepEqual(outputs, { output1: { type: 'boolean', value: false } });
   });
 
   void it('uses a prewarmed worker for the first run when one is available', async () => {
@@ -251,58 +225,76 @@ void describe('AppExecutorWorkerCodeRunner', () => {
     }
   });
 
-  void it('supports require inside the worker', async () => {
-    const runner = new AppExecutorWorkerCodeRunner();
-
-    const outputs = await runner.runCode(
-      `
-        const path = require('node:path');
-        return { output1: { type: 'string', value: path.basename('one/two.txt') } };
-      `,
-      {},
-      {
-        includeConsole: false,
-        includeFetch: false,
-        includeProcess: false,
-        includeRequire: true,
-        includeRivet: false,
-      },
-    );
-
-    assert.deepEqual(outputs, {
-      output1: { type: 'string', value: 'two.txt' },
+  void it('keeps the prepared physical anchor when a worker request waits in a queue', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'rivet-queued-release-'));
+    const hooks = globalThis as typeof globalThis & {
+      __RIVET_PREPARE_RUNTIME_LIBRARIES__?: (force?: boolean) => Promise<unknown>;
+    };
+    const previous = hooks.__RIVET_PREPARE_RUNTIME_LIBRARIES__;
+    const realPool = new AppExecutorCodeWorkerPool({ size: 1 });
+    let release!: () => void, queued!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
     });
+    const entered = new Promise<void>((resolve) => {
+      queued = resolve;
+    });
+    let active = 'A';
+    hooks.__RIVET_PREPARE_RUNTIME_LIBRARIES__ = async () => ({
+      version: 1,
+      requireAnchorPath: join(root, active, 'node_modules', '__rivet.cjs'),
+    });
+    const pool = {
+      run: async (request: CodeWorkerRunRequest) => {
+        queued();
+        await gate;
+        return realPool.run(request);
+      },
+    } as unknown as AppExecutorCodeWorkerPool;
+    let running: Promise<Outputs> | undefined;
+    try {
+      for (const name of ['A', 'B']) {
+        const pkg = join(root, name, 'node_modules', 'example');
+        await mkdir(pkg, { recursive: true });
+        await writeFile(join(pkg, 'index.js'), `module.exports=${JSON.stringify(name)};`);
+      }
+      const runner = new AppExecutorWorkerCodeRunner(undefined, { workerPool: pool });
+      const code = 'return {output1:{type:"string",value:require("example")}}';
+      const options = defaultCodeRunnerOptions({ includeRequire: true });
+      running = runner.runCode(code, {}, options);
+      await entered;
+      active = 'B';
+      release();
+      assert.equal((await running).output1?.value, 'A');
+      assert.equal(
+        (await new AppExecutorWorkerCodeRunner(undefined, { workerPool: realPool }).runCode(code, {}, options)).output1
+          ?.value,
+        'B',
+      );
+    } finally {
+      release();
+      await running?.catch(() => {});
+      await realPool.shutdown();
+      hooks.__RIVET_PREPARE_RUNTIME_LIBRARIES__ = previous;
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
-  void it('prepares hosted runtime libraries before require-enabled code runs', async () => {
-    let prepareCount = 0;
-    const globalWithPrepareHook = globalThis as typeof globalThis & {
-      __RIVET_PREPARE_RUNTIME_LIBRARIES__?: (force?: boolean) => Promise<void>;
-    };
-    const previousPrepareHook = globalWithPrepareHook.__RIVET_PREPARE_RUNTIME_LIBRARIES__;
-    globalWithPrepareHook.__RIVET_PREPARE_RUNTIME_LIBRARIES__ = async (force) => {
-      assert.equal(force, true);
-      prepareCount += 1;
-    };
-
+  void it('rejects a legacy void preparation hook before invoking Code', async () => {
+    const hooks = globalThis as typeof globalThis & { __RIVET_PREPARE_RUNTIME_LIBRARIES__?: () => Promise<unknown> };
+    const previous = hooks.__RIVET_PREPARE_RUNTIME_LIBRARIES__;
+    hooks.__RIVET_PREPARE_RUNTIME_LIBRARIES__ = async () => undefined;
     try {
-      const runner = new AppExecutorWorkerCodeRunner();
-
-      await runner.runCode(
-        `return { output1: { type: 'string', value: require('node:path').basename('a/b') } };`,
-        {},
-        {
-          includeConsole: false,
-          includeFetch: false,
-          includeProcess: false,
-          includeRequire: true,
-          includeRivet: false,
-        },
+      await assert.rejects(
+        new AppExecutorWorkerCodeRunner().runCode(
+          'throw new Error("Code invoked")',
+          {},
+          defaultCodeRunnerOptions({ includeRequire: true }),
+        ),
+        /verified snapshot/,
       );
-
-      assert.equal(prepareCount, 1);
     } finally {
-      globalWithPrepareHook.__RIVET_PREPARE_RUNTIME_LIBRARIES__ = previousPrepareHook;
+      hooks.__RIVET_PREPARE_RUNTIME_LIBRARIES__ = previous;
     }
   });
 
@@ -324,13 +316,7 @@ void describe('AppExecutorWorkerCodeRunner', () => {
           return { output1: { type: 'string', value } };
         `,
         {},
-        {
-          includeConsole: false,
-          includeFetch: false,
-          includeProcess: false,
-          includeRequire: true,
-          includeRivet: false,
-        },
+        defaultCodeRunnerOptions({ includeRequire: true }),
       );
 
       assert.deepEqual(outputs, {
@@ -405,13 +391,7 @@ void describe('AppExecutorWorkerCodeRunner', () => {
       {
         ['local' as PortId]: { type: 'string', value: 'input' },
       },
-      {
-        includeConsole: false,
-        includeFetch: false,
-        includeProcess: false,
-        includeRequire: false,
-        includeRivet: false,
-      },
+      defaultCodeRunnerOptions(),
       {
         global: { type: 'string', value: 'graph' },
       },
@@ -425,14 +405,20 @@ void describe('AppExecutorWorkerCodeRunner', () => {
     });
   });
 
-  void it('refreshes runtime packages for Rivet-capable main-thread executions', async () => {
+  void it('pins the same release for worker and Rivet-capable calls, while a new root sees updates', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'rivet-main-thread-release-'));
-    const current = join(directory, 'current');
-    const previousRoot = process.env.RIVET_CODE_RUNNER_REQUIRE_ROOT;
+    const hooks = globalThis as typeof globalThis & { __RIVET_PREPARE_RUNTIME_LIBRARIES__?: () => Promise<unknown> };
+    const previousHook = hooks.__RIVET_PREPARE_RUNTIME_LIBRARIES__;
+    let active = join(directory, 'first');
+    let preparations = 0;
+    hooks.__RIVET_PREPARE_RUNTIME_LIBRARIES__ = async (force) => {
+      assert.equal(force, true);
+      preparations++;
+      return { version: 1, requireAnchorPath: join(active, 'node_modules', '__rivet.cjs') };
+    };
     try {
-      await mkdir(join(current, 'node_modules', 'example'), { recursive: true });
-      await writeFile(join(current, 'node_modules', 'example', 'index.js'), 'module.exports=84;');
-      process.env.RIVET_CODE_RUNNER_REQUIRE_ROOT = join(current, 'node_modules');
+      await mkdir(join(active, 'node_modules', 'example'), { recursive: true });
+      await writeFile(join(active, 'node_modules', 'example', 'index.js'), 'module.exports=84;');
       const runner = new AppExecutorWorkerCodeRunner();
       const options = defaultCodeRunnerOptions({ includeRequire: true, includeRivet: true });
       const code = "return { output1: { type: 'number', value: require('example') } };";
@@ -440,12 +426,17 @@ void describe('AppExecutorWorkerCodeRunner', () => {
       const next = join(directory, 'next');
       await mkdir(join(next, 'node_modules', 'example'), { recursive: true });
       await writeFile(join(next, 'node_modules', 'example', 'index.js'), 'module.exports=42;');
-      await rename(current, join(directory, 'retained'));
-      await rename(next, current);
-      assert.deepEqual(await runner.runCode(code, {}, options), { output1: { type: 'number', value: 42 } });
+      active = next;
+      assert.deepEqual(await runner.runCode(code, {}, options), { output1: { type: 'number', value: 84 } });
+      assert.deepEqual(await runner.runCode(code, {}, { ...options, includeRivet: false }), {
+        output1: { type: 'number', value: 84 },
+      });
+      assert.equal(preparations, 1);
+      assert.deepEqual(await new AppExecutorWorkerCodeRunner().runCode(code, {}, options), {
+        output1: { type: 'number', value: 42 },
+      });
     } finally {
-      if (previousRoot === undefined) delete process.env.RIVET_CODE_RUNNER_REQUIRE_ROOT;
-      else process.env.RIVET_CODE_RUNNER_REQUIRE_ROOT = previousRoot;
+      hooks.__RIVET_PREPARE_RUNTIME_LIBRARIES__ = previousHook;
       await rm(directory, { recursive: true, force: true });
     }
   });
@@ -670,13 +661,7 @@ void describe('AppExecutorWorkerCodeRunner', () => {
         return { output1: { type: 'string', value: await response.text() } };
       `,
       {},
-      {
-        includeConsole: false,
-        includeFetch: true,
-        includeProcess: false,
-        includeRequire: false,
-        includeRivet: false,
-      },
+      defaultCodeRunnerOptions({ includeFetch: true }),
     );
 
     assert.deepEqual(outputs, {
@@ -690,13 +675,7 @@ void describe('AppExecutorWorkerCodeRunner', () => {
     const outputs = await runner.runCode(
       `return { output1: { type: 'string', value: process.release.name } };`,
       {},
-      {
-        includeConsole: false,
-        includeFetch: false,
-        includeProcess: true,
-        includeRequire: false,
-        includeRivet: false,
-      },
+      defaultCodeRunnerOptions({ includeProcess: true }),
     );
 
     assert.deepEqual(outputs, {
@@ -717,13 +696,7 @@ void describe('AppExecutorWorkerCodeRunner', () => {
         return { output1: { type: 'string', value: 'done' } };
       `,
       {},
-      {
-        includeConsole: true,
-        includeFetch: false,
-        includeProcess: false,
-        includeRequire: false,
-        includeRivet: false,
-      },
+      defaultCodeRunnerOptions({ includeConsole: true }),
     );
 
     assert.deepEqual(outputs, {
@@ -741,13 +714,7 @@ void describe('AppExecutorWorkerCodeRunner', () => {
     const outputs = await runner.runCode(
       `return { output1: { type: 'boolean', value: typeof Rivet.createProcessor === 'function' } };`,
       {},
-      {
-        includeConsole: false,
-        includeFetch: false,
-        includeProcess: false,
-        includeRequire: false,
-        includeRivet: true,
-      },
+      defaultCodeRunnerOptions({ includeRivet: true }),
     );
 
     assert.deepEqual(outputs, {
@@ -767,13 +734,7 @@ void describe('AppExecutorWorkerCodeRunner', () => {
         return { output1: { type: 'boolean', value: typeof Rivet.createProcessor === 'function' } };
       `,
       {},
-      {
-        includeConsole: true,
-        includeFetch: false,
-        includeProcess: false,
-        includeRequire: false,
-        includeRivet: true,
-      },
+      defaultCodeRunnerOptions({ includeConsole: true, includeRivet: true }),
     );
 
     assert.deepEqual(outputs, {
@@ -786,18 +747,7 @@ void describe('AppExecutorWorkerCodeRunner', () => {
     const runner = new AppExecutorWorkerCodeRunner();
 
     await assert.rejects(
-      () =>
-        runner.runCode(
-          `throw new TypeError('worker boom');`,
-          {},
-          {
-            includeConsole: false,
-            includeFetch: false,
-            includeProcess: false,
-            includeRequire: false,
-            includeRivet: false,
-          },
-        ),
+      () => runner.runCode(`throw new TypeError('worker boom');`, {}, defaultCodeRunnerOptions()),
       (error) => error instanceof TypeError && error.message === 'worker boom',
     );
   });
@@ -818,46 +768,6 @@ void describe('AppExecutorWorkerCodeRunner', () => {
       () => runner.runCode(`process.exit(0);`, {}, defaultCodeRunnerOptions({ includeProcess: true })),
       /Code worker exited before returning outputs/,
     );
-  });
-
-  void it('lets independent graph nodes finish while synchronous code is still running', async () => {
-    const graph: NodeGraph = {
-      connections: [],
-      metadata: {
-        description: '',
-        id: 'worker-timing-graph' as GraphId,
-        name: 'Worker Timing Graph',
-      },
-      nodes: [
-        makeCodeNode(`
-          const end = Date.now() + 200;
-          while (Date.now() < end) {}
-          return { output1: { type: 'string', value: 'code done' } };
-        `),
-        makeTextNode(),
-      ],
-    };
-    const processor = new GraphProcessor(makeProject(graph), graph.metadata!.id!, createBuiltInRegistry());
-    processor.executor = 'nodejs';
-
-    const finishedNodeIds: NodeId[] = [];
-    const finishedOutputs: Record<string, Outputs> = {};
-    processor.on('nodeFinish', ({ node, outputs }) => {
-      finishedNodeIds.push(node.id);
-      finishedOutputs[node.id] = outputs;
-    });
-
-    await processor.processGraph(testProcessContext());
-
-    assert.equal(finishedNodeIds[0], 'text-node');
-    assert.deepEqual(finishedOutputs['text-node']?.['output' as PortId], {
-      type: 'string',
-      value: 'ready',
-    } satisfies DataValue);
-    assert.deepEqual(finishedOutputs['code-node']?.['output1' as PortId], {
-      type: 'string',
-      value: 'code done',
-    } satisfies DataValue);
   });
 
   void it('still lets the Code (legacy) node validate returned output shape', async () => {

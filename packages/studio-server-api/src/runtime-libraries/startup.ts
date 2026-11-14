@@ -1,14 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-import {
-  ensureDirectories,
-  getRootPath,
-  currentDir,
-  currentNodeModulesPath,
-  readManifest,
-  writeManifest,
-} from './manifest.js';
+import { ensureDirectories, getRootPath, readManifest } from './manifest.js';
+import { publishRuntimeLibraryCandidate } from '@valerypopoff/rivet-studio-server-bootstrap/runtime-release-cache';
 import { getRuntimeLibrariesBackendMode } from './config.js';
 import { initializeRuntimeLibrariesBackend } from './backend.js';
 import { getLocalMetadataServingSelection } from '../local-metadata/serving-selection.js';
@@ -35,31 +29,21 @@ export async function reconcileRuntimeLibraries(): Promise<void> {
     return;
   }
 
-  migrateLegacyReleaseLayoutIfNeeded();
+  await migrateLegacyReleaseLayoutIfNeeded();
+
+  // Copy a legacy release into an immutable cache before accepting new runs.
+  // The legacy directory stays available to any older co-located reader.
+  await initializeRuntimeLibrariesBackend();
 
   const manifest = readManifest();
 
-  if (!currentNodeModulesPath()) {
-    if (Object.keys(manifest.packages).length > 0) {
-      console.warn('[runtime-libraries] Current runtime library set is missing or corrupt; clearing manifest state');
-      manifest.packages = {};
-      writeManifest(manifest);
-    }
-
-    console.log('[runtime-libraries] No active release, starting clean');
-    return;
-  }
-
-  console.log(
-    `[runtime-libraries] Active runtime libraries: current (${Object.keys(manifest.packages).length} packages)`,
-  );
+  console.log(`[runtime-libraries] Active runtime libraries: ${Object.keys(manifest.packages).length} packages`);
 }
 
-function migrateLegacyReleaseLayoutIfNeeded(): void {
+async function migrateLegacyReleaseLayoutIfNeeded(): Promise<void> {
   const root = getRootPath();
-  const currentPath = currentDir();
-  const currentNodeModulesPath = path.join(currentPath, 'node_modules');
-  if (fs.existsSync(currentNodeModulesPath)) {
+  const manifest = readManifest();
+  if (manifest.runtimeCache || fs.existsSync(path.join(root, 'current', 'node_modules'))) {
     return;
   }
 
@@ -72,25 +56,25 @@ function migrateLegacyReleaseLayoutIfNeeded(): void {
 
   try {
     const releaseId = fs.readFileSync(legacyActiveRelease, 'utf8').trim();
-    if (!releaseId) {
-      return;
-    }
+    if (!releaseId || path.basename(releaseId) !== releaseId || releaseId === '.' || releaseId === '..')
+      throw new Error('Invalid legacy runtime-library release identity.');
 
     const legacyReleasePath = path.join(legacyReleasesDir, releaseId);
     if (!fs.existsSync(path.join(legacyReleasePath, 'node_modules'))) {
       return;
     }
 
-    fs.renameSync(legacyReleasePath, currentPath);
+    const staging = fs.mkdtempSync(path.join(root, 'legacy-'));
     try {
-      fs.rmSync(legacyActiveRelease, { force: true });
-      fs.rmSync(legacyReleasesDir, { recursive: true, force: true });
-    } catch {
-      // ignore cleanup errors after successful migration
+      const candidate = path.join(staging, 'candidate');
+      fs.cpSync(legacyReleasePath, candidate, { recursive: true, verbatimSymlinks: true });
+      await publishRuntimeLibraryCandidate(root, candidate, manifest);
+    } finally {
+      fs.rmSync(staging, { recursive: true, force: true });
     }
 
-    console.warn(`[runtime-libraries] Migrated legacy release ${releaseId} to current/ layout`);
+    console.log('[runtime-libraries] Adopted legacy runtime libraries without removing their source.');
   } catch (err) {
-    console.error('[runtime-libraries] Failed to migrate legacy runtime-library layout:', err);
+    throw new Error('Failed to migrate legacy runtime-library layout.', { cause: err });
   }
 }

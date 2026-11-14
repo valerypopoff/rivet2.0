@@ -25,6 +25,7 @@ test('container runtime staging preserves compiled assets and bootstrap while ex
     const bootstrap = path.join(root, 'packages/studio-server-bootstrap');
     await fs.writeFile(path.join(bootstrap, 'bootstrap.mjs'), 'export {};');
     await fs.writeFile(path.join(bootstrap, 'bootstrap.test.mjs'), 'test fixture');
+    await fs.writeFile(path.join(bootstrap, 'runtime-release-cache.mjs'), 'export const snapshot = true;');
     const tests = path.join(root, 'packages/studio-server-api/dist/studio-server-api/src/tests');
     await fs.mkdir(tests, { recursive: true });
     await fs.writeFile(path.join(tests, 'private-fixture.js'), 'not a runtime input');
@@ -82,6 +83,10 @@ test('container runtime staging preserves compiled assets and bootstrap while ex
       await assert.rejects(fs.stat(path.join(destination, 'studio-server-bootstrap/bootstrap.test.mjs')), {
         code: 'ENOENT',
       });
+      assert.equal(
+        await fs.readFile(path.join(destination, 'studio-server-bootstrap/runtime-release-cache.mjs'), 'utf8'),
+        'export const snapshot = true;',
+      );
       await assert.rejects(fs.stat(path.join(destination, 'studio-server-api/dist/studio-server-api/src/tests')), {
         code: 'ENOENT',
       });

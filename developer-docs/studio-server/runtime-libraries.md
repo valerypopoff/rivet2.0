@@ -83,7 +83,7 @@ backend is not scaled beyond one replica.
 
 - release metadata, activation state, and job state in Postgres
 - immutable release artifacts in object storage
-- `current/` under `RIVET_RUNTIME_LIBRARIES_ROOT` as a local extracted cache
+- immutable `cache-<UUID>/` directories under `RIVET_RUNTIME_LIBRARIES_ROOT` as local extracted caches
 
 Managed mode reuses the same database and object-storage connection settings as
 managed workflow storage and uses the fixed object key prefix `runtime-libraries/`.
@@ -185,94 +185,102 @@ to `Settings` -> `Storage`. The retired runtime-library alias
 `RIVET_RUNTIME_LIBRARIES_SYNC_POLL_INTERVAL_MS` if that low-level interval must
 be overridden.
 
-## On-disk layout
+## On-disk layout and execution snapshots
 
-Runtime libraries use a simple persistent layout rooted at `RIVET_RUNTIME_LIBRARIES_ROOT`:
+Each completed release has its own physical directory under `RIVET_RUNTIME_LIBRARIES_ROOT`:
 
 ```text
 <root>/
-  manifest.json
-  current/
+  manifest.json               # existing file authority / managed cache hint
+  cache-<UUID>/
     package.json
     node_modules/
-  jobs/
+    .rivet-runtime-release.json
+  jobs/                       # disposable preparation
+  current/                    # retained legacy source, if present
 ```
 
-During activation, the runtime-library backend may also create a transient `current.previous`
-backup while swapping the extracted release into place.
+The private `runtimeCache` field in the existing manifest selects a validated,
+confined `cache-<UUID>` directory. There is no second activation database or
+pointer file. A prepared descriptor contains that physical path and its release
+and integrity identities. Existing API responses do not expose local paths.
+Managed PostgreSQL activation and immutable object-storage archives remain the
+authority. A damaged managed cache is rebuilt from that authority; an invalid
+legacy file authority fails preparation rather than becoming an empty release.
+Missing manifests also fail when retained releases or legacy activation state
+exist; offline migration uses the same rule. A fresh empty directory is distinct
+from lost activation metadata. Install/remove jobs also use a strict authority
+read, rather than using the display normalizer as the basis for new state.
+Managed startup reconstructs legacy-format caches
+from the authoritative archive once, rather than trusting matching local metadata.
+Warm-cache reuse also compares its checksum with the published artifact checksum,
+when one is recorded. Matching release IDs and package lists alone cannot certify
+a restored or damaged cache. A mismatch rebuilds from the checked archive while
+preserving the files already bound to an older run.
 
-In `managed` mode, this root is a local cache/workspace only. The authoritative source
-of truth is:
+Legacy `current/` is copied into an immutable directory without renaming or
+removing the source. New install/remove operations publish complete directories
+and update the manifest atomically. Even an empty selection has its own directory;
+removing the last library cannot change an already bound run.
 
-- Postgres for release metadata, activation state, and job state
-- object storage for immutable `runtime-libraries/releases/<releaseId>/release.tar` artifacts
+SQLite retains its catalog authority and the confined `current -> cache-<UUID>`
+compatibility link. It returns the prepared descriptor directly. Activation and
+API restart retain earlier directories: the separate editor executor may still
+need them. Restart reuses a validated cache only when its package metadata and
+archive checksum match the catalog. Missing or inconsistent cache metadata is
+rebuilt from that archive; neither the catalog nor old readers are changed.
+
+Neither managed nor SQLite caches are automatically pruned: API-only restart is
+not proof that every reader has stopped. Ephemeral caches
+are reclaimed with their Pod; persistent/shared caches require explicit quiescent
+maintenance. Allow disk space for retained releases plus extraction. Space and
+archive-layout checks occur during preparation, never each Code invocation.
+Insufficient space fails the new preparation while preserving existing runs.
 
 ## Execution bootstrap
 
-Rivet-capable editor Code nodes run in the executor's main thread. Before each
-such invocation, the require helper resolves the configured runtime directory
-with uncached native realpath and checks its physical identity. Changed releases
-invalidate their previous and current CommonJS `node_modules` trees, including
-nested dependencies. Ordinary Code workers already have invocation-local module
-caches. Desktop launches without a configured hosted require root retain ordinary
-Node resolution.
+API `ManagedCodeRunner` binds once, on its first successful require-enabled Code
+invocation. Concurrent first uses share one preparation. No-require Code keeps
+its existing fast path. Independent requests receive new runners; cross-project
+Subgraphs and background work inherit their root runner, even after the HTTP
+response. The binding is not a snapshot taken at HTTP admission: a run that has
+not used libraries yet can select a later activation.
 
-In SQLite-backed local mode, `runtime-cache/current` is a confined activation
-link to a unique `cache-<UUID>` directory. API and editor resolvers anchor at that
-physical directory, not the mutable `current` alias. Subsequent POSIX activations
-replace the link with a single atomic rename, so concurrent editor readers see
-the old or new release, never an absent `current` between two renames. A failed
-replacement leaves the old link usable; older directory caches and Windows
-junctions use the startup/compatibility swap path. This also isolates Node's
-package-entry/exports resolution caches, which cannot be refreshed by deleting
-`require.cache` alone. Activation still commits the authoritative SQL archive
-first and repairs extraction from it on failure/restart. Live promotion retains
-earlier physical caches so an in-flight workflow can still lazy-load its own
-dependencies. Supervised startup prunes inactive owned caches before admitting
-executions; do not prune them during running work. Disk sizing must allow package
-changes between restarts as well as extraction overhead. Interrupted extraction
-can leave disposable orphans, not a second business-data authority. Legacy source
-folders and managed cache layouts are not converted by this change. The packaged rehearsal changes
-both `main` and `exports` between installed package versions to check the selected
-SQLite path in endpoint and editor execution.
+The editor `AppExecutorWorkerCodeRunner` binds once on the first require- or
+Rivet-capable invocation. Both current-thread Code and ordinary worker Code use
+that same physical path. Worker requests carry it before entering the queue.
+Ordinary Code workers keep their existing invocation-local module state; they
+share release bytes, not JavaScript objects.
 
-Runtime-library sync is part of execution wiring, not only the admin UI:
+The preparation hook returns an explicit verified snapshot, or `null` only for
+unconfigured ambient Node resolution. Missing/void results and corrupt hosted
+metadata fail before Code runs. Builtin modules and normal unconfigured desktop
+resolution continue to work. Hosted `NODE_PATH` entries inside the mutable cache
+root, including aliases that resolve there, are rejected, so an empty or older release cannot fall through to a newly
+installed managed package. Intentional mutation of package files, `require.cache`
+or explicit mutable absolute paths is outside this contract.
 
-- `prepareRuntimeLibrariesForExecution()` goes through the root runtime-library backend singleton
-- API-side `Code` node execution reaches that path through `ManagedCodeRunner` only when Rivet enables `require(...)` for that code invocation
-- plain JS Code/Expression executions that do not receive `require(...)` skip runtime-library preparation, because they cannot resolve wrapper-managed packages
-- `ManagedRuntimeLibrariesBackend.prepareForExecution()` forces the managed backend to initialize and reconcile the local `current/` cache before managed-package code execution continues
-- in managed mode, `managed/context.ts` prefers the process-local `globalThis.__RIVET_PREPARE_RUNTIME_LIBRARIES__` hook when one exists, then falls back to `localCache.sync(force)`
-- that keeps API processes and executor processes on the same "prepare then resolve `current/node_modules`" contract even though they are different runtimes
+Activating another release never clears old CommonJS objects. Resolvers are
+cached by physical anchor in a bounded lookup cache; evicting that lookup does
+not evict live Node modules. The compiled-function cache remains separate and
+bounded, with fresh invocation arguments. Supported native packages resolve from
+the selected directory; an addon that cannot coexist across releases still needs
+a controlled process restart.
 
-`ManagedCodeRunner` is still request-scoped, but it now keeps runtime-library
-preparation lazy and stable inside one workflow request:
+API and bootstrap synchronization use one serialized, coalescing helper. Forced
+waiters request a follow-up round rather than starting concurrent writers. Each
+round returns its actual prepared descriptor; readiness reports that release.
+Shutdown waits for all accepted synchronization rounds, including a forced round
+queued while its predecessor settles, before closing clients. Concurrent disposal
+callers share that wait; restarting synchronization waits for disposal to finish. No npm
+install or workflow execution is automatically replayed.
 
-- if no code node requests `require(...)`, the request performs no
-  runtime-library sync
-- the first `includeRequire=true` code invocation prepares the active
-  runtime-library snapshot
-- later `includeRequire=true` invocations in the same workflow request reuse
-  that same preparation promise
-- package installs/removals are therefore observed on a later workflow request,
-  not in the middle of a running workflow
-
-The runner also keeps a bounded process-level cache of successful
-`AsyncFunction` compilations. The cache key contains the generated code and the
-exact argument-name shape. Request values such as `inputs`, `graphInputs`,
-`context`, `require`, and `Rivet` are never cached; they are passed fresh on
-every invocation.
-
-For `require(...)`-enabled code, the runner creates the managed `require`
-resolver lazily after runtime-library preparation and reuses it for the
-workflow request. Resolver caching is keyed by the runtime-library root, the
-active `node_modules` path, and the manifest snapshot (`activeReleaseId` when
-available, otherwise `updatedAt`, otherwise the active `node_modules`
-timestamp). When a later request observes a different snapshot for the same
-local runtime-library path, the wrapper drops the stale managed resolver and
-clears CommonJS modules loaded from that `node_modules` tree so the next
-request resolves the newly active packages.
-
+Migration, restore, candidate staging and recovery read one validated
+manifest/directory pair. Selected-runtime exports archive only that directory.
+Full browser backups still contain retained source/history bytes and include them
+in fingerprints and space estimates. Restore only normalizes its private
+extraction; it does not rewrite a live source. See the
+[implementation and validation plan](./runtime-library-snapshot-plan.md).
 Operational flags:
 
 - `RIVET_CODE_RUNNER_TELEMETRY=true` enables ManagedCodeRunner aggregate timing
@@ -280,7 +288,7 @@ Operational flags:
 - `RIVET_MANAGED_CODE_RUNNER_DISABLE_CACHE=true` disables only the compiled
   function cache
 - `RIVET_MANAGED_CODE_RUNNER_FORCE_PREPARE_EVERY_CODE=true` restores the old
-  per-code runtime-library preparation behavior without disabling telemetry or
+  per-code runtime-library checks without rebinding an already selected root, disabling telemetry or
   the compiled-function cache
 
 ## API surface
@@ -499,8 +507,8 @@ Integrity rule:
 
 After the opt-in [local metadata upgrade](local-metadata-upgrade.md), local
 runtime-library activation and its immutable package archive are authoritative
-in the SQLite catalog, not `manifest.json`. The API rebuilds a disposable cache
-from that archive; the co-located executor obtains its generation/cache path
+in the SQLite catalog, not `manifest.json`. The API validates and reuses the
+current cache or rebuilds it from that archive; the co-located executor obtains its generation/cache path
 and current outbound proxy settings through the authenticated loopback startup
 protocol. Package activation commits the SQL archive pointer before changing
 the cache; a failed cache promotion stays unavailable until repair, never falls

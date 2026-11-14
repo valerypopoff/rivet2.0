@@ -25,7 +25,7 @@ import { LOCAL_UPGRADE_FAILURE_REASONS } from '../../../studio-server-shared/loc
 import { selectRestoreSourceBudget } from './preparation-budget.js';
 import { withLocalSourceBundleLimit, withLocalSourceBudget } from '../local-metadata/source-budget.js';
 import { prepareRestoreRuntime, restoreRuntimePlatform, runtimeNeedsReinstallation } from './runtime-preparation.js';
-import { readSourceManifest } from '../scripts/migrate-runtime-libraries.js';
+import { readSourceRuntimeSelection } from '../scripts/migrate-runtime-libraries.js';
 import { fingerprintVmMigrationSource } from '../scripts/vm-migration-source-manifest.js';
 import fs from 'node:fs/promises';
 
@@ -134,9 +134,10 @@ async function run() {
         await normalizeExtractedRuntimeLayout(roots.runtimeLibraries);
         const originalRoots = roots;
         const originalSourceManifest = await fingerprintVmMigrationSource(originalRoots);
+        const runtimeSource = await readSourceRuntimeSelection(roots.runtimeLibraries);
         if (
-          Object.keys((await readSourceManifest(roots.runtimeLibraries)).packages).length &&
-          (await runtimeNeedsReinstallation(path.join(roots.runtimeLibraries, 'current')))
+          Object.keys(runtimeSource.manifest.packages).length &&
+          (await runtimeNeedsReinstallation(runtimeSource.directory!))
         ) {
           operation = {
             ...operation,

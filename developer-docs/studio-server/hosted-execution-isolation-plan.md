@@ -1,13 +1,16 @@
 # Hosted execution isolation plan
 
-Status: Gate A development tooling implemented against source `4da42d4d6`,
+Status: Gate A development tooling built on committed prototype `8854c24d9`,
 2026-11-14. [Local results](./hosted-execution-isolation-gate-a.md) record passing
-functional checks and an unmet strict no-regression constraint. No serving path,
+functional checks and historical measurements against a strict no-regression
+constraint. The user subsequently accepted up to 1 ms added p95 for small runs,
+with large-request regressions separately bounded and tested. No serving path,
 default, deployment or cloud resource has changed. Production supervisor/service
 integration below remains planned and gated; this is not completed isolation.
 The local review also verifies prepared-action tail ownership through response
-encoding/delivery failures and bounded pool replacement; it does not advance the
-performance gate or authorize serving changes.
+encoding/delivery failures and bounded pool replacement. These functional checks
+do not establish latency or capacity; the separately fingerprinted comparisons
+in the results document cover only their local workloads.
 Benchmark acceptance also waits for root/capture settlement and cleanup, with a
 real late-failure and controller-disconnect regression. Foreground response timing
 remains separate from acceptance of the complete fixture run.
@@ -20,27 +23,44 @@ results do not substitute for the production gateway/debugger integration below.
 The original blocking issue is **not resolved in serving code**. The entries below
 describe implementation, not permission to enable an unqualified mode.
 
-| Plan area                   | Current state                                                                     | Remaining work                                                                                                                              |
-| --------------------------- | --------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| Local whole-root prototype  | Implemented for generated graphs, all Code-family call sites and prepared actions | Complete the real-fixture and lifecycle/capability gates                                                                                    |
-| Performance and capacity    | Functional checks pass; strict no-regression gate has not passed                  | Resolve the latency budget, then qualify representative latency/concurrency/RSS before choosing a lifecycle or slot count                   |
-| Supervisor and readiness    | Prototype pool only                                                               | API-owned startup/readiness, leases, bounded controls, drain and metrics                                                                    |
-| Shared service adapters     | Not implemented                                                                   | Settings/authorization context, references, datasets, stored values, knowledge/profile health, and tracked parent operations without replay |
-| Durable recording ownership | Existing serving owner is unchanged                                               | Stable root/child IDs, asynchronous parent admission and bounded capture handoff, with execution outcome separate from replay availability  |
-| Hosted surface integration  | Not implemented                                                                   | Published/latest HTTP, HTTP and socket actions/preview, schedules, Evaluations and actual debugger controls/reconnect                       |
-| Release evidence            | Local prototype only                                                              | Full integration/failure tests, packaged loading/capacity, then separately authorized staging/release                                       |
+| Plan area                   | Current state                                                                     | Remaining work                                                                                                                             |
+| --------------------------- | --------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| Local whole-root prototype  | Implemented for generated graphs, all Code-family call sites and prepared actions | Complete the real-fixture and lifecycle/capability gates                                                                                   |
+| Performance and capacity    | Local paced fixtures meet the accepted additive p95 limits                        | Complete real-fixture latency and concurrency/RSS qualification before choosing production lifecycle or slot count                         |
+| Supervisor and readiness    | Prototype pool only                                                               | API-owned startup/readiness, leases, bounded controls, drain and metrics                                                                   |
+| Shared service adapters     | Local host-store seam proves root context and in-flight write ownership only      | Production settings/authorization, references, datasets, stored values, knowledge/profile health, and remaining parent-operation tracking  |
+| Durable recording ownership | Existing serving owner is unchanged                                               | Stable root/child IDs, asynchronous parent admission and bounded capture handoff, with execution outcome separate from replay availability |
+| Hosted surface integration  | Not implemented                                                                   | Published/latest HTTP, HTTP and socket actions/preview, schedules, Evaluations and actual debugger controls/reconnect                      |
+| Release evidence            | Local prototype only                                                              | Full integration/failure tests, packaged loading/capacity, then separately authorized staging/release                                      |
+
+The local host-store seam has its own MessagePort and exposes only typed get/set
+operations, at most 64 in flight per root. Retained root scopes are bounded by
+the pool's worker-plus-queue capacity, including writes left after worker exit.
+It restores the accepting parent
+request context, fences new calls on cancellation and retains accepted IO through
+worker exit/drain without replay. A real prepared-action fixture proves this;
+it is not connected to a production store, gateway or durable execution owner.
 
 All five hosted surfaces still instantiate their actual processors locally. In
 particular, the socket gateway still uses Node's real prepared action; the local
 prepared-action fixture does not exercise that production gateway. The proposed
 `src/hosted-execution/` supervisor directory does not exist yet.
 
-The earlier requirement not to slow endpoint runs still governs this work.
-The redundant request copies have been removed and the full matrix repeated.
-Small-fixture median overhead remains about 0.07-0.30 ms; large-input point
-estimates improved but tail latency remains variable. Passing functional checks
-cannot establish zero overhead. Resolve that performance tradeoff before broad
-serving integration, then complete the remaining compatibility and capacity gates.
+The accepted latency limit is **up to 1 ms added p95 for small runs**. Freeze the
+separate large-request limit before measuring: the local 8 MiB fixture uses
+**at most 5 ms added p95**. This latter number is an engineering bound, not a
+user-specified value. It does not authorize larger production inputs or a change
+to admission policy. Report large payload size and latency independently; passing
+small fixtures cannot hide a large-input regression. Historical median-only or
+maximum-throughput results do not establish acceptance under the new limits.
+
+Compare the paths at the same offered rate: the local single-outstanding-request
+comparison caps arrivals at 100 requests/s for small fixtures and 10 requests/s for
+the large fixture, with no catch-up bursts. Measure request latency without the
+intentional delay between requests. Use at least 200 observations per path and
+nearest-rank p95; the maintained 100-request/three-block command gives 300.
+Zero-delay saturation measurements remain a separate diagnostic. This is a
+workload latency check, not proof of concurrent serving capacity or integration.
 
 ## Goal and boundaries
 
@@ -127,7 +147,7 @@ Do this before migrating every surface.
 
 **Gate A deliverable:** one recorded choice of boundary/lifecycle, measured
 latency/throughput/memory results, and exact worker/admission/queue/limit settings.
-No repeatable normal-run regression beyond the frozen baseline noise is accepted.
+No repeatable normal-run regression beyond the frozen additive p95 limits is accepted.
 A prototype does not prove production speed or sizing until this evidence exists.
 
 Determine effective Pod resources and admission mode before choosing numbers.
@@ -350,7 +370,7 @@ memory; preserve the existing qualification/cleanup process. No new cloud attemp
 is authorized by this plan.
 
 Completion means no authored hosted Code on the API event loop, working explicit
-abort/drain, no repeatable normal-run performance regression, unchanged useful
+abort/drain, latency within the accepted limits, unchanged useful
 recordings/cost/debugger behavior and coverage of every listed hosted surface.
 Until the prototype settles lifecycle, sizing and budgets, this plan is ready for
 local investigation and is not a claim of production readiness.

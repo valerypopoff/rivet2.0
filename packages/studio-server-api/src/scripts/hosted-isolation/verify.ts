@@ -3,7 +3,8 @@ import { fork } from 'node:child_process';
 import { once } from 'node:events';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
-import type { GraphId, PortId, Project } from '@valerypopoff/rivet2-node';
+import { AsyncLocalStorage } from 'node:async_hooks';
+import type { GraphId, PortId, Project, RivetStoredValue } from '@valerypopoff/rivet2-node';
 import type { PrototypeDefinition, PrototypeEvent, PrototypeRequest, PrototypeResult } from './protocol.js';
 import { assemblePrototypeInput } from './request.js';
 
@@ -16,8 +17,8 @@ const SYNC = 'sync-loop' as GraphId,
 
 async function fixtures(): Promise<PrototypeDefinition> {
   const [
-    { SetStoredValueNodeImpl, CodeNewNodeImpl, ExpressionNodeImpl, JSMapNodeImpl, JSFilterNodeImpl },
-    { isolationFixture, IDENTITY_CODE, addIsolationTail },
+    { CodeNewNodeImpl, ExpressionNodeImpl, JSMapNodeImpl, JSFilterNodeImpl },
+    { isolationFixture, IDENTITY_CODE, addIsolationTail, addIsolationStoredValue },
   ] = await Promise.all([import('@valerypopoff/rivet2-node'), import('./fixtures.js')]);
   const sharedCode = `
     const value = inputs.input.value;
@@ -87,19 +88,7 @@ async function fixtures(): Promise<PrototypeDefinition> {
       inputId: 'value' as PortId,
     },
   );
-  const actionGraph = projects[1]!.graphs[ACTION]!;
-  const output = actionGraph.nodes.find((node) => node.type === 'graphOutput')!;
-  const store = SetStoredValueNodeImpl.create();
-  store.data.key = 'fixture';
-  store.data.dataType = 'any';
-  actionGraph.connections.find((connection) => connection.inputNodeId === output.id)!.inputNodeId = store.id;
-  actionGraph.nodes.push(store);
-  actionGraph.connections.push({
-    outputNodeId: store.id,
-    outputId: 'saved-value' as PortId,
-    inputNodeId: output.id,
-    inputId: 'value' as PortId,
-  });
+  addIsolationStoredValue(projects[1]!, ACTION);
   return {
     project: {
       metadata: projects[0]!.metadata,
@@ -368,6 +357,46 @@ async function verify() {
     assert.equal(action.storagePatch.fixture, 42);
     passed('real prepared action, browser storage/state and recording');
 
+    const hostAction = (input: number): PrototypeRequest => ({
+      recording: true,
+      action: {
+        uiGraph: Object.values(definition.project.uiGraphs!).find((ui) =>
+          ui.components.some((component) => component.type === 'button' && component.action.graphId === ACTION),
+        )!,
+        componentId: 'run',
+        state: { input },
+      },
+    });
+    const parentContext = new AsyncLocalStorage<number>();
+    let hostValue: RivetStoredValue | undefined;
+    for (const input of [73, 74]) {
+      let response: string | undefined;
+      const result = await parentContext.run(input, () =>
+        pool.run(hostAction(input), {
+          storedValueStore: {
+            get: () => {
+              assert.equal(parentContext.getStore(), input);
+              return hostValue;
+            },
+            set: (_key, value) => {
+              assert.equal(parentContext.getStore(), input);
+              hostValue = value;
+            },
+          },
+          onEvent: (event) => {
+            if (event.kind === 'foreground') response = event.json;
+          },
+        }),
+      );
+      assert.equal(result.status, 'succeeded', result.failure?.message);
+      assert.equal(hostValue, input);
+      assert.equal(JSON.parse(response!).statePatch.result, input);
+      assert.deepEqual(JSON.parse(response!).storagePatch, {}, 'Host values must not leak into browser storage.');
+      assert.ok(result.recording);
+    }
+    assert.equal(pool.stats.parentOperations, 0);
+    passed('real prepared actions use parent host storage with fresh per-root request context');
+
     // Keep actual roots occupied until this test releases them. CPU speed or
     // a slow assertion cannot accidentally empty the queue fixture.
     const markers = Array.from({ length: 3 }, () => new Int32Array(new SharedArrayBuffer(12)));
@@ -434,17 +463,88 @@ async function verify() {
       assert.equal(other.status, 'succeeded');
       assert.equal(answer, '42');
       assert.ok(other.recording);
+      if (graph === ASYNC) {
+        let release!: () => void;
+        const writeGate = new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        const cancelled = new AbortController();
+        const cancelledReplacement = new AbortController();
+        const cancelledQueue = new AbortController();
+        let writes = 0;
+        const committed: RivetStoredValue[] = [];
+        const heldStore = {
+          get: () => hostValue,
+          set: async (_key: string, value: RivetStoredValue) => {
+            writes++;
+            await writeGate;
+            committed.push(value);
+          },
+        };
+        const writing = pool.run(hostAction(75), {
+          signal: cancelled.signal,
+          storedValueStore: heldStore,
+        });
+        const writeRejected = assert.rejects(writing, { name: 'AbortError' });
+        void writeRejected.catch(() => undefined);
+        try {
+          await waitFor(() => writes === 1, 'The parent accepted the real host-store write.');
+          cancelled.abort();
+          await writeRejected;
+          await pool.prepare();
+          const replacement = assert.rejects(
+            pool.run(hostAction(76), {
+              signal: cancelledReplacement.signal,
+              storedValueStore: heldStore,
+            }),
+            { name: 'AbortError' },
+          );
+          void replacement.catch(() => undefined);
+          await waitFor(() => writes === 2, 'A replacement root accepted a second distinct parent write.');
+          const queued = assert.rejects(
+            pool.run(hostAction(77), {
+              signal: cancelledQueue.signal,
+              storedValueStore: heldStore,
+            }),
+            { name: 'AbortError' },
+          );
+          void queued.catch(() => undefined);
+          await assert.rejects(pool.run(hostAction(78), { storedValueStore: heldStore }), /host-store roots/);
+          cancelledQueue.abort();
+          await queued;
+          cancelledReplacement.abort();
+          await replacement;
+          abort.abort();
+          await rejected;
+          let drained = false;
+          const closing = pool.close().then(() => {
+            drained = true;
+          });
+          void closing.catch(() => undefined);
+          await Promise.resolve();
+          assert.equal(drained, false);
+          assert.equal(pool.stats.parentOperations, 2);
+          release();
+          await closing;
+          assert.deepEqual(committed.sort(), [75, 76]);
+          assert.equal(writes, 2, 'Worker loss must not replay an accepted write or invoke queued work.');
+          assert.equal(pool.stats.parentOperations, 0);
+          assert.equal(pool.stats.workers, 0);
+          passed(
+            'async loop cancellation bounds retained parent writes and drains them exactly once after worker exit',
+          );
+        } finally {
+          release();
+          cancelled.abort();
+          cancelledReplacement.abort();
+          cancelledQueue.abort();
+          await pool.close();
+        }
+        continue;
+      }
       abort.abort();
       await rejected;
       assert.ok(pool.stats.workers <= 2);
-      if (graph === ASYNC) {
-        // The first cancellation already verifies replenishment. On the last
-        // one, shutdown proves physical reclamation without another cold import.
-        await pool.close();
-        assert.equal(pool.stats.workers, 0);
-        passed(`${graph}: actual loop entry, independent root progress and confirmed shutdown`);
-        continue;
-      }
       await pool.prepare(); // Confirm physical exit and warm replacement before the next fault.
       assert.equal(pool.stats.retiring, 0);
       assert.equal(pool.stats.workers, 2);

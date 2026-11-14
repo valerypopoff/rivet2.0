@@ -10,6 +10,11 @@ The owning implementation is `runtime-libraries/managed-code-runner.ts` in the
 Studio Server API, with `src/tests/managed-code-runner.test.ts` as its regression
 entrypoint. Re-run its fixtures before relying on historical performance results.
 
+The historical cache-invalidation alternative below is superseded by
+[immutable runtime-library snapshots](./runtime-library-snapshot-plan.md).
+Live runs retain their physical release and module instances when another
+release activates; activation must not clear their CommonJS cache entries.
+
 ## Purpose
 
 This document records why Rivet-side CodeRunner optimizations did not
@@ -143,6 +148,7 @@ comparing results.
 Keep `ManagedCodeRunner`, but split its behavior internally:
 
 1. Fast plain-JS path
+
    - Used when `includeRequire=false`.
    - Does not call `prepareRuntimeLibrariesForExecution()`.
    - Can still expose `console`, `fetch`, `process`, `Rivet`, `graphInputs`, and
@@ -150,6 +156,7 @@ Keep `ManagedCodeRunner`, but split its behavior internally:
    - Uses a bounded compiled-function cache.
 
 2. Managed package path
+
    - Used when `includeRequire=true`.
    - Prepares runtime libraries lazily.
    - Prepares at most once per workflow request.
@@ -620,13 +627,13 @@ workflow timing headers.
 
 Representative local result, 50 measured requests after 10 warmups:
 
-| Run | Mean total client | P95 total client | Mean `x-duration-ms` | P95 `x-duration-ms` | Mean `x-workflow-execute-ms` | P95 `x-workflow-execute-ms` | CodeRunner telemetry |
-|---|---:|---:|---:|---:|---:|---:|---|
-| Clean HEAD baseline with explicit `{}` | 7 ms | 24 ms | 5 ms | 23 ms | 2 ms | 2 ms | unavailable in old code |
-| Current optimized with explicit `{}` | 7 ms | 23 ms | 4 ms | 22 ms | 1 ms | 2 ms | 1 call, 0 `require`, cache hit, output equivalent |
-| Clean HEAD baseline with no body/default input | 58 ms | 269 ms | 56 ms | 265 ms | 27 ms | 29 ms | unavailable in old code; recording confirms 42 code-like node starts |
-| Current legacy-compatible flags with no body/default input | 59 ms | 268 ms | 48 ms | 265 ms | 28 ms | 29 ms | 42 calls, 0 `require`, cache disabled, output equivalent |
-| Current optimized with no body/default input | 57 ms | 268 ms | 51 ms | 266 ms | 26 ms | 28 ms | 42 calls, 0 `require`, 42 cache hits, output equivalent |
+| Run                                                        | Mean total client | P95 total client | Mean `x-duration-ms` | P95 `x-duration-ms` | Mean `x-workflow-execute-ms` | P95 `x-workflow-execute-ms` | CodeRunner telemetry                                                 |
+| ---------------------------------------------------------- | ----------------: | ---------------: | -------------------: | ------------------: | ---------------------------: | --------------------------: | -------------------------------------------------------------------- |
+| Clean HEAD baseline with explicit `{}`                     |              7 ms |            24 ms |                 5 ms |               23 ms |                         2 ms |                        2 ms | unavailable in old code                                              |
+| Current optimized with explicit `{}`                       |              7 ms |            23 ms |                 4 ms |               22 ms |                         1 ms |                        2 ms | 1 call, 0 `require`, cache hit, output equivalent                    |
+| Clean HEAD baseline with no body/default input             |             58 ms |           269 ms |                56 ms |              265 ms |                        27 ms |                       29 ms | unavailable in old code; recording confirms 42 code-like node starts |
+| Current legacy-compatible flags with no body/default input |             59 ms |           268 ms |                48 ms |              265 ms |                        28 ms |                       29 ms | 42 calls, 0 `require`, cache disabled, output equivalent             |
+| Current optimized with no body/default input               |             57 ms |           268 ms |                51 ms |              266 ms |                        26 ms |                       28 ms | 42 calls, 0 `require`, 42 cache hits, output equivalent              |
 
 The explicit `{}` numbers are only a shallow smoke path. The no-body/default
 input run is the representative fixture path for this workflow: the recording

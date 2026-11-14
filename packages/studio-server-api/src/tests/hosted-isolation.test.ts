@@ -1,9 +1,85 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import type { ProjectId } from '@valerypopoff/rivet2-node';
 import { PrototypePool } from '../scripts/hosted-isolation/pool.js';
 import type { PrototypeDefinition } from '../scripts/hosted-isolation/protocol.js';
 import { assemblePrototypeInput } from '../scripts/hosted-isolation/request.js';
+import { evaluateLatencyBudget, percentile } from '../scripts/hosted-isolation/latency-budget.js';
+import { ParentStoredValues } from '../scripts/hosted-isolation/stored-values.js';
+
+test(
+  'accepted host-store writes retain request context and drain after lost replies without replay',
+  { timeout: 5000 },
+  async () => {
+    const context = new AsyncLocalStorage<string>();
+    let writes = 0;
+    let entered!: () => void;
+    const started = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const scope = context.run(
+      'accepting request',
+      () =>
+        new ParentStoredValues(1, {
+          get: () => undefined,
+          set: async () => {
+            writes++;
+            assert.equal(context.getStore(), 'accepting request');
+            entered();
+            await gate;
+          },
+        }),
+    );
+    context.run('unrelated message handler', () =>
+      scope.handle({ rootId: 1, operationId: 1, method: 'set', key: 'key', value: 42 }, () => {
+        throw new Error('Worker already exited');
+      }),
+    );
+    try {
+      await started;
+      assert.equal(scope.pending, 1);
+      let drained = false;
+      const closed = scope.close().then(() => {
+        drained = true;
+      });
+      await Promise.resolve();
+      assert.equal(drained, false, 'Worker loss must not hide an accepted parent write from drain.');
+      let rejected = false;
+      scope.handle({ rootId: 1, operationId: 1, method: 'set', key: 'key', value: 43 }, (reply) => {
+        rejected = !!reply.failure;
+      });
+      assert.equal(rejected, true);
+      release();
+      await closed;
+      assert.equal(scope.pending, 0);
+      assert.equal(writes, 1, 'An uncertain write is never replayed.');
+    } finally {
+      release();
+      await scope.close();
+    }
+  },
+);
+
+test('latency budgets use nearest-rank p95 and require matched, sufficient observations', () => {
+  assert.equal(
+    percentile(
+      Array.from({ length: 20 }, (_, index) => index + 1),
+      0.95,
+    ),
+    19,
+  );
+  const direct = Array(200).fill(2) as number[];
+  assert.equal(evaluateLatencyBudget(direct, Array(200).fill(3), 1).status, 'met');
+  assert.equal(evaluateLatencyBudget(direct, Array(200).fill(3.01), 1).status, 'exceeded');
+  assert.equal(evaluateLatencyBudget(direct, Array(199).fill(2), 1).status, 'insufficient-evidence');
+  assert.equal(evaluateLatencyBudget([2], [1], 1).status, 'insufficient-evidence');
+  for (const samples of [[], [NaN], [Infinity], [-1]]) assert.throws(() => percentile(samples, 0.95));
+});
 
 test('HTTP input assembly preserves JSON across fragmented UTF-8 chunks and transfer', () => {
   for (const value of [null, 42, 'Привет 🚀', { text: '日本語', items: [1, true, null] }]) {

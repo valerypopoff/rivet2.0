@@ -7,6 +7,7 @@ import {
   type NodeCreatedProcessor,
   type Outputs,
   type PortId,
+  type RivetStoredValueStore,
 } from '@valerypopoff/rivet2-node';
 import { ManagedCodeRunner } from '../../runtime-libraries/managed-code-runner.js';
 import { createHostedRuntimeOptions } from '../../routes/workflows/hosted-runtime-policy.js';
@@ -36,6 +37,7 @@ export async function runPrototypeRoot(
   request: PrototypeRequest,
   signal: AbortSignal,
   emit: (event: PrototypeEvent) => void,
+  storedValueStore?: RivetStoredValueStore,
 ): Promise<PrototypeResult> {
   signal.throwIfAborted();
   const executionEnvironment = request.executionEnvironment ?? definition.executionEnvironment;
@@ -54,8 +56,9 @@ export async function runPrototypeRoot(
   // same lazy fixture preparation instead of accidentally contacting production.
   runtime.codeRunner = new ManagedCodeRunner(definition.runtimeLibrariesRoot, {
     executionEnvironment,
-    prepareRuntimeLibraries: async () => {},
+    prepareRuntimeLibraries: async () => null,
   });
+  runtime.storedValueStore = storedValueStore;
   const started = performance.now();
   let unsubscribe: (() => void) | undefined;
   const observe = (processor: NodeCreatedProcessor['processor']) => {

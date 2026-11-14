@@ -1,5 +1,7 @@
-import { Worker } from 'node:worker_threads';
+import { MessageChannel, Worker } from 'node:worker_threads';
 import { deserialize, serialize } from 'node:v8';
+import type { RivetStoredValueStore } from '@valerypopoff/rivet2-node';
+import { ParentStoredValues } from './stored-values.js';
 import {
   prototypeFailure,
   type PrototypeDefinition,
@@ -17,6 +19,7 @@ type Job = {
   reject(error: Error): void;
   event?: (event: PrototypeEvent) => void;
   eventFailure?: Error;
+  storedValues?: ParentStoredValues;
   cleanup(): void;
   settled: boolean;
 };
@@ -45,6 +48,7 @@ type PoolOptions = {
 export class PrototypePool {
   readonly #slots = new Set<Slot>();
   readonly #queue: Job[] = [];
+  readonly #operations = new Set<ParentStoredValues>();
   #bytes = 0;
   #nextId = 0;
   #closed = false;
@@ -84,6 +88,7 @@ export class PrototypePool {
       retiring: [...this.#slots].filter((slot) => slot.retiring).length,
       queued: this.#queue.length,
       queuedBytes: this.#bytes,
+      parentOperations: [...this.#operations].reduce((count, scope) => count + scope.pending, 0),
     };
   }
 
@@ -104,11 +109,17 @@ export class PrototypePool {
       timeoutMs?: number;
       retainedBytes?: number;
       onEvent?: (event: PrototypeEvent) => void;
+      storedValueStore?: RivetStoredValueStore;
     } = {},
   ): Promise<PrototypeResult> {
     if (this.#closed) return Promise.reject(new Error('Prototype pool is closed.'));
     if (this.#startupFailure) return Promise.reject(this.#startupFailure);
     if (options.signal?.aborted) return Promise.reject(this.#abortError());
+    // Cancelled workers may have accepted parent IO that is still running.
+    // Bound those retained roots too, rather than admitting an unlimited tail
+    // of writes through repeated worker cancellation/replacement.
+    if (options.storedValueStore && this.#operations.size >= this.#options.size + this.#options.maxQueued)
+      return Promise.reject(new PrototypeCapacityError('Prototype host-store roots are still draining.'));
     const timeoutMs = options.timeoutMs ?? 30_000;
     if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 2_147_483_647)
       return Promise.reject(new Error('Invalid prototype root deadline.'));
@@ -137,6 +148,10 @@ export class PrototypePool {
           options.signal?.removeEventListener('abort', abort);
         },
       };
+      if (options.storedValueStore) {
+        job.storedValues = new ParentStoredValues(job.id, options.storedValueStore);
+        this.#operations.add(job.storedValues);
+      }
       options.signal?.addEventListener('abort', abort, { once: true });
       this.#queue.push(job);
       this.#bytes += bytes;
@@ -154,9 +169,12 @@ export class PrototypePool {
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       await Promise.race([
-        Promise.all(slots.map((slot) => slot.exited)),
+        Promise.all([...slots.map((slot) => slot.exited), ...[...this.#operations].map((scope) => scope.close())]),
         new Promise<never>((_, reject) => {
-          timer = setTimeout(() => reject(new Error('Prototype thread exit was not confirmed.')), 5000);
+          timer = setTimeout(
+            () => reject(new Error('Prototype thread/parent-operation drain was not confirmed.')),
+            5000,
+          );
         }),
       ]);
     } finally {
@@ -167,9 +185,15 @@ export class PrototypePool {
   #fill(): void {
     while (!this.#closed && !this.#startupFailure && this.#slots.size < this.#options.size) {
       let worker: Worker;
+      const { port1, port2 } = new MessageChannel();
       try {
-        worker = new Worker(new URL('./worker.js', import.meta.url), { workerData: this.#definition });
+        worker = new Worker(new URL('./worker.js', import.meta.url), {
+          workerData: { definition: this.#definition, servicePort: port2 },
+          transferList: [port2],
+        });
       } catch (error) {
+        port1.close();
+        port2.close();
         // Retain ownership of any threads already created so close() can reap them.
         this.#stopAdmissions(error instanceof Error ? error : new Error(String(error)));
         return;
@@ -191,6 +215,12 @@ export class PrototypePool {
           exited = resolve;
         }),
       };
+      port1.on('message', (request: Parameters<ParentStoredValues['handle']>[0]) => {
+        const scope = slot.job?.storedValues;
+        if (!scope || slot.job?.settled || slot.retiring || scope.rootId !== request.rootId) return;
+        scope.handle(request, (reply) => port1.postMessage(reply));
+      });
+      port1.unref();
       this.#created++;
       this.#slots.add(slot);
       const deadline = setTimeout(
@@ -225,6 +255,7 @@ export class PrototypePool {
         }
         job.settled = true;
         job.cleanup();
+        this.#closeOperations(job);
         slot.job = undefined;
         job.resolve(
           job.eventFailure && !message.result.failure
@@ -239,6 +270,7 @@ export class PrototypePool {
       });
       worker.once('error', (error) => this.#fail(slot, error));
       worker.once('exit', (code) => {
+        port1.close();
         clearTimeout(deadline);
         if (!slot.ready) slot.failed(new Error(`Prototype worker exited during startup (${code}).`));
         if (slot.job)
@@ -263,7 +295,7 @@ export class PrototypePool {
       slot.worker.ref();
       try {
         slot.worker.postMessage(
-          { kind: 'run', id: job.id, request: job.request },
+          { kind: 'run', id: job.id, request: job.request, hostStore: !!job.storedValues },
           job.request.inputJson ? [job.request.inputJson] : [],
         );
       } catch (error) {
@@ -299,6 +331,7 @@ export class PrototypePool {
     if (job.settled) return;
     job.settled = true;
     job.cleanup();
+    this.#closeOperations(job);
     job.reject(error);
   }
 
@@ -317,5 +350,10 @@ export class PrototypePool {
 
   #abortError(): Error {
     return Object.assign(new Error('Prototype root cancelled.'), { name: 'AbortError' });
+  }
+
+  #closeOperations(job: Job): void {
+    const scope = job.storedValues;
+    if (scope) void scope.close().then(() => this.#operations.delete(scope));
   }
 }

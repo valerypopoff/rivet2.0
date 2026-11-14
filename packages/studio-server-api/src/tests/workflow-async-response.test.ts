@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
+import path from 'node:path';
 import http from 'node:http';
 import test from 'node:test';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -7,7 +8,8 @@ import { createApiApp } from '../app.js';
 import type { ChartNode, NodeConnection } from '@valerypopoff/rivet2-node';
 import { listenTestServer } from './helpers/http-server-harness.js';
 import { createFilesystemWorkflowSuiteHarness } from './helpers/workflow-filesystem-suite-harness.js';
-import { waitForWorkflowRecordingRunCount } from './helpers/workflow-api-harness.js';
+import { waitForWorkflowRecordingRunCount, withEnvOverride } from './helpers/workflow-api-harness.js';
+import { publishRuntimeLibraryCandidate } from '@valerypopoff/rivet-studio-server-bootstrap/runtime-release-cache';
 import { getActiveHttpExecutionCount, abortActiveHttpExecutions } from '../active-http-executions.js';
 import { getHttpBodyAdmissionSnapshot } from '../middleware/body-admission.js';
 import { getPublishedExecutionAdmission } from '../published-execution-admission.js';
@@ -48,6 +50,117 @@ async function waitForIdle(): Promise<void> {
   while (getActiveHttpExecutionCount() > 0 && Date.now() < deadline) await delay(10);
   assert.equal(getActiveHttpExecutionCount(), 0, 'execution must release its registration');
 }
+
+test(
+  'a published response and its physical tail retain one library release across activation',
+  { timeout: 20_000 },
+  async () => {
+    await withEnvOverride('RIVET_RUNTIME_LIBRARIES_ROOT', suite.runtimeLibrariesRoot, async () => {
+      await withEnvOverride('RIVET_RECORDINGS_ENABLED', 'false', async () => {
+        const activate = async (version: string) => {
+          const candidate = path.join(suite.runtimeLibrariesRoot, `candidate-${version}`);
+          await fs.mkdir(path.join(candidate, 'node_modules', 'fixture'), { recursive: true });
+          await fs.writeFile(path.join(candidate, 'package.json'), '{"private":true}');
+          await fs.writeFile(
+            path.join(candidate, 'node_modules', 'fixture', 'index.js'),
+            `module.exports=${JSON.stringify(version)};`,
+          );
+          await publishRuntimeLibraryCandidate(suite.runtimeLibrariesRoot, candidate, {
+            packages: { fixture: { name: 'fixture', version } },
+            updatedAt: '',
+            activeReleaseId: version,
+          });
+        };
+        let release!: () => void, markStarted!: () => void;
+        const gate = new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        const started = new Promise<void>((resolve) => {
+          markStarted = resolve;
+        });
+        let captured: string | undefined;
+        const tailServer = await listenTestServer(
+          http.createServer((req, res) => {
+            if (req.url === '/hold') {
+              markStarted();
+              void gate.then(() => res.end('continue'));
+            } else {
+              captured = req.url;
+              res.end('ok');
+            }
+          }),
+        );
+        try {
+          await activate('A');
+          const created = await suite.workflowMutations.createWorkflowProjectItem('', 'Pinned runtime');
+          const project = await suite.rivetNode.loadProjectFromFile(created.absolutePath);
+          const graph = project.graphs[project.metadata.mainGraphId!]!;
+          const first = suite.rivetNode.CodeNodeImpl.create();
+          first.data = {
+            inputNames: [],
+            outputNames: ['result'],
+            code: 'return {result:{type:"string",value:require("fixture")}};',
+          };
+          const output = suite.rivetNode.GraphOutputNodeImpl.create();
+          output.data = { id: 'output', dataType: 'string' };
+          const trigger = suite.rivetNode.StartBackgroundBranchNodeImpl.create();
+          const tail = suite.rivetNode.CodeNodeImpl.create();
+          tail.data = {
+            inputNames: ['input'],
+            outputNames: [],
+            code: `
+          await fetch(${JSON.stringify(tailServer.baseUrl + '/hold')});
+          await fetch(${JSON.stringify(tailServer.baseUrl + '/value/')} + require('fixture'));
+          return {};
+        `,
+          };
+          const connect = (from: ChartNode, fromPort: string, to: ChartNode, toPort: string): NodeConnection => ({
+            outputNodeId: from.id,
+            outputId: fromPort as NodeConnection['outputId'],
+            inputNodeId: to.id,
+            inputId: toPort as NodeConnection['inputId'],
+          });
+          graph.nodes = [first, output, trigger, tail];
+          graph.connections = [
+            connect(first, 'result', output, 'value'),
+            connect(first, 'result', trigger, 'input1'),
+            connect(trigger, 'output1', tail, 'input'),
+          ];
+          await fs.writeFile(created.absolutePath, suite.rivetNode.serializeProject(project) as string);
+          await suite.workflowMutations.publishWorkflowProjectItem(created.relativePath, {
+            endpointName: 'pinned-runtime',
+          });
+          await suite.withWorkflowExecutionServer(async ({ publishedBaseUrl }) => {
+            const run = async () => {
+              const response = await fetch(publishedBaseUrl + '/pinned-runtime', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: '{}',
+                signal: AbortSignal.timeout(5000),
+              });
+              const result = await response.json();
+              assert.equal(response.status, 200, JSON.stringify(result));
+              return result;
+            };
+            assert.equal((await run()).output.value, 'A');
+            await started;
+            await activate('B');
+            release();
+            await waitForIdle();
+            assert.equal(captured, '/value/A');
+            assert.equal((await run()).output.value, 'B');
+            await waitForIdle();
+            assert.equal(captured, '/value/B');
+          });
+        } finally {
+          release();
+          await waitForIdle();
+          await tailServer.close();
+        }
+      });
+    });
+  },
+);
 
 for (const route of ['published', 'internal', 'latest'] as const) {
   for (const outcome of ['success', 'failure', 'abort', 'recording-disabled'] as const) {

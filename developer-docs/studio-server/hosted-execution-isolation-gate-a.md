@@ -1,12 +1,15 @@
 # Hosted execution isolation: local gate results
 
 Status: Gate A tooling is implemented and locally exercised, 2026-11-14.
-**The strict no-regression gate did not pass. Production integration has not
-started and the existing endpoint/preview execution paths are unchanged.**
+**Production integration has not started and the existing endpoint/preview
+execution paths are unchanged.** The historical zero-regression gate below did
+not pass. The owner subsequently accepted **1 ms added p95 for small runs**, with
+large-request regressions separately bounded and tested. The new local 8 MiB
+comparison freezes a **5 ms added-p95 engineering limit** before measurement.
 
-This records the [isolation plan](./hosted-execution-isolation-plan.md) stop
-condition, rather than treating a successful infinite-loop test as permission to
-make normal requests slower.
+This records the [isolation plan](./hosted-execution-isolation-plan.md) evidence
+and remaining gates. An infinite-loop test does not qualify normal-run latency
+or production capacity.
 
 ## Implemented local tooling
 
@@ -41,6 +44,14 @@ was changed. This prototype is not the planned production supervisor/adapters.
   admission. Pool settings and the fixture definition are snapshotted at creation;
   caller mutations cannot change replacement behavior. Bootstrap failure closes
   admission and rejects queued work without invoking it or replaying active work.
+- A narrow host stored-value adapter uses a separate MessagePort, per-root
+  identities and monotonically increasing operation IDs. At most 64 calls are
+  pending per root. Retained roots, including IO left after worker exit, are
+  bounded by the worker-plus-queue capacity. Accepted calls enter the parent's drain inventory before
+  invocation, retain the accepting request's AsyncLocalStorage context, and stay
+  tracked after cancellation or lost replies. No store write or graph is replayed.
+  This is an in-memory local integration proof; other production adapters remain
+  unimplemented. It adds no database/settings owner or serving configuration.
 
 ## Functional evidence
 
@@ -77,10 +88,17 @@ read-only. Fast contracts also passed on both runtimes. The verifier covered:
    and Expression, with interpolation, the Rivet namespace, builtin `require`
    and recording. Direct and isolated results agree. This does not yet establish
    managed third-party/native package or plugin compatibility.
+10. Prepared actions use a parent-owned host store across root reuse, preserving
+    fresh parent request context, recordings and state patches while keeping host
+    values out of browser storage. Cancellation while a real store write is held
+    proves shutdown waits for that write after worker loss and never replays it.
+    A replacement accepts a separate held write; retained-root saturation rejects
+    further store roots, and queued cancellation never invokes its graph/write.
 
 Prepared-action checks do not exercise the production web-app gateway. They do
 not establish production resume/debugger/browser behavior, parent service IO
-ownership, crash evidence recovery or complete cross-root cleanup. Those planned
+ownership beyond the narrow local host-store proof, crash evidence recovery or
+complete cross-root cleanup. Those planned
 integration gates remain unimplemented.
 
 ## Performance evidence and decision
@@ -115,16 +133,16 @@ qualified against that overhead. In the Windows Node-22/PnP experiment, retireme
 required about eight seconds to reload each thread; that is not a production
 startup prediction, but it rules out treating prewarming as free replenishment.
 
-**Decision under the current requirement:** do not enable the isolated execution
+**Historical decision under the original requirement:** do not enable the isolated execution
 path or proceed with a broad production integration. No measurable endpoint
-slowdown has been accepted by the owner. A latency-budget decision, a demonstrated
+slowdown had been accepted by the owner. A latency-budget decision, a demonstrated
 large-input improvement and capacity evidence would all be needed to advance;
 relaxing one check would not establish the others.
 
 The figures above belong to the fingerprinted pre-review matrix. Subsequent local
 review repaired lifecycle/admission checks and benchmark failure handling; the
 short large-input/retirement smoke check validates those paths, not a new latency
-acceptance result. The performance stop remains in force.
+acceptance result. These results do not qualify the subsequently accepted budget.
 
 ### Follow-up after removing redundant request copies
 
@@ -146,13 +164,69 @@ As above, these are medians of the three block medians, not the median of paired
 differences. Every small-case paired median still increased. The large case had
 two higher paired medians and one lower one; its p95 deltas ranged from about
 -2.9 to +23.9 ms. Roughly equal aggregate medians do not qualify its tail latency.
-Neither the zero-regression requirement nor an alternative small-run p95 budget
-has been established by this evidence. Production integration remains gated.
+These unpaced, 180-observation results do not qualify the subsequently accepted
+p95 budgets. Production integration remains gated by the full plan.
 
 This is local design evidence, not GKE qualification or a fresh application-image
 test. The cached Linux dependency image plus mounted current workspaces verifies
 the prototype on the target Node patch; it does not establish a new release's
 dependency provenance or exact production Pod performance.
+
+### Accepted-budget follow-up
+
+The comparison now paces both paths at the same capped arrival rate, excluding
+the inter-request wait from latency. Small fixtures use at least 10 ms between
+request starts, and the 8 MiB fixture uses 100 ms. There is at most one HTTP
+request outstanding, with no catch-up bursts after slow responses. This is an
+ordinary-load latency comparison, not concurrent-load or saturation qualification.
+`--interval-ms=0` selects a separately labelled saturation diagnostic.
+
+The six-case Node 24.22.1/Linux comparison used 100 requests per block and three
+alternating pairs: 300 observations per path, plus separate direct baselines.
+It retained the two-CPU/1.5-GiB local envelope and transferred owned request bytes.
+The complete receipt is `gate-a-parent-store-paced-node24-matrix.json`, compiled
+SHA256 `a9cf878c7b2006d83a28979f96eaab251dba2862e47ed1e5b5a65faeef13b8d6`.
+
+| Generated case                           | Direct p95, ms | Isolated p95, ms | Added p95, ms | Limit, ms |
+| ---------------------------------------- | -------------: | ---------------: | ------------: | --------: |
+| No Code nodes                            |          1.518 |            1.958 |         0.439 |         1 |
+| One trivial Code node                    |          1.790 |            2.320 |         0.530 |         1 |
+| Sixteen sequential Code nodes            |          2.003 |            2.991 |         0.988 |         1 |
+| One Code node with capture               |          1.848 |            2.306 |         0.458 |         1 |
+| Code and actual parent Stored Value node |          1.770 |            2.407 |         0.637 |         1 |
+| 8 MiB request, small result              |         33.599 |           36.758 |         3.159 |         5 |
+
+All six workload limits were met in this comparison. The sequential case is close
+to its limit, so this is not evidence of substantial latency headroom. The prior
+five-case paced comparison also met the limits (small added p95 0.377-0.615 ms;
+8 MiB added p95 1.752 ms), receipt `gate-a-paced-budget-node24-matrix.json`,
+SHA256 `73cc348068cb206d1da0f156bb74b8067377c7baf3f95034bfcea96324bfd795`.
+Keep the source fingerprints and all raw samples; do not select a favorable run
+or reinterpret maximum-throughput historical samples as the new comparison.
+
+The retained-root admission bound was added after that full matrix. Its targeted
+300-observation host-store follow-up measured 1.535 ms direct p95 and 2.164 ms
+isolated p95: **0.629 ms added**, within 1 ms. Receipt:
+`gate-a-bounded-parent-store-node24.json`, SHA256
+`054ced73c8844a3ca5bc96660e0721bc848e21f54f70ac03c6aa137894c07aa3`.
+Other fixture paths were not remeasured for this store-admission change.
+
+The user supplied the 1 ms small-run limit. The 5 ms large-input limit is a
+separately frozen engineering bound for this explicit fixture, not blanket
+acceptance of arbitrary large-payload regressions. These results clear only local
+workload latency. Real-fixture/native-package compatibility, concurrent capacity,
+production adapters, actual socket/debugger integration and activation remain
+required by the plan. The serving event-loop blocking issue remains unresolved.
+
+Reports declare requested cases and `complete` so a partially written case set
+cannot be mistaken for the finished matrix. Per-case `latencyBudget` is separate
+from its median trend and load profile; a trend is not an acceptance decision.
+
+The final local checks passed: 29 targeted API tests, all 11 real-worker groups
+on Windows Node 22 and Linux Node 24, the production compiler with isolation tools
+absent from its output, documentation links and test/import style checks. These
+checks used generated fixtures and in-memory host stores, with zero managed SQL
+pools. They do not constitute a hosted browser or production-store integration test.
 
 ## Reproduction
 
@@ -161,13 +235,16 @@ From the repository root, with development dependencies installed:
 ```powershell
 node .yarn/releases/yarn-4.17.1.cjs workspace @valerypopoff/rivet-studio-server-api run hosted-isolation:test
 node .yarn/releases/yarn-4.17.1.cjs workspace @valerypopoff/rivet-studio-server-api run hosted-isolation:verify
-node .yarn/releases/yarn-4.17.1.cjs workspace @valerypopoff/rivet-studio-server-api run hosted-isolation:benchmark -- --case=trivial --wire=transfer --runs=60 --blocks=3
+node .yarn/releases/yarn-4.17.1.cjs workspace @valerypopoff/rivet-studio-server-api run hosted-isolation:benchmark -- --wire=transfer --input-bytes=8388608 --runs=100 --blocks=3
 ```
 
-Use `hosted-isolation:test` for input/limit edits: four normal `node:test` cases
+Use `hosted-isolation:test` for input/limit edits: six normal `node:test` cases
 cover fragmented Unicode JSON, real ArrayBuffer transfer/slice ownership,
-malformed input and invalid pool bounds. It does not build the API or start a
-worker. `hosted-isolation:verify` builds current sources before its real-worker
+malformed input, invalid pool bounds, the additive latency-budget calculation,
+and request-context/write ownership after a lost reply.
+The latter uses nearest-rank p95 and requires equal counts of at least 200
+observations per path; a small smoke run reports insufficient evidence. It does
+not build the API or start a worker. `hosted-isolation:verify` builds current sources before its real-worker
 checks; after an unchanged build, the compiled verifier can also be invoked
 directly through `yarn exec node` to avoid another build. Keep the existing Node
 `webAppHandler.test.ts` / `webAppSocketGateway.test.ts` suites responsible for
@@ -189,9 +266,9 @@ completed in 0.34 s in the Windows Node 22 test runner, about 1.8 s including Ya
 These are observations, not speed guarantees; module bootstrap dominates the
 remaining worker integration cost.
 
-The benchmark also accepts `--case=no-code|sequential|large-input|recording`,
+The benchmark also accepts `--case=no-code|trivial|sequential|large-input|recording|host-storage`,
 `--input-bytes=8388608`, `--retire` for the two-request retirement experiment and
-`--output=...`. Omitting `--case` runs the five-case matrix. Case/all input sizes
+`--output=...`. Omitting `--case` runs the six-case matrix. Case/all input sizes
 and run counts are validated; no fixture contacts a paid provider.
 Reuse and retirement use the same request-byte allowance, including large inputs.
 Resource samples identify both pools when retirement is enabled. HTTP response

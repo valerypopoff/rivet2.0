@@ -12,6 +12,11 @@ import { ensureDirectories, getRootPath, readManifest, prepareLocalRuntimeLibrar
 import { jobRunner } from './job-runner.js';
 import type { RuntimeLibrariesBackend } from './backend.js';
 import { conflict, createHttpError } from '../utils/httpError.js';
+import {
+  prepareFilesystemRuntimeSnapshot,
+  type RuntimeLibrarySnapshot,
+} from '@valerypopoff/rivet-studio-server-bootstrap/runtime-release-cache';
+import { getLocalMetadataServingSelection } from '../local-metadata/serving-selection.js';
 
 function mapRuntimeLibrariesFilesystemError(error: unknown, operation: 'read' | 'write'): Error {
   const code = (error as NodeJS.ErrnoException | null)?.code;
@@ -80,6 +85,8 @@ class FilesystemRuntimeLibrariesBackend implements RuntimeLibrariesBackend {
     this.assertAdmission();
     try {
       ensureDirectories();
+      if (getLocalMetadataServingSelection()) await prepareLocalRuntimeLibraries();
+      else await prepareFilesystemRuntimeSnapshot(getRootPath());
     } catch (error) {
       throw mapRuntimeLibrariesFilesystemError(error, 'write');
     }
@@ -89,9 +96,10 @@ class FilesystemRuntimeLibrariesBackend implements RuntimeLibrariesBackend {
     await this.getState();
   }
 
-  async prepareForExecution(): Promise<void> {
+  async prepareForExecution(): Promise<RuntimeLibrarySnapshot | null> {
     this.assertAdmission();
-    await prepareLocalRuntimeLibraries();
+    if (getLocalMetadataServingSelection()) return prepareLocalRuntimeLibraries();
+    return prepareFilesystemRuntimeSnapshot(getRootPath(), { allowAbsent: !process.env.RIVET_RUNTIME_LIBRARIES_ROOT });
   }
 
   async dispose(): Promise<void> {

@@ -46,6 +46,7 @@
   "dependencies": {
     "@aws-sdk/client-s3": "^3.901.0",
     "@smithy/node-http-handler": "^4.11.3",
+    "@valerypopoff/rivet-studio-server-bootstrap": "workspace:^",
     "@valerypopoff/rivet-studio-server-shared": "workspace:^",
     "@valerypopoff/rivet2-core": "workspace:^",
     "@valerypopoff/rivet2-evaluations": "workspace:^",

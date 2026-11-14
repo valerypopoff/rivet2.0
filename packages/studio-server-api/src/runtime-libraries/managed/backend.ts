@@ -93,9 +93,9 @@ export class ManagedRuntimeLibrariesBackend implements RuntimeLibrariesBackend {
     ]);
   }
 
-  async prepareForExecution(): Promise<void> {
+  async prepareForExecution() {
     await this.initialize();
-    await this.#context.syncForLocalUse(true);
+    return this.#context.syncForLocalUse(true);
   }
 
   dispose(): Promise<void> {
@@ -107,6 +107,7 @@ export class ManagedRuntimeLibrariesBackend implements RuntimeLibrariesBackend {
       await this.#initializePromise?.catch(() => undefined);
       this.#initializePromise = null;
       await this.#jobWorker.drain();
+      await this.#context.localCache.drain();
       this.#context.localCache.reset();
       this.#processRegistry.clear();
       await this.#context.poolLease.release();

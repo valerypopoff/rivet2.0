@@ -1,4 +1,5 @@
 import type { RuntimeLibraryJobObserver } from './job-observation.js';
+import type { RuntimeLibrarySnapshot } from '@valerypopoff/rivet-studio-server-bootstrap/runtime-release-cache';
 
 import type { RuntimeHealthCheckContext } from '../runtime-health.js';
 
@@ -16,7 +17,7 @@ import { RuntimeLibraryServices } from './services.js';
 export interface RuntimeLibrariesBackend {
   initialize(): Promise<void>;
   checkHealth?(context?: RuntimeHealthCheckContext): Promise<void>;
-  prepareForExecution(): Promise<void>;
+  prepareForExecution(): Promise<RuntimeLibrarySnapshot | null>;
   getState(): Promise<RuntimeLibrariesState>;
   enqueueInstall(packages: RuntimeLibraryPackageSpec[]): Promise<RuntimeLibraryJobState>;
   enqueueRemove(packageNames: string[]): Promise<RuntimeLibraryJobState>;
@@ -63,8 +64,8 @@ export async function checkRuntimeLibrariesHealth(context?: RuntimeHealthCheckCo
   await backend.checkHealth?.(context);
 }
 
-export async function prepareRuntimeLibrariesForExecution(): Promise<void> {
-  await getRuntimeLibrariesBackend().prepareForExecution();
+export async function prepareRuntimeLibrariesForExecution(): Promise<RuntimeLibrarySnapshot | null> {
+  return getRuntimeLibrariesBackend().prepareForExecution();
 }
 
 export async function disposeRuntimeLibrariesBackend(): Promise<void> {

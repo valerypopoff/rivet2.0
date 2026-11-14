@@ -4,6 +4,7 @@ import {
   GraphOutputNodeImpl,
   TextNodeImpl,
   StartBackgroundBranchNodeImpl,
+  SetStoredValueNodeImpl,
   type GraphId,
   type Project,
   type ProjectId,
@@ -90,6 +91,23 @@ export function isolationFixture(code?: string, nodes = 1, graphId = 'isolation-
 }
 
 export const IDENTITY_CODE = 'return { result: { type: "any", value: inputs.input.value } };';
+
+/** Route the output of an identity fixture through the actual host-store node. */
+export function addIsolationStoredValue(project: Project, graphId: GraphId): void {
+  const graph = project.graphs[graphId]!;
+  const output = graph.nodes.find((node) => node.type === 'graphOutput')!;
+  const store = SetStoredValueNodeImpl.create();
+  store.data.key = 'fixture';
+  store.data.dataType = 'any';
+  graph.connections.find((connection) => connection.inputNodeId === output.id)!.inputNodeId = store.id;
+  graph.nodes.push(store);
+  graph.connections.push({
+    outputNodeId: store.id,
+    outputId: 'saved-value' as PortId,
+    inputNodeId: output.id,
+    inputId: 'value' as PortId,
+  });
+}
 
 /** Attach real managed background work to a generated input/output fixture. */
 export function addIsolationTail(project: Project, graphId: GraphId, code: string): void {

@@ -146,6 +146,7 @@ export const defaultApiTestFiles = [
   'src/tests/runtime-library-cleanup.test.ts',
   'src/tests/runtime-library-local-cache.test.ts',
   'src/tests/runtime-library-stream.test.ts',
+  'src/tests/runtime-release-cache.test.ts',
   'src/tests/scheduled-run-execution.test.ts',
   'src/tests/scheduled-runs.test.ts',
   'src/tests/server-deployment-contract.test.ts',
