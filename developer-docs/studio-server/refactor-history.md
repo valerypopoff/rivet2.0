@@ -4,6 +4,21 @@ This document records intentional architecture and cleanup changes that future m
 
 It is not a changelog. Keep entries focused on why a refactor happened, which ownership boundary changed, and which verification paths should be kept alive.
 
+## 2026-11-14 - Publication And Version-history HTTP Ownership
+
+`publication-http.ts` owns the thirteen publication/history handlers and their
+schemas. Two registration calls preserve the original blocks and leave reference
+routes between them; no nested router or request-time abstraction is added.
+The existing parser, notifier, publication services and storage owners are reused.
+
+The history fixture exercises actual HTTP reads, downloads, annotations and
+restoration while checking saved bytes, unchanged state after rejection, and tree
+notifications, including binary dataset restoration through HTTP. Recording and
+publication checks share full-app fixtures per profile and preserve authentication
+before parsing and route absence on execution/evaluation. Existing publication,
+endpoint access and web-app suites retain execution-dependent behavior. See the
+[separation record](publication-http-separation-plan.md) for local evidence.
+
 ## 2026-11-14 - Recording And Run-statistics HTTP Ownership
 
 The workflow parent router mixed recording browsing, input search, replay and

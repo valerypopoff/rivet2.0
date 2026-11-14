@@ -2,6 +2,18 @@
 
 Workflows can be published as HTTP endpoints, and project-contained Rivet web apps can be published as browser pages. This document describes the current publication, execution, app-serving, and recording model.
 
+Publication and saved-version HTTP routes live in
+`routes/workflows/publication-http.ts`, registered directly on the parent workflow
+router with its existing parser and middleware order. The
+[separation record](publication-http-separation-plan.md) describes the preserved
+contracts and local validation. Publication services, reviewed-state policy and
+storage transactions remain unchanged.
+
+Project and saved-version downloads share the attachment-header encoder in
+`workflow-download.ts`. It keeps an ASCII fallback and an RFC 5987 UTF-8 filename;
+apostrophes and parentheses are percent-encoded so Unicode names survive browser
+downloads even when they contain punctuation.
+
 In the current deployment model:
 
 - published execution belongs to the execution surface

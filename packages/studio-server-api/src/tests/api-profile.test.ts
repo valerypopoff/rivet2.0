@@ -188,7 +188,7 @@ function trustedProxyHeaders(): Record<string, string> {
 }
 
 for (const profile of ['control', 'combined', 'execution', 'evaluation'] as const) {
-  test(`${profile} preserves recording route exposure, operator authentication and validation`, async (t) => {
+  test(`${profile} preserves recording and publication HTTP access and validation`, async (t) => {
     await withApiEnv({ RIVET_SERVER_UI_AUTH_MODE: 'key' }, async () => {
       t.mock.method(console, 'error', () => {});
       const server = await startServer(profile);
@@ -199,6 +199,11 @@ for (const profile of ['control', 'combined', 'execution', 'evaluation'] as cons
           ['/recordings/runs?page=0', 'GET', undefined, 500, 'Internal server error'],
           ['/recordings/missing', 'DELETE', undefined, 404, 'Recording not found'],
           ['/run-statistics/query', 'POST', '{', 400, undefined],
+          ['/projects/published-versions', 'GET', undefined, 400, 'Missing relativePath'],
+          ['/projects/published-versions/restore', 'POST', '{', 400, undefined],
+          ['/projects/web-apps', 'GET', undefined, 400, 'Missing relativePath'],
+          ['/projects/web-apps/publish', 'POST', '{', 400, undefined],
+          ['/projects/publish', 'POST', '{', 400, undefined],
         ] as const) {
           for (const headers of [{}, trustedProxyHeaders(), operator]) {
             const response = await fetch(`${server.baseUrl}/api/workflows${pathname}`, {
@@ -231,6 +236,17 @@ for (const profile of ['control', 'combined', 'execution', 'evaluation'] as cons
               undefined,
             ],
             ['/recordings/runs', 'POST', '{', 404, 'Not found'],
+            ['/projects/published-versions?relativePath=..%2Foutside', 'GET', undefined, 400, 'Invalid relativePath'],
+            ['/projects/web-apps?relativePath=..%2Foutside', 'GET', undefined, 400, 'Invalid relativePath'],
+            [
+              '/projects/published-versions?relativePath=%20%2Fmissing.rivet-project%2F%20',
+              'GET',
+              undefined,
+              404,
+              'Project not found',
+            ],
+            ['/projects/published-versions', 'POST', '{', 404, 'Not found'],
+            ['/projects/publish', 'POST', '{}', 400, 'Missing relativePath'],
           ] as const) {
             const response = await fetch(`${server.baseUrl}/api/workflows${pathname}`, {
               method,

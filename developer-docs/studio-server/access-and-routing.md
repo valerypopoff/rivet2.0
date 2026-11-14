@@ -20,6 +20,14 @@ instances still apply. Query-schema errors keep the existing general error
 path, while statistics POST validation and invalid search filters retain their
 400 responses. The local-editor recording upload router remains separate.
 
+The thirteen project-publication and saved-version routes under `/api/workflows`
+are registered by `routes/workflows/publication-http.ts`. Their existing control/
+combined-only exposure, operator authentication, parent body parser and cache
+policy are unchanged. History annotation changes keep their existing response
+envelopes without an extra HTTP tree notification; restoration and publication
+notify the existing tree owner after a successful command. Storage adapters keep
+their independent invalidations and commit safeguards.
+
 On a single VM, the optional Compose TLS listener terminates public HTTPS and
 forwards public HTTPS or private-host HTTP over loopback to this same nginx
 gate. It overwrites forwarded host, protocol, client IP, and Rivet trust

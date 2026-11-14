@@ -494,6 +494,14 @@ The parent retains GET cache headers, graph-reference cancellation and the
 compatibility exports. Storage, search, statistics and execution owners are
 unchanged. See the [recording HTTP separation record](recording-http-separation-plan.md).
 
+Publication and saved-version HTTP handlers live in `routes/workflows/publication-http.ts`.
+Two startup registration functions retain the original history and publication
+blocks on `workflowsRouter`, with the graph-reference routes between them. They
+reuse the parent JSON parser and existing tree notifier; publication policy,
+reviewed-state capture, transactions and execution remain in their existing
+services. The small private path schemas call the same shared normalizer.
+See the [publication HTTP separation record](publication-http-separation-plan.md).
+
 Workflow contracts live in `routes/workflows/data-backend.ts`, independently of
 the PostgreSQL implementation. Project IO, publication, execution sources and
 recording repositories are separate interfaces; `WorkflowDataBackend` composes

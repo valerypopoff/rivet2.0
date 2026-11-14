@@ -29,7 +29,13 @@ function getAsciiContentDispositionFileName(fileName: string): string {
 
 export function createWorkflowDownloadContentDisposition(fileName: string): string {
   const asciiFileName = getAsciiContentDispositionFileName(fileName);
-  return `attachment; filename="${asciiFileName}"; filename*=UTF-8''${encodeURIComponent(fileName)}`;
+  // RFC 5987 excludes these characters even though encodeURIComponent leaves
+  // them literal. In particular, an apostrophe invalidates the UTF-8 parameter.
+  const encodedFileName = encodeURIComponent(fileName).replace(
+    /['()*]/g,
+    (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`,
+  );
+  return `attachment; filename="${asciiFileName}"; filename*=UTF-8''${encodedFileName}`;
 }
 
 export async function readWorkflowProjectDownload(

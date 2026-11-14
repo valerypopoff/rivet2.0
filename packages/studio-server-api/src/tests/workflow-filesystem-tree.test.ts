@@ -901,7 +901,15 @@ test('workflow project upload rejects invalid project files', async () => {
   );
 });
 
-test('workflow project download reads the live unpublished file with an unpublished tag', async () => {
+test('workflow project download preserves live contents, version labels and encoded filenames', async () => {
+  assert.equal(
+    workflowDownload.createWorkflowDownloadContentDisposition("café's (draft)*.rivet-project"),
+    `attachment; filename="caf_'s (draft)*.rivet-project"; filename*=UTF-8''caf%C3%A9%27s%20%28draft%29%2A.rivet-project`,
+  );
+  assert.equal(
+    workflowDownload.createWorkflowDownloadContentDisposition('plain.rivet-project'),
+    `attachment; filename="plain.rivet-project"; filename*=UTF-8''plain.rivet-project`,
+  );
   const created = await workflowMutations.createWorkflowProjectItem('', 'DownloadUnpublished');
   const liveContents = await fs.readFile(created.absolutePath, 'utf8');
 
@@ -1372,7 +1380,7 @@ test('workflow download route streams unpublished projects with attachment heade
       await fetch(`${baseUrl}/projects`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: 'HttpDownloadUnpublished' }),
+        body: JSON.stringify({ name: "HttpDownload café's (draft)" }),
       }),
     );
     const expectedContents = await fs.readFile(createdProject.project.absolutePath, 'utf8');
@@ -1385,9 +1393,9 @@ test('workflow download route streams unpublished projects with attachment heade
 
     assert.equal(response.status, 200);
     assert.match(response.headers.get('content-type') ?? '', /application\/x-yaml/);
-    assert.match(
-      response.headers.get('content-disposition') ?? '',
-      /filename="HttpDownloadUnpublished \[unpublished\]\.rivet-project"/,
+    assert.equal(
+      response.headers.get('content-disposition'),
+      `attachment; filename="HttpDownload caf_'s (draft) [unpublished].rivet-project"; filename*=UTF-8''HttpDownload%20caf%C3%A9%27s%20%28draft%29%20%5Bunpublished%5D.rivet-project`,
     );
     assert.equal(await response.text(), expectedContents);
   });
