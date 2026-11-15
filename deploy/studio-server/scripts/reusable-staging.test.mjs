@@ -1068,6 +1068,20 @@ test('concrete provider Helm render retains installed production timing, real ma
     folder,
   );
   const values = gate.values();
+  assert.deepEqual(
+    gate.config.imagePullSecrets,
+    [],
+    'Public schema probes must not reference an absent registry Secret',
+  );
+  assert.deepEqual(gate.config.imagePullSecrets, values.imagePullSecrets);
+  const authenticated = new ReusableProviderGate(
+    gate.operation,
+    { ...settings(), registrySecret: { name: 'source-registry', uid: 'source-registry-uid' } },
+    {},
+    folder,
+  );
+  assert.deepEqual(authenticated.config.imagePullSecrets, [{ name: 'rivet-release-gate-registry' }]);
+  assert.deepEqual(authenticated.config.imagePullSecrets, authenticated.values().imagePullSecrets);
   assert.equal(values.rollout.minReadySeconds, 120);
   assert.equal(values.lifecycle.preStopDelaySeconds, 60);
   assert.equal(values.release.production.manifestDigest, getStudioServerReleaseManifestDigest(candidate));

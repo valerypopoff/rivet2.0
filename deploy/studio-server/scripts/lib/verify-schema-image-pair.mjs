@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { readSchemaRepositoryReceipt } from './schema-compatibility-probe.mjs';
+import { readSchemaRepositoryReceipt, SCHEMA_PROBE_TIMING } from './schema-compatibility-probe.mjs';
 
 /** Optional local exact-image check on the schema gate's disposable PostgreSQL.
  * No registry pulls, cloud credentials or caller-provided database are accepted.
@@ -77,10 +77,13 @@ export async function verifySchemaImagePair(docker, postgresId, env = process.en
               stdio: ['ignore', 'pipe', 'pipe'],
             });
             let output = '';
-            const timer = setTimeout(() => {
-              child.kill();
-              reject(Error('Schema image fixture exceeded its deadline'));
-            }, 90000);
+            const timer = setTimeout(
+              () => {
+                child.kill();
+                reject(Error('Schema image fixture exceeded its deadline'));
+              },
+              (SCHEMA_PROBE_TIMING.jobSeconds + 10) * 1000,
+            );
             child.stdout.on('data', (b) => {
               output += b;
             });

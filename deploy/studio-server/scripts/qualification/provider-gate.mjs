@@ -80,6 +80,7 @@ export class ReusableProviderGate extends RuntimeControlLocalGate {
       runtimeEdgeProfile: 'compact',
       runtimeAutoscalerPolicy: operation.policy,
       registry: { secretName: 'rivet-release-gate-registry' },
+      imagePullSecrets: settings.registrySecret ? [{ name: 'rivet-release-gate-registry' }] : [],
       keepNamespace: true,
       deploymentTimeoutSeconds: 1200,
     };

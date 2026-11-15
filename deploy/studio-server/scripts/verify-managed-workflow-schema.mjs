@@ -6,7 +6,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { containerServerConfig, createManagedCompose } from './lib/container-server-config.mjs';
 import { verifyFolderParentMigration } from './lib/verify-folder-parent-migration.mjs';
 import { verifyNamespaceMutations } from './lib/verify-namespace-mutations.mjs';
-import { probeSchemaLockContention } from './lib/schema-compatibility-probe.mjs';
+import { probeSchemaLockContention, probeSchemaRepositories } from './lib/schema-compatibility-probe.mjs';
 import { verifySchemaImagePair } from './lib/verify-schema-image-pair.mjs';
 
 // Use the API's compiled migration owner and dependency scope, just like the
@@ -217,6 +217,61 @@ try {
       [{ project_blob_key: 'preserved/project', reference_summary: null }],
     );
     await verifySchemaImagePair(docker, containerId, process.env, { from: 19, to: 20 });
+    const repositoryModules = Object.fromEntries(
+      await Promise.all(
+        ['revision-factory', 'recordings', 'db', 'mappers'].map(async (name) => [
+          name === 'revision-factory' ? 'factory' : name,
+          await import(
+            `../../../packages/studio-server-api/dist/studio-server-api/src/routes/workflows/managed/${name}.js`
+          ),
+        ]),
+      ),
+    );
+    repositoryModules.migrations = { MANAGED_WORKFLOW_SCHEMA_MIGRATIONS };
+    // Actual repositories/SQL, deliberately staggered beyond the round budget.
+    // Each role must tolerate the other image starting late, in either order.
+    for (const lateRole of ['previous', 'candidate']) {
+      const runId = randomUUID().replaceAll('-', '');
+      const results = await Promise.allSettled(
+        ['previous', 'candidate'].map(async (role) => {
+          if (role === lateRole) await delay(2500);
+          const peerPool = new Pool({ ...rollingPool.options, max: 5 });
+          try {
+            return await probeSchemaRepositories({
+              pool: peerPool,
+              modules: repositoryModules,
+              role,
+              runId,
+              version: CURRENT_MANAGED_WORKFLOW_SCHEMA_VERSION,
+              targetVersion: CURRENT_MANAGED_WORKFLOW_SCHEMA_VERSION,
+              timeoutMs: 1000,
+              startupTimeoutMs: 5000,
+            });
+          } finally {
+            await peerPool.end();
+          }
+        }),
+      );
+      for (const result of results) {
+        if (result.status === 'rejected') throw result.reason;
+        assert.equal(result.value.rounds, 2);
+        assert.equal(result.value.peerRowsRead, 2);
+      }
+    }
+    console.log('Schema peer startup: both late-worker orders passed with unchanged round bounds.');
+    await assert.rejects(
+      probeSchemaRepositories({
+        pool: rollingPool,
+        modules: repositoryModules,
+        role: 'previous',
+        runId: randomUUID().replaceAll('-', ''),
+        version: CURRENT_MANAGED_WORKFLOW_SCHEMA_VERSION,
+        targetVersion: CURRENT_MANAGED_WORKFLOW_SCHEMA_VERSION,
+        timeoutMs: 1000,
+        startupTimeoutMs: 100,
+      }),
+      /bounded startup barrier/,
+    );
     const schema = `rivet_schema_probe_${randomUUID().replaceAll('-', '')}`;
     await rollingPool.query(`CREATE SCHEMA ${schema}`);
     try {
