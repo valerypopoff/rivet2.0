@@ -1,42 +1,43 @@
 import { createLegacyWorkflowCommands } from './legacy-workflow-commands.js';
-import { workflowFailure } from './workflow-failure.js';
 import type { ProjectReferenceQuery } from './managed/reference-index.js';
 import { REFERENCE_QUERY_TIMEOUT_MS } from './managed/reference-query.js';
 import { constants as fsConstants } from 'node:fs';
-import { isVmMigrationMaintenanceActive } from '../../vm-migration-maintenance.js';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import type { WorkflowRepositories, WorkflowExecutionDefinition, WorkflowRecordingPageQuery } from './data-backend.js';
+import type {
+  HostedProjectStorageLoadResult as LoadHostedProjectResult,
+  HostedProjectStorageSaveResult as SaveHostedProjectResult,
+  HostedProjectStorageSaveOptions,
+  WorkflowRepositories,
+  WorkflowExecutionDefinition,
+  WorkflowRecordingPageQuery,
+  WorkflowPublicationRepository,
+  PersistWorkflowExecutionRecordingOptions,
+  WorkflowWebAppAccessPolicy as WebAppAccessPolicy,
+} from './data-backend.js';
+export type { HostedProjectSaveIntent, WorkflowWebAppAccessPolicy as WebAppAccessPolicy } from './data-backend.js';
 import {
   getWorkflowStorageServices,
   peekWorkflowStorageServices,
   disposeWorkflowStorageServices,
 } from './storage-composition.js';
-import { createHash } from 'node:crypto';
-import {
-  deserializeDatasets,
-  loadProjectAndAttachedDataFromFile,
-  loadProjectAndAttachedDataFromString,
+import type {
+  ResolvedSubgraphProject,
+  SubgraphProjectTarget,
+  ProjectReferenceLoader,
+  ProjectId,
 } from '@valerypopoff/rivet2-node';
-import type { ResolvedSubgraphProject, SubgraphProjectTarget, ProjectReferenceLoader } from '@valerypopoff/rivet2-node';
-
 import type {
   WorkflowFolderItem,
   WorkflowProjectDownloadVersion,
   WorkflowProjectItem,
-  WorkflowPublicationPreconditions,
-  WorkflowDraftPublicationPreconditions,
   WorkflowProjectPathMove,
-  WorkflowProjectSettingsDraft,
-  WorkflowProjectWebAppAccessDraft,
-  WorkflowProjectWebAppPublicationDraft,
   WorkflowProjectWebAppsResponse,
   WorkflowPublishedVersionRestoreResponse,
   WorkflowPublishedVersionSummary,
   WorkflowPublishedVersionsResponse,
 } from '../../../../studio-server-shared/workflow-types.js';
 import type {
-  WorkflowRecordingExecutionIdentity,
   WorkflowRecordingRunsPageResponse,
   WorkflowRecordingRunSummary,
   WorkflowRecordingWorkflowListResponse,
@@ -51,16 +52,7 @@ import { createHttpError } from '../../utils/httpError.js';
 import { getWorkflowStorageBackendMode } from './storage-config.js';
 import type { WorkflowPublicationCommand } from './publication-command.js';
 import type { ManagedReconciliationFindingDetailQuery } from './managed/reconciliation.js';
-import {
-  ensureWorkflowsRoot,
-  getPublishedWorkflowSnapshotPath,
-  getWorkflowDatasetPath,
-  listProjectPathsRecursive,
-  pathExists,
-  PROJECT_EXTENSION,
-  requireProjectPath,
-} from './fs-helpers.js';
-import { listWorkflowFolders, listWorkflowProjects } from './workflow-query.js';
+import { ensureWorkflowsRoot } from './fs-helpers.js';
 import {
   deleteWorkflowRecording,
   listWorkflowRecordingRunsPage,
@@ -74,145 +66,31 @@ import {
   disposeWorkflowRecordingQueuePolicy,
 } from './recordings.js';
 import { shouldSnapshotWorkflowRecordingDatasets } from './recordings-config.js';
-import {
-  createPublishedWorkflowProjectReferenceLoader,
-  findPublishedWorkflowWebAppBySlug,
-  normalizeWorkflowEndpointLookupName,
-  readStoredWorkflowProjectSettings,
-  resolvePublishedWorkflowProjectPath,
-} from './publication.js';
-import { NodeDatasetProvider } from '@valerypopoff/rivet2-node';
-import type { AttachedData, CombinedDataset, Project, ProjectId } from '@valerypopoff/rivet2-node';
-import { getFilesystemExecutionCache } from './filesystem-execution-cache.js';
-import { notifyWebAppSocketPolicyInvalidation } from './web-app-policy-invalidation.js';
 import { getManagedWorkflowProjectVirtualPath } from './virtual-paths.js';
-import { normalizeHostedProjectTitle, parseHostedProjectContents } from './hosted-project-contents.js';
-import { getFilesystemProjectRevisionId, writeWorkflowProjectStatsCacheFromContents } from './project-stats.js';
-import {
-  checkFilesystemProjectTransactionHealth,
-  saveFilesystemProjectTransaction,
-  withFilesystemWorkflowProjectRead,
-  withFilesystemWorkflowStorageRead,
-} from './filesystem-project-transactions.js';
+import { checkFilesystemProjectTransactionHealth } from './filesystem-project-transactions.js';
 import type { RivetStudioLLMProfileHealthStore } from '../../llm-profile-health/store.js';
 import type { RivetStudioEvaluationStore } from '../../evaluation-runs/store.js';
 import type { HostedEvaluationCoordinator } from '../../evaluation-runs/hosted-coordinator.js';
-
-function mapHostedProjectFilesystemError(error: unknown, operation: 'read' | 'write', projectPath: string): Error {
-  const code = (error as NodeJS.ErrnoException | null)?.code;
-  if (code !== 'EACCES' && code !== 'EPERM') {
-    return error instanceof Error ? error : new Error(String(error));
-  }
-
-  const targetDir = path.dirname(projectPath).replace(/\\/g, '/');
-  return createHttpError(
-    500,
-    operation === 'write'
-      ? `Workflow storage is not writable. Check server permissions for ${targetDir}.`
-      : `Workflow storage is not readable. Check server permissions for ${targetDir}.`,
-    { expose: true },
-  );
-}
-
-function assertMatchingHostedProjectIdentity(
-  project: Project,
-  expectedProjectId: ProjectId,
-  projectPath: string,
-): void {
-  if (!project.metadata.id || project.metadata.id !== expectedProjectId) {
-    throw workflowFailure(
-      'workflow_project_mismatch',
-      `The save target ${projectPath} belongs to a different project.`,
-    );
-  }
-}
-type SaveHostedProjectResult = {
-  path: string;
-  revisionId: string | null;
-  project: WorkflowProjectItem | null;
-  created: boolean;
-};
-
-export type HostedProjectSaveIntent = 'in-place' | 'save-as';
-
-type LoadHostedProjectResult = {
-  contents: string;
-  datasetsContents: string | null;
-  revisionId: string | null;
-};
-
-function resolveFilesystemProjectPathInsideRoot(root: string, projectPath: string): string {
-  const resolvedRoot = path.resolve(root);
-  const resolvedPath = path.resolve(projectPath);
-  const relative = path.relative(resolvedRoot, resolvedPath);
-  if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) {
-    throw createHttpError(400, 'Project path must stay inside workflow storage.', { expose: true });
-  }
-  return requireProjectPath(resolvedPath);
-}
-
-async function findFilesystemProjectPathsByMetadataId(root: string, projectId: ProjectId): Promise<string[]> {
-  // Save reconciliation cannot depend on a UI/tree projection: the physical
-  // workflow file may have moved between the tree refresh and this write lock.
-  const candidates = await listProjectPathsRecursive(root);
-  const matches: string[] = [];
-  for (const candidate of candidates) {
-    try {
-      const [candidateProject] = await loadProjectAndAttachedDataFromFile(candidate);
-      if (candidateProject.metadata.id === projectId) {
-        matches.push(candidate);
-      }
-    } catch {
-      // A malformed neighboring project cannot establish ownership of this id.
-    }
-  }
-  return matches;
-}
-
-async function resolveFilesystemInPlaceSaveTarget(
-  root: string,
-  requestedProjectPath: string,
-  sourceProjectId: ProjectId,
-): Promise<string> {
-  const requestedPath = resolveFilesystemProjectPathInsideRoot(root, requestedProjectPath);
-  if (await pathExists(requestedPath)) {
-    try {
-      const [requestedProject] = await loadProjectAndAttachedDataFromFile(requestedPath);
-      if (requestedProject.metadata.id === sourceProjectId) {
-        return requestedPath;
-      }
-    } catch {
-      // Fall through to the authoritative id scan. A moved project may have
-      // left a different or malformed file at its old location.
-    }
-  }
-
-  const matches = await findFilesystemProjectPathsByMetadataId(root, sourceProjectId);
-  if (matches.length === 1) {
-    return matches[0]!;
-  }
-  if (matches.length === 0) {
-    throw createHttpError(409, 'This project no longer exists at its saved location. Reopen it or use Save As.', {
-      expose: true,
-    });
-  }
-  throw createHttpError(
-    409,
-    'Could not determine a unique current location for this project. Reopen it before saving.',
-    {
-      expose: true,
-    },
-  );
-}
+import {
+  getLegacyWorkflowTree,
+  listLegacyHostedProjectPaths,
+  loadLegacyHostedProject,
+  saveLegacyHostedProject,
+} from './legacy-project-storage.js';
+import {
+  createLegacyExecutionProjectReferenceLoader,
+  invalidateFilesystemExecutionMaterializations,
+  markFilesystemExecutionStructureDirty,
+  invalidateFilesystemExecutionMove,
+  resolveLegacyPublishedExecutionProject,
+  resolveLegacyLatestExecutionProject,
+  resolveLegacyPublishedWebAppExecutionProject,
+  resolveLegacyLatestWebAppExecutionProject,
+  resolveLegacyWebAppAccessPolicy,
+  loadLegacySubgraphTarget,
+} from './legacy-execution-storage.js';
 
 type ExecutionProjectResult = WorkflowExecutionDefinition;
-
-export type WebAppAccessPolicy = {
-  projectVirtualPath: string;
-  uiGraphId: string;
-  allowedEmails: string[];
-  bindingId: string;
-};
 
 export function getLocalWorkflowActiveWriteCount(): number {
   return peekWorkflowStorageServices()?.getLocalActiveWriteCount() ?? 0;
@@ -264,6 +142,12 @@ const resetFilesystemLLMProfileHealthForProject = (id: ProjectId) =>
   getWorkflowStorageServices().resetLocalProjectHealth(id);
 function usesDatabaseCatalog(): boolean {
   return getWorkflowStorageServices().mode !== 'legacy';
+}
+
+function withWorkflowPublicationRepository<T>(
+  run: (repository: WorkflowPublicationRepository) => Promise<T>,
+): Promise<T> {
+  return delegate('publications', run, () => run(legacyCommands));
 }
 
 export async function listManagedReconciliationFindingDetailsWithBackend(
@@ -345,180 +229,6 @@ async function delegateWithWorkflowsRoot<T, K extends keyof WorkflowRepositories
   return delegate(repository, managedFn, async () => fsFn(await ensureWorkflowsRoot()));
 }
 
-async function loadFilesystemWithMissingRootRetry<T>(load: (root: string) => Promise<T>): Promise<T> {
-  const root = getWorkflowsRoot();
-
-  try {
-    return await load(root);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-      throw error;
-    }
-
-    if (await pathExists(root)) {
-      throw error;
-    }
-
-    const ensuredRoot = await ensureWorkflowsRoot();
-    getFilesystemExecutionCache().reset(ensuredRoot);
-    return load(ensuredRoot);
-  }
-}
-
-async function createFilesystemPublishedWebAppRevisionKey(
-  sourceProjectPath: string,
-  publishedProjectPath: string,
-  slug: string,
-  uiGraphId: string,
-): Promise<string> {
-  const hash = createHash('sha256');
-  for (const filePath of [publishedProjectPath, getWorkflowDatasetPath(publishedProjectPath)]) {
-    const signature = await fs.stat(filePath).then(
-      (stats) => `${stats.isFile() ? 'file' : 'other'}:${stats.size}:${stats.mtimeMs}`,
-      (error) => ((error as NodeJS.ErrnoException).code === 'ENOENT' ? 'missing' : Promise.reject(error)),
-    );
-    hash.update(signature);
-    hash.update('\0');
-  }
-  hash.update(sourceProjectPath);
-  hash.update('\0');
-  hash.update(publishedProjectPath);
-  hash.update('\0');
-  hash.update(slug);
-  hash.update('\0');
-  hash.update(uiGraphId);
-  return `filesystem-web-app:${hash.digest('hex').slice(0, 32)}`;
-}
-
-async function loadFilesystemPublishedWebAppExecutionProject(
-  root: string,
-  slug: string,
-): Promise<ExecutionProjectResult | null> {
-  const match = await findPublishedWorkflowWebAppBySlug(root, slug);
-  if (!match) {
-    return null;
-  }
-
-  const [project, attachedData] = await loadProjectAndAttachedDataFromFile(match.publishedProjectPath);
-  const datasetPath = getWorkflowDatasetPath(match.publishedProjectPath);
-  const datasetsContents = (await pathExists(datasetPath)) ? await fs.readFile(datasetPath, 'utf8') : null;
-  const datasetProvider = new NodeDatasetProvider(datasetsContents ? deserializeDatasets(datasetsContents) : []);
-
-  return {
-    project,
-    attachedData,
-    datasetProvider,
-    projectVirtualPath: match.projectPath,
-    revisionKey: await createFilesystemPublishedWebAppRevisionKey(
-      match.projectPath,
-      match.publishedProjectPath,
-      match.slug,
-      match.uiGraphId,
-    ),
-    webAppUiGraphId: match.uiGraphId,
-    webAppAllowedEmails: match.allowedEmails,
-    webAppBindingId: `filesystem:${match.appId}`,
-    webAppPolicyInvalidationKey: `filesystem:${path.resolve(match.projectPath)}`,
-  };
-}
-
-async function loadFilesystemLatestWebAppExecutionProject(
-  root: string,
-  slug: string,
-): Promise<ExecutionProjectResult | null> {
-  const match = await findPublishedWorkflowWebAppBySlug(root, slug);
-  if (!match) {
-    return null;
-  }
-
-  const [project, attachedData] = await loadProjectAndAttachedDataFromFile(match.projectPath);
-  const datasetPath = getWorkflowDatasetPath(match.projectPath);
-  const datasetsContents = (await pathExists(datasetPath)) ? await fs.readFile(datasetPath, 'utf8') : null;
-  const datasetProvider = new NodeDatasetProvider(datasetsContents ? deserializeDatasets(datasetsContents) : []);
-
-  return {
-    project,
-    attachedData,
-    datasetProvider,
-    projectVirtualPath: match.projectPath,
-    revisionKey: await createFilesystemPublishedWebAppRevisionKey(
-      match.projectPath,
-      match.projectPath,
-      match.slug,
-      match.uiGraphId,
-    ),
-    webAppUiGraphId: match.uiGraphId,
-    webAppAllowedEmails: match.allowedEmails,
-    webAppBindingId: `filesystem:${match.appId}`,
-    webAppPolicyInvalidationKey: `filesystem:${path.resolve(match.projectPath)}`,
-  };
-}
-
-async function resolveFilesystemWebAppAccessPolicy(
-  root: string,
-  slug: string,
-  expectedProjectVirtualPath: string | undefined,
-): Promise<WebAppAccessPolicy | null> {
-  if (!expectedProjectVirtualPath) return null;
-
-  // Socket execution captured this absolute path from Rivet's own project
-  // resolver. Re-read only that project's small settings file: a periodic
-  // authorization check must not validate or deserialize every project in the
-  // workspace just to confirm one app's current publication policy.
-  const projectPath = path.resolve(expectedProjectVirtualPath);
-  const relativePath = path.relative(root, projectPath);
-  if (
-    !projectPath.endsWith(PROJECT_EXTENSION) ||
-    relativePath === '' ||
-    relativePath === '..' ||
-    relativePath.startsWith(`..${path.sep}`) ||
-    path.isAbsolute(relativePath)
-  ) {
-    return null;
-  }
-
-  const projectName = path.basename(projectPath, PROJECT_EXTENSION);
-  const settings = await readStoredWorkflowProjectSettings(projectPath, projectName);
-  const lookupName = normalizeWorkflowEndpointLookupName(slug);
-  const webApp = settings.publishedWebApps.find(
-    (candidate) => normalizeWorkflowEndpointLookupName(candidate.slug) === lookupName,
-  );
-  if (!webApp || !(await pathExists(getPublishedWorkflowSnapshotPath(root, webApp.publishedSnapshotId)))) {
-    return null;
-  }
-
-  return {
-    projectVirtualPath: projectPath,
-    uiGraphId: webApp.uiGraphId,
-    allowedEmails: webApp.allowedEmails,
-    bindingId: `filesystem:${webApp.appId}`,
-  };
-}
-
-function invalidateFilesystemExecutionMaterializations(projectPaths: Iterable<string>): void {
-  getFilesystemExecutionCache().invalidateProjectMaterializations(projectPaths);
-}
-
-function markFilesystemExecutionStructureDirty(projectPathsToInvalidate: Iterable<string> = []): void {
-  const projectPaths = [...projectPathsToInvalidate];
-  const cache = getFilesystemExecutionCache();
-  cache.markIndexDirty();
-  cache.invalidateProjectMaterializations(projectPaths);
-  for (const projectPath of projectPaths) {
-    notifyWebAppSocketPolicyInvalidation(`filesystem:${path.resolve(projectPath)}`);
-  }
-}
-
-function invalidateFilesystemExecutionMove(movedProjectPaths: WorkflowProjectPathMove[]): void {
-  if (movedProjectPaths.length === 0) {
-    return;
-  }
-
-  markFilesystemExecutionStructureDirty(
-    movedProjectPaths.flatMap(({ fromAbsolutePath, toAbsolutePath }) => [fromAbsolutePath, toAbsolutePath]),
-  );
-}
-
 export async function checkWorkflowStorageHealth(context?: RuntimeHealthCheckContext): Promise<void> {
   if (getWorkflowStorageServices().mode === 'sqlite') {
     await (await getWorkflowStorageServices().getLocal()).checkHealth(context);
@@ -543,14 +253,7 @@ export async function getWorkflowTree() {
   const tree = await delegate(
     'projects',
     async (backend) => backend.getTree(),
-    async () => {
-      const root = isVmMigrationMaintenanceActive() ? getWorkflowsRoot() : await ensureWorkflowsRoot();
-      return withFilesystemWorkflowStorageRead(async () => ({
-        root,
-        folders: await listWorkflowFolders(root),
-        projects: await listWorkflowProjects(root),
-      }));
-    },
+    () => getLegacyWorkflowTree(),
   );
   return {
     ...tree,
@@ -564,18 +267,10 @@ export async function getWorkflowTree() {
 }
 
 export async function listHostedProjectPaths(): Promise<string[]> {
-  return delegateWithWorkflowsRoot(
+  return delegate(
     'projects',
     async (backend) => backend.listProjectPathsForHostedIo(),
-    async (root) =>
-      withFilesystemWorkflowStorageRead(async () => {
-        const projects = await listWorkflowProjects(root);
-        const folders = await listWorkflowFolders(root);
-        const nestedProjects = folders.flatMap(function flatten(folder): WorkflowProjectItem[] {
-          return [...folder.projects, ...folder.folders.flatMap(flatten)];
-        });
-        return [...projects, ...nestedProjects].map((project) => project.absolutePath);
-      }),
+    () => listLegacyHostedProjectPaths(),
   );
 }
 
@@ -583,147 +278,18 @@ export async function loadHostedProject(projectPath: string): Promise<LoadHosted
   return delegate<LoadHostedProjectResult, 'projects'>(
     'projects',
     async (backend) => backend.loadHostedProject(projectPath),
-    async () => {
-      try {
-        const root = await ensureWorkflowsRoot();
-        return await withFilesystemWorkflowProjectRead(root, projectPath, async () => {
-          const contents = await fs.readFile(projectPath, 'utf8');
-          const [project, attachedData] = loadProjectAndAttachedDataFromString(contents);
-          void project;
-          void attachedData;
-          const datasetPath = getWorkflowDatasetPath(projectPath);
-          const datasetsContents = (await pathExists(datasetPath)) ? await fs.readFile(datasetPath, 'utf8') : null;
-
-          return {
-            contents,
-            datasetsContents,
-            revisionId: getFilesystemProjectRevisionId(contents, datasetsContents),
-          };
-        });
-      } catch (error) {
-        throw mapHostedProjectFilesystemError(error, 'read', projectPath);
-      }
-    },
+    () => loadLegacyHostedProject(projectPath),
   );
 }
 
-export async function saveHostedProject(options: {
-  projectPath: string;
-  contents: string;
-  datasetsContents: string | null;
-  expectedRevisionId?: string | null;
-  projectId?: ProjectId;
-  saveIntent?: HostedProjectSaveIntent;
-  structuralMutation?: import('../../../../studio-server-shared/workflow-mutation-contract.js').StructuralMutation;
-}): Promise<SaveHostedProjectResult> {
+export async function saveHostedProject(options: HostedProjectStorageSaveOptions): Promise<SaveHostedProjectResult> {
+  // Capture before backend acquisition or writer waits so persistence, revision
+  // checks and derived statistics describe the same submitted bytes.
+  options = structuredClone(options);
   return delegate<SaveHostedProjectResult, 'projects'>(
     'projects',
     async (backend) => backend.saveHostedProject(options),
-    async () => {
-      try {
-        const parsed = parseHostedProjectContents(options.contents, 'Could not save project');
-        const sourceProjectId = parsed.project.metadata.id;
-        if (!sourceProjectId) {
-          throw createHttpError(400, 'Could not save project', { expose: true });
-        }
-        if (options.projectId && options.projectId !== sourceProjectId) {
-          throw createHttpError(400, 'Project identity does not match the submitted project contents.', {
-            expose: true,
-          });
-        }
-        if (options.datasetsContents != null) {
-          try {
-            deserializeDatasets(options.datasetsContents);
-          } catch {
-            throw createHttpError(400, 'Could not save datasets', { expose: true });
-          }
-        }
-
-        const root = await ensureWorkflowsRoot();
-        let targetAlreadyExists = false;
-        let savedProjectPath = options.projectPath;
-        await saveFilesystemProjectTransaction({
-          root,
-          projectPath: options.projectPath,
-          projectContents: options.contents,
-          datasetsContents: options.datasetsContents,
-          resolveProjectTarget: async () => {
-            const projectPath =
-              options.saveIntent === 'in-place'
-                ? await resolveFilesystemInPlaceSaveTarget(root, options.projectPath, sourceProjectId)
-                : resolveFilesystemProjectPathInsideRoot(root, options.projectPath);
-            savedProjectPath = projectPath;
-            const projectName = path.basename(projectPath, PROJECT_EXTENSION);
-            const normalized = normalizeHostedProjectTitle(options.contents, projectName, 'Could not save project');
-            return { projectPath, projectContents: normalized.contents };
-          },
-          beforeTransaction: async () => {
-            targetAlreadyExists = await pathExists(savedProjectPath);
-            if (!targetAlreadyExists) return;
-
-            let targetProject: Project;
-            try {
-              [targetProject] = await loadProjectAndAttachedDataFromFile(savedProjectPath);
-            } catch {
-              throw createHttpError(409, 'Could not verify the existing save target. Reopen it before saving.', {
-                expose: true,
-              });
-            }
-            assertMatchingHostedProjectIdentity(targetProject, sourceProjectId, savedProjectPath);
-
-            if (options.saveIntent !== 'in-place' || !options.expectedRevisionId) {
-              return;
-            }
-
-            const currentContents = await fs.readFile(savedProjectPath, 'utf8');
-            const datasetPath = getWorkflowDatasetPath(savedProjectPath);
-            const currentDatasetsContents = (await pathExists(datasetPath))
-              ? await fs.readFile(datasetPath, 'utf8')
-              : null;
-            if (
-              getFilesystemProjectRevisionId(currentContents, currentDatasetsContents) !== options.expectedRevisionId
-            ) {
-              throw createHttpError(409, 'Project has changed since it was opened. Reload it before saving again.', {
-                expose: true,
-              });
-            }
-          },
-          afterCommit: async () => {
-            try {
-              const projectName = path.basename(savedProjectPath, PROJECT_EXTENSION);
-              const normalized = normalizeHostedProjectTitle(options.contents, projectName, 'Could not save project');
-              await writeWorkflowProjectStatsCacheFromContents(
-                savedProjectPath,
-                normalized.contents,
-                options.datasetsContents,
-              );
-            } finally {
-              // The statistics cache is derived and may be rebuilt later. The
-              // execution materialization is not: always discard it so a
-              // committed project can never keep serving its old graph merely
-              // because updating derived statistics failed.
-              invalidateFilesystemExecutionMaterializations([savedProjectPath]);
-            }
-          },
-        });
-
-        return {
-          path: savedProjectPath,
-          revisionId: getFilesystemProjectRevisionId(
-            normalizeHostedProjectTitle(
-              options.contents,
-              path.basename(savedProjectPath, PROJECT_EXTENSION),
-              'Could not save project',
-            ).contents,
-            options.datasetsContents,
-          ),
-          project: null,
-          created: !targetAlreadyExists,
-        };
-      } catch (error) {
-        throw mapHostedProjectFilesystemError(error, 'write', options.projectPath);
-      }
-    },
+    () => saveLegacyHostedProject(options, invalidateFilesystemExecutionMaterializations),
   );
 }
 
@@ -754,10 +320,12 @@ export async function readManagedHostedRelativeProject(relativeFrom: string, pro
   );
 }
 
-export async function listWorkflowRecordingWorkflowsWithBackend(): Promise<WorkflowRecordingWorkflowListResponse> {
+export async function listWorkflowRecordingWorkflowsWithBackend(
+  includeEvidence = false,
+): Promise<WorkflowRecordingWorkflowListResponse> {
   return delegateWithWorkflowsRoot(
     'recordings',
-    async (backend) => backend.listWorkflowRecordingWorkflows(),
+    async (backend) => backend.listWorkflowRecordingWorkflows(includeEvidence),
     async (root) => listWorkflowRecordingWorkflows(root),
   );
 }
@@ -781,6 +349,7 @@ export async function listWorkflowRecordingRunsPageWithBackend(
     'recordings',
     async (backend) =>
       backend.listWorkflowRecordingRunsPage({
+        includeEvidence: query.includeEvidence,
         workflowId,
         page,
         pageSize,
@@ -1009,26 +578,18 @@ export async function listWorkflowProjectReferenceCatalogWithBackend() {
 export async function listWorkflowPublishedVersionsWithBackend(
   relativePath: string,
 ): Promise<WorkflowPublishedVersionsResponse> {
-  return delegate(
-    'publications',
-    async (backend) => backend.listWorkflowPublishedVersions(relativePath),
-    () => legacyCommands.listWorkflowPublishedVersions(relativePath),
-  );
+  return withWorkflowPublicationRepository((backend) => backend.listWorkflowPublishedVersions(relativePath));
 }
 
 export async function readWorkflowPublishedVersionDownloadWithBackend(relativePath: string, versionId: string) {
-  return delegate(
-    'publications',
-    async (backend) => backend.readWorkflowPublishedVersionDownload(relativePath, versionId),
-    () => legacyCommands.readWorkflowPublishedVersionDownload(relativePath, versionId),
+  return withWorkflowPublicationRepository((backend) =>
+    backend.readWorkflowPublishedVersionDownload(relativePath, versionId),
   );
 }
 
 export async function readWorkflowPublishedVersionPreviewWithBackend(relativePath: string, versionId: string) {
-  return delegate(
-    'publications',
-    async (backend) => backend.readWorkflowPublishedVersionPreview(relativePath, versionId),
-    () => legacyCommands.readWorkflowPublishedVersionPreview(relativePath, versionId),
+  return withWorkflowPublicationRepository((backend) =>
+    backend.readWorkflowPublishedVersionPreview(relativePath, versionId),
   );
 }
 
@@ -1037,10 +598,8 @@ export async function setWorkflowPublishedVersionStarWithBackend(
   versionId: string,
   isStarred: boolean,
 ): Promise<WorkflowPublishedVersionSummary> {
-  return delegate(
-    'publications',
-    async (backend) => backend.setWorkflowPublishedVersionStar(relativePath, versionId, isStarred),
-    () => legacyCommands.setWorkflowPublishedVersionStar(relativePath, versionId, isStarred),
+  return withWorkflowPublicationRepository((backend) =>
+    backend.setWorkflowPublishedVersionStar(relativePath, versionId, isStarred),
   );
 }
 
@@ -1049,104 +608,15 @@ export async function setWorkflowPublishedVersionCommentWithBackend(
   versionId: string,
   comment: string,
 ): Promise<WorkflowPublishedVersionSummary> {
-  return delegate(
-    'publications',
-    async (backend) => backend.setWorkflowPublishedVersionComment(relativePath, versionId, comment),
-    () => legacyCommands.setWorkflowPublishedVersionComment(relativePath, versionId, comment),
-  );
-}
-
-async function restoreWorkflowPublishedVersionWithBackend(
-  relativePath: string,
-  versionId: string,
-  preconditions: WorkflowDraftPublicationPreconditions,
-): Promise<WorkflowPublishedVersionRestoreResponse> {
-  return delegate(
-    'publications',
-    async (backend) => backend.restoreWorkflowPublishedVersion(relativePath, versionId, preconditions),
-    () => legacyCommands.restoreWorkflowPublishedVersion(relativePath, versionId, preconditions),
-  );
-}
-
-async function publishWorkflowProjectItemWithBackend(
-  relativePath: string,
-  settings: WorkflowProjectSettingsDraft,
-  preconditions: WorkflowDraftPublicationPreconditions,
-) {
-  return delegate(
-    'publications',
-    async (backend) => backend.publishWorkflowProjectItem(relativePath, settings, preconditions),
-    () => legacyCommands.publishWorkflowProjectItem(relativePath, settings, preconditions),
-  );
-}
-
-async function updateWorkflowEndpointAccessWithBackend(
-  relativePath: string,
-  access: 'public' | 'internal',
-  preconditions: WorkflowPublicationPreconditions,
-) {
-  return delegate(
-    'publications',
-    async (backend) => backend.updateWorkflowEndpointAccess(relativePath, access, preconditions),
-    () => legacyCommands.updateWorkflowEndpointAccess(relativePath, access, preconditions),
+  return withWorkflowPublicationRepository((backend) =>
+    backend.setWorkflowPublishedVersionComment(relativePath, versionId, comment),
   );
 }
 
 export async function listWorkflowProjectWebAppsWithBackend(
   relativePath: string,
 ): Promise<WorkflowProjectWebAppsResponse> {
-  return delegate(
-    'publications',
-    async (backend) => backend.listWorkflowProjectWebApps(relativePath),
-    () => legacyCommands.listWorkflowProjectWebApps(relativePath),
-  );
-}
-
-async function publishWorkflowProjectWebAppsWithBackend(
-  relativePath: string,
-  publications: WorkflowProjectWebAppPublicationDraft[],
-  preconditions: WorkflowDraftPublicationPreconditions,
-) {
-  return delegate(
-    'publications',
-    async (backend) => backend.publishWorkflowProjectWebApps(relativePath, publications, preconditions),
-    () => legacyCommands.publishWorkflowProjectWebApps(relativePath, publications, preconditions),
-  );
-}
-
-async function updateWorkflowProjectWebAppAccessWithBackend(
-  relativePath: string,
-  accessUpdates: WorkflowProjectWebAppAccessDraft[],
-  preconditions: WorkflowPublicationPreconditions,
-) {
-  return delegate(
-    'publications',
-    async (backend) => backend.updateWorkflowProjectWebAppAccess(relativePath, accessUpdates, preconditions),
-    () => legacyCommands.updateWorkflowProjectWebAppAccess(relativePath, accessUpdates, preconditions),
-  );
-}
-
-async function unpublishWorkflowProjectWebAppWithBackend(
-  relativePath: string,
-  uiGraphId: string,
-  preconditions: WorkflowPublicationPreconditions,
-) {
-  return delegate(
-    'publications',
-    async (backend) => backend.unpublishWorkflowProjectWebApp(relativePath, uiGraphId, preconditions),
-    () => legacyCommands.unpublishWorkflowProjectWebApp(relativePath, uiGraphId, preconditions),
-  );
-}
-
-async function unpublishWorkflowProjectItemWithBackend(
-  relativePath: string,
-  preconditions: WorkflowPublicationPreconditions,
-) {
-  return delegate(
-    'publications',
-    async (backend) => backend.unpublishWorkflowProjectItem(relativePath, preconditions),
-    () => legacyCommands.unpublishWorkflowProjectItem(relativePath, preconditions),
-  );
+  return withWorkflowPublicationRepository((backend) => backend.listWorkflowProjectWebApps(relativePath));
 }
 
 type RestorePublicationCommand = Extract<WorkflowPublicationCommand, { kind: 'restore-version' }>;
@@ -1166,31 +636,37 @@ export async function executeWorkflowPublicationCommandWithBackend(
   command = structuredClone(command);
   switch (command.kind) {
     case 'publish-endpoint':
-      return publishWorkflowProjectItemWithBackend(
-        command.relativePath,
-        { endpointName: command.endpointName },
-        command.preconditions,
+      return withWorkflowPublicationRepository((backend) =>
+        backend.publishWorkflowProjectItem(
+          command.relativePath,
+          { endpointName: command.endpointName },
+          command.preconditions,
+        ),
       );
     case 'publish-web-apps':
-      return publishWorkflowProjectWebAppsWithBackend(
-        command.relativePath,
-        command.publications,
-        command.preconditions,
+      return withWorkflowPublicationRepository((backend) =>
+        backend.publishWorkflowProjectWebApps(command.relativePath, command.publications, command.preconditions),
       );
     case 'restore-version':
-      return restoreWorkflowPublishedVersionWithBackend(command.relativePath, command.versionId, command.preconditions);
+      return withWorkflowPublicationRepository((backend) =>
+        backend.restoreWorkflowPublishedVersion(command.relativePath, command.versionId, command.preconditions),
+      );
     case 'unpublish-endpoint':
-      return unpublishWorkflowProjectItemWithBackend(command.relativePath, command.preconditions);
+      return withWorkflowPublicationRepository((backend) =>
+        backend.unpublishWorkflowProjectItem(command.relativePath, command.preconditions),
+      );
     case 'set-endpoint-access':
-      return updateWorkflowEndpointAccessWithBackend(command.relativePath, command.access, command.preconditions);
+      return withWorkflowPublicationRepository((backend) =>
+        backend.updateWorkflowEndpointAccess(command.relativePath, command.access, command.preconditions),
+      );
     case 'set-web-app-access':
-      return updateWorkflowProjectWebAppAccessWithBackend(
-        command.relativePath,
-        command.accessUpdates,
-        command.preconditions,
+      return withWorkflowPublicationRepository((backend) =>
+        backend.updateWorkflowProjectWebAppAccess(command.relativePath, command.accessUpdates, command.preconditions),
       );
     case 'unpublish-web-app':
-      return unpublishWorkflowProjectWebAppWithBackend(command.relativePath, command.uiGraphId, command.preconditions);
+      return withWorkflowPublicationRepository((backend) =>
+        backend.unpublishWorkflowProjectWebApp(command.relativePath, command.uiGraphId, command.preconditions),
+      );
     default: {
       const unsupportedCommand: never = command;
       throw createHttpError(400, `Unsupported publication command: ${String(unsupportedCommand)}`);
@@ -1217,11 +693,7 @@ export async function resolvePublishedExecutionProject(
     );
   }
 
-  return withFilesystemWorkflowStorageRead(() =>
-    loadFilesystemWithMissingRootRetry((root) =>
-      getFilesystemExecutionCache().loadPublishedExecutionProject(root, endpointName),
-    ),
-  );
+  return resolveLegacyPublishedExecutionProject(endpointName);
 }
 
 export async function resolvePublishedWebAppExecutionProject(slug: string): Promise<ExecutionProjectResult | null> {
@@ -1229,9 +701,7 @@ export async function resolvePublishedWebAppExecutionProject(slug: string): Prom
     return (await getWorkflowStorageServices().getRepository('execution')).loadPublishedWebAppExecutionProject(slug);
   }
 
-  return withFilesystemWorkflowStorageRead(() =>
-    loadFilesystemWithMissingRootRetry((root) => loadFilesystemPublishedWebAppExecutionProject(root, slug)),
-  );
+  return resolveLegacyPublishedWebAppExecutionProject(slug);
 }
 
 export async function resolveLatestWebAppExecutionProject(slug: string): Promise<ExecutionProjectResult | null> {
@@ -1239,9 +709,7 @@ export async function resolveLatestWebAppExecutionProject(slug: string): Promise
     return (await getWorkflowStorageServices().getRepository('execution')).loadLatestWebAppExecutionProject(slug);
   }
 
-  return withFilesystemWorkflowStorageRead(() =>
-    loadFilesystemWithMissingRootRetry((root) => loadFilesystemLatestWebAppExecutionProject(root, slug)),
-  );
+  return resolveLegacyLatestWebAppExecutionProject(slug);
 }
 
 /** Reads the current app binding and allowlist without loading project data. */
@@ -1274,11 +742,7 @@ export async function resolveWebAppAccessPolicy(
         };
   }
 
-  return withFilesystemWorkflowStorageRead(() =>
-    loadFilesystemWithMissingRootRetry((root) =>
-      resolveFilesystemWebAppAccessPolicy(root, slug, expectedProjectVirtualPath),
-    ),
-  );
+  return resolveLegacyWebAppAccessPolicy(slug, expectedProjectVirtualPath);
 }
 
 export async function resolveLatestExecutionProject(
@@ -1292,24 +756,14 @@ export async function resolveLatestExecutionProject(
     );
   }
 
-  return withFilesystemWorkflowStorageRead(() =>
-    loadFilesystemWithMissingRootRetry((root) =>
-      getFilesystemExecutionCache().loadLatestExecutionProject(root, endpointName),
-    ),
-  );
+  return resolveLegacyLatestExecutionProject(endpointName);
 }
 
 export async function createExecutionProjectReferenceLoader(projectPath: string) {
   return delegate<ProjectReferenceLoader, 'execution'>(
     'execution',
     async (backend) => backend.createProjectReferenceLoader(),
-    async () => {
-      const loader = createPublishedWorkflowProjectReferenceLoader(getWorkflowsRoot(), projectPath);
-      return {
-        loadProject: (...args: Parameters<typeof loader.loadProject>) =>
-          withFilesystemWorkflowStorageRead(() => loader.loadProject(...args)),
-      };
-    },
+    () => createLegacyExecutionProjectReferenceLoader(projectPath),
   );
 }
 
@@ -1326,71 +780,15 @@ export function createExecutionSubgraphProjectLoader() {
       return delegate(
         'execution',
         async (backend) => backend.loadSubgraphTarget(target),
-        async () =>
-          withFilesystemWorkflowStorageRead(async () => {
-            const root = getWorkflowsRoot();
-            const matches = await findFilesystemProjectPathsByMetadataId(root, target.projectId);
-            if (matches.length > 1) {
-              throw createHttpError(409, `Subgraph project ${target.projectId} has multiple saved locations.`);
-            }
-            const selectedPath = matches[0];
-            if (!selectedPath) throw createHttpError(404, `Subgraph project ${target.projectId} was not found.`);
-            let artifactPath = selectedPath;
-            if (target.version === 'published') {
-              const settings = await readStoredWorkflowProjectSettings(
-                selectedPath,
-                path.basename(selectedPath, PROJECT_EXTENSION),
-              );
-              const publishedPath = await resolvePublishedWorkflowProjectPath(root, selectedPath, settings);
-              if (!publishedPath)
-                throw workflowFailure(
-                  'workflow_publication_missing',
-                  `Subgraph project ${target.projectId} has no published version.`,
-                );
-              artifactPath = publishedPath;
-            }
-            const projectContents = await fs.readFile(artifactPath, 'utf8');
-            const [project] = loadProjectAndAttachedDataFromString(projectContents);
-            if (project.metadata.id !== target.projectId) {
-              throw createHttpError(500, `Subgraph project ${target.projectId} has a mismatched saved identity.`);
-            }
-            const datasetPath = getWorkflowDatasetPath(artifactPath);
-            const datasetsContents = (await pathExists(datasetPath)) ? await fs.readFile(datasetPath, 'utf8') : null;
-            return {
-              project,
-              datasetProvider: new NodeDatasetProvider(datasetsContents ? deserializeDatasets(datasetsContents) : []),
-              revisionKey: `${target.version}:${createHash('sha256')
-                .update(projectContents)
-                .update('\0')
-                .update(datasetsContents ?? '')
-                .digest('hex')}`,
-              projectContents,
-              datasetsContents: datasetsContents ?? undefined,
-              sourceProjectPath: selectedPath,
-            };
-          }),
+        () => loadLegacySubgraphTarget(target),
       );
     },
   };
 }
 
-export async function persistWorkflowExecutionRecordingWithBackend(options: {
-  createdAt?: string;
-  sourceProject: Project;
-  sourceProjectPath: string;
-  executedProject: Project;
-  executedAttachedData: AttachedData;
-  executedDatasets: CombinedDataset[];
-  endpointName: string;
-  recordingSerialized: string;
-  runKind: 'published' | 'latest' | 'editor';
-  status: 'succeeded' | 'failed' | 'suspicious';
-  durationMs: number;
-  cost?: import('../../../../studio-server-shared/workflow-recording-types.js').WorkflowRunCost;
-  errorMessage?: string;
-  executionIdentity?: WorkflowRecordingExecutionIdentity;
-  onPersisted?: (recordingId: string) => Promise<void>;
-}): Promise<string | undefined> {
+export async function persistWorkflowExecutionRecordingWithBackend(
+  options: PersistWorkflowExecutionRecordingOptions,
+): Promise<string | undefined> {
   // Every recording surface, including editor uploads and called-project runs,
   // must honor the same server-side dataset retention policy.
   const permittedOptions = shouldSnapshotWorkflowRecordingDatasets() ? options : { ...options, executedDatasets: [] };

@@ -291,7 +291,10 @@ export function useRunRecordingsController(
             return;
           }
 
-          setRunsPage(response);
+          setRunsPage((current) => ({
+            ...response,
+            unsearchableRuns: response.unsearchableRuns ?? current?.unsearchableRuns,
+          }));
           if (response.scopeCounts) {
             setRelatedCounts({ workflowId: response.workflowId, counts: response.scopeCounts });
           }
@@ -772,6 +775,7 @@ export function useRunRecordingsController(
     totalPages,
     inputSearchStatus,
     inputSearchProgress,
+    unsearchableRuns: runsPage?.unsearchableRuns ?? 0,
     visibleRuns: sessionReady ? visibleRuns : [],
     childLoadStates,
     childLoadErrors: sessionReady ? childLoadErrors : {},

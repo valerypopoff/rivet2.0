@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import { mock } from 'node:test';
 import http from 'node:http';
+import { once } from 'node:events';
+import { text as readStreamText } from 'node:stream/consumers';
 import fs from 'node:fs/promises';
 import { createHash, randomUUID } from 'node:crypto';
 import path from 'node:path';
@@ -32,15 +34,20 @@ import {
 import {
   initializeWorkflowStorage,
   disposeWorkflowStorage,
+  getWorkflowTree,
   loadHostedProject,
   saveHostedProject,
+  executeWorkflowPublicationCommandWithBackend,
+  resolvePublishedExecutionProject,
+  resolveLatestExecutionProject,
 } from '../../routes/workflows/storage-backend.js';
 import { fingerprintVmMigrationSource } from '../../scripts/vm-migration-source-manifest.js';
 import { createLocalCatalogNativeApi } from '../../local-metadata/execution-io.js';
 import { readManifest, getRootPath } from '../../runtime-libraries/manifest.js';
 import { localCatalogExecutorIoRouter } from '../../local-metadata/executor-io-route.js';
 import { getExpectedExecutorAuthToken, getExpectedProxyAuthToken, getExpectedUiSessionToken } from '../../auth.js';
-import express from 'express';
+import express, { type Response } from 'express';
+import { AcceptedWork } from '../../../../studio-server-shared/process-retirement.js';
 import { pathToFileURL } from 'node:url';
 import { runtimeTestEntry, runtimeTestRepo as repo } from './runtime-test-entry.js';
 import { allocateDistinctTestPorts, listenTestServer } from './http-server-harness.js';
@@ -51,6 +58,94 @@ import { DatabaseSync } from 'node:sqlite';
 import { FilesystemRivetLLMProfileHealthStore } from '../../llm-profile-health/filesystem-store.js';
 import { format } from 'node:util';
 import { registerActiveHttpExecution } from '../../active-http-executions.js';
+
+async function assertDownloadFailureSettlement(url: string, headers: Record<string, string>, work: AcceptedWork) {
+  for (const phase of ['before-headers', 'after-headers', 'disconnected'] as const) {
+    let releaseTimeout: ReturnType<typeof setTimeout> | undefined;
+    let response!: Response;
+    let settle: ((error: Error) => void) | undefined;
+    let arrived!: () => void;
+    const started = new Promise<void>((resolve) => {
+      arrived = resolve;
+    });
+    let releaseWork!: () => void;
+    const released = new Promise<void>((resolve) => {
+      releaseWork = resolve;
+    });
+    const acquire = work.acquire.bind(work);
+    const trackedWork = mock.method(work, 'acquire', () => {
+      const release = acquire();
+      assert.ok(release);
+      return () => {
+        release();
+        releaseWork();
+      };
+    });
+    const download = mock.method(express.response, 'download', function (this: Response, ...args: unknown[]) {
+      response = this;
+      settle = args.at(-1) as (error: Error) => void;
+      if (phase !== 'before-headers') this.flushHeaders();
+      arrived();
+      return this;
+    });
+    const logged = mock.method(console, 'error', () => {});
+    const deadline = AbortSignal.timeout(5000);
+    const request = http.get(url, { headers, signal: deadline });
+    const received = once(request, 'response').then(([stream]) => stream as http.IncomingMessage);
+    const completed = received
+      .then(async (stream) => ({ status: stream.statusCode, body: await readStreamText(stream) }))
+      .then(
+        (result) => ({ result }),
+        (error: unknown) => ({ error }),
+      );
+    try {
+      await Promise.race([
+        started,
+        completed.then(() => {
+          throw new Error('Download request ended before its callback was installed.');
+        }),
+      ]);
+      assert.equal(work.count, 1);
+      if (phase === 'disconnected') {
+        const incoming = await received;
+        const closed = once(response, 'close', { signal: AbortSignal.timeout(5000) });
+        incoming.destroy();
+        await closed;
+        assert.equal(work.count, 1, 'response close must not release unsettled download work');
+      }
+      assert.ok(settle);
+      settle(new Error('injected download failure'));
+      settle = undefined;
+      const outcome = await completed;
+      await Promise.race([
+        released,
+        new Promise<never>((_resolve, reject) => {
+          releaseTimeout = setTimeout(() => reject(new Error('Download retained work after settlement.')), 5000);
+        }),
+      ]);
+      assert.equal(work.count, 0, 'download callback must release retained work');
+      if (phase !== 'before-headers') {
+        assert.ok('error' in outcome, 'a partial download must close without a replacement JSON response');
+        assert.equal(deadline.aborted, false, 'a request timeout is not evidence of correct download cleanup');
+        assert.equal(response.destroyed, true);
+      } else {
+        assert.ok('result' in outcome);
+        assert.equal(outcome.result.status, 500);
+        assert.equal(
+          JSON.parse(outcome.result.body).error,
+          'Storage operation failed. Check source integrity and reload status before retrying.',
+        );
+      }
+    } finally {
+      clearTimeout(releaseTimeout);
+      settle?.(new Error('download fixture cleanup'));
+      request.destroy();
+      download.mock.restore();
+      trackedWork.mock.restore();
+      logged.mock.restore();
+    }
+  }
+}
 
 const command = process.argv[2];
 const { assertLocalMetadataExecutorAdmission } = (await import(
@@ -630,7 +725,8 @@ try {
   } else if (command === 'duplicate-repair') {
     await initializeWorkflowStorage();
     const { createApiApp } = await import('../../app.js');
-    const listener = await listenTestServer(http.createServer(createApiApp('combined')));
+    const work = new AcceptedWork();
+    const listener = await listenTestServer(http.createServer(createApiApp('combined', { requestWork: work })));
     const headers = {
       'x-rivet-proxy-auth': getExpectedProxyAuthToken(),
       cookie: `rivet_ui_token=${getExpectedUiSessionToken()}`,
@@ -722,6 +818,7 @@ try {
       assert.match(download.headers.get('content-disposition')!, /attachment/);
       assert.equal(download.headers.get('x-content-type-options'), 'nosniff');
       await download.arrayBuffer();
+      await assertDownloadFailureSettlement(`${url}/repair/download?id=${done.repair.id}`, headers, work);
       const file = path.join(process.env.RIVET_LOCAL_METADATA_CONTROL_ROOT!, 'duplicate-project-repair.json');
       const journal = JSON.parse(await fs.readFile(file, 'utf8'));
       await fs.writeFile(file, JSON.stringify({ ...journal, phase: 'applying' }));
@@ -959,7 +1056,8 @@ try {
     const fingerprint = await fingerprintVmMigrationSource(source);
     const original = await fs.readFile(path.join(source.workflows, 'story.rivet-project'), 'utf8');
     const { createApiApp } = await import('../../app.js');
-    const listener = await listenTestServer(http.createServer(createApiApp('combined')));
+    const work = new AcceptedWork();
+    const listener = await listenTestServer(http.createServer(createApiApp('combined', { requestWork: work })));
     const headers = {
       'x-rivet-proxy-auth': getExpectedProxyAuthToken(),
       cookie: `rivet_ui_token=${getExpectedUiSessionToken()}`,
@@ -1112,6 +1210,7 @@ try {
       assert.equal(download.headers.get('cache-control'), 'no-store');
       const archive = Buffer.from(await download.arrayBuffer());
       assert.equal(createHash('sha256').update(archive).digest('hex'), status.backup!.archiveHash);
+      await assertDownloadFailureSettlement(`${url}/backup/download?id=${id}`, headers, work);
       const keyDownload = await fetch(`${url}/backup/key?id=${id}`, { headers });
       assert.equal(keyDownload.status, 200);
       assert.equal(keyDownload.headers.get('cache-control'), 'no-store');
@@ -1604,12 +1703,50 @@ try {
       const original = await loadHostedProject(path.join(localMetadataSourceRoots().workflows, 'story.rivet-project'));
       const [project, attached] = loadProjectAndAttachedDataFromString(original.contents);
       project.metadata.description = 'saved-in-selected-sqlite';
-      await saveHostedProject({
+      const saved = await saveHostedProject({
         projectPath: path.join(localMetadataSourceRoots().workflows, 'story.rivet-project'),
         contents: serializeProject(project, attached) as string,
         datasetsContents: null,
         expectedRevisionId: original.revisionId,
       });
+      assert.ok(saved.project);
+      assert.ok(saved.revisionId);
+      assert.equal((await getWorkflowTree()).capabilities.explicitBundles, false);
+      const published = await executeWorkflowPublicationCommandWithBackend({
+        kind: 'publish-endpoint',
+        relativePath: saved.project.relativePath,
+        endpointName: 'sqlite-facade',
+        preconditions: {
+          expectedProjectId: saved.project.projectMetadataId!,
+          expectedPublicationVersion: saved.project.settings.publicationVersion!,
+          expectedDraftRevisionId: saved.revisionId,
+        },
+      });
+      project.metadata.description = 'saved-in-selected-sqlite-after-publication';
+      await saveHostedProject({
+        projectPath: saved.path,
+        contents: serializeProject(project, attached) as string,
+        datasetsContents: null,
+        expectedRevisionId: saved.revisionId,
+      });
+      assert.equal(
+        (await resolvePublishedExecutionProject('sqlite-facade', true))?.project.metadata.description,
+        'saved-in-selected-sqlite',
+      );
+      assert.equal(
+        (await resolveLatestExecutionProject('sqlite-facade', true))?.project.metadata.description,
+        project.metadata.description,
+      );
+      assert.equal((await loadHostedProject(saved.path)).contents.includes(project.metadata.description), true);
+      await executeWorkflowPublicationCommandWithBackend({
+        kind: 'unpublish-endpoint',
+        relativePath: published.relativePath,
+        preconditions: {
+          expectedProjectId: published.projectMetadataId!,
+          expectedPublicationVersion: published.settings.publicationVersion!,
+        },
+      });
+      assert.equal(await resolvePublishedExecutionProject('sqlite-facade', true), null);
       const native = createLocalCatalogNativeApi();
       assert.match(
         await native.readTextFile(path.join(localMetadataSourceRoots().workflows, 'story.rivet-project')),

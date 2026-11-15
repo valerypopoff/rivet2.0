@@ -16,21 +16,42 @@ import {
 } from '../local-metadata/browser-backup.js';
 import { fingerprintVmMigrationSource } from '../scripts/vm-migration-source-manifest.js';
 import type { LocalMetadataSourceRoots } from '../local-metadata/source-identity.js';
+import { publishEmptyRuntimeRelease } from '@valerypopoff/rivet-studio-server-bootstrap/runtime-release-cache';
+import { readSourceRuntimeSelection } from '../scripts/migrate-runtime-libraries.js';
 
 // test-style: fixture-read: verifies generated backups and restored fixtures only.
+async function statusFixture(run: (control: string, state: BrowserBackup) => Promise<void>) {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-browser-backup-'));
+  const control = path.join(root, 'control');
+  try {
+    await fs.mkdir(control);
+    await run(control, {
+      id: randomUUID(),
+      revision: 1,
+      pausedAt: 'paused-fixture',
+      phase: 'creating',
+      archiveHash: null,
+      bytes: 0,
+      createdAt: new Date().toISOString(),
+      sourceFingerprint: 'a'.repeat(64),
+    });
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+}
+
 async function fixture(
   run: (source: LocalMetadataSourceRoots, control: string, state: BrowserBackup) => Promise<void>,
 ) {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-browser-backup-'));
-  const control = path.join(root, 'control');
-  const source: LocalMetadataSourceRoots = {
-    workflows: path.join(root, 'workflows'),
-    recordings: path.join(root, 'recordings'),
-    appData: path.join(root, 'appData'),
-    runtimeLibraries: path.join(root, 'runtimeLibraries'),
-  };
-  try {
-    for (const directory of [control, ...Object.values(source)]) await fs.mkdir(directory);
+  await statusFixture(async (control, state) => {
+    const root = path.dirname(control);
+    const source: LocalMetadataSourceRoots = {
+      workflows: path.join(root, 'workflows'),
+      recordings: path.join(root, 'recordings'),
+      appData: path.join(root, 'appData'),
+      runtimeLibraries: path.join(root, 'runtimeLibraries'),
+    };
+    for (const directory of Object.values(source)) await fs.mkdir(directory);
     await fs.mkdir(path.join(source.workflows, 'empty'));
     await fs.writeFile(path.join(source.workflows, 'a.rivet-project'), 'project fixture');
     await fs.mkdir(path.join(source.appData, 'settings'));
@@ -43,19 +64,9 @@ async function fixture(
       await fs.chmod(path.join(source.workflows, 'empty'), 0o1777);
       await fs.symlink('index.js', path.join(source.runtimeLibraries, 'entry.js'));
     }
-    await run(source, control, {
-      id: randomUUID(),
-      revision: 1,
-      pausedAt: 'paused-fixture',
-      phase: 'creating',
-      archiveHash: null,
-      bytes: 0,
-      createdAt: new Date().toISOString(),
-      sourceFingerprint: await fingerprintVmMigrationSource(source),
-    });
-  } finally {
-    await fs.rm(root, { recursive: true, force: true });
-  }
+    state.sourceFingerprint = await fingerprintVmMigrationSource(source);
+    await run(source, control, state);
+  });
 }
 
 test('browser backup restores the downloadable archive, preserves source bytes and leaves only the verified archive', async () => {
@@ -88,6 +99,91 @@ test('browser backup restores the downloadable archive, preserves source bytes a
       assert.equal(await fs.readlink(path.join(restored, 'runtimeLibraries', 'entry.js')), 'index.js');
     }
     await assert.rejects(createBrowserBackupArchive({ source, control, state, assertFrozen: async () => {} }));
+  });
+});
+
+test('full backups preserve retained cache history as well as the selected empty release', async () => {
+  await fixture(async (source, control, state) => {
+    const old = await publishEmptyRuntimeRelease(source.runtimeLibraries, {
+      packages: {},
+      updatedAt: '',
+      activeReleaseId: 'old',
+    });
+    await fs.writeFile(path.join(old.snapshot.directory, 'history.txt'), 'retained source bytes');
+    const active = await publishEmptyRuntimeRelease(source.runtimeLibraries, {
+      packages: {},
+      updatedAt: '',
+      activeReleaseId: 'active',
+    });
+    state.sourceFingerprint = await fingerprintVmMigrationSource(source);
+    await createBrowserBackupArchive({ source, control, state, assertFrozen: async () => {} });
+    const restored = path.join(control, 'with-history');
+    await fs.mkdir(restored);
+    await restoreBrowserBackupArchive(path.join(browserBackupDirectory(control, state.id), 'backup.tar.gz'), restored);
+    const libraries = path.join(restored, 'runtimeLibraries');
+    assert.equal(
+      await fs.readFile(path.join(libraries, path.basename(old.snapshot.directory), 'history.txt'), 'utf8'),
+      'retained source bytes',
+    );
+    assert.equal((await readSourceRuntimeSelection(libraries)).manifest.activeReleaseId, 'active');
+    assert.equal((await fs.readdir(libraries)).filter((name) => name.startsWith('cache-')).length, 2);
+    assert.notEqual(old.snapshot.directory, active.snapshot.directory);
+    await fs.writeFile(path.join(old.snapshot.directory, 'history.txt'), 'changed history');
+    assert.notEqual(await fingerprintVmMigrationSource(source), state.sourceFingerprint);
+  });
+});
+
+test(
+  'Windows backup status replacement tolerates an overlapping reader',
+  { skip: process.platform !== 'win32' },
+  async (t) => {
+    await statusFixture(async (control, state) => {
+      await saveBrowserBackup(control, state);
+      const file = path.join(control, 'browser-backup.json');
+      let reader: Awaited<ReturnType<typeof fs.open>> | undefined = await fs.open(file, 'r');
+      const rename = fs.rename;
+      const sources: string[] = [];
+      t.mock.method(fs, 'rename', async (...args: Parameters<typeof fs.rename>) => {
+        if (String(args[1]) !== file) return rename(...args);
+        sources.push(String(args[0]));
+        try {
+          return await rename(...args);
+        } catch (error) {
+          assert.equal((error as NodeJS.ErrnoException).code, 'EPERM');
+          await reader?.close();
+          reader = undefined;
+          throw error;
+        }
+      });
+      try {
+        const next = { ...state, phase: 'failed' as const };
+        await saveBrowserBackup(control, next);
+        assert.deepEqual(await readBrowserBackup(control), next);
+        assert.equal(sources.length, 2);
+        assert.equal(new Set(sources).size, 1);
+        assert.deepEqual(await fs.readdir(control), ['browser-backup.json']);
+      } finally {
+        await reader?.close();
+      }
+    });
+  },
+);
+
+test('failed backup status publication preserves prior evidence and removes its temporary file', async (t) => {
+  await statusFixture(async (control, state) => {
+    await saveBrowserBackup(control, state);
+    const file = path.join(control, 'browser-backup.json');
+    const rename = fs.rename;
+    let attempts = 0;
+    t.mock.method(fs, 'rename', async (...args: Parameters<typeof fs.rename>) => {
+      if (String(args[1]) !== file) return rename(...args);
+      attempts++;
+      throw Object.assign(new Error('Fixture backup status write failed'), { code: 'EIO' });
+    });
+    await assert.rejects(saveBrowserBackup(control, { ...state, phase: 'failed' }), { code: 'EIO' });
+    assert.equal(attempts, 1);
+    assert.deepEqual(await readBrowserBackup(control), state);
+    assert.deepEqual(await fs.readdir(control), ['browser-backup.json']);
   });
 });
 
@@ -142,7 +238,7 @@ test('backup rejects source drift during copying and never publishes ready state
 });
 
 test('backup status rejects corrupt metadata, inconsistent readiness and archive links', async () => {
-  await fixture(async (_source, control, state) => {
+  await statusFixture(async (control, state) => {
     await fs.writeFile(path.join(control, 'browser-backup.json'), '{broken');
     await assert.rejects(readBrowserBackup(control));
     await assert.rejects(hashBackupArchive(path.join(control, 'browser-backup.json', 'bad')));
@@ -154,7 +250,7 @@ test('backup status rejects corrupt metadata, inconsistent readiness and archive
 });
 
 test('invalidating obsolete backup evidence preserves corrupt status and archives without requiring a read', async () => {
-  await fixture(async (_source, control, state) => {
+  await statusFixture(async (control, state) => {
     await invalidateBrowserBackup(control);
     const directory = browserBackupDirectory(control, state.id);
     await fs.mkdir(directory, { recursive: true });

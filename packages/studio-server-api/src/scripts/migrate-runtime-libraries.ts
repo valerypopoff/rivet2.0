@@ -6,6 +6,7 @@ import path from 'node:path';
 
 import { Pool } from 'pg';
 import * as tar from 'tar';
+import { selectRuntimeLibrarySource } from '@valerypopoff/rivet-studio-server-bootstrap/runtime-release-cache';
 
 import type { ManagedRuntimeLibrariesConfig } from '../runtime-libraries/config.js';
 import { MANAGED_RUNTIME_LIBRARIES_OBJECT_STORAGE_PREFIX } from '../runtime-libraries/config.js';
@@ -60,15 +61,13 @@ async function assertRealSourceDirectory(directory: string): Promise<void> {
   }
 }
 
-export async function readSourceManifest(root: string): Promise<RuntimeLibraryManifest> {
+export async function readSourceRuntimeSelection(root: string): Promise<{
+  manifest: RuntimeLibraryManifest;
+  directory: string | null;
+}> {
   if (await sourceStatOrNull(root)) await assertRealSourceDirectory(root);
   const manifestPath = path.join(root, 'manifest.json');
   const legacyActiveRelease = path.join(root, 'active-release');
-  if (await sourceStatOrNull(legacyActiveRelease)) {
-    throw new Error(
-      'Source runtime libraries still use the legacy active-release layout; start the VM once to reconcile it before taking the frozen migration copy.',
-    );
-  }
   let text: string;
   try {
     const stat = await fs.lstat(manifestPath);
@@ -76,10 +75,17 @@ export async function readSourceManifest(root: string): Promise<RuntimeLibraryMa
     text = await readMigrationSourceUtf8(manifestPath);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      if (await sourceStatOrNull(legacyActiveRelease))
+        throw new Error('Source runtime libraries need legacy layout reconciliation before migration.');
       if (await sourceStatOrNull(path.join(root, 'current'))) {
         throw new Error('Source runtime libraries have current/ but no manifest.json');
       }
-      return { packages: {}, updatedAt: '' };
+      const selected = selectRuntimeLibrarySource(root);
+      const { runtimeCache: _localCache, ...manifest } = selected.manifest;
+      return {
+        manifest: { ...manifest, packages: normalizePackageMap(manifest.packages) },
+        directory: selected.directory,
+      };
     }
     throw new Error('Cannot read source runtime-library manifest', { cause: error });
   }
@@ -93,26 +99,36 @@ export async function readSourceManifest(root: string): Promise<RuntimeLibraryMa
   ) {
     throw new Error('Source runtime-library manifest is invalid');
   }
+  if (!raw.runtimeCache && (await sourceStatOrNull(legacyActiveRelease))) {
+    throw new Error(
+      'Source runtime libraries still use the legacy active-release layout; start the VM once to reconcile it before taking the frozen migration copy.',
+    );
+  }
   const packages = normalizePackageMap(raw.packages);
   if (Object.keys(packages).length !== Object.keys(raw.packages).length) {
     throw new Error('Source runtime-library manifest has invalid package entries');
   }
-  if (Object.keys(packages).length === 0 && (await sourceStatOrNull(path.join(root, 'current')))) {
-    throw new Error('Source runtime libraries have current/ but no packages in the manifest');
-  }
   if (raw.activeReleaseId !== undefined && (typeof raw.activeReleaseId !== 'string' || !raw.activeReleaseId.trim())) {
     throw new Error('Source runtime-library manifest has an invalid active release ID');
   }
-  return {
+  const selected = selectRuntimeLibrarySource(root, {
     packages,
     updatedAt: typeof raw.updatedAt === 'string' ? raw.updatedAt : '',
     ...(raw.activeReleaseId ? { activeReleaseId: raw.activeReleaseId.trim() } : {}),
-  };
+    ...(raw.runtimeCache !== undefined ? { runtimeCache: raw.runtimeCache } : {}),
+  });
+  const { runtimeCache: _localCache, ...manifest } = selected.manifest;
+  return { manifest, directory: selected.directory };
+}
+
+export async function readSourceManifest(root: string): Promise<RuntimeLibraryManifest> {
+  return (await readSourceRuntimeSelection(root)).manifest;
 }
 
 export async function createSourceArchive(root: string, temporaryDirectory?: string): Promise<Buffer> {
-  await assertRealSourceDirectory(root);
-  return createRuntimeLibraryDirectoryArchive(path.join(root, 'current'), temporaryDirectory);
+  const source = await readSourceRuntimeSelection(root);
+  if (!source.directory) throw new Error('Source runtime libraries have no release to archive.');
+  return createRuntimeLibraryDirectoryArchive(source.directory, temporaryDirectory);
 }
 
 export async function validateRuntimeLibraryDirectory(current: string): Promise<void> {
@@ -193,7 +209,8 @@ export async function migrateRuntimeLibraries(options: {
   /** Restore has dedicated PVC scratch; do not spill its archive onto the pod's small /tmp volume. */
   artifactTemporaryDirectory?: string;
 }): Promise<number> {
-  const manifest = options.sourceState?.manifest ?? (await readSourceManifest(options.sourceRoot));
+  const source = options.sourceState ? null : await readSourceRuntimeSelection(options.sourceRoot);
+  const manifest = options.sourceState?.manifest ?? source!.manifest;
   const hasPackages = Object.keys(manifest.packages).length > 0;
   if (hasPackages && !options.platformValidated && process.env.RIVET_MIGRATION_RUNTIME_PLATFORM_ACK !== '1') {
     throw new Error(
@@ -203,7 +220,7 @@ export async function migrateRuntimeLibraries(options: {
   const archive = hasPackages
     ? options.sourceState
       ? options.sourceState.archive
-      : await createSourceArchive(options.sourceRoot, options.artifactTemporaryDirectory)
+      : await createRuntimeLibraryDirectoryArchive(source!.directory!, options.artifactTemporaryDirectory)
     : null;
   if (hasPackages && !archive) throw new Error('Selected runtime libraries have packages but no immutable archive.');
   const archiveSha = archive ? createHash('sha256').update(archive).digest('hex') : null;

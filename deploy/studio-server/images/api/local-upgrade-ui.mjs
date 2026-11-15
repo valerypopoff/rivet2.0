@@ -289,7 +289,7 @@ function assertOutsideSource(env, volume) {
     realDirectory(directory);
     const identities = [];
     for (let cursor = directory; ; cursor = path.dirname(cursor)) {
-      const stat = fs.statSync(cursor);
+      const stat = fs.statSync(cursor, { bigint: true });
       identities.push(`${stat.dev}:${stat.ino}`);
       if (path.dirname(cursor) === cursor) return identities;
     }

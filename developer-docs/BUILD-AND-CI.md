@@ -2134,6 +2134,41 @@ version. It checks npm before publishing each package and skips package versions
 that are already present in the registry, so re-running the same main-branch
 workflow does not turn an already-published package into a hard failure.
 
+### Prepared release versions (2026-11-15)
+
+Review since the actual version bump `d02b3c656`, through `e120aa379` and the
+pending comparison/settings fixes, prepares App `2.37.0`, the public
+Core/Node/CLI/Evaluations family `2.31.0`, App Executor `2.23.0`, all five
+Studio Server packages `1.39.0`, and Docs `2.29.0`. The
+[package matrix](PACKAGES.md#version-update-2026-11-15--recording-evidence-runtime-snapshots-and-bundle-tools)
+separates package-local additions from public-family companions. New recording
+capabilities, optional lifecycle hooks and model support warrant minor releases;
+the included refactors and fixes do not require major versions.
+
+Synchronize desktop Tauri/Cargo metadata and the CLI Docker fallback. Validate
+with `yarn verify:desktop-version`, `yarn check:npm-publish-versions`,
+`yarn check:pnp:fresh`, `yarn studio-server:verify:repo-structure` and
+`node scripts/checks/check-doc-links.mjs`. Regenerate install state with the
+checked-in Yarn release and immutable lockfile/cache; retain existing dependency
+ranges. Helm metadata and database schema numbers remain independent. Preparing
+versions neither publishes packages nor deploys a release.
+
+### Prepared release versions (2026-11-13)
+
+The last version-changing commit for all tracks is `dca880e38`. Review through
+`b5688d08c` prepares App `2.36.1`, the public Core/Node/CLI/Evaluations family
+`2.30.0`, App Executor `2.22.0`, all five Studio Server packages `1.38.1`, and
+Docs `2.28.1`. The [package matrix](PACKAGES.md#version-update-2026-11-13--executor-recovery-and-failed-recordings)
+distinguishes additive public executor APIs from corrections to existing
+preview, recording and comparison behavior and unchanged release companions.
+
+Run `yarn sync:desktop-version`, then `yarn verify:desktop-version`,
+`yarn check:npm-publish-versions`, `yarn check:pnp:fresh`,
+`yarn studio-server:verify:repo-structure` and
+`node scripts/checks/check-doc-links.mjs`. The CLI Docker fallback follows the
+public-family version. Workspace dependency ranges, schema versions and Helm
+metadata stay independent. These metadata edits do not publish or deploy a release.
+
 ### Prepared bundle comparison release versions (2026-11-12)
 
 The actual per-track baselines are `54c429551` (desktop/public runtime/App

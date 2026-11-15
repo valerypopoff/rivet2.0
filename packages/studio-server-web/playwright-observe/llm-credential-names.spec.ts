@@ -359,7 +359,7 @@ for (const nodeName of ['Decision AI run', 'Decision AI Profile']) {
       ['OpenRouter', 'Microsoft Decision-1 (9b)', true],
       ['OpenAI', 'gpt-6-luna', false],
       ['Perplexity', 'pplx-decider-v1.1 (27b)', true],
-      ['SubQ', 'subq-snap-1.1', true],
+      ['SubQ', 'Snap 1.2', true],
       ['Baseten', 'Joey-1 (2b)', true],
     ] as const) {
       await selectProvider(editor, providerName);

@@ -12,7 +12,14 @@ import { ScheduledRunStore } from '../scheduled-runs/store.js';
 import { projectBundleFixture } from './helpers/project-bundle-fixture.js';
 import { getActiveScheduledRunCount } from '../scheduled-runs/activity.js';
 import { withAsyncDeadline } from './helpers/workflow-async-process.js';
-import { ExecutionRecorder, NodeDatasetProvider } from '@valerypopoff/rivet2-node';
+import { ExecutionSession } from '../routes/workflows/execution-session.js';
+import {
+  ExecutionRecorder,
+  NodeDatasetProvider,
+  CodeNodeImpl,
+  GraphOutputNodeImpl,
+  serializeProject,
+} from '@valerypopoff/rivet2-node';
 
 test('scheduled root uses real cross-project execution and root/child recording wiring', async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-scheduled-execution-'));
@@ -149,6 +156,75 @@ test('scheduled root uses real cross-project execution and root/child recording 
       } finally {
         acceptanceFailure.mock.restore();
       }
+    }
+    await store.runNow(recordingFailure.id, recordingFailure.revision);
+    const incompleteJob = (await store.tick('worker'))!;
+    const incompleteRun = t.mock.method(ExecutionSession.prototype, 'run', async function (this: ExecutionSession) {
+      this.processor.dispose();
+      return {
+        invoked: true,
+        createdAt: new Date().toISOString(),
+        recorder: null,
+        status: 'failed' as const,
+        durationMs: 1,
+        failure: { error: new Error('Execution did not settle') },
+      };
+    });
+    const serializeIncomplete = t.mock.method(ExecutionRecorder.prototype, 'serialize', () => {
+      throw new Error('An incomplete capture must not be serialized');
+    });
+    try {
+      const incomplete = await runScheduledGraph(incompleteJob, store, 'worker', new AbortController().signal);
+      assert.equal(incomplete.recordingStatus, 'unavailable');
+      assert.equal(incomplete.recordingId, undefined);
+      assert.equal(serializeIncomplete.mock.callCount(), 0);
+      await store.finish(incompleteJob.occurrence.id, 'worker', incomplete);
+    } finally {
+      incompleteRun.mock.restore();
+      serializeIncomplete.mock.restore();
+    }
+    const warningProject = structuredClone(fixture.root.project);
+    const warningGraph = warningProject.graphs[warningProject.metadata.mainGraphId!]!;
+    const warningCode = CodeNodeImpl.create(),
+      warningOutput = GraphOutputNodeImpl.create();
+    warningCode.data.code = "return {result:{type:'control-flow-excluded',value:undefined}};";
+    warningCode.data.inputNames = [];
+    warningCode.data.outputNames = ['result'];
+    warningOutput.data.id = 'output';
+    warningGraph.nodes = [warningCode, warningOutput];
+    warningGraph.connections = [
+      {
+        outputNodeId: warningCode.id,
+        outputId: 'result' as never,
+        inputNodeId: warningOutput.id,
+        inputId: 'value' as never,
+      },
+    ];
+    const rootPath = path.join(root, 'workflows', 'root.rivet-project');
+    await storage.saveHostedProject({
+      projectPath: rootPath,
+      contents: serializeProject(warningProject) as string,
+      datasetsContents: null,
+    });
+    try {
+      await store.runNow(recordingFailure.id, recordingFailure.revision);
+      const warningJob = (await store.tick('worker'))!;
+      const warning = await runScheduledGraph(warningJob, store, 'worker', new AbortController().signal);
+      assert.equal(warning.status, 'succeeded');
+      assert.equal(warning.recordingStatus, 'saved');
+      const warningPage = await storage.listWorkflowRecordingRunsPageWithBackend({
+        workflowId: '',
+        page: 1,
+        pageSize: 20,
+      });
+      assert.equal(warningPage.runs.find((run) => run.id === warning.recordingId)?.status, 'suspicious');
+      await store.finish(warningJob.occurrence.id, 'worker', warning);
+    } finally {
+      await storage.saveHostedProject({
+        projectPath: rootPath,
+        contents: fixture.root.projectContents,
+        datasetsContents: null,
+      });
     }
     const marker = path.join(root, 'app-data', 'vm-migration-maintenance.json');
     await fs.writeFile(marker, JSON.stringify({ version: 1, enteredAt: new Date().toISOString() }));

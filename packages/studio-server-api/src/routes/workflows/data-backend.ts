@@ -4,6 +4,7 @@ import type {
   AttachedData,
   CombinedDataset,
   Project,
+  ProjectId,
   NodeDatasetProvider,
   ProjectReferenceLoader,
   ResolvedSubgraphProject,
@@ -44,6 +45,35 @@ import type {
   WorkflowProjectReferenceCatalogEntry,
 } from './project-reference-snapshots.js';
 
+/** Hosted IO compatibility retains filesystem responses without widening SQL contracts. */
+export type HostedProjectSaveIntent = 'in-place' | 'save-as';
+export type HostedProjectStorageSaveOptions = {
+  projectPath: string;
+  contents: string;
+  datasetsContents: string | null;
+  expectedRevisionId?: string | null;
+  projectId?: ProjectId;
+  saveIntent?: HostedProjectSaveIntent;
+  structuralMutation?: import('@valerypopoff/rivet-studio-server-shared/workflow-mutation-contract.js').StructuralMutation;
+};
+export type HostedProjectStorageLoadResult = {
+  contents: string;
+  datasetsContents: string | null;
+  revisionId: string | null;
+};
+export type HostedProjectStorageSaveResult = {
+  path: string;
+  revisionId: string | null;
+  project: WorkflowProjectItem | null;
+  created: boolean;
+};
+export type WorkflowWebAppAccessPolicy = {
+  projectVirtualPath: string;
+  uiGraphId: string;
+  allowedEmails: string[];
+  bindingId: string;
+};
+
 export type HostedProjectSaveOptions = {
   projectPath: string;
   contents: string;
@@ -76,6 +106,7 @@ export type WorkflowExecutionDefinition = {
 };
 export type WorkflowWebAppPolicy = { appId: string; relativePath: string; uiGraphId: string; allowedEmails: string[] };
 export type PersistWorkflowExecutionRecordingOptions = {
+  evidenceHandle?: import('@valerypopoff/rivet-studio-server-shared/workflow-run-evidence.js').RunEvidenceHandle;
   /** Logical run creation/start time; omitted by older producers. Never a storage key. */
   createdAt?: string;
   sourceProject: Project;
@@ -205,6 +236,7 @@ export interface WorkflowExecutionSources {
   validateSubgraphTarget?(target: SubgraphProjectTarget): Promise<void>;
 }
 export type WorkflowRecordingPageQuery = {
+  includeEvidence?: boolean;
   workflowId: string;
   page: number;
   pageSize: number;
@@ -218,8 +250,9 @@ export type WorkflowRecordingPageQuery = {
 };
 
 export interface WorkflowRecordingRepository {
+  readonly evidence?: import('@valerypopoff/rivet-studio-server-shared/workflow-run-evidence.js').RunEvidenceRepository;
   getWorkflowRecordingSummary(recordingId: string): Promise<WorkflowRecordingRunSummary>;
-  listWorkflowRecordingWorkflows(): Promise<WorkflowRecordingWorkflowListResponse>;
+  listWorkflowRecordingWorkflows(includeEvidence?: boolean): Promise<WorkflowRecordingWorkflowListResponse>;
   listWorkflowRecordingRunsPage(query: WorkflowRecordingPageQuery): Promise<WorkflowRecordingRunsPageResponse>;
   listWorkflowRunStatisticsCatalog(
     surface: WorkflowRunStatisticsSurface,

@@ -165,37 +165,39 @@ test('internal endpoint access blocks both public routes while retaining private
     endpointName: 'network-access',
   });
 
-  await withWorkflowExecutionServer(async ({ apiBaseUrl, publishedBaseUrl, internalPublishedBaseUrl, latestBaseUrl, internalLatestBaseUrl }) => {
-    const post = (baseUrl: string) => fetch(`${baseUrl}/network-access`, { method: 'POST' });
-    assert.equal((await post(publishedBaseUrl)).status, 200);
+  await withWorkflowExecutionServer(
+    async ({ apiBaseUrl, publishedBaseUrl, internalPublishedBaseUrl, latestBaseUrl, internalLatestBaseUrl }) => {
+      const post = (baseUrl: string) => fetch(`${baseUrl}/network-access`, { method: 'POST' });
+      assert.equal((await post(publishedBaseUrl)).status, 200);
 
-    const accessResponse = await fetch(`${apiBaseUrl}/projects/endpoint-access`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        relativePath: created.relativePath,
-        access: 'internal',
-        preconditions: {
-          expectedProjectId: published.projectMetadataId,
-          expectedPublicationVersion: published.settings.publicationVersion,
-        },
-      }),
-    });
-    assert.equal(accessResponse.status, 200);
-    assert.equal((await post(publishedBaseUrl)).status, 404);
-    assert.equal((await post(latestBaseUrl)).status, 404);
-    assert.equal((await post(internalPublishedBaseUrl)).status, 200);
-    assert.equal((await post(internalLatestBaseUrl)).status, 200);
+      const accessResponse = await fetch(`${apiBaseUrl}/projects/endpoint-access`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          relativePath: created.relativePath,
+          access: 'internal',
+          preconditions: {
+            expectedProjectId: published.projectMetadataId,
+            expectedPublicationVersion: published.settings.publicationVersion,
+          },
+        }),
+      });
+      assert.equal(accessResponse.status, 200);
+      assert.equal((await post(publishedBaseUrl)).status, 404);
+      assert.equal((await post(latestBaseUrl)).status, 404);
+      assert.equal((await post(internalPublishedBaseUrl)).status, 200);
+      assert.equal((await post(internalLatestBaseUrl)).status, 200);
 
-    await workflowStorageBackend.publishWorkflowProjectItemWithBackend(created.relativePath, {
-      endpointName: 'network-access',
-    });
-    assert.equal((await post(publishedBaseUrl)).status, 404);
+      await workflowStorageBackend.publishWorkflowProjectItemWithBackend(created.relativePath, {
+        endpointName: 'network-access',
+      });
+      assert.equal((await post(publishedBaseUrl)).status, 404);
 
-    await workflowStorageBackend.updateWorkflowEndpointAccessWithBackend(created.relativePath, 'public');
-    assert.equal((await post(publishedBaseUrl)).status, 200);
-    assert.equal((await post(latestBaseUrl)).status, 200);
-  });
+      await workflowStorageBackend.updateWorkflowEndpointAccessWithBackend(created.relativePath, 'public');
+      assert.equal((await post(publishedBaseUrl)).status, 200);
+      assert.equal((await post(latestBaseUrl)).status, 200);
+    },
+  );
 });
 
 test('a published endpoint keeps its identity and private access after recovery of a crashed project move', async () => {
@@ -204,34 +206,49 @@ test('a published endpoint keeps its identity and private access after recovery 
     endpointName: 'recovered-move-endpoint',
   });
   await workflowStorageBackend.updateWorkflowEndpointAccessWithBackend(created.relativePath, 'internal');
-  const settingsBefore = await workflowPublication.readStoredWorkflowProjectSettings(created.absolutePath, 'Recovered Endpoint Move');
+  const settingsBefore = await workflowPublication.readStoredWorkflowProjectSettings(
+    created.absolutePath,
+    'Recovered Endpoint Move',
+  );
   const destination = path.join(workflowsRoot, 'Moved');
   await fs.mkdir(destination);
   const target = path.join(destination, path.basename(created.absolutePath));
 
-  const assertPrivateEndpoint = async () => withWorkflowExecutionServer(async ({ publishedBaseUrl, internalPublishedBaseUrl, latestBaseUrl, internalLatestBaseUrl }) => {
-    const post = (baseUrl: string) => fetch(`${baseUrl}/recovered-move-endpoint`, { method: 'POST' });
-    assert.equal((await post(publishedBaseUrl)).status, 404);
-    assert.equal((await post(latestBaseUrl)).status, 404);
-    assert.equal((await post(internalPublishedBaseUrl)).status, 200);
-    assert.equal((await post(internalLatestBaseUrl)).status, 200);
-  });
+  const assertPrivateEndpoint = async () =>
+    withWorkflowExecutionServer(
+      async ({ publishedBaseUrl, internalPublishedBaseUrl, latestBaseUrl, internalLatestBaseUrl }) => {
+        const post = (baseUrl: string) => fetch(`${baseUrl}/recovered-move-endpoint`, { method: 'POST' });
+        assert.equal((await post(publishedBaseUrl)).status, 404);
+        assert.equal((await post(latestBaseUrl)).status, 404);
+        assert.equal((await post(internalPublishedBaseUrl)).status, 200);
+        assert.equal((await post(internalLatestBaseUrl)).status, 200);
+      },
+    );
 
   await assertPrivateEndpoint();
   try {
     setFilesystemProjectMoveCheckpointForTests((checkpoint) => {
       if (checkpoint === 'committed') throw new FilesystemProjectMoveInterruption(checkpoint);
     });
-    await assert.rejects(moveProjectWithSidecars(workflowsRoot, created.absolutePath, target), FilesystemProjectMoveInterruption);
+    await assert.rejects(
+      moveProjectWithSidecars(workflowsRoot, created.absolutePath, target),
+      FilesystemProjectMoveInterruption,
+    );
   } finally {
     setFilesystemProjectMoveCheckpointForTests(null);
   }
 
   // The second execution-server startup runs journal recovery before it serves requests.
   await assertPrivateEndpoint();
-  assert.deepEqual(await workflowPublication.readStoredWorkflowProjectSettings(target, 'Recovered Endpoint Move'), settingsBefore);
+  assert.deepEqual(
+    await workflowPublication.readStoredWorkflowProjectSettings(target, 'Recovered Endpoint Move'),
+    settingsBefore,
+  );
   await assert.rejects(fs.stat(created.absolutePath), { code: 'ENOENT' });
-  assert.equal((await workflowPublication.findPublishedWorkflowByEndpoint(workflowsRoot, 'recovered-move-endpoint'))?.projectPath, target);
+  assert.equal(
+    (await workflowPublication.findPublishedWorkflowByEndpoint(workflowsRoot, 'recovered-move-endpoint'))?.projectPath,
+    target,
+  );
 });
 
 test('filesystem execution emits per-stage debug headers only when explicitly enabled', async () => {
@@ -470,13 +487,16 @@ test('filesystem execution cache rebuilds lazily after project-affecting mutatio
   });
 });
 
-test('filesystem saveHostedProject refreshes latest materialization without dirtying the endpoint index', async () => {
+test('filesystem saves refresh latest materialization even when statistics cannot be written', async (t) => {
   const created = await workflowMutations.createWorkflowProjectItem('', 'LatestSaveRefresh');
   await workflowMutations.publishWorkflowProjectItem(created.relativePath, {
     endpointName: 'latest-save-refresh-endpoint',
   });
 
   await withEnvOverride('RIVET_WORKFLOW_EXECUTION_DEBUG_HEADERS', 'true', async () => {
+    const savedTime = new Date('2026-01-01T00:00:00.000Z');
+    await fs.utimes(created.absolutePath, savedTime, savedTime);
+    const beforeStat = await fs.stat(created.absolutePath);
     await workflowStorageBackend.initializeWorkflowStorage();
 
     const beforeProject = await workflowStorageBackend.resolveLatestExecutionProject('latest-save-refresh-endpoint');
@@ -489,29 +509,41 @@ test('filesystem saveHostedProject refreshes latest materialization without dirt
     );
 
     const loaded = await workflowStorageBackend.loadHostedProject(created.absolutePath);
-    await workflowStorageBackend.saveHostedProject({
-      projectPath: created.absolutePath,
-      contents: loaded.contents.replace('name: "Main Graph"', 'name: "Updated Main Graph"'),
-      datasetsContents: loaded.datasetsContents,
-    });
-
-    const afterProject = await workflowStorageBackend.resolveLatestExecutionProject('latest-save-refresh-endpoint');
-    assert.ok(afterProject);
-    assert.equal(afterProject.debug?.cacheStatus, 'hit');
-    assert.equal(afterProject.project.metadata.title, 'LatestSaveRefresh');
-    assert.equal(
-      afterProject.project.graphs[afterProject.project.metadata.mainGraphId!]?.metadata?.name,
-      'Updated Main Graph',
-    );
-
-    const followupProject = await workflowStorageBackend.resolveLatestExecutionProject('latest-save-refresh-endpoint');
-    assert.ok(followupProject);
-    assert.equal(followupProject.debug?.cacheStatus, 'hit');
-    assert.equal(followupProject.project.metadata.title, 'LatestSaveRefresh');
-    assert.equal(
-      followupProject.project.graphs[followupProject.project.metadata.mainGraphId!]?.metadata?.name,
-      'Updated Main Graph',
-    );
+    for (const [graphName, failStatistics] of [
+      ['First edit', false],
+      ['Final edit', true],
+    ] as const) {
+      let failedStatsWrites = 0;
+      if (failStatistics) {
+        const statsPath = workflowFs.getWorkflowProjectStatsPath(created.absolutePath);
+        const writeFile = fs.writeFile;
+        t.mock.method(fs, 'writeFile', async (...args: Parameters<typeof fs.writeFile>) => {
+          if (String(args[0]) === statsPath) {
+            failedStatsWrites++;
+            throw Object.assign(new Error('Fixture statistics cache write failed'), { code: 'EIO' });
+          }
+          return writeFile(...args);
+        });
+      }
+      const saved = await workflowStorageBackend.saveHostedProject({
+        projectPath: created.absolutePath,
+        contents: loaded.contents.replace('name: "Main Graph"', `name: "${graphName}"`),
+        datasetsContents: loaded.datasetsContents,
+      });
+      assert.equal(saved.created, false);
+      if (failStatistics) assert.equal(failedStatsWrites, 1);
+      // Keep the file signature unchanged: ordinary metadata revalidation must
+      // not hide a missing save invalidation, including after statistics fail.
+      await fs.utimes(created.absolutePath, savedTime, savedTime);
+      const afterStat = await fs.stat(created.absolutePath);
+      assert.equal(afterStat.size, beforeStat.size);
+      assert.equal(afterStat.mtimeMs, beforeStat.mtimeMs);
+      const latest = await workflowStorageBackend.resolveLatestExecutionProject('latest-save-refresh-endpoint');
+      assert.ok(latest);
+      assert.equal(latest.debug?.cacheStatus, 'hit');
+      assert.equal(latest.project.metadata.title, 'LatestSaveRefresh');
+      assert.equal(latest.project.graphs[latest.project.metadata.mainGraphId!]?.metadata?.name, graphName);
+    }
   });
 });
 

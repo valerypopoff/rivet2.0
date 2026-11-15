@@ -1,5 +1,25 @@
 # Project bundles
 
+`useWorkflowBundleActions.ts` owns the project-tree bundle action state,
+conversion and duplication requests, modal initiation and completion callbacks.
+`useWorkflowLibraryController.ts` supplies tree reconciliation, selection and
+menu state and preserves the panel's public interface. The existing modals own
+their operations, while comparison and drag/drop retain their dedicated hooks.
+After duplication or upload, expansion uses the committed folder's stable ID
+and current ancestors from the fresh tree, including a move that occurred before
+the refresh completed. An obsolete action still reconciles the mutation while
+suppressing its automatic expansion and notification.
+Deletion completion carries each deleted project's ID through editor cleanup.
+A delayed deletion preserves a different project at the old path, including
+its unsaved tab and local revision state.
+Editor deletion uses the existing project-command queue. An earlier in-flight
+open finishes before its deletion is applied, so a late load cannot reopen the
+deleted member. The same ordering covers ordinary project deletion.
+Queued commands read the current workspace store directly, so a load completed
+in the previous command is visible before React renders the next frame.
+The [bundle actions separation record](bundle-actions-separation-plan.md)
+documents the behavior contract and local verification.
+
 ## Explicit Studio Server containers
 
 PostgreSQL/S3 installations create authored bundles by converting ordinary folders.
@@ -15,9 +35,23 @@ but bundles cannot nest. Existing folders are not converted automatically.
 Conversion back to an ordinary folder removes grouping only. Projects, references
 and publications survive. Ordinary folders must be empty to delete; bundles have
 a separate recursive deletion flow.
-The bundle context menu keeps conversion last in its bundle-action section,
-uses a merge icon for merging, and puts New folder in its own section between
-separators, before the New project and upload actions.
+The bundle context menu groups Download, Duplicate, conversion, Merge and Compare
+under **Bundle actions**, immediately after Rename bundle. The submenu opens
+with hover, click, Enter/Space or ArrowRight/ArrowDown. Keyboard opening focuses
+the first action; Escape/ArrowLeft returns to its trigger.
+The trigger and editor context menus share the solid triangular SVG in
+`packages/app/src/assets/icons/submenu-arrow.svg`, preserving the editor's
+7-by-14-pixel shape rather than using a font glyph.
+It opens on the right, with content-sized width and single-line action labels.
+When space is tight, the main menu shifts left to reserve room for the submenu
+instead of flipping it to the left. Busy/capability guards apply to its actions.
+The main menu tracks its virtual anchor while open and shifts vertically as well
+as horizontally, including after window resizing or reopening at another location.
+Download, Duplicate and Convert to ordinary folder form the first submenu group,
+followed by separate Merge and Compare groups. Duplicate reuses the project
+menu's copy icon; conversion to an ordinary folder uses the folder icon.
+Separators appear only before available groups. New folder retains its separate
+section in the main menu.
 
 ### Comparing bundles
 
@@ -42,12 +76,16 @@ The Older/Newer selectors display only bundle names when closed, with their path
 underneath; open options retain paths for disambiguation and path-based search.
 The icon-only Swap button exchanges both names and paths and keeps an accessible
 label. On narrow screens each path stays with its selector above/below Swap.
+Comparison roles are consistently **Older** and **Newer** in the matching table,
+tree, toolbar and editor. Root and editor labels put the role before the actual
+bundle name; bundle names themselves are preserved, including when roles swap.
 
 The Server tree shows both selected bundles, including subfolders and disconnected
 members. Either paired row opens the same real **Newer** project. Edit, undo, save,
 and resolve conflicts normally; an open dirty tab is activated without reloading
 it. **Older** stays pinned to Saved latest at setup. The comparison sidebar offers
-only **Exit comparison**; Swap and project matching stay in the setup modal.
+only **Exit comparison** in its normal toolbar; failed saved-change checks add
+a contextual **Retry check** action. Swap and project matching stay in the setup modal.
 To capture fresh saved versions, change roles or review changed membership/locations,
 exit and start a new comparison. Unsaved edits remain in their original real tabs
 and are excluded from the saved Older reference.
@@ -56,8 +94,42 @@ library's selected-descendant cue without reopening folders the user has closed.
 Comparison rows reuse the ordinary project's row sizing and neutral selection
 background, without an accent outline. Older uses half the selection opacity to
 distinguish it from editable Newer. Long names truncate within one row. The
-expected Paired status is omitted; Loading, Unavailable and one-sided statuses
-remain visible. The toolbar keeps the role labels and Exit without extra help text.
+hover text retains full project names and relative paths; bundle headers expose
+their full locations on hover for same-name bundle disambiguation. The
+expected Paired status is omitted. Newer shows Added in green, Removed in red
+and Changed in yellow. Older-only members also appear at their old relative
+locations under Newer as read-only Removed inspections; Older omits the old
+Only in older label. These rows never create or restore server projects.
+The toolbar keeps the role labels and Exit without extra help text.
+
+Changed is calculated by the read-only `/compare/changes` route using the
+reviewed project mapping, pinned Older revisions and current Newer drafts.
+It uses Core's `compareProjects` engine, just like the editor, instead of hashing
+serialized project files. Node movement, color/size changes, comment nodes and
+other differences the editor ignores do not produce a Changed badge. Paired
+project names and paths are labels, so renaming a paired project does not count;
+node/graph renames and other meaningful settings still count. Core's identity
+helper owns the same target normalization for the saved checks, editor node
+highlights and inspected field differences. A Subgraph calling a matched Older
+project and its corresponding Newer project
+is unchanged when only that binding differs. Reselecting a matched target may
+also record picker scope or explicit Saved latest; picker scope is ignored for
+these bound targets and missing version is equivalent to Saved latest. An
+unmatched target, opposite-side binding, different graph, Published/latest
+change or changed boundary still counts. Normalization never mutates either
+project or changes the IDs used for saving and execution. Standalone project
+comparison retains its existing behavior.
+Distinct revision IDs alone do not imply changes. Reads compare two pairs at a
+time (at most four artifact reads), releasing each batch's parsed contents before
+the next batch. SQL connections are released before artifact reads, and the existing
+30-second request deadline still applies. Checks refresh after saves and are cancelled
+on session changes. Unsaved edits have their own Unsaved indicator; they do not
+automatically mark saved content as Changed. A failed check is shown explicitly
+rather than treated as unchanged. No database migration or workflow execution changes are involved.
+A failed saved-change check offers **Retry check** without saving, reopening a
+project, changing the reviewed mapping or advancing the pinned Older revisions.
+Only explicit retries are made; successful checks remove the recovery control.
+Sessions without matched pairs skip this request entirely.
 Pair availability errors stay with the current reviewed versions and mapping;
 a new review clears errors from the previous review. Switching pairs alone retains
 other pairs' errors until they are reopened.
@@ -572,13 +644,14 @@ must not acquire topology after that row lock. The managed integration regressio
 holds a topology lease while both unchanged and edited full-service saves finish;
 checking only the final workflow UPDATE would miss folder-preparation regressions.
 
-Legacy restore recognizes only the four source-owned topology triggers, matching
-their full PostgreSQL trigger definitions and function bodies, public namespace,
+Legacy restore recognizes the four source-owned topology triggers and the
+recording-evidence deletion trigger, matching their full PostgreSQL trigger
+definitions and function bodies, public namespace,
 language, invoker security and absence of function-local configuration. A matching
 name is insufficient: custom triggers, altered guards, cross-table dependencies,
 RLS and inheritance still block replacement before deletion. Migration SQL and
 checksums are unchanged; the restore boundary accepts the guards already installed
-by migration16. The disposable PostgreSQL/MinIO migration test covers successful
+by migrations 16 and 20. The disposable PostgreSQL/MinIO migration test covers successful
 restore plus changed bodies, security/configuration, disabled/replaced/custom
 triggers and an unrelated table referencing Rivet. Unrelated SQL/S3 sentinels
 must survive the complete import/verification cycle.

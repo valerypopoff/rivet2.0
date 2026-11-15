@@ -566,12 +566,18 @@ Classifier Evaluate has one optional multimodal **State** input, not a separate 
 
 ### SubQ Snap Decisions
 
-`subq` is an appended provider ID (existing IDs/order/defaults are unchanged).
-Its default and only currently documented decision model is `subq-snap-1.1`,
+`subq` keeps its existing provider ID and registry position.
+Its default decision model is `subq-snap-1.2` (Snap 1.2 in the picker),
 using `POST https://api.subq.ai/v1/systemone` with Bearer authentication. Do not
 send it to Chat Completions, or list `subq-preview` as a decision model: that
 model is early-access chat. The public preview may require account credits/access.
-Sources checked 2026-10-24: [API](https://docs.subq.ai/endpoints/decisions-api/),
+The picker retains `subq-snap-1.1` as **Snap 1.1 (deprecated)** for explicit saved
+selections; opening an existing node does not rewrite its model. Both inline
+and Profile editors use this shared catalog. New or unset SubQ models use 1.2.
+`subq.ts` owns the one model catalog, with the default first. Picker labels and
+the known IDs used for image support and equal-rate pricing derive from it.
+Recheck capabilities and rates before adding another model to this catalog.
+Sources checked 2026-11-15: [API](https://docs.subq.ai/endpoints/decisions-api/),
 [models](https://docs.subq.ai/using-the-api/models/),
 [authentication](https://docs.subq.ai/using-the-api/authentication/).
 
@@ -597,7 +603,8 @@ No remote URLs/files are fetched. All existing cancellation, request snapshot,
 retry, redaction and opt-in body diagnostics remain shared.
 
 Pricing is **$0.04 / million input tokens**, free output, for the exact verified
-`subq-snap-1.1` requested/returned pair only. The current model catalog supersedes
+`subq-snap-1.2` and deprecated `subq-snap-1.1` requested/returned models only.
+Their equal rates cover a legacy request answered as 1.2. The current model catalog supersedes
 the launch article's $0.05 figure; record the discrepancy instead of guessing an
 alias or using a prefix match. Usage is aggregate: do not multiply by questions
 or add image tokens again. Unknown model pairs have unknown Cost. SubQ's documented

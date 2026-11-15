@@ -3,6 +3,7 @@ import { HeadObjectCommand, PutObjectCommand, DeleteObjectCommand, S3Client } fr
 import { randomUUID } from 'node:crypto';
 import type { ManagedWorkflowStorageConfig } from '../routes/workflows/storage-config.js';
 import { MANAGED_BUNDLE_RESTORE_GUARDS } from '../routes/workflows/managed/bundle-schema.js';
+import { RECORDING_EVIDENCE_RESTORE_GUARDS } from '../routes/workflows/managed/recording-evidence-schema.js';
 import {
   createManagedWorkflowS3ClientConfig,
   isManagedWorkflowArtifactObjectKey,
@@ -18,6 +19,7 @@ export const LEGACY_RESTORE_TABLES = [
   'workflow_endpoints',
   'workflow_web_apps',
   'workflow_recordings',
+  'workflow_run_evidence',
   'evaluation_library',
   'evaluation_library_imports',
   'evaluation_runs',
@@ -46,6 +48,8 @@ export const LEGACY_RESTORE_TABLES = [
   'app_settings',
   'rivet_vm_migration_gate',
 ] as const;
+
+export const LEGACY_RESTORE_GUARDS = [...MANAGED_BUNDLE_RESTORE_GUARDS, ...RECORDING_EVIDENCE_RESTORE_GUARDS];
 
 export type RestoreObject = { key: string; versionId?: string; etag: string };
 
@@ -148,7 +152,7 @@ export async function assertRestoreTableBoundary(client: Pool | PoolClient, tabl
         AND p.pronargs=0 AND p.prorettype='pg_catalog.trigger'::regtype
         AND t.tgenabled='O' AND pg_get_triggerdef(t.oid, true)=owned.definition
     ) LIMIT 1`,
-    [tables, JSON.stringify(MANAGED_BUNDLE_RESTORE_GUARDS)],
+    [tables, JSON.stringify(LEGACY_RESTORE_GUARDS)],
   );
   const policies = await client.query(
     `SELECT 1 FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace

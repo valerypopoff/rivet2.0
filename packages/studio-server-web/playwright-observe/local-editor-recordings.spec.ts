@@ -45,6 +45,7 @@ data:
 for (const executor of ['browser', 'nodejs'] as const) {
   for (const scenario of [
     'enabled',
+    'durable',
     'disabled',
     'successful-abort',
     'upload-failure',
@@ -54,10 +55,12 @@ for (const executor of ['browser', 'nodejs'] as const) {
     'child-failed-abort',
   ] as const) {
     if (executor === 'nodejs' && scenario.startsWith('child-')) continue;
+    if (executor === 'nodejs' && scenario === 'durable') continue;
     const recordExecutions = scenario !== 'disabled';
     const failedChild = scenario === 'child-failure' || scenario === 'child-failed-abort';
     const crossProject =
-      executor === 'browser' && (['enabled', 'disabled', 'upload-failure'].includes(scenario) || failedChild);
+      executor === 'browser' &&
+      (['enabled', 'durable', 'disabled', 'upload-failure'].includes(scenario) || failedChild);
     test(`${executor} parent recording ${scenario}`, async ({ page }) => {
       test.slow();
       const parentId = 'local-recording-parent';
@@ -135,17 +138,27 @@ for (const executor of ['browser', 'nodejs'] as const) {
       };
       const uploads: Array<{ path: string; body: RecordingUpload; createdAt?: string }> = [];
       const unavailableCorrelations: string[] = [];
+      const durableOperations: string[] = [];
+      let durableHandle: { id: string; token: string } | undefined;
       const unexpectedMutations: string[] = [];
       await page.addInitScript(
         ({ executor, recordExecutions, contextProjectId }) => {
           localStorage.setItem('recoil-persist', JSON.stringify({ defaultExecutor: executor, recordExecutions }));
-          if (contextProjectId) localStorage.setItem('project', JSON.stringify({
-            [`projectContext__"${contextProjectId}"`]: Object.fromEntries([
-              ['__proto__', { value: { type: 'string', value: 'portable-context' } }],
-            ]),
-          }));
+          if (contextProjectId)
+            localStorage.setItem(
+              'project',
+              JSON.stringify({
+                [`projectContext__"${contextProjectId}"`]: Object.fromEntries([
+                  ['__proto__', { value: { type: 'string', value: 'portable-context' } }],
+                ]),
+              }),
+            );
         },
-        { executor, recordExecutions, contextProjectId: executor === 'browser' && scenario === 'enabled' ? parentId : undefined },
+        {
+          executor,
+          recordExecutions,
+          contextProjectId: executor === 'browser' && scenario === 'enabled' ? parentId : undefined,
+        },
       );
       await mockHostedEditorBootstrap(page);
       // Node cases use the real server transport, including its HA owner
@@ -167,7 +180,16 @@ for (const executor of ['browser', 'nodejs'] as const) {
         } else if (path === '/api/projects/load') {
           await route.fulfill({ json: { contents, datasetsContents: null, revisionId: null } });
         } else if (path === '/api/workflows/local-editor-recordings/capability') {
-          await route.fulfill({ json: { supported: true } });
+          await route.fulfill({
+            json: { supported: true, ...(scenario === 'durable' ? { durability: 'run-evidence-v1' } : {}) },
+          });
+        } else if (path === '/api/workflows/local-editor-recordings/runs/begin') {
+          durableHandle = request.postDataJSON().handle;
+          durableOperations.push('begin');
+          await route.fulfill({ json: { handle: durableHandle } });
+        } else if (path.startsWith('/api/workflows/local-editor-recordings/runs/')) {
+          durableOperations.push(path.split('/').at(-1)!);
+          await route.fulfill({ json: { state: 'succeeded', availability: 'pending' } });
         } else if (path === `/api/workflows/subgraph-projects/${childId}/execution`) {
           await route.fulfill({ json: { projectContents: childContents, revisionKey: 'fixture-child' } });
         } else if (path === `/api/workflows/subgraph-projects/${childId}/preview`) {
@@ -183,13 +205,18 @@ for (const executor of ['browser', 'nodejs'] as const) {
             body: request.postDataJSON(),
             createdAt: request.headers()[WORKFLOW_RECORDING_CREATED_AT_HEADER],
           });
+          if (path === '/api/workflows/local-editor-recordings' && scenario === 'durable')
+            durableOperations.push('payload');
           if (scenario === 'upload-failure' && path === '/api/workflows/local-editor-recordings') {
             await route.fulfill({ status: 500, json: { error: 'Fixture recording storage unavailable' } });
             return;
           }
           await route.fulfill({
             status: 201,
-            json: { availability: 'available', recordingId: `fixture-${uploads.length}` },
+            json: {
+              availability: 'available',
+              recordingId: request.postDataJSON().evidenceHandle?.id ?? `fixture-${uploads.length}`,
+            },
           });
         } else if (path === '/api/workflows/local-editor-recordings/outcome' && request.method() === 'POST') {
           unavailableCorrelations.push(request.postDataJSON().correlationId);
@@ -235,7 +262,9 @@ for (const executor of ['browser', 'nodejs'] as const) {
         if (crossProject) {
           const nested = uploads.find((upload) => upload.path.endsWith('/subgraph-run'))!.body;
           expect(nested.projectId).toBe(childId);
-          expect(root.executionIdentity?.correlationId).toMatch(/^rvt-local-/);
+          expect(root.executionIdentity?.correlationId).toMatch(
+            scenario === 'durable' ? /^rvt-durable-local-/ : /^rvt-local-/,
+          );
           expect(nested.correlationId).toBe(root.executionIdentity?.correlationId);
           expect(nested.status).toBe(failedChild ? 'failed' : 'succeeded');
           if (failedChild) {
@@ -243,6 +272,14 @@ for (const executor of ['browser', 'nodejs'] as const) {
             expect(nestedRecorder.events.some((event) => event.type === 'error')).toBe(true);
             expect(nestedRecorder.events.some((event) => event.type === 'done')).toBe(false);
           }
+        }
+        if (scenario === 'durable') {
+          expect(durableOperations).toEqual(['begin', 'outcome', 'payload']);
+          expect(root).toHaveProperty('evidenceHandle', durableHandle);
+          expect(uploads.find((upload) => upload.path.endsWith('/subgraph-run'))!.body).toHaveProperty(
+            'rootEvidenceHandle',
+            durableHandle,
+          );
         }
         if (scenario === 'successful-abort') {
           expect(recorder.events.some((event) => event.type === 'abort' && event.data.successful)).toBe(true);

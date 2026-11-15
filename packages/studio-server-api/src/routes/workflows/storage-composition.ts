@@ -19,6 +19,7 @@ import {
 } from './filesystem-project-transactions.js';
 import { getFilesystemExecutionCache } from './filesystem-execution-cache.js';
 import { initializeWorkflowRecordingStorage, flushWorkflowExecutionRecordingPersistence } from './recordings.js';
+import { flushEvidenceWork } from './recording-evidence-work.js';
 import { WorkflowStorageServices } from './storage-services.js';
 
 /** The only serving resource construction site. Offline importers construct
@@ -61,7 +62,10 @@ export function createWorkflowStorageServices(): WorkflowStorageServices {
       await initializeWorkflowRecordingStorage(root);
     },
     drainLegacy: waitForFilesystemWorkflowStorageIdle,
-    flushRecordings: flushWorkflowExecutionRecordingPersistence,
+    flushRecordings: async () => {
+      await flushEvidenceWork();
+      await flushWorkflowExecutionRecordingPersistence();
+    },
     flushRecordingOutcomes: flushLLMProfileHealthRecordingOutcomes,
     assertRetentionAllowed: assertLocalMetadataWritesAllowed,
   });

@@ -396,6 +396,9 @@ const rivetDebugger = startDebuggerServer({
     const releaseSession = resumableSessions?.retain(client);
 
     let processorForConsole: ReturnType<typeof createProcessor>['processor'] | undefined;
+    let observedRunFailure: unknown;
+    let observedRunOutputs: Record<string, Rivet.DataValue> | undefined;
+    const observedRunStartedAt = performance.now();
     const bundlePreparation = projectBundle ? new AbortController() : undefined;
     let preparingBundle = projectBundle != null;
     const abortBundlePreparation = () => bundlePreparation?.abort();
@@ -580,18 +583,38 @@ const rivetDebugger = startDebuggerServer({
       try {
         bundlePreparation?.signal.throwIfAborted();
         preparingBundle = false;
-        await processor.run();
+        observedRunOutputs = await processor.run();
       } finally {
         if (processor.processor.isRunning) {
-          await processor.processor.waitForRunCompletion().catch(() => undefined);
+          observedRunOutputs = await processor.processor.waitForRunCompletion().catch((error) => {
+            observedRunFailure = error;
+            return undefined;
+          });
         }
       }
     } catch (err) {
+      observedRunFailure = err;
       if (bundlePreparation?.signal.aborted) return;
       logRuntimeError(`Graph ${graphId} failed.`, err, { requestId });
       sendGraphRunError(client, requestId, err);
     } finally {
       client.off('message', onBundleControl);
+      try {
+        await getAppExecutorHostOptions().onRunSettled?.({
+          requestId,
+          state: processorForConsole?.isRunning
+            ? 'unknown'
+            : observedRunFailure
+              ? 'failed'
+              : observedRunOutputs?.output?.type === 'control-flow-excluded'
+                ? 'suspicious'
+                : 'succeeded',
+          durationMs: performance.now() - observedRunStartedAt,
+          cost: processorForConsole?.getRunCostSnapshot(),
+        });
+      } catch {
+        logRuntimeWarn('Hosted recording outcome could not be confirmed.', { requestId });
+      }
       client.off('close', abortBundlePreparation);
       try {
         if (processorForConsole) {

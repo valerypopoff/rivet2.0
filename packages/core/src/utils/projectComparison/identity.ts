@@ -25,9 +25,17 @@ export function comparisonNodeIdentity(
   const data = (value: unknown) => {
     if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
     const record = value as Record<string, unknown>;
-    return typeof record[field] === 'string'
-      ? { ...record, [field]: comparisonProjectIdentity(record[field], side, identity) }
-      : value;
+    if (typeof record[field] !== 'string') return value;
+    const result = { ...record, [field]: comparisonProjectIdentity(record[field], side, identity) };
+    if (
+      node.type === 'subGraph' &&
+      identity.pairs.some((p) => (side === 'before' ? p.beforeProjectId : p.afterProjectId) === record[field])
+    ) {
+      // Picker scope does not change an already-bound target. Missing version means latest.
+      delete result.targetScope;
+      result.targetVersion ??= 'latest';
+    }
+    return result;
   };
   return {
     ...node,

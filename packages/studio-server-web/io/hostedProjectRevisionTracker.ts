@@ -355,16 +355,17 @@ export function acceptHostedProjectRemoteRevision(projectId: string, path: strin
   return true;
 }
 
-export function clearHostedProjectRevisionPath(path: string | null | undefined): void {
-  if (!path) return;
+/** A known project ID remains authoritative after a move or path reuse. */
+export function clearHostedProjectRevisionPath(path: string | null | undefined, projectId?: string): void {
+  if (!path && !projectId) return;
   loadEntries();
-  const normalizedPath = normalizePath(path);
+  const normalizedPath = normalizePath(path ?? '');
   let changed = false;
-  for (const [projectId, entry] of entriesByProjectId.entries()) {
-    if (entry.path !== normalizedPath) continue;
-    entriesByProjectId.delete(projectId);
-    awaitingTabRegistration.delete(projectId);
-    notifyRevisionChanged(projectId, true);
+  for (const [entryProjectId, entry] of entriesByProjectId.entries()) {
+    if (projectId ? entryProjectId !== projectId : entry.path !== normalizedPath) continue;
+    entriesByProjectId.delete(entryProjectId);
+    awaitingTabRegistration.delete(entryProjectId);
+    notifyRevisionChanged(entryProjectId, true);
     changed = true;
   }
   if (changed) persistEntries();

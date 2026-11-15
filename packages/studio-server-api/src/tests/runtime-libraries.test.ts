@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { seedDeploymentStorageSettings } from './helpers/seed-deployment-storage.js';
+import { publishEmptyRuntimeRelease } from '@valerypopoff/rivet-studio-server-bootstrap/runtime-release-cache';
 
 const runtimeLibrariesRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-runtime-libraries-'));
 const appDataRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-runtime-libraries-app-data-'));
@@ -93,6 +94,21 @@ test('terminal job notifications do not release admission before candidate clean
   } finally {
     jobRunner.off('status', observe);
   }
+});
+
+test('library jobs do not replace a lost manifest with an empty release', async () => {
+  const active = await publishEmptyRuntimeRelease(runtimeLibrariesRoot, {
+    packages: {},
+    updatedAt: '',
+    activeReleaseId: 'retained',
+  });
+  await fs.unlink(path.join(runtimeLibrariesRoot, 'manifest.json'));
+  const job = jobRunner.startRemove([]);
+  await jobRunner.drain();
+  assert.equal(jobRunner.getJob(job.id)?.status, 'failed');
+  assert.match(jobRunner.getJob(job.id)?.error ?? '', /manifest/);
+  await assert.rejects(fs.access(path.join(runtimeLibrariesRoot, 'manifest.json')), { code: 'ENOENT' });
+  await fs.access(active.snapshot.directory);
 });
 
 test('managed retirement rejects new installs/removals without opening storage or stopping an accepted worker', async () => {
@@ -191,7 +207,7 @@ test('readManifest normalizes invalid manifest content', async () => {
   });
 });
 
-test('reconcileRuntimeLibraries clears stale manifest state when no active runtime set exists', async () => {
+test('reconcileRuntimeLibraries refuses missing package bytes without clearing the declared release', async () => {
   await fs.writeFile(
     path.join(runtimeLibrariesRoot, 'manifest.json'),
     JSON.stringify({
@@ -207,14 +223,15 @@ test('reconcileRuntimeLibraries clears stale manifest state when no active runti
     'utf8',
   );
 
-  await startup.reconcileRuntimeLibraries();
-
-  assert.deepEqual(manifest.readManifest().packages, {});
+  await assert.rejects(startup.reconcileRuntimeLibraries(), /no release directory/);
+  assert.ok(manifest.readManifest().packages.lodash);
 });
 
 test('reconcileRuntimeLibraries preserves manifest when active runtime set exists', async () => {
   const currentPath = path.join(runtimeLibrariesRoot, 'current');
-  await fs.mkdir(path.join(currentPath, 'node_modules'), { recursive: true });
+  await fs.mkdir(path.join(currentPath, 'node_modules', 'lodash'), { recursive: true });
+  await fs.writeFile(path.join(currentPath, 'package.json'), '{"private":true}');
+  await fs.writeFile(path.join(currentPath, 'node_modules', 'lodash', 'index.js'), 'module.exports = {};');
 
   const packages = {
     lodash: {
@@ -307,6 +324,7 @@ test('currentNodeModulesPath returns null when no current directory exists', () 
 test('currentNodeModulesPath returns path when node_modules exists', async () => {
   const currentPath = path.join(runtimeLibrariesRoot, 'current');
   await fs.mkdir(path.join(currentPath, 'node_modules'), { recursive: true });
+  manifest.writeManifest({ packages: {}, updatedAt: '' });
 
   const result = manifest.currentNodeModulesPath();
   assert.ok(result);

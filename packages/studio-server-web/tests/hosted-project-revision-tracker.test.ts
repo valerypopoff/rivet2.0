@@ -269,13 +269,17 @@ test('reload keeps the displayed conflict until replacement settles and rollback
   assert.equal(revisions.claimHostedProjectObservation(observation, 'project-1'), 'waiting-for-save');
   finish(false);
   const settled = snapshot();
+  assert.equal(revisions.getHostedProjectExpectedRevision('project-1', path), 'ours');
   finish();
   const repeated = snapshot();
   assert.equal(repeated.recheckSequence, settled.recheckSequence);
   assert.deepEqual(repeated.contentChanges, settled.contentChanges);
   assert.equal(settled.contentChanges[0]?.revisionId, 'theirs');
   assert.notEqual(settled.contentChanges[0]?.changeId, conflict.changeId);
-  assert.throws(() => revisions.assertHostedProjectRevisionCanSave('project-1'));
+  assert.throws(
+    () => revisions.assertHostedProjectRevisionCanSave('project-1'),
+    revisions.HostedProjectRemoteChangePendingError,
+  );
   assert.equal(revisions.claimHostedProjectObservation(observation, 'project-1'), 'retry');
 });
 
@@ -384,30 +388,6 @@ test('a move accompanied by a new saved revision cannot authorize overwriting re
   assert.equal(revisions.getHostedProjectExpectedRevision('project-1', movedPath), 'revision-1');
   assert.equal(revisions.getHostedProjectPendingRevision('project-1'), 'revision-2');
   assert.throws(() => revisions.assertHostedProjectRevisionCanSave('project-1'));
-});
-
-test('a failed candidate reload restores the prior pending remote-version decision', () => {
-  revisions.pruneHostedProjectRevisions([]);
-  revisions.bindHostedProjectRevision('project-1', '/workflows/Project.rivet-project', 'revision-1');
-  revisions.observeHostedProjectRevision({
-    projectId: 'project-1',
-    path: '/workflows/Project.rivet-project',
-    revisionId: 'revision-2',
-  });
-  const finish = revisions.beginHostedProjectReload('project-1');
-
-  revisions.bindHostedProjectRevision('project-1', '/workflows/Project.rivet-project', 'revision-2');
-  finish(false);
-
-  assert.equal(
-    revisions.getHostedProjectExpectedRevision('project-1', '/workflows/Project.rivet-project'),
-    'revision-1',
-  );
-  assert.equal(revisions.getHostedProjectPendingRevision('project-1'), 'revision-2');
-  assert.throws(
-    () => revisions.assertHostedProjectRevisionCanSave('project-1'),
-    revisions.HostedProjectRemoteChangePendingError,
-  );
 });
 
 test('a later remote move refreshes an already-pending change notification', () => {

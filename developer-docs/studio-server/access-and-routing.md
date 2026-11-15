@@ -12,6 +12,22 @@ control outcomes or readiness.
 
 This document describes the current external route families, the nginx gate, and the trust boundary between `proxy`, the control-plane API, the execution-plane API, and `executor`.
 
+Recording and run-statistics handlers under `/api/workflows` are registered by
+`routes/workflows/recording-http.ts` on the same workflow router. Control and
+combined profiles expose them behind `requireOperatorAuth`; execution and
+evaluation profiles do not. The parent's GET cache policy and shared middleware
+instances still apply. Query-schema errors keep the existing general error
+path, while statistics POST validation and invalid search filters retain their
+400 responses. The local-editor recording upload router remains separate.
+
+The thirteen project-publication and saved-version routes under `/api/workflows`
+are registered by `routes/workflows/publication-http.ts`. Their existing control/
+combined-only exposure, operator authentication, parent body parser and cache
+policy are unchanged. History annotation changes keep their existing response
+envelopes without an extra HTTP tree notification; restoration and publication
+notify the existing tree owner after a successful command. Storage adapters keep
+their independent invalidations and commit safeguards.
+
 On a single VM, the optional Compose TLS listener terminates public HTTPS and
 forwards public HTTPS or private-host HTTP over loopback to this same nginx
 gate. It overwrites forwarded host, protocol, client IP, and Rivet trust
@@ -281,6 +297,15 @@ The wrapper API currently exposes these groups behind `/api`:
 - `/api/app-settings/web-app-auth`
   - guarded app-settings helper behind `Settings` -> `Web apps` auth mode, `Settings` -> `OAuth` provider/session settings, and `Settings` -> `Server UI access` admin settings
 
+`routes/app-settings.ts` also registers the local-upgrade and VM-migration HTTP
+modules on its existing router. Both require a signed-in operator independently
+of trusted-client bypass; non-GET requests, including HEAD, retain migration
+intent/origin checks. Setup and prepare have explicit setup guards before the
+remaining local prefix guard; the VM prefix guard remains ahead of all routes.
+They share the 16 KiB parser, except local preparation uses 1 MiB. Ordinary
+settings retain their separate 100 MiB parser and do not require migration intent.
+See the [HTTP separation record](app-settings-http-separation-plan.md).
+
 Current tree-response note:
 
 - `GET /api/workflows/tree` is the dashboard's main workflow-library metadata source
@@ -505,6 +530,14 @@ Each published web-app slug also exposes a latest-saved-draft route under `${RIV
 The route prefixes are owned by `Settings` -> `Workflow endpoints` -> `Routes` for workflow endpoints and `Settings` -> `Web apps` -> `Routes` for web apps after an operator saves them. The env names `RIVET_PUBLISHED_WORKFLOWS_BASE_PATH`, `RIVET_LATEST_WORKFLOWS_BASE_PATH`, `RIVET_PUBLISHED_APPS_BASE_PATH`, and `RIVET_LATEST_APPS_BASE_PATH` remain first-run/deployment defaults, and `RIVET_WEB_APPS_BASE_PATH` / `RIVET_LATEST_WEB_APPS_BASE_PATH` remain supported aliases for older deployments until the active repository contains a saved `public-routes` value.
 
 The wrapper intentionally uses the lower-level upstream web-app helpers instead of the single Fetch-style handler so route ownership, browser/session auth, timing headers, code-runner setup, dataset providers, project-reference loading, and response envelopes stay consistent with the existing endpoint execution stack.
+
+`routes/workflows/web-app-http.ts` owns these HTML, JSON and HTTP-action routes,
+including browser authorization and action preflight. Workflow endpoints remain
+in `execution.ts`, which re-exports the same web-app router instances for existing
+callers. The shared HTTP support module preserves the distinct workflow and
+web-app error contracts; it does not wrap the handlers or add request work.
+The app's dynamic path dispatch, OAuth callback ordering and profile mounts are
+unchanged. See the [HTTP separation record](web-app-http-separation-plan.md).
 
 Web-app action requests use the same `ManagedCodeRunner`, dataset provider, project path, project-reference loader, and browser request `context.headers` shape as published workflow execution, but the wrapper strips sensitive browser/session headers before graph execution. In particular, `cookie`, `authorization`, `proxy-authorization`, `x-forwarded-authorization`, `x-rivet-proxy-auth`, and `x-rivet-token-free-host` are not exposed to web-app action graphs or the Fetch-style action request. The wrapper does not pass `inputs` for web-app actions; Rivet maps the declarative UI state into graph inputs according to the clicked button's action definition.
 

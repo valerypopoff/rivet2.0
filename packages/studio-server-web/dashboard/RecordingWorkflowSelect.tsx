@@ -7,7 +7,7 @@ export type RecordingWorkflowOption = {
   description: string;
   endpoint: string;
   statusLabel: string;
-  recordingCount: number | null;
+  runCount: number | null;
 };
 
 type RecordingWorkflowSelectProps = {
@@ -19,8 +19,8 @@ type RecordingWorkflowSelectProps = {
   onRetry: () => void;
 };
 
-function formatRecordingCount(count: number): string {
-  return `${count.toLocaleString()} ${count === 1 ? 'recording' : 'recordings'}`;
+function formatRunCount(count: number): string {
+  return `${count.toLocaleString()} ${count === 1 ? 'run' : 'runs'}`;
 }
 
 export const RecordingWorkflowSelect: FC<RecordingWorkflowSelectProps> = ({
@@ -51,11 +51,11 @@ export const RecordingWorkflowSelect: FC<RecordingWorkflowSelectProps> = ({
             <div className="run-recordings-select-option-title">{option.label}</div>
             {context === 'menu' ? (
               <div className="run-recordings-select-option-count">
-                {option.recordingCount === null
+                {option.runCount === null
                   ? isLoading
                     ? 'Loading count…'
                     : 'Count unavailable'
-                  : `${formatRecordingCount(option.recordingCount)}${option.value ? ' in this project' : ''}`}
+                  : `${formatRunCount(option.runCount)}${option.value ? ' in this project' : ''}`}
               </div>
             ) : null}
           </div>

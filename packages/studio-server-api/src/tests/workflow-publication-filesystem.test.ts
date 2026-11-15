@@ -18,6 +18,8 @@ import { listSavedLatestSubgraphProjectIds } from '../routes/workflows/subgraph-
 import { getExpectedProxyAuthToken } from '../auth.js';
 import { withEnvOverride } from './helpers/workflow-api-harness.js';
 import type { WorkflowProjectReferencesResponse } from '../../../studio-server-shared/workflow-types.js';
+import { peekWorkflowStorageServices } from '../routes/workflows/storage-composition.js';
+import { withFilesystemWorkflowStorageRead } from '../routes/workflows/filesystem-project-transactions.js';
 
 const {
   workflowsRoot,
@@ -53,6 +55,36 @@ test('publication command captures reviewed state before asynchronous backend di
   await assert.rejects(pending, { status: 409, code: 'publication_state_changed' });
   const after = await workflowQuery.getWorkflowProject(workflowsRoot, project.absolutePath);
   assert.deepEqual(after.settings, before.settings);
+});
+
+test('unsupported publication commands reject before constructing storage', async () => {
+  assert.equal(peekWorkflowStorageServices(), undefined);
+  await assert.rejects(
+    workflowStorageBackend.executeWorkflowPublicationCommandWithBackend({ kind: 'unsupported' } as never),
+    { status: 400, message: 'Unsupported publication command: [object Object]' },
+  );
+  assert.equal(peekWorkflowStorageServices(), undefined);
+});
+
+test('publication admits its filesystem writer before a subsequent reader', async () => {
+  const project = await workflowStorageBackend.createWorkflowProjectItemWithBackend('', 'Writer order');
+  const published = await workflowStorageBackend.publishWorkflowProjectItemWithBackend(project.relativePath, {
+    endpointName: 'writer-order',
+  });
+  const pending = workflowStorageBackend.executeWorkflowPublicationCommandWithBackend({
+    kind: 'unpublish-endpoint',
+    relativePath: project.relativePath,
+    preconditions: {
+      expectedProjectId: published.projectMetadataId!,
+      expectedPublicationVersion: published.settings.publicationVersion!,
+    },
+  });
+  const observed = withFilesystemWorkflowStorageRead(() =>
+    workflowPublication.readStoredWorkflowProjectSettings(project.absolutePath, project.name),
+  );
+  const [unpublished, settings] = await Promise.all([pending, observed]);
+  assert.equal(settings.publicationVersion, unpublished.settings.publicationVersion);
+  assert.notEqual(settings.publicationVersion, published.settings.publicationVersion);
 });
 
 test('authenticated filesystem reference check preserves references in serving publications after draft removal', async () => {

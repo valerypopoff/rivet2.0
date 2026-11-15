@@ -3,6 +3,10 @@ import { authenticateIfNeeded, mockHostedEditorBootstrap, waitForDashboardReady 
 
 test.beforeEach(async ({ page }) => {
   await mockHostedEditorBootstrap(page);
+  // Expose migration without opening the unrelated local-upgrade onboarding modal.
+  await page.route('**/api/app-settings/local-upgrade/setup', (route) =>
+    route.fulfill({ json: { eligible: true, liveSqlite: true } }),
+  );
   await page.route('**/api/workflows/tree', (route) =>
     route.fulfill({
       json: {

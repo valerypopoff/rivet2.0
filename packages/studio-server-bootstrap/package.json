@@ -2,6 +2,14 @@
   "name": "@valerypopoff/rivet-studio-server-bootstrap",
   "private": true,
   "type": "module",
+  "exports": {
+    "./runtime-release-cache": {
+      "types": "./runtime-release-cache.d.mts",
+      "import": "./runtime-release-cache.mjs"
+    },
+    "./*.mjs": "./*.mjs",
+    "./package.json": "./package.json"
+  },
   "description": "Container bootstrap helpers for proxy-mediated managed runtime setup",
   "dependencies": {
     "@aws-sdk/client-s3": "^3.901.0",
@@ -10,8 +18,8 @@
     "tar": "^7.4.3",
     "undici": "^6.29.1"
   },
-  "version": "1.38.0",
+  "version": "1.39.0",
   "scripts": {
-    "build": "node --check bootstrap.mjs && node --check config.mjs && node --check node-executor-proxy-settings.mjs && node --check runtime-libraries-sync.mjs && node --check legacy-restore-participant.mjs && node --check state.mjs && node --check sync.mjs"
+    "build": "node --check bootstrap.mjs && node --check config.mjs && node --check node-executor-proxy-settings.mjs && node --check runtime-libraries-sync.mjs && node --check runtime-release-cache.mjs && node --check legacy-restore-participant.mjs && node --check state.mjs && node --check sync.mjs"
   }
 }

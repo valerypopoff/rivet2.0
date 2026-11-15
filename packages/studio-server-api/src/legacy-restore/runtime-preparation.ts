@@ -3,7 +3,7 @@ import path from 'node:path';
 import type { ChildProcess } from 'node:child_process';
 import { npmInstall, validateCandidate } from '../runtime-libraries/managed/release-builder.js';
 import {
-  readSourceManifest,
+  readSourceRuntimeSelection,
   validateRuntimeLibraryDirectory,
   assertRuntimeLibraryArchiveSpace,
 } from '../scripts/migrate-runtime-libraries.js';
@@ -73,10 +73,10 @@ export function validateRestoreRuntimeLock(raw: unknown, dependencies: Record<st
 /** destination is a fresh child of the operation scratch, never a live runtime path.
  * Pin the original dependency graph, install target-platform optional binaries, and retain derived bytes for retries. */
 export async function prepareRestoreRuntime(source: string, destination: string): Promise<void> {
-  const manifest = await readSourceManifest(source);
+  const { manifest, directory: current } = await readSourceRuntimeSelection(source);
   const dependencies = Object.fromEntries(Object.values(manifest.packages).map((entry) => [entry.name, entry.version]));
   if (!Object.keys(dependencies).length) throw new Error('Runtime package reinstallation has no packages.');
-  const current = path.join(source, 'current');
+  if (!current) throw new Error('Runtime package reinstallation has no release directory.');
   await validateRuntimeLibraryDirectory(current);
   const allowance = await assertRuntimeLibraryArchiveSpace(current, path.dirname(destination));
   const space = await fs.statfs(path.dirname(destination), { bigint: true });
@@ -148,7 +148,8 @@ export async function prepareRestoreRuntime(source: string, destination: string)
       if (installed.version !== lock.packages![`node_modules/${name}`]?.version)
         throw new Error('Runtime package reinstallation failed.');
     }
-    await fs.writeFile(path.join(destination, 'manifest.json'), JSON.stringify(manifest));
+    const { runtimeCache: _cache, ...derivedManifest } = manifest;
+    await fs.writeFile(path.join(destination, 'manifest.json'), JSON.stringify(derivedManifest));
   } catch (error) {
     if (child) terminateChildProcess(child, 'SIGKILL');
     throw error;

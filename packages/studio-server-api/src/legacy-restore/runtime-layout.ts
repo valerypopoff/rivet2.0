@@ -1,5 +1,9 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import {
+  readRuntimeCacheManifest,
+  selectRuntimeLibrarySource,
+} from '@valerypopoff/rivet-studio-server-bootstrap/runtime-release-cache';
 
 /** Normalize only an already verified extraction, never the original backup or a live runtime root. */
 export async function normalizeExtractedRuntimeLayout(root: string): Promise<void> {
@@ -9,6 +13,21 @@ export async function normalizeExtractedRuntimeLayout(root: string): Promise<voi
     throw error;
   });
   if (!stat) return;
+  // A new-format backup may retain the pre-adoption marker and old files.
+  // The verified manifest selects its immutable release; do not rewrite history.
+  const manifestStat = await fs.lstat(path.join(root, 'manifest.json')).catch((error) => {
+    if (error.code === 'ENOENT') return null;
+    throw error;
+  });
+  if (manifestStat) {
+    const manifest = readRuntimeCacheManifest(root);
+    if (manifest.runtimeCache) {
+      selectRuntimeLibrarySource(root, manifest);
+      return;
+    }
+  }
+  // Old layouts can be normalized before their package metadata is validated.
+  // This helper changes only the verified extraction, never the live source.
   if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 256)
     throw new Error('Invalid legacy runtime release marker.');
   const id = (await fs.readFile(marker, 'utf8')).trim();

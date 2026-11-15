@@ -7,7 +7,8 @@ if (!process.send || !process.env.RIVET_ASYNC_TEST_ROOT) throw new Error('Requir
 const root = process.env.RIVET_ASYNC_TEST_ROOT;
 if (process.env.RIVET_ASYNC_TEST_COST_PROVIDER_URL) {
   const providerUrl = new URL(process.env.RIVET_ASYNC_TEST_COST_PROVIDER_URL);
-  if (providerUrl.protocol !== 'http:' || providerUrl.hostname !== '127.0.0.1') throw new Error('Requires local cost provider');
+  if (providerUrl.protocol !== 'http:' || providerUrl.hostname !== '127.0.0.1')
+    throw new Error('Requires local cost provider');
   const nativeFetch = globalThis.fetch;
   globalThis.fetch = (input, init) => {
     // Test-only URL redirection; preserve the actual HTTP client and adapter.
@@ -30,6 +31,26 @@ if (process.env.RIVET_ASYNC_TEST_STORAGE) {
 const storage = await import('../../routes/workflows/storage-backend.js');
 const rivet = await import('@valerypopoff/rivet2-node');
 await storage.initializeWorkflowStorage();
+let releaseRecordingWork: (() => void) | undefined;
+const recordingWork = { registrations: 0, outcomes: 0 };
+if (process.env.RIVET_ASYNC_TEST_HOLD_RECORDING_WORK === 'true') {
+  const gate = new Promise<void>((resolve) => {
+    releaseRecordingWork = resolve;
+  });
+  const { ManagedRecordingEvidence } = await import('../../routes/workflows/managed/recording-evidence.js');
+  const begin = ManagedRecordingEvidence.prototype.begin,
+    outcome = ManagedRecordingEvidence.prototype.outcome;
+  ManagedRecordingEvidence.prototype.begin = async function (...args) {
+    recordingWork.registrations++;
+    await gate;
+    return begin.apply(this, args);
+  };
+  ManagedRecordingEvidence.prototype.outcome = async function (...args) {
+    recordingWork.outcomes++;
+    await gate;
+    return outcome.apply(this, args);
+  };
+}
 const { writeWorkflowEndpointAuthSettings } = await import('../../workflow-endpoint-auth-settings.js');
 await writeWorkflowEndpointAuthSettings({ requireBearerAuth: false });
 const resume = process.env.RIVET_ASYNC_TEST_RESUME === '1';
@@ -107,9 +128,30 @@ for (let attempt = 0; ; attempt++) {
   if (attempt === 300) throw new Error('Test API did not become ready');
   await delay(100);
 }
-let hostedSubgraphFixture: Awaited<ReturnType<typeof import('./hosted-subgraph-fixture.js').seedHostedSubgraphFixture>> | undefined;
+let hostedSubgraphFixture:
+  | Awaited<ReturnType<typeof import('./hosted-subgraph-fixture.js').seedHostedSubgraphFixture>>
+  | undefined;
 process.on('message', async (message: { id: number; command: string }) => {
   try {
+    if (message.command === 'release-recording-work') {
+      releaseRecordingWork?.();
+      process.send?.({ id: message.id, result: true });
+      return;
+    }
+    if (message.command === 'recording-work-state') {
+      process.send?.({ id: message.id, result: recordingWork });
+      return;
+    }
+    if (message.command === 'durability-off' || message.command === 'durability-on') {
+      process.env.RIVET_RECORDING_DURABILITY_ENABLED = message.command === 'durability-on' ? 'true' : 'false';
+      process.send?.({ id: message.id, result: true });
+      return;
+    }
+    if (message.command === 'recording-off' || message.command === 'recording-on') {
+      process.env.RIVET_RECORDINGS_ENABLED = message.command === 'recording-on' ? 'true' : 'false';
+      process.send?.({ id: message.id, result: true });
+      return;
+    }
     if (message.command === 'shutdown') {
       // Windows does not deliver POSIX signals through child.kill(). Exercise
       // the real entrypoint's installed SIGTERM handler on every platform.
@@ -126,7 +168,11 @@ process.on('message', async (message: { id: number; command: string }) => {
       process.send?.({ id: message.id, result: hostedSubgraphFixture });
     } else if (message.command === 'move-hosted-subgraph') {
       if (!hostedSubgraphFixture) throw new Error('Seed the hosted fixture first');
-      await storage.moveWorkflowItemWithBackend('project', hostedSubgraphFixture.target.relativePath, hostedSubgraphFixture.foreignPath);
+      await storage.moveWorkflowItemWithBackend(
+        'project',
+        hostedSubgraphFixture.target.relativePath,
+        hostedSubgraphFixture.foreignPath,
+      );
       process.send?.({ id: message.id, result: true });
     } else if (message.command === 'scheduled-recordings') {
       const { flushWorkflowExecutionRecordingPersistence } = await import('../../routes/workflows/recordings.js');

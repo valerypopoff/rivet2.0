@@ -76,8 +76,6 @@ export const EditorMessageBridge: FC<EditorMessageBridgeProps> = ({ savedProject
     onOpenGraphSearch: openGraphSearch,
   });
   useEditorCommandBridge({
-    currentProject,
-    loadedProject,
     openProject,
     preview,
     projects,

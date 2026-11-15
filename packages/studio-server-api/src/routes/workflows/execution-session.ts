@@ -1,8 +1,22 @@
 import { performance } from 'node:perf_hooks';
 import { ExecutionRecorder, type NodeCreatedProcessor, type DataValue } from '@valerypopoff/rivet2-node';
+import type {
+  RunEvidenceHandle,
+  RunEvidenceInput,
+} from '@valerypopoff/rivet-studio-server-shared/workflow-run-evidence.js';
+import {
+  completeRunEvidence,
+  type BeginExecutionEvidence,
+  type ExecutionEvidenceOwner,
+} from './execution-evidence-owner.js';
+import { deferEvidenceWork } from './recording-evidence-work.js';
+import { reportRecordingFailure } from './recording-diagnostics.js';
 type ExecutionRunCost = ReturnType<NodeCreatedProcessor['processor']['getRunCostSnapshot']>;
 
 export type ExecutionSessionResult = {
+  invoked: boolean;
+  evidenceHandle?: RunEvidenceHandle;
+  evidenceCompletion?: Promise<void>;
   createdAt: string;
   recorder: ExecutionRecorder | null;
   outputs?: Record<string, DataValue>;
@@ -82,6 +96,8 @@ function disposeProcessor(processor: NodeCreatedProcessor): void {
  * release this processor early on a response-writing failure. Persistence is
  * deliberately caller-owned (Evaluation artifacts differ from workflow runs). */
 export class ExecutionSession {
+  readonly #evidence?: RunEvidenceInput;
+  readonly #beginEvidence?: BeginExecutionEvidence;
   readonly recorder: ExecutionRecorder | null;
   #started = false;
   constructor(
@@ -89,8 +105,12 @@ export class ExecutionSession {
     options: {
       recording: boolean;
       recorderOptions?: ConstructorParameters<typeof ExecutionRecorder>[0];
+      evidence?: RunEvidenceInput;
+      beginEvidence?: BeginExecutionEvidence;
     },
   ) {
+    this.#evidence = options.recording ? options.evidence : undefined;
+    this.#beginEvidence = options.beginEvidence;
     try {
       this.recorder = options.recording ? new ExecutionRecorder(options.recorderOptions) : null;
       this.recorder?.record(processor.processor);
@@ -106,12 +126,24 @@ export class ExecutionSession {
     this.#started = true;
     const startedAt = performance.now();
     const result: ExecutionSessionResult = {
+      invoked: false,
       createdAt: new Date().toISOString(),
       recorder: this.recorder,
       status: 'succeeded',
       durationMs: 0,
     };
+    let evidence: ExecutionEvidenceOwner | undefined;
     try {
+      if (this.#evidence) {
+        try {
+          if (!this.#beginEvidence) throw new Error('Recorded execution admission is not configured.');
+          evidence = this.#beginEvidence({ ...this.#evidence, createdAt: result.createdAt });
+        } catch (error) {
+          reportRecordingFailure(error, { projectId: this.#evidence.projectId, phase: 'admission' });
+        }
+        result.evidenceHandle = evidence?.handle;
+      }
+      result.invoked = true;
       const foreground = await this.processor.run();
       try {
         await onForeground?.(foreground);
@@ -129,6 +161,18 @@ export class ExecutionSession {
       result.durationMs = performance.now() - startedAt;
       if (this.recorder) {
         result.cost = getExecutionRunCostSnapshot(this.processor.processor);
+      }
+      const unfinished = this.processor.processor.isRunning;
+      if (unfinished) result.recorder = null;
+      if (evidence) {
+        const owner = evidence;
+        const outcome = {
+          state: unfinished ? ('unknown' as const) : result.status,
+          durationMs: result.durationMs,
+          cost: result.cost,
+        };
+        const correlationId = this.#evidence?.executionIdentity?.correlationId;
+        result.evidenceCompletion = deferEvidenceWork(() => completeRunEvidence(owner, outcome, correlationId));
       }
       disposeProcessor(this.processor);
     }

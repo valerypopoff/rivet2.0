@@ -1,6 +1,6 @@
 {
   "name": "@valerypopoff/rivet-studio-server-api",
-  "version": "1.38.0",
+  "version": "1.39.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -15,6 +15,9 @@
     "recording-input:benchmark": "node dist/studio-server-api/src/scripts/benchmark-recording-input-search.js",
     "recording-input:benchmark:managed": "node dist/studio-server-api/src/scripts/benchmark-recording-search-managed.js",
     "workflow-execution:measure": "tsx src/scripts/measure-workflow-execution.ts",
+    "hosted-isolation:verify": "yarn build && node dist/studio-server-api/src/scripts/hosted-isolation/verify.js",
+    "hosted-isolation:test": "yarn test:files src/tests/hosted-isolation.test.ts",
+    "hosted-isolation:benchmark": "yarn build && node dist/studio-server-api/src/scripts/hosted-isolation/benchmark.js",
     "serving-refactors:benchmark": "node dist/studio-server-api/src/scripts/benchmark-serving-refactors.js",
     "serving-refactors:workload": "node dist/studio-server-api/src/scripts/benchmark-serving-workload.js",
     "serving-refactors:operational-workload": "node dist/studio-server-api/src/scripts/benchmark-operational-stores.js",
@@ -35,12 +38,15 @@
     "test:async-managed": "tsx src/tests/workflow-async-managed.integration.ts",
     "test:scheduled-managed": "tsx src/tests/scheduled-runs-managed.integration.ts",
     "test:statistics-managed": "tsx src/tests/recording-statistics-managed.integration.ts",
+    "test:recording-durability-managed": "tsx src/tests/recording-durability-managed.integration.ts",
+    "recording-durability:measure": "tsx src/tests/recording-durability-managed.integration.ts --measure",
     "test:migration-managed": "yarn build && tsx src/tests/workflow-storage-migration-managed.integration.ts",
     "test:legacy-restore-managed": "yarn build && tsx src/tests/workflow-storage-migration-managed.integration.ts --supervised-restore-only"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.901.0",
     "@smithy/node-http-handler": "^4.11.3",
+    "@valerypopoff/rivet-studio-server-bootstrap": "workspace:^",
     "@valerypopoff/rivet-studio-server-shared": "workspace:^",
     "@valerypopoff/rivet2-core": "workspace:^",
     "@valerypopoff/rivet2-evaluations": "workspace:^",

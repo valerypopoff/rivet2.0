@@ -1,4 +1,3 @@
-import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
@@ -7,19 +6,17 @@ import s3Pkg from '@aws-sdk/client-s3';
 import smithyNodeHttpHandlerPkg from '@smithy/node-http-handler';
 import { Agent as HttpsAgent } from 'node:https';
 import pg from 'pg';
-import * as tar from 'tar';
 
 import { getManagedRuntimeLibrariesConfig, getManagedRuntimeLibrariesPoolConfig } from './config.mjs';
+import { ensureDirectories, jobsRoot, readManifest } from './state.mjs';
 import {
-  currentDir,
-  currentNodeModulesPath,
-  ensureDirectories,
-  jobsRoot,
-  promoteCurrentRelease,
-  readManifest,
-  removeCurrentRelease,
-  writeManifest,
-} from './state.mjs';
+  createRuntimeLibrarySync,
+  extractRuntimeLibraryArchive,
+  publishRuntimeLibraryCandidate,
+  publishEmptyRuntimeRelease,
+  selectRuntimeLibrarySource,
+  runtimePackagesKey,
+} from './runtime-release-cache.mjs';
 
 const { S3Client, GetObjectCommand, HeadBucketCommand } = s3Pkg;
 const { NodeHttpHandler } = smithyNodeHttpHandlerPkg;
@@ -103,7 +100,9 @@ function createReplicaStatusReporter(pool, config) {
     } catch (error) {
       if (getPgErrorCode(error) === REPLICA_STATUS_UNDEFINED_TABLE_CODE) {
         if (!schemaMissingLogged) {
-          console.warn(`[runtime-libraries] replica-status reporting skipped during ${action}: runtime_library_replica_status does not exist yet.`);
+          console.warn(
+            `[runtime-libraries] replica-status reporting skipped during ${action}: runtime_library_replica_status does not exist yet.`,
+          );
           schemaMissingLogged = true;
         }
         return;
@@ -275,8 +274,7 @@ export function createManagedRuntimeLibrariesSyncController(runtimeSettings) {
   const pool = new pg.Pool(getManagedRuntimeLibrariesPoolConfig(config));
   const s3 = createS3Client(config);
   const reporter = createReplicaStatusReporter(pool, config);
-  let syncPromise = null;
-  let lastSyncCheckAt = 0;
+  let stopped = false;
   let schemaMissingLogged = false;
 
   const queryActiveReleaseOrSkip = async () => {
@@ -287,7 +285,9 @@ export function createManagedRuntimeLibrariesSyncController(runtimeSettings) {
     } catch (error) {
       if (getPgErrorCode(error) === MANAGED_RUNTIME_LIBRARIES_SCHEMA_UNDEFINED_TABLE_CODE) {
         if (!schemaMissingLogged) {
-          console.warn('[runtime-libraries] managed runtime-library tables do not exist yet; bootstrap sync will retry after schema initialization.');
+          console.warn(
+            '[runtime-libraries] managed runtime-library tables do not exist yet; bootstrap sync will retry after schema initialization.',
+          );
           schemaMissingLogged = true;
         }
         return undefined;
@@ -297,176 +297,87 @@ export function createManagedRuntimeLibrariesSyncController(runtimeSettings) {
     }
   };
 
-  const syncCurrentRelease = async (force = false) => {
-    if (syncPromise) {
-      if (!force) {
-        return syncPromise;
-      }
-
-      await syncPromise;
-    }
-
-    if (!force && Date.now() - lastSyncCheckAt < config.syncPollIntervalMs) {
-      return;
-    }
-
-    const run = (async () => {
-      const syncStartedAt = new Date().toISOString();
-      let activeRelease = null;
-      let cachedReleaseId = null;
-      let nextReleaseId = null;
-      let nextPackages = {};
-
+  const synchronizer = createRuntimeLibrarySync(async () => {
+    const syncStartedAt = new Date().toISOString();
+    let nextReleaseId = null;
+    let cachedReleaseId = null;
+    try {
+      const activeRelease = await queryActiveReleaseOrSkip();
+      if (activeRelease === undefined) return undefined;
+      const root = path.dirname(jobsRoot());
+      let manifest, snapshot;
       try {
-        activeRelease = await queryActiveReleaseOrSkip();
-        if (activeRelease === undefined) {
-          return;
-        }
-        const manifest = readManifest();
-        cachedReleaseId = manifest.activeReleaseId ?? null;
-        nextReleaseId = activeRelease?.release_id ?? null;
-        nextPackages = activeRelease?.packages_json && typeof activeRelease.packages_json === 'object'
-          ? activeRelease.packages_json
-          : {};
-
-        if (!nextReleaseId) {
-          if (cachedReleaseId || currentNodeModulesPath()) {
-            await reporter.reportSyncing({
-              targetReleaseId: null,
-              syncedReleaseId: cachedReleaseId,
-              lastSyncStartedAt: syncStartedAt,
-            });
-            removeCurrentRelease();
-            writeManifest({ packages: {}, updatedAt: new Date().toISOString() });
-          }
-
-          lastSyncCheckAt = Date.now();
-          const completedAt = new Date().toISOString();
-          await reporter.reportReady({
-            targetReleaseId: null,
-            syncedReleaseId: null,
-            lastSyncStartedAt: syncStartedAt,
-            lastSyncCompletedAt: completedAt,
-          });
-          return;
-        }
-
-        if (Object.keys(nextPackages).length === 0) {
-          if (cachedReleaseId !== nextReleaseId || currentNodeModulesPath()) {
-            await reporter.reportSyncing({
-              targetReleaseId: nextReleaseId,
-              syncedReleaseId: cachedReleaseId,
-              lastSyncStartedAt: syncStartedAt,
-            });
-            removeCurrentRelease();
-            writeManifest({
-              packages: {},
-              updatedAt: activeRelease.updated_at ? new Date(activeRelease.updated_at).toISOString() : new Date().toISOString(),
-              activeReleaseId: nextReleaseId,
-            });
-          }
-
-          lastSyncCheckAt = Date.now();
-          const completedAt = new Date().toISOString();
-          await reporter.reportReady({
-            targetReleaseId: nextReleaseId,
-            syncedReleaseId: nextReleaseId,
-            lastSyncStartedAt: syncStartedAt,
-            lastSyncCompletedAt: completedAt,
-          });
-          return;
-        }
-
-        if (
-          cachedReleaseId === nextReleaseId &&
-          currentNodeModulesPath() &&
-          fs.existsSync(path.join(currentDir(), 'package.json'))
-        ) {
-          lastSyncCheckAt = Date.now();
-          const completedAt = new Date().toISOString();
-          await reporter.reportReady({
-            targetReleaseId: nextReleaseId,
-            syncedReleaseId: nextReleaseId,
-            lastSyncStartedAt: syncStartedAt,
-            lastSyncCompletedAt: completedAt,
-          });
-          return;
-        }
-
+        manifest = readManifest();
+        if (manifest.runtimeCache) snapshot = selectRuntimeLibrarySource(root, manifest).snapshot;
+      } catch {
+        manifest = undefined;
+        console.warn('[runtime-libraries] Rebuilding invalid local cache from the active release.');
+      }
+      cachedReleaseId = snapshot?.releaseId ?? null;
+      nextReleaseId = activeRelease?.release_id ?? null;
+      const packages = activeRelease?.packages_json ?? {};
+      const nextManifest = {
+        packages,
+        updatedAt: new Date(activeRelease?.updated_at ?? Date.now()).toISOString(),
+        ...(nextReleaseId ? { activeReleaseId: nextReleaseId } : {}),
+      };
+      const targetKey = runtimePackagesKey(packages);
+      const matches =
+        snapshot &&
+        cachedReleaseId === nextReleaseId &&
+        runtimePackagesKey(manifest.packages) === targetKey &&
+        (!activeRelease?.artifact_sha256 || snapshot.integrity === activeRelease.artifact_sha256);
+      if (!matches) {
         await reporter.reportSyncing({
           targetReleaseId: nextReleaseId,
           syncedReleaseId: cachedReleaseId,
           lastSyncStartedAt: syncStartedAt,
         });
-
-        if (!activeRelease.artifact_blob_key) {
-          throw new Error(`Active runtime-library release ${nextReleaseId} is missing its artifact pointer`);
+        if (!Object.keys(packages).length) snapshot = (await publishEmptyRuntimeRelease(root, nextManifest)).snapshot;
+        else {
+          if (!activeRelease.artifact_blob_key)
+            throw new Error(`Active runtime-library release ${nextReleaseId} is missing its artifact pointer`);
+          const response = await s3.send(
+            new GetObjectCommand({
+              Bucket: config.objectStorageBucket,
+              Key: prefixedBlobKey(config.objectStoragePrefix, activeRelease.artifact_blob_key),
+            }),
+          );
+          if (!response.Body) throw new Error('Runtime-library artifact has no body.');
+          const archive = Buffer.from(await response.Body.transformToByteArray());
+          const integrity = createHash('sha256').update(archive).digest('hex');
+          if (activeRelease.artifact_sha256 && integrity !== activeRelease.artifact_sha256)
+            throw new Error(`Runtime-library artifact checksum mismatch for release ${nextReleaseId}`);
+          const extracted = await extractRuntimeLibraryArchive(root, archive);
+          try {
+            snapshot = (await publishRuntimeLibraryCandidate(root, extracted.candidate, nextManifest, { integrity }))
+              .snapshot;
+          } finally {
+            await extracted.dispose();
+          }
         }
-
-        const response = await s3.send(new GetObjectCommand({
-          Bucket: config.objectStorageBucket,
-          Key: prefixedBlobKey(config.objectStoragePrefix, activeRelease.artifact_blob_key),
-        }));
-
-        if (!response.Body) {
-          throw new Error(`Object body missing for runtime-library artifact ${activeRelease.artifact_blob_key}`);
-        }
-
-        const archiveBuffer = Buffer.from(await response.Body.transformToByteArray());
-        const archiveSha256 = createHash('sha256').update(archiveBuffer).digest('hex');
-        if (activeRelease.artifact_sha256 && archiveSha256 !== activeRelease.artifact_sha256) {
-          throw new Error(`Runtime-library artifact checksum mismatch for release ${nextReleaseId}`);
-        }
-
-        const tempRoot = fs.mkdtempSync(path.join(jobsRoot(), `sync-${nextReleaseId}-`));
-        const archivePath = path.join(tempRoot, 'release.tar');
-        const extractedDir = path.join(tempRoot, 'candidate');
-
-        try {
-          fs.mkdirSync(extractedDir, { recursive: true });
-          fs.writeFileSync(archivePath, archiveBuffer);
-
-          await tar.x({
-            file: archivePath,
-            cwd: extractedDir,
-          });
-
-          promoteCurrentRelease(extractedDir);
-          writeManifest({
-            packages: nextPackages,
-            updatedAt: activeRelease.updated_at ? new Date(activeRelease.updated_at).toISOString() : new Date().toISOString(),
-            activeReleaseId: nextReleaseId,
-          });
-          lastSyncCheckAt = Date.now();
-          const completedAt = new Date().toISOString();
-          await reporter.reportReady({
-            targetReleaseId: nextReleaseId,
-            syncedReleaseId: nextReleaseId,
-            lastSyncStartedAt: syncStartedAt,
-            lastSyncCompletedAt: completedAt,
-          });
-        } finally {
-          fs.rmSync(tempRoot, { recursive: true, force: true });
-        }
-      } catch (error) {
-        const latestManifest = readManifest();
-        await reporter.reportError({
-          targetReleaseId: nextReleaseId,
-          syncedReleaseId: latestManifest.activeReleaseId ?? cachedReleaseId,
-          lastSyncStartedAt: syncStartedAt,
-          error,
-        });
-        throw error;
       }
-    })();
-
-    syncPromise = run.finally(() => {
-      syncPromise = null;
-    });
-
-    return syncPromise;
+      await reporter.reportReady({
+        targetReleaseId: nextReleaseId,
+        syncedReleaseId: snapshot.releaseId,
+        lastSyncStartedAt: syncStartedAt,
+        lastSyncCompletedAt: new Date().toISOString(),
+      });
+      return snapshot;
+    } catch (error) {
+      await reporter.reportError({
+        targetReleaseId: nextReleaseId,
+        syncedReleaseId: cachedReleaseId,
+        lastSyncStartedAt: syncStartedAt,
+        error,
+      });
+      throw error;
+    }
+  }, config.syncPollIntervalMs);
+  const syncCurrentRelease = (force = false) => {
+    if (stopped) return Promise.reject(new Error('Runtime-library synchronization is closed.'));
+    return synchronizer.sync(force);
   };
-
   return {
     config,
     syncCurrentRelease,
@@ -476,10 +387,14 @@ export function createManagedRuntimeLibrariesSyncController(runtimeSettings) {
       await syncCurrentRelease(true);
     },
     async dispose() {
-      syncPromise = null;
-      lastSyncCheckAt = 0;
-      await reporter.dispose();
-      await pool.end().catch(() => {});
+      stopped = true;
+      try {
+        await synchronizer.drain();
+      } finally {
+        await reporter.dispose();
+        await pool.end().catch(() => {});
+        s3.destroy();
+      }
     },
   };
 }

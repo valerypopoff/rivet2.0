@@ -10,6 +10,10 @@ import {
 import type { SubgraphProjectCatalogProvider } from '../../app/src/providers/ProvidersContext';
 import { RIVET_API_BASE_URL } from '../../studio-server-shared/hosted-env';
 import { postMessageToDashboard } from '../../studio-server-shared/editor-bridge';
+import {
+  hostedRecordingEvidenceHandle,
+  reportHostedChildRecordingFailure,
+} from './hostedLocalExecutionRecordingPersistence';
 import { rememberSubgraphPreviewStreamingOutputs } from '../../app/src/utils/subgraphPreviewStreaming';
 import type { WorkflowProjectReferencesResponse } from '../../studio-server-shared/workflow-types';
 import {
@@ -144,26 +148,37 @@ export const hostedSubgraphProjectLoader = {
 };
 
 export async function persistHostedSubgraphProjectRun(run: SubgraphProjectRun): Promise<void> {
-  if (!run.resolved.projectContents) throw new Error('Subgraph replay has no saved project snapshot.');
-  const response = await fetch(`${RIVET_API_BASE_URL}/workflows/local-editor-recordings/subgraph-run`, {
-    method: 'POST',
-    signal: AbortSignal.timeout(60_000),
-    headers: {
-      'content-type': 'application/json',
-      [WORKFLOW_RECORDING_CREATED_AT_HEADER]: run.createdAt ?? getWorkflowRecordingCreatedAt(run.recorder.events),
-    },
-    body: JSON.stringify({
-      projectId: run.target.projectId,
-      projectContents: run.resolved.projectContents,
-      datasetsContents: run.resolved.datasetsContents,
-      recordingSerialized: run.recorder.serialize(),
-      graphId: run.graphId,
-      revisionKey: run.resolved.revisionKey,
-      correlationId: run.correlationId,
-      status: run.status,
-      durationMs: run.durationMs,
-      errorMessage: run.errorMessage,
-    }),
-  });
-  await readJson(response);
+  try {
+    if (!run.resolved.projectContents) throw new Error('Subgraph replay has no saved project snapshot.');
+    const response = await fetch(`${RIVET_API_BASE_URL}/workflows/local-editor-recordings/subgraph-run`, {
+      method: 'POST',
+      signal: AbortSignal.timeout(60_000),
+      headers: {
+        'content-type': 'application/json',
+        [WORKFLOW_RECORDING_CREATED_AT_HEADER]: run.createdAt ?? getWorkflowRecordingCreatedAt(run.recorder.events),
+      },
+      body: JSON.stringify({
+        projectId: run.target.projectId,
+        projectContents: run.resolved.projectContents,
+        datasetsContents: run.resolved.datasetsContents,
+        recordingSerialized: run.recorder.serialize(),
+        graphId: run.graphId,
+        revisionKey: run.resolved.revisionKey,
+        correlationId: run.correlationId,
+        ...(hostedRecordingEvidenceHandle(run.correlationId)
+          ? {
+              rootEvidenceHandle: hostedRecordingEvidenceHandle(run.correlationId),
+              captureId: run.recorder.recordingId,
+            }
+          : {}),
+        status: run.status,
+        durationMs: run.durationMs,
+        errorMessage: run.errorMessage,
+      }),
+    });
+    await readJson(response);
+  } catch (error) {
+    await reportHostedChildRecordingFailure(run.correlationId);
+    throw error;
+  }
 }

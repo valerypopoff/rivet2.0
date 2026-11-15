@@ -358,18 +358,23 @@ export const perplexityClassifierProvider: ClassifierProvider = createClassifier
 });
 
 /** Current model catalog rate, not the older launch article's $0.05/MTok.
- * https://docs.subq.ai/using-the-api/models/ (verified 2026-10-24).
+ * https://docs.subq.ai/using-the-api/models/ (verified 2026-11-15).
  */
 export const subqClassifierProvider: ClassifierProvider = createClassifierProvider({
   id: 'subq',
   label: 'SubQ',
-  defaultModel: 'subq-snap-1.1',
-  modelOptions: SUBQ_DECISION_MODELS.map((value) => ({ value, label: value, aggregateTokenUsageOnly: true })),
+  defaultModel: SUBQ_DECISION_MODELS[0].value,
+  modelOptions: SUBQ_DECISION_MODELS,
   credentialNames: SUBQ_DEFAULT_CREDENTIAL_NAMES,
   browserExecutionSupported: false,
   endpoint: SUBQ_DECISIONS_ENDPOINT,
-  supportsImages: (model) => SUBQ_DECISION_MODELS.includes(model),
-  modelPricing: [{ models: SUBQ_DECISION_MODELS, pricing: { inputPerMillionTokens: 0.04, outputPerMillionTokens: 0 } }],
+  supportsImages: (model) => SUBQ_DECISION_MODELS.some(({ value }) => value === model),
+  modelPricing: [
+    {
+      models: SUBQ_DECISION_MODELS.map(({ value }) => value),
+      pricing: { inputPerMillionTokens: 0.04, outputPerMillionTokens: 0 },
+    },
+  ],
   maxRequestBytes: 13 * 1024 * 1024,
   checkRequest: assertSubQDecisionLimits,
   buildRequest: ({ model, state, questions }) => ({

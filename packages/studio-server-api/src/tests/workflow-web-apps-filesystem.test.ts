@@ -41,6 +41,34 @@ const {
 test.beforeEach(resetAndEnsureWorkflowsRoot);
 test.after(cleanupWorkflowSuite);
 
+test('an HTTP action response-binding failure preserves the successful graph recording', async () => {
+  const created = await workflowMutations.createWorkflowProjectItem('', 'MissingOutput');
+  const project = createWebAppProject(rivetNode, workflowFs.createBlankProjectFile('MissingOutput'), 'Missing Output');
+  const component = project.uiGraphs![WEB_APP_TEST_UI_GRAPH_ID]!.components[0]!;
+  if (component.type !== 'button' || component.action?.type !== 'runGraph') throw new Error('Invalid test button');
+  component.action.outputKey = 'not-returned';
+  await fs.writeFile(created.absolutePath, serializeWebAppProject(rivetNode, project));
+  await publishWebApp(created.relativePath, 'missing-output');
+  await withWorkflowExecutionServer(async ({ apiBaseUrl, webAppsBaseUrl }) => {
+    const revisionKey = extractWebAppRevisionKey(await (await fetch(`${webAppsBaseUrl}/missing-output`)).text());
+    const response = await fetch(`${webAppsBaseUrl}/missing-output/actions/run`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ componentId: WEB_APP_TEST_ACTION_COMPONENT_ID, revisionKey, state: { prompt: 'value' } }),
+    });
+    assert.equal(response.status, 500);
+    const catalog = await waitForRecordingWorkflows(apiBaseUrl, (rows) => rows.some((row) => row.totalRuns === 1));
+    const item = catalog.workflows.find((row) => row.totalRuns === 1)!;
+    const page = await readJson<{ runs: Array<{ status: string }> }>(
+      await fetch(`${apiBaseUrl}/recordings/workflows/${item.workflowId}/runs?status=all`),
+    );
+    assert.deepEqual(
+      page.runs.map((run) => run.status),
+      ['succeeded'],
+    );
+  });
+});
+
 test('exhausted profiles retain failed web-app recordings over HTTP and WebSocket', async (t) => {
   const nativeFetch = globalThis.fetch;
   let providerCalls = 0;
@@ -816,69 +844,84 @@ test('workflow web app publication routes keep stale published apps visible for 
   });
 });
 
-test('published filesystem web apps serve HTML and app JSON from the published snapshot', async () => {
+test('a missing latest UI graph rejects before action body parsing while its published snapshot remains runnable', async () => {
+  const created = await workflowMutations.createWorkflowProjectItem('', 'MissingLatestUiGraph');
+  await writeWebAppProject(created.absolutePath, 'MissingLatestUiGraph', 'Published UI Graph');
+  await publishWebApp(created.relativePath, 'missing-latest-ui-graph');
+  const { contents, datasetsContents } = await workflowStorageBackend.loadHostedProject(created.absolutePath);
+  const project = rivetNode.loadProjectFromString(contents);
+  project.uiGraphs = {};
+  await workflowStorageBackend.saveHostedProject({
+    projectPath: created.absolutePath,
+    contents: serializeWebAppProject(rivetNode, project),
+    datasetsContents,
+  });
+
+  await withWorkflowExecutionServer(async ({ webAppsBaseUrl, latestWebAppsBaseUrl }) => {
+    const latestResponse = await fetch(`${latestWebAppsBaseUrl}/missing-latest-ui-graph/actions/run`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{',
+      signal: AbortSignal.timeout(5000),
+    });
+    assert.equal(latestResponse.status, 404);
+    assert.equal(latestResponse.headers.get('connection'), 'close');
+    assert.equal(((await latestResponse.json()) as { error: string }).error, 'Rivet web app not found');
+
+    const publishedHtml = await (
+      await fetch(`${webAppsBaseUrl}/missing-latest-ui-graph`, {
+        signal: AbortSignal.timeout(5000),
+      })
+    ).text();
+    const action = await readJson<{ outputs: { value: { value: string } } }>(
+      await fetch(`${webAppsBaseUrl}/missing-latest-ui-graph/actions/run`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          componentId: WEB_APP_TEST_ACTION_COMPONENT_ID,
+          revisionKey: extractWebAppRevisionKey(publishedHtml),
+          state: { prompt: 'published snapshot still works' },
+        }),
+        signal: AbortSignal.timeout(5000),
+      }),
+    );
+    assert.equal(action.outputs.value.value, 'published snapshot still works');
+  });
+});
+
+test('published and latest web apps keep their HTML and JSON snapshots separate', async () => {
   const created = await workflowMutations.createWorkflowProjectItem('', 'PublishedWebApp');
   await writeWebAppProject(created.absolutePath, 'PublishedWebApp', 'Published Web App');
   await publishWebApp(created.relativePath, 'published-web-app');
   await writeWebAppProject(created.absolutePath, 'PublishedWebApp', 'Draft Web App');
 
-  await withWorkflowExecutionServer(async ({ webAppsBaseUrl }) => {
-    const htmlResponse = await fetch(`${webAppsBaseUrl}/published-web-app`, {
-      signal: AbortSignal.timeout(5000),
-    });
-    const html = await htmlResponse.text();
-
-    assert.equal(htmlResponse.status, 200);
-    assert.match(htmlResponse.headers.get('content-type') ?? '', /text\/html/);
-    assert.match(html, /Published Web App/);
-    assert.doesNotMatch(html, /Draft Web App/);
-    assert.match(html, /\/apps\/published-web-app\/actions\/ws/);
-    assert.match(extractWebAppRevisionKey(html), /^filesystem-web-app:/);
-
-    const appJsonResponse = await fetch(`${webAppsBaseUrl}/published-web-app/app.json`, {
-      signal: AbortSignal.timeout(5000),
-    });
-    const appJson = await appJsonResponse.json() as { name?: string };
-
-    assert.equal(appJsonResponse.status, 200);
-    assert.equal(appJson.name, 'Published Web App');
-  });
-});
-
-test('latest filesystem web apps serve the saved draft for a published web app slug', async () => {
-  const created = await workflowMutations.createWorkflowProjectItem('', 'LatestWebApp');
-  await writeWebAppProject(created.absolutePath, 'LatestWebApp', 'Published Latest Web App');
-  await publishWebApp(created.relativePath, 'latest-web-app');
-  await writeWebAppProject(created.absolutePath, 'LatestWebApp', 'Draft Latest Web App');
-
   await withWorkflowExecutionServer(async ({ webAppsBaseUrl, latestWebAppsBaseUrl }) => {
-    const publishedHtmlResponse = await fetch(`${webAppsBaseUrl}/latest-web-app`, {
-      signal: AbortSignal.timeout(5000),
-    });
-    const publishedHtml = await publishedHtmlResponse.text();
+    const revisionKeys: string[] = [];
+    for (const [baseUrl, name, otherName, socketBase] of [
+      [webAppsBaseUrl, 'Published Web App', 'Draft Web App', '/apps'],
+      [latestWebAppsBaseUrl, 'Draft Web App', 'Published Web App', '/apps-latest'],
+    ] as const) {
+      const htmlResponse = await fetch(`${baseUrl}/published-web-app`, {
+        signal: AbortSignal.timeout(5000),
+      });
+      const html = await htmlResponse.text();
+      assert.equal(htmlResponse.status, 200);
+      assert.match(htmlResponse.headers.get('content-type') ?? '', /text\/html/);
+      assert.ok(html.includes(name), `${socketBase}: expected ${name}`);
+      assert.ok(!html.includes(otherName), `${socketBase}: must not serve ${otherName}`);
+      assert.ok(html.includes(`${socketBase}/published-web-app/actions/ws`));
+      const revisionKey = extractWebAppRevisionKey(html);
+      assert.match(revisionKey, /^filesystem-web-app:/);
+      revisionKeys.push(revisionKey);
 
-    assert.equal(publishedHtmlResponse.status, 200);
-    assert.match(publishedHtml, /Published Latest Web App/);
-    assert.doesNotMatch(publishedHtml, /Draft Latest Web App/);
-    assert.match(publishedHtml, /\/apps\/latest-web-app\/actions\/ws/);
-
-    const latestHtmlResponse = await fetch(`${latestWebAppsBaseUrl}/latest-web-app`, {
-      signal: AbortSignal.timeout(5000),
-    });
-    const latestHtml = await latestHtmlResponse.text();
-
-    assert.equal(latestHtmlResponse.status, 200);
-    assert.match(latestHtml, /Draft Latest Web App/);
-    assert.doesNotMatch(latestHtml, /Published Latest Web App/);
-    assert.match(latestHtml, /\/apps-latest\/latest-web-app\/actions\/ws/);
-
-    const latestAppJsonResponse = await fetch(`${latestWebAppsBaseUrl}/latest-web-app/app.json`, {
-      signal: AbortSignal.timeout(5000),
-    });
-    const latestAppJson = await latestAppJsonResponse.json() as { name?: string };
-
-    assert.equal(latestAppJsonResponse.status, 200);
-    assert.equal(latestAppJson.name, 'Draft Latest Web App');
+      const appJsonResponse = await fetch(`${baseUrl}/published-web-app/app.json`, {
+        signal: AbortSignal.timeout(5000),
+      });
+      assert.equal(appJsonResponse.status, 200);
+      const appJson = await appJsonResponse.json() as { name?: string };
+      assert.equal(appJson.name, name);
+    }
+    assert.notEqual(revisionKeys[0], revisionKeys[1]);
   });
 });
 

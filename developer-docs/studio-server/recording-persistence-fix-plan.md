@@ -1,5 +1,8 @@
 # Recording persistence after failed LLM profile chains
 
+Implemented, opt-in follow-up: [Durable run evidence and recording recovery](recording-durability-plan.md).
+The repair below does not make in-memory captures or queued writes crash-durable.
+
 Status: implemented and validated locally, 2026-11-13. Staging qualification and
 production deployment remain separate release steps through the normal pipeline.
 

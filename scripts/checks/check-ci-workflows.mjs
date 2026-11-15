@@ -705,6 +705,7 @@ for (const [lane, names] of [
     [
       'Verify compiled migrations on PostgreSQL',
       'Verify async endpoint completion with managed storage',
+      'Verify recording crash recovery and immutable handoffs',
       'Verify VM-to-managed copy, retry, and exact readback',
     ],
   ],
@@ -1045,8 +1046,26 @@ assert.equal(
   'deploy/studio-server/images/web/Dockerfile',
   'Compose source builds must not bypass the hardened production web image.',
 );
+const bundledYarnPath = parseDocument(read('.yarnrc.yml')).toJS().yarnPath;
+assert.equal(
+  bundledYarnPath,
+  `.yarn/releases/yarn-${JSON.parse(read('package.json')).packageManager.split('@')[1].split('+')[0]}.cjs`,
+);
 for (const service of ['api', 'executor', 'web']) {
   const dockerfile = read(`deploy/studio-server/images/${service}/Dockerfile`);
+  const firstYarnCommand = dockerfile.search(/\byarn (?:config|install)\b/);
+  assert.ok(firstYarnCommand >= 0, `${service}: missing dependency installation`);
+  for (const setup of [
+    `cp ${bundledYarnPath} /usr/local/lib/rivet-yarn.cjs`,
+    'chmod 0755 /usr/local/lib/rivet-yarn.cjs',
+    'ln -sf /usr/local/lib/rivet-yarn.cjs /usr/local/bin/yarn',
+    'ln -sf /usr/local/lib/rivet-yarn.cjs /usr/local/bin/yarnpkg',
+  ]) {
+    assert.ok(
+      dockerfile.slice(0, firstYarnCommand).includes(`${setup} && \\`),
+      `${service}: require "${setup}" before installation so Corepack cannot download Yarn`,
+    );
+  }
   const references = [
     ...dockerfile.matchAll(/^(?:FROM |ARG NODE_IMAGE=)(node:[\w.-]+(?:@sha256:[a-f0-9]{64})?)/gm),
   ].map((match) => match[1]);

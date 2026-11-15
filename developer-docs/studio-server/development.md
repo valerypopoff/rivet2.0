@@ -318,6 +318,37 @@ Kubernetes rehearsal or a new browser run.
 
 ## Extending serving services
 
+The [hosted execution isolation plan](./hosted-execution-isolation-plan.md)
+tracks the Code-family event-loop blocking problem and unfinished production
+integration. The prototype under `src/scripts/hosted-isolation/` is excluded from
+production compiler inputs; serving defaults are unchanged. The accepted latency
+budget is 1 ms added p95 on small fixtures, with a separate frozen 5 ms bound on
+the local 8 MiB fixture. These workload checks do not qualify capacity or serving
+integration. The [local Gate A results](./hosted-execution-isolation-gate-a.md)
+record functional/performance evidence, limits and reproduction commands.
+
+`hosted-isolation:test` runs fast input/limit contracts in ordinary API CI without
+bootstrapping the graph engine. `hosted-isolation:verify` builds current sources
+and exercises real workers, prepared actions, held background work, cancellation,
+replacement and cleanup. Its narrow parent host-store proof preserves accepting
+request context and tracks accepted writes through worker exit/drain without
+replay. Benchmarks accept a sample only after its root/capture settles successfully,
+report nearest-rank p95 against frozen additive limits, and distinguish insufficient
+samples from meeting a workload budget. Production socket/debugger integration remains planned;
+retain the existing Node handler/gateway suites as the transport coverage owner.
+
+Runtime-library preparation returns a verified physical snapshot. API and editor
+root runs retain that binding through later nodes, Subgraphs and background work;
+activating a new release never clears another run's modules or removes its files.
+See [Runtime Libraries](./runtime-libraries.md#on-disk-layout-and-execution-snapshots)
+for cache recovery, retention and the first-upgrade precautions. The shared
+bootstrap helper is packaged with both consumers; its local descriptor is not a
+portable project or archive setting.
+
+The [execution error-policy plan](./execution-error-policy-plan.md) records the
+confirmed public-error inconsistencies and the proposed compatible fix. It is a
+deferred plan, not the current implemented policy.
+
 Classifier providers are Core-owned and shared by desktop and hosted execution.
 Their curated `modelOptions` also drive the shared Decision AI Model dropdown in
 run/Profile inspectors: known model IDs and Custom model text entry. An absent
@@ -401,6 +432,28 @@ then the hosted `jev-nodes.spec.ts` observer when changing these integrations.
   tasks may use existing stores during drain, but may not create new resources.
   Obtain health/Evaluation stores from the owner rather than repeating mode
   dispatch in consumers; managed owners must never create their local counterparts.
+- Keep filesystem project IO in `legacy-project-storage.ts` and execution lookup
+  in `legacy-execution-storage.ts`. Share only the physical ID scan through
+  `filesystem-project-identity.ts`; do not use the UI tree to reconcile a moved
+  save target. Hosted save invalidation runs even if post-commit derived
+  statistics fail. Tree queries retain their maintenance-specific root lookup.
+  Capture hosted-save options at the facade entry point, before lazy backend
+  acquisition. Reuse the filesystem transaction's normalized contents for its
+  statistics and response revision; a caller changing its object during IO must
+  not change submitted bytes or produce a revision for unsaved edits.
+  Published/latest web-app loaders select the executable project and its dataset
+  together; keep their source path and app binding tied to the saved project.
+  The facade's hosted-IO compatibility types in `data-backend.ts` preserve legacy
+  nulls and branded IDs without widening SQL repository results.
+  When changing SQL routing, retain the `local-upgrade-runtime.test.ts` ordinary
+  SQLite serving scenario as well as direct-adapter contracts: it publishes and
+  loads both versions through the actual facade after a real storage selection.
+- Keep publication selection callback-based. Snapshot the command, reject unknown
+  kinds before storage acquisition, and enter the legacy writer without an
+  additional await. Do not replace short explicit project/recording dispatch with
+  a generic registry. New files use public shared-package type imports rather
+  than adding deep-relative import allowances. See the
+  [storage routing plan](./workflow-storage-routing-plan.md) for verification.
 - Extend `hosted-runtime-policy.ts` when adding execution dependencies. Supply
   explicit loaders for hosted Evaluation execution as well as serving runs.
   Keep transport credentials and request-context filtering in their owning
@@ -449,6 +502,65 @@ separate from concurrent builds/tests; passing correctness checks does not measu
 production throughput or latency.
 Run `yarn test:style` separately from runtime/browser suites: its asset checks
 rebuild Core outputs, which runtime fixtures import from `dist`.
+
+## Recordings architecture and extension points
+
+Recording capture, replay availability and execution outcome have separate owners.
+New shared evidence types use the declared Studio Server shared workspace package
+through type-only imports. Runtime imports keep the API's compiled sibling layout:
+the exact reviewed boundary-ledger entries cover path conversion, HTTP errors,
+health-evidence notification and metrics. Do not replace those runtime paths with
+source-only package paths or add a forwarding module solely to hide a dependency.
+
+An unavailable replay does not make a successful execution fail, and recovering a
+recording must never execute the graph again. Keep production bookkeeping in the
+background; the accepted crash window and durable editor protocol are documented
+in [Recording durability](./recording-durability.md).
+
+| Responsibility                        | Owner                                                                                                                            | Extension rule                                                                                                                                          |
+| ------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Capture graph events                  | Core `ExecutionRecorder`, API `ExecutionSession`, and the endpoint/editor/web-app/schedule adapters                              | Reuse the session recorder. Keep storage I/O out of Core and avoid serializing replay payloads on the production response path.                         |
+| Admit and drain recording work        | `recordings-store.ts`, `recording-evidence-work.ts` and `storage-composition.ts`                                                 | Use the existing bounded queues and storage lifecycle. Drain accepted work before closing evidence heartbeats or stores.                                |
+| Persist and repair managed recordings | `managed/recordings.ts`, `managed/recording-evidence.ts` and the existing maintenance owner                                      | Keep one stable recording identity. Publish artifacts and evidence together; retry persistence, never execution.                                        |
+| Browse projects and run history       | `managed/recordings.ts` for the catalog; `managed/recording-history.ts` for history pagination                                   | Count playable recordings and unrepresented attempts once. Include projects with only pending/unavailable runs. Read metadata rather than replay blobs. |
+| Search captured inputs                | `recording-input-filter.ts` with its source, extractor worker and cache                                                          | Preserve bounded reads, cancellation and progressive results. Missing replay data is unsearchable, not evidence that an input field is absent.          |
+| Aggregate outcomes and costs          | `recording-statistics.ts` and `recording-statistics-sql.ts`                                                                      | Keep execution outcome and telemetry completeness independent of replay availability; exclude duplicate evidence.                                       |
+| Present and operate history           | `useRunRecordingsModalState.ts`, `useRunRecordingsController.ts`, `recording-run-hierarchy.ts` and the table/selector components | Keep session lifetime, request effects, pure family grouping and presentation separate. Invalidate stale requests when the view changes.                |
+
+The project picker and its global totals use one managed catalog query. Filtering
+projects before merging evidence would hide an unpublished project's first run;
+counting again in a second overlay would add work and allow inconsistent snapshots.
+Counts are labelled as runs because some entries have no playable recording yet.
+
+Extend the owning seam and its behavioral tests instead of adding a parallel
+recording writer or another interpretation of status. Large query/controller files
+are worth watching, but splitting them by line count alone creates more boundaries
+without reducing responsibility. Extract a helper when it owns a distinct rule or
+removes duplicated behavior.
+
+`recording-durability-managed.integration.ts` covers real PostgreSQL/MinIO recovery
+and the catalog transitions from pending to unavailable to playable to deleted.
+`run-recordings-modal.spec.ts` covers the corresponding browser controls. Keep
+mocked UI checks and actual storage checks separate: neither substitutes for the
+other or for production activation of the default-off durability feature.
+
+Keep recording tests at the layer that owns the behavior. Duration-format edge
+cases belong in App's `recordingPresentation.test.ts`; one browser case verifies
+that history renders the saved duration. Mocked history tests answer continuation
+requests immediately unless a case explicitly holds a response to test a race.
+Use response gates and observed cancellation for those races, not a sleep long
+enough to hope a request remains in flight. Catalog arrival, pending/completed
+session reuse and stale-result rejection each have their own behavioral checks;
+do not repeat browser startup just to collect timing samples.
+When replacing a held search, explicitly stop it before applying another filter:
+Apply is intentionally disabled during an active search. Register the cancellation
+observer before the Stop action so the test cannot miss the event.
+
+Real PostgreSQL/MinIO crash, uncertain-write, deletion and blocked-storage checks
+remain in the normal managed lane. Extra repeated latency samples use
+`recording-durability:measure` explicitly; correctness CI does not depend on noisy
+stopwatch comparisons. Legacy replay and filesystem storage remain supported, so
+their distinct compatibility tests must stay even when the managed path passes.
 
 ## Serving-path regression checks
 
@@ -605,6 +717,9 @@ Self-contained editor fixtures must also mock configuration and Evaluation-libra
 bootstrap using `mockHostedEditorBootstrap`; a mocked workflow tree alone can leave
 the project row disabled before the test reaches its owning behavior. The graph-port
 rename fixture uses that helper and does not depend on an ambient API session.
+Match recording catalog mocks by pathname with optional query parameters. The
+browser requests `includeEvidence=true`; an exact URL glob without that query
+silently bypasses delayed/error responses and invalidates those regression tests.
 
 ## Shared dropdown styling
 
@@ -1039,8 +1154,9 @@ converting a formatted string back to a number. Invalid, missing, negative or
 non-finite timings display `Unavailable` rather than crashing the modal or
 presenting a misleading zero.
 This is presentation-only: stored `durationMs`, replay timings and statistics
-retain their original precision. The recordings-modal observer covers fractional
-milliseconds, seconds and minute-boundary rounding.
+retain their original precision. App's `recordingPresentation.test.ts` covers
+fractional milliseconds, seconds, minute-boundary rounding and missing/invalid
+values. One recordings-modal case verifies the rendered saved duration.
 
 ## Called-project recordings in the caller browse scope
 
@@ -1167,6 +1283,14 @@ They retain the current managed PostgreSQL/S3 topology, not the historical
 Compose stack described below. See [development watch ownership](server-stack.md#development-watch-ownership)
 for source-mount boundaries, startup budgets and changes requiring recreation.
 No tunnel launcher or additional frontend-mode variable is required.
+
+The API, executor and web dependency stages install the checked-in Yarn release
+as `/usr/local/lib/rivet-yarn.cjs` and bind both `yarn` and `yarnpkg` to it before
+configuration or installation. Direct commands and nested build scripts therefore
+use the repository pin without a Corepack download. Copying `.yarnrc.yml` with
+`yarnPath` alone is insufficient: Corepack resolves `packageManager` before Yarn
+reads that file. Ordinary dependency downloads still use the configured network
+and caches. Corepack remains available for the separately configured pnpm tool.
 
 Use `yarn studio-server:dev:tunnel` when forwarding the browser port through a
 VS Code tunnel. Forward the same proxy port as ordinary dev (for example 8081),
@@ -1394,6 +1518,7 @@ API-only edit checks watcher separation, not a live API/executor execution path.
 See also: [Mistakes and Misconceptions](./mistakes-and-misconceptions.md)
 See also: [Repo structure](./repo-structure.md)
 See also: [Wrapper ManagedCodeRunner Speed Plan](./wrapper-managed-code-runner-speed-plan.md)
+See also: [Runtime-library execution snapshots](./runtime-library-snapshot-plan.md)
 See also: [Local metadata storage upgrade](./local-metadata-upgrade.md)
 
 ## Local metadata conversion verification
@@ -1776,22 +1901,23 @@ committing or pushing the source never applies that recovery to a live cluster.
 
 The five private `@valerypopoff/rivet-studio-server-*` workspaces form one
 Studio Server product and use one lockstep package version. Their current
-version is `1.38.0`. `yarn studio-server:verify:repo-structure` rejects version
+version is `1.39.0`. `yarn studio-server:verify:repo-structure` rejects version
 drift between the API, web, executor, shared, and bootstrap manifests.
-This minor release covers changes since the Studio Server bump in `5b3a3fae7`
-through `3551e25c7`, plus the current export UI/status fixes: bounded saved bundle
-comparison reads, project matching and projected navigation, editable Newer
-projects, pinned Older references and cancellation/ownership handling.
-API/Web/Shared change locally; unchanged Bootstrap/Executor workspaces are release
-companions, not separate implementations of these features. Comparison adds no
-schema migration or reference-index backfill.
+This minor release covers changes since the Studio Server bump in `d02b3c656`
+through `e120aa379` and the pending comparison/settings fixes: asynchronous
+recoverable recording evidence, immutable runtime-library snapshots, bundle
+change statuses and navigation/menu refinements. All five workspaces have local
+implementation changes; the route/storage/controller refactors preserve behavior.
+Local execution-isolation tooling remains a prototype, not a production runtime
+switch. Schema 20 belongs to the recording-evidence implementation, not this
+metadata update; versioning adds no migration or reference-index backfill.
 Backend overlap was covered by `1.31.0`; compact HA/autoscaling by `1.30.0`.
 This version update does not enable optional rollout features or establish new
 GKE qualification; see the [performance implementation status](rolling-update-performance-plan.md).
 Bump all five manifests together even when only one workspace has runtime
 changes; run the repository-structure check before
 building a release candidate. See the prepared release matrix in
-[Build and CI](../BUILD-AND-CI.md#prepared-bundle-comparison-release-versions-2026-11-12) for the
+[Build and CI](../BUILD-AND-CI.md#prepared-release-versions-2026-11-15) for the
 separate desktop, sidecar, documentation and public runtime version decisions.
 
 These private package versions are release metadata, not npm publication or
@@ -1800,13 +1926,18 @@ commit and promoted by immutable OCI digest. The Helm chart's `version` and
 `appVersion` are separate chart metadata and must not be changed merely to
 bump the private workspace manifests.
 
-The current reference-index runtime advances managed storage to schema 19.
-Keep the chart's ordinary `workflowSchema.compatibility` defaults at 19/19 to match
+Reference indexing introduced schema 19; durable recording evidence advances the
+current runtime to schema 20. Keep the chart's ordinary
+`workflowSchema.compatibility` defaults at 20/20 to match
 that build, independently of package versioning. The promoted release launcher
 still derives exact migration and allowed reader windows from the immutable
 manifest; predecessor compatibility remains a separate contract, not permission
 to leave new-build chart defaults at16. The Kubernetes contract tests exercise
 both an ordinary exact-version migration and a lower serving-only rollback floor.
+
+[Recording durability](recording-durability.md) documents the opt-in acceptance,
+recovery and mixed-version activation rules. An additive schema alone does not
+make an old garbage-collection owner safe for pending handoffs.
 
 ## Main commands
 
@@ -3230,6 +3361,18 @@ For packages/studio-server-web changes:
 3. if the change affects browser-visible behavior, run `PLAYWRIGHT_HEADLESS=1`, `PLAYWRIGHT_SLOW_MO=0`, then `yarn studio-server:ui:observe`
 4. if the Playwright coverage needs real workflow mutations in Storage-tab `Object storage` mode, set `PLAYWRIGHT_ALLOW_MANAGED_MUTATIONS=1` deliberately and keep cleanup explicit; prefer mocked API/browser tests for modal and controller coverage when storage mutation is not the point
 5. if the change lives under `packages/studio-server-web/overrides/` or affects hosted editor save/hotkey behavior, also verify with `yarn studio-server:prod:custom`; `yarn studio-server:prod` deliberately pulls already-published images instead of using your local workspace changes
+
+Source-host observer cases, including hosted Save As, require a Vite source server;
+a static web build cannot serve their `/@fs` imports. Let dependency optimization
+settle before collecting a result: changing optimized React modules during page
+initialization can produce duplicate React instances. Pass `waitForFunction`
+timeouts in its third argument (options), after the optional page-data argument;
+otherwise the intended startup deadline is silently treated as page data.
+For cases forwarding browser requests into an owned API fixture, drain routes
+and close the browser context
+before closing the fixture, including when an assertion or page initialization
+fails. Otherwise teardown can replace the original failure with a connection reset
+and interrupt cleanup of disposable services.
 
 For workflow-library mutations that change on-disk project state:
 

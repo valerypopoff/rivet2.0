@@ -87,6 +87,7 @@ export const RunRecordingsModal: FC<RunRecordingsModalProps> = ({
     totalPages,
     inputSearchStatus,
     inputSearchProgress,
+    unsearchableRuns,
     visibleRuns,
     childLoadStates,
     childLoadErrors,
@@ -162,7 +163,7 @@ export const RunRecordingsModal: FC<RunRecordingsModalProps> = ({
         description: 'Runs across all projects',
         endpoint: '',
         statusLabel: '',
-        recordingCount: allWorkflowsRunsCount,
+        runCount: allWorkflowsRunsCount,
       },
       ...workflows.map((workflow) => {
         const endpoint = getWorkflowEndpoint(workflow);
@@ -177,7 +178,7 @@ export const RunRecordingsModal: FC<RunRecordingsModalProps> = ({
               ? ''
               : 'No recorded runs yet',
           endpoint,
-          recordingCount: allWorkflowsRunsCount === null ? null : workflow.totalRuns,
+          runCount: allWorkflowsRunsCount === null ? null : workflow.totalRuns,
           statusLabel,
         };
       }),
@@ -283,49 +284,57 @@ export const RunRecordingsModal: FC<RunRecordingsModalProps> = ({
                 />
 
                 {selectedWorkflow || !selectedWorkflowId ? (
-                  <RecordingRunsTable
-                    expandedFamilyKeys={expandedFamilyKeys}
-                    onToggleFamily={handleToggleFamily}
-                    childLoadStates={childLoadStates}
-                    selectedWorkflow={selectedWorkflow}
-                    selectedWorkflowEndpoint={selectedWorkflowEndpoint}
-                    selectedWorkflowStatusLabel={selectedWorkflowStatusLabel}
-                    overallRunsCount={overallRunsCount}
-                    badRunsCount={badRunsCount}
-                    filteredRunsCount={filteredRunsCount}
-                    totalPages={totalPages}
-                    inputSearchStatus={inputSearchStatus}
-                    inputSearchProgress={inputSearchProgress}
-                    page={page}
-                    runsPerPage={runsPerPage}
-                    statusFilter={statusFilter}
-                    inputFilterVisible={inputFilterVisible}
-                    inputFilterPath={inputFilterPath}
-                    inputFilterOperator={inputFilterOperator}
-                    inputFilterValue={inputFilterValue}
-                    appliedInputFilter={appliedInputFilter}
-                    inputFilterError={inputFilterError}
-                    runsLoading={runsLoading}
-                    visibleRuns={visibleRuns}
-                    deletingRecordingId={deletingRecordingId}
-                    openingRecordingId={openingRecordingId}
-                    onSetStatusFilter={setStatusFilter}
-                    onSetInputFilterVisible={setInputFilterVisible}
-                    onSetInputFilterPath={setInputFilterPath}
-                    onSetInputFilterOperator={setInputFilterOperator}
-                    onSetInputFilterValue={setInputFilterValue}
-                    onApplyInputFilter={handleApplyInputFilter}
-                    onClearInputFilter={handleClearInputFilter}
-                    onStopInputSearch={handleStopInputSearch}
-                    onSetRunsPerPage={setRunsPerPage}
-                    onSetPage={setPage}
-                    onDeleteRecording={(recordingId) => {
-                      void handleDeleteRecording(recordingId);
-                    }}
-                    onOpenRecording={(recordingId) => {
-                      void handleOpenRecording(recordingId);
-                    }}
-                  />
+                  <>
+                    {unsearchableRuns > 0 && (
+                      <div className="run-recordings-warning" role="status">
+                        {unsearchableRuns} run attempts could not be searched because their recording payload is
+                        unavailable.
+                      </div>
+                    )}
+                    <RecordingRunsTable
+                      expandedFamilyKeys={expandedFamilyKeys}
+                      onToggleFamily={handleToggleFamily}
+                      childLoadStates={childLoadStates}
+                      selectedWorkflow={selectedWorkflow}
+                      selectedWorkflowEndpoint={selectedWorkflowEndpoint}
+                      selectedWorkflowStatusLabel={selectedWorkflowStatusLabel}
+                      overallRunsCount={overallRunsCount}
+                      badRunsCount={badRunsCount}
+                      filteredRunsCount={filteredRunsCount}
+                      totalPages={totalPages}
+                      inputSearchStatus={inputSearchStatus}
+                      inputSearchProgress={inputSearchProgress}
+                      page={page}
+                      runsPerPage={runsPerPage}
+                      statusFilter={statusFilter}
+                      inputFilterVisible={inputFilterVisible}
+                      inputFilterPath={inputFilterPath}
+                      inputFilterOperator={inputFilterOperator}
+                      inputFilterValue={inputFilterValue}
+                      appliedInputFilter={appliedInputFilter}
+                      inputFilterError={inputFilterError}
+                      runsLoading={runsLoading}
+                      visibleRuns={visibleRuns}
+                      deletingRecordingId={deletingRecordingId}
+                      openingRecordingId={openingRecordingId}
+                      onSetStatusFilter={setStatusFilter}
+                      onSetInputFilterVisible={setInputFilterVisible}
+                      onSetInputFilterPath={setInputFilterPath}
+                      onSetInputFilterOperator={setInputFilterOperator}
+                      onSetInputFilterValue={setInputFilterValue}
+                      onApplyInputFilter={handleApplyInputFilter}
+                      onClearInputFilter={handleClearInputFilter}
+                      onStopInputSearch={handleStopInputSearch}
+                      onSetRunsPerPage={setRunsPerPage}
+                      onSetPage={setPage}
+                      onDeleteRecording={(recordingId) => {
+                        void handleDeleteRecording(recordingId);
+                      }}
+                      onOpenRecording={(recordingId) => {
+                        void handleOpenRecording(recordingId);
+                      }}
+                    />
+                  </>
                 ) : null}
               </div>
             </div>

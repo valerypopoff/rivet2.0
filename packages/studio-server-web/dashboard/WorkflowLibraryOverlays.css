@@ -33,6 +33,21 @@
   height: 14px;
 }
 
+.workflow-bundle-submenu-arrow {
+  width: 7px;
+  height: 14px;
+  flex: 0 0 auto;
+  margin-left: auto;
+}
+
+.workflow-bundle-submenu {
+  width: max-content;
+}
+
+.workflow-bundle-submenu .workflow-project-context-menu-item {
+  white-space: nowrap;
+}
+
 .workflow-project-context-menu-item:hover,
 .workflow-project-context-menu-item:focus-visible {
   background: rgba(255, 255, 255, 0.08);

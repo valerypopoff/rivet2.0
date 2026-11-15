@@ -270,6 +270,7 @@ export function createCodeWorkerRunRequest(
   contextValues: Record<string, DataValue> | undefined,
   globalValues: Record<string, DataValue> | undefined,
   executionEnvironment?: Readonly<Record<string, string | undefined>>,
+  requireAnchorPath = getCodeRunnerRequireAnchorPath(),
 ): CodeWorkerRunRequest {
   return {
     code,
@@ -283,7 +284,7 @@ export function createCodeWorkerRunRequest(
         : undefined,
     inputs,
     options,
-    requireAnchorPath: getCodeRunnerRequireAnchorPath(),
+    requireAnchorPath,
     type: 'run',
   };
 }

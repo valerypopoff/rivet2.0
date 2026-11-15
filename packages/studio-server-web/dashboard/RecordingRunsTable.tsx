@@ -67,17 +67,20 @@ function RecordingRow({
   const detailText = recording.errorMessage ?? (recording.status === 'suspicious' ? SUSPICIOUS_RECORDING_DETAIL : null);
   const endpointNameAtExecution = recording.endpointNameAtExecution?.trim() || 'Unknown';
   const isSubgraphRun = recording.executionIdentity?.surface === 'subgraph_project';
+  const playable = !recording.evidence || recording.evidence.availability === 'available';
+  const availability = recording.evidence?.availability;
+  const evidenceReason = recording.evidence?.reason;
 
   return (
     <div
-      className={`run-recordings-run ${recording.status}${isChild ? ' run-recordings-sub-run' : ''}`}
+      className={`run-recordings-run ${recording.status}${isChild ? ' run-recordings-sub-run' : ''}${!playable ? ' evidence-only' : ''}`}
       data-recording-id={recording.id}
     >
       <button
         type="button"
         className="run-recordings-run-open-button"
         onClick={() => onOpen(recording.id)}
-        disabled={isDeleting || isInteractionLocked}
+        disabled={isDeleting || isInteractionLocked || !playable}
       >
         <div className="run-recordings-run-body">
           <div className="run-recordings-run-header">
@@ -114,11 +117,41 @@ function RecordingRow({
         <div className="run-recordings-run-footer">
           <div className="run-recordings-run-meta">
             <span className={`run-recordings-badge ${recording.status}`}>
-              {RECORDING_STATUS_LABELS[recording.status]}
+              {recording.status === 'accepted'
+                ? 'Accepted'
+                : recording.status === 'unknown'
+                  ? 'Outcome unknown'
+                  : recording.status === 'running'
+                    ? 'Running'
+                    : RECORDING_STATUS_LABELS[recording.status]}
             </span>
             <span className="run-recordings-run-duration">{formatRecordingDuration(recording.durationMs)}</span>
           </div>
         </div>
+        {availability && availability !== 'available' && (
+          <div className="run-recordings-run-detail" role="status">
+            {availability === 'pending'
+              ? 'Recording pending'
+              : availability === 'deleted'
+                ? 'Recording deleted'
+                : 'Recording unavailable'}
+            {evidenceReason &&
+              ` · ${
+                (
+                  {
+                    capacity: 'Capture capacity was exhausted',
+                    capture_incomplete: 'Capture did not complete',
+                    serialization_failed: 'Replay serialization failed',
+                    upload_incomplete: 'Replay upload did not complete',
+                    persistence_failed: 'Replay storage failed',
+                  } as const
+                )[evidenceReason]
+              }`}
+          </div>
+        )}
+        {recording.evidence?.childCoverage === 'incomplete' && (
+          <div className="run-recordings-run-detail">Some called-project recordings could not be confirmed.</div>
+        )}
         <div className="run-recordings-run-endpoint">
           Project:{' '}
           <span className="run-recordings-run-endpoint-value">

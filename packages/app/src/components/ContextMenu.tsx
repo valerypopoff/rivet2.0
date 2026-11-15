@@ -12,6 +12,7 @@ import {
 import { useFuseSearch } from '../hooks/useFuseSearch.js';
 import { uniqBy } from 'lodash-es';
 import clsx from 'clsx';
+import SubmenuArrowIcon from '../assets/icons/submenu-arrow.svg?react';
 import { useMarkdown } from '../hooks/useMarkdown.js';
 import { getContextMenuSearchPresentation } from './contextMenuSearchGrouping.js';
 import {
@@ -450,21 +451,19 @@ export const ContextMenuItemDiv = styled.div<{
   ${(props) =>
     props.hasSubmenu &&
     css`
-      &::after {
-        content: '';
+      > .context-menu-submenu-arrow {
         position: absolute;
         right: 8px;
         top: 50%;
         transform: translateY(-50%);
-        width: 0;
-        height: 0;
-        border-style: solid;
-        border-width: 7px 0 7px 7px;
-        border-color: transparent transparent transparent var(--grey-darkish);
+        width: 7px;
+        height: 14px;
+        color: var(--grey-darkish);
+        pointer-events: none;
       }
 
-      &:hover::after {
-        border-color: transparent transparent transparent var(--primary);
+      &:hover > .context-menu-submenu-arrow {
+        color: var(--primary);
       }
     `}
 
@@ -472,8 +471,8 @@ export const ContextMenuItemDiv = styled.div<{
     props.isDisabled &&
     props.hasSubmenu &&
     css`
-      &:hover::after {
-        border-color: transparent transparent transparent var(--grey-darkish);
+      &:hover > .context-menu-submenu-arrow {
+        color: var(--grey-darkish);
       }
     `}
 `;
@@ -560,6 +559,7 @@ export const ContextMenuItem: FC<ContextMenuItemProps> = ({
         </div>
         {subLabel && <div className="sublabel">{subLabel}</div>}
       </div>
+      {hasSubMenu && <SubmenuArrowIcon className="context-menu-submenu-arrow" aria-hidden="true" focusable="false" />}
 
       <CSSTransition
         nodeRef={submenuFloating.refs.floating}

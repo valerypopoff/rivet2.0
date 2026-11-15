@@ -18,6 +18,10 @@ export const MANAGED_WORKFLOW_OBJECT_REFERENCES_CTE = `
     SELECT replay_project_blob_key AS object_key FROM workflow_recordings
     UNION
     SELECT replay_dataset_blob_key AS object_key FROM workflow_recordings WHERE replay_dataset_blob_key IS NOT NULL
+    UNION
+    SELECT artifact->>'key' AS object_key FROM workflow_run_evidence,
+      jsonb_array_elements(manifest_json->'artifacts') artifact
+      WHERE availability IN ('pending','unavailable') AND manifest_json IS NOT NULL
   )
 `;
 

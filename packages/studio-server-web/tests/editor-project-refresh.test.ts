@@ -1,10 +1,21 @@
+import 'fake-indexeddb/auto';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { Project, ProjectId } from '@valerypopoff/rivet2-core';
 import { createEmptyEvaluationProjectData } from '@valerypopoff/rivet2-evaluations';
 import type { EditorCommandBridgeContext } from '../dashboard/editorCommandBridgeContext.js';
 import { handleRefreshOpenProjectCommand } from '../dashboard/editorProjectOpenCommands.js';
-import { bindHostedProjectRevision, getHostedProjectRevisionState } from '../io/hostedProjectRevisionTracker.js';
+import { handleDeleteWorkflowProjectCommand } from '../dashboard/editorProjectLifecycleCommands.js';
+import {
+  bindHostedProjectRevision,
+  clearHostedProjectRevisionPath,
+  getHostedProjectRevisionState,
+} from '../io/hostedProjectRevisionTracker.js';
+import {
+  clearOpenedProjectSession,
+  getOpenedProjectSession,
+  primeOpenedProjectSession,
+} from '../io/openedProjectSessionCache.js';
 
 function fixture() {
   const id = 'inactive' as ProjectId;
@@ -81,8 +92,9 @@ test('an inactive tab closed during preparation receives no dataset or snapshot 
   assert.equal(f.replaced(), 0);
 });
 
-test('a cancelled active refresh rolls back its candidate revision without a false error notification', async () => {
+test('a cancelled active refresh rolls back its candidate revision without a false error notification', async (t) => {
   const f = fixture();
+  t.after(() => clearHostedProjectRevisionPath(undefined, 'inactive'));
   f.context.getLoadedProject = () => ({ path: f.path, loaded: true });
   bindHostedProjectRevision('inactive', f.path, 'original');
   f.context.getOpenProject = () => async () => {
@@ -95,4 +107,81 @@ test('a cancelled active refresh rolls back its candidate revision without a fal
     false,
   );
   assert.equal(getHostedProjectRevisionState('inactive')?.acceptedRevisionId, 'original');
+});
+
+test('deletion follows project identity after a path is reused and preserves path-only compatibility', async (t) => {
+  for (const scenario of ['moved', 'already closed', 'path only'] as const) {
+    await t.test(scenario, async (t) => {
+      const deletedId = `deleted-${scenario}` as ProjectId;
+      const replacementId = `replacement-${scenario}` as ProjectId;
+      const deletedPath = `/workflows/${scenario}.rivet-project`;
+      const movedPath = `/workflows/moved-${scenario}.rivet-project`;
+      const deletedTabPath = scenario === 'moved' ? movedPath : deletedPath;
+      const replacementPath = scenario === 'path only' ? '/workflows/Other.rivet-project' : deletedPath;
+      const pathForProject = (id: ProjectId) => (id === deletedId ? deletedTabPath : replacementPath);
+      const openedIds = scenario === 'already closed' ? [replacementId] : [deletedId, replacementId];
+      const closed: ProjectId[] = [];
+      const cleared: ProjectId[] = [];
+      const previewsCleared: ProjectId[] = [];
+      let loadedClosed = false;
+      const currentId = scenario === 'path only' ? deletedId : replacementId;
+      const evaluation = { evaluationData: createEmptyEvaluationProjectData(), evaluationDatasets: [] };
+      for (const id of [deletedId, replacementId]) {
+        const path = pathForProject(id);
+        bindHostedProjectRevision(id, path, 'saved');
+        primeOpenedProjectSession(id, { fsPath: path, evaluation });
+        t.after(() => {
+          clearHostedProjectRevisionPath(undefined, id);
+          clearOpenedProjectSession(id);
+        });
+      }
+      const aliases = new Map([
+        [replacementPath, replacementId],
+        [movedPath, deletedId],
+      ]);
+      const context = {
+        getProjects: () => ({
+          openedProjectsSortedIds: openedIds,
+          openedProjects: Object.fromEntries(
+            openedIds.map((id) => [id, { projectId: id, fsPath: pathForProject(id) }]),
+          ),
+        }),
+        getCurrentProject: () => ({ metadata: { id: currentId } }),
+        getLoadedProject: () => ({ loaded: true, path: deletedPath }),
+        markLoadedProjectClosed: () => {
+          loadedClosed = true;
+        },
+        openedProjectPathAliases: aliases,
+        preview: {
+          previewProjectRef: { current: { projectId: currentId } },
+          clearPreviewProject: (value: { projectId: ProjectId }) => previewsCleared.push(value.projectId),
+        },
+        getWorkspace: () => ({
+          closeProject: async (id: ProjectId) => {
+            closed.push(id);
+            return true;
+          },
+          deleteProjectContext: async (id: ProjectId) => {
+            cleared.push(id);
+          },
+        }),
+      } as unknown as EditorCommandBridgeContext;
+      await handleDeleteWorkflowProjectCommand(context, {
+        type: 'delete-workflow-project',
+        path: scenario === 'path only' ? deletedPath.replaceAll('/', '\\') : deletedPath,
+        ...(scenario === 'path only' ? {} : { projectId: deletedId }),
+      });
+
+      assert.deepEqual(closed, scenario === 'already closed' ? [] : [deletedId]);
+      assert.deepEqual(cleared, [deletedId]);
+      assert.deepEqual(previewsCleared, scenario === 'path only' ? [deletedId] : []);
+      assert.equal(loadedClosed, false);
+      assert.equal(aliases.get(replacementPath), replacementId);
+      assert.equal(aliases.has(movedPath), false);
+      assert.equal(getHostedProjectRevisionState(deletedId), null);
+      assert.equal(getHostedProjectRevisionState(replacementId)?.acceptedRevisionId, 'saved');
+      assert.equal(getOpenedProjectSession(deletedId), null);
+      assert.deepEqual(getOpenedProjectSession(replacementId, replacementPath), evaluation);
+    });
+  }
 });

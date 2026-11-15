@@ -51,7 +51,7 @@ import {
   upsertWorkflowRecordingBundle,
   type WorkflowRecordingRunRow,
 } from './recordings-db.js';
-import { createWorkflowRecordingStore } from './recordings-store.js';
+import { createWorkflowRecordingStore, type RecordingQueueAdmission } from './recordings-store.js';
 import { notifyRecordingPersisted, type RecordingDiagnosticContext } from './recording-diagnostics.js';
 import { getWorkflowRecordingRuntimeConfig, isWorkflowRecordingEnabled } from './recordings-config.js';
 import {
@@ -163,8 +163,10 @@ export async function prepareWorkflowRecordingsForVmMigration(): Promise<void> {
 export function enqueueWorkflowExecutionRecordingPersistence(
   task: () => Promise<void>,
   context?: RecordingDiagnosticContext,
+  retainedBytes = 0,
+  admission?: RecordingQueueAdmission,
 ): boolean {
-  return workflowRecordingStore.enqueuePersistence(task, context);
+  return workflowRecordingStore.enqueuePersistence(task, context, retainedBytes, admission);
 }
 
 export function initializeWorkflowRecordingQueuePolicy(): Promise<void> {

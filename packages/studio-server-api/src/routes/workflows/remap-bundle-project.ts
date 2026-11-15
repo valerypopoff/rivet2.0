@@ -96,7 +96,10 @@ export function listBundleProjectReferenceIds(project: Project): Set<string> {
 export function remapBundleProject(
   project: Project,
   ids: ReadonlyMap<string, ProjectId>,
-  options: { graphs?: ReadonlyMap<string, string>; titles?: ReadonlyMap<string, string> } = {},
+  options: {
+    graphs?: ReadonlyMap<string, string>;
+    titles?: ReadonlyMap<string, string>;
+  } = {},
 ): Set<string> {
   const external = new Set<string>();
   const map = (id: ProjectId) => {

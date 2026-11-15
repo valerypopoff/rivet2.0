@@ -37,10 +37,39 @@ void test('side-specific equivalence suppresses copied IDs without mutating save
   const diff = compareProjects(before, after, identity);
   assert.equal(diff.metadataChanged, false);
   assert.equal(diff.graphs.g?.nodes.n?.kind, 'unchanged');
+  assert.deepEqual(getProjectNodeFieldComparisons(diff.graphs.g!.nodes.n!), []);
   assert.equal(JSON.stringify([before, after]), saved);
   assert.equal(compareProjects(project('a', 'a'), project('a1', 'a1'), identity).graphs.g?.nodes.n?.kind, 'unchanged');
   assert.equal(compareProjects(before, project('a1', 'b'), identity).graphs.g?.nodes.n?.kind, 'changed');
   assert.equal(compareProjects(project('a', 'b1'), after, identity).graphs.g?.nodes.n?.kind, 'changed');
+});
+void test('paired project names and locations are labels, while other project settings remain meaningful', () => {
+  const before = project('a', 'b');
+  const after = project('a1', 'b1');
+  after.metadata.title = 'Renamed project';
+  after.metadata.path = '/different/location';
+  assert.equal(compareProjects(before, after, identity).metadataChanged, false);
+  assert.equal(compareProjects(before, after).metadataChanged, true);
+  after.metadata.description = 'Changed description';
+  assert.equal(compareProjects(before, after, identity).metadataChanged, true);
+});
+void test('reselecting a corresponding project ignores picker scope and an explicit default version', () => {
+  const before = project('a', 'b');
+  const after = project('a1', 'b1');
+  delete (before.graphs.g!.nodes[0]!.data as Record<string, unknown>).targetVersion;
+  (after.graphs.g!.nodes[0]!.data as Record<string, unknown>).targetScope = 'same-bundle';
+  const original = JSON.stringify([before, after]);
+  const diff = compareProjects(before, after, identity);
+  assert.equal(diff.graphs.g?.nodes.n?.kind, 'unchanged');
+  assert.deepEqual(getProjectNodeFieldComparisons(diff.graphs.g!.nodes.n!), []);
+  assert.equal(JSON.stringify([before, after]), original);
+  assert.equal(compareProjects(before, after).graphs.g?.nodes.n?.kind, 'changed');
+  (after.graphs.g!.nodes[0]!.data as Record<string, unknown>).targetVersion = 'published';
+  const changed = compareProjects(before, after, identity);
+  assert.deepEqual(
+    getProjectNodeFieldComparisons(changed.graphs.g!.nodes.n!).map((f) => f.field),
+    ['data.targetVersion'],
+  );
 });
 void test('real version/target changes and raw inspector values survive equivalence', () => {
   const diff = compareProjects(project('a', 'b'), project('a1', 'foreign', 'published'), identity);

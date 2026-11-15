@@ -5,7 +5,7 @@ import { setTimeout as delay } from 'node:timers/promises';
  * A future schema change must extend this matrix, not inherit a generic green flag. */
 export function assertProbedSchemaTransition(from, to) {
   assert.ok(
-    (from === 17 && to === 18) || (from === 18 && to === 19),
+    (from === 17 && to === 18) || (from === 18 && to === 19) || (from === 19 && to === 20),
     'Schema transition has no reviewed mixed-writer probe',
   );
 }
@@ -49,10 +49,10 @@ export function readSchemaRepositoryReceipt(output, { role, version, runId }) {
  * The actual migration SQL and actual rolling budgets come from the candidate. */
 export async function probeSchemaLockContention(pool, schema, migration) {
   assert.match(schema, /^rivet_schema_probe_[a-f0-9]{32}$/);
-  assert.ok([18, 19].includes(migration.version));
-  const table = migration.version === 18 ? 'workflow_recordings' : 'workflow_revisions';
-  const id = migration.version === 18 ? 'recording_id' : 'revision_id';
-  const column = migration.version === 18 ? 'cost_json' : 'reference_summary';
+  assert.ok([18, 19, 20].includes(migration.version));
+  const table = migration.version === 19 ? 'workflow_revisions' : 'workflow_recordings';
+  const id = migration.version === 19 ? 'revision_id' : 'recording_id';
+  const column = migration.version === 18 ? 'cost_json' : migration.version === 19 ? 'reference_summary' : undefined;
   const clients = [];
   try {
     for (let i = 0; i < 3; i++) clients.push(await pool.connect());
@@ -64,6 +64,10 @@ export async function probeSchemaLockContention(pool, schema, migration) {
       .rows[0].id;
     await blocker.query('BEGIN');
     await blocker.query(`SELECT * FROM ${schema}.${table}`);
+    // Installing the deletion trigger takes SHARE ROW EXCLUSIVE. It waits for
+    // a writer, while ordinary readers remain compatible with that lock.
+    if (migration.version === 20)
+      await blocker.query(`UPDATE ${schema}.${table} SET ${id}=${id} WHERE ${id}='preserved'`);
     await ddl.query('BEGIN');
     await ddl.query(
       `SET LOCAL search_path TO ${schema}; SET LOCAL lock_timeout='1000ms'; SET LOCAL statement_timeout='5000ms'`,
@@ -105,7 +109,7 @@ export async function probeSchemaLockContention(pool, schema, migration) {
     await ddl.query(migration.sql);
     await ddl.query('COMMIT');
     assert.deepEqual((await reader.query(`SELECT * FROM ${schema}.${table} WHERE ${id}='preserved'`)).rows, [
-      { [id]: 'preserved', [column]: null },
+      { [id]: 'preserved', ...(column ? { [column]: null } : {}) },
     ]);
     assert.equal((await reader.query(`SELECT count(*)::int AS n FROM ${schema}.${table}`)).rows[0].n, 10001);
     assert.equal(

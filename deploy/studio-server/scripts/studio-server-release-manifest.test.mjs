@@ -150,10 +150,36 @@ function promoted(overrides = {}, options = {}) {
 }
 
 test('release manifest reads the source-owned managed schema contract', () => {
-  assert.deepEqual(readManagedWorkflowSchemaReleaseContract(rootDir), {
-    version: 19,
-    minimumRollbackCompatibleVersion: 17,
-  });
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'rivet-schema-contract-'));
+  const sourcePath = path.join(
+    directory,
+    'packages/studio-server-api/src/routes/workflows/managed/schema-migrations.ts',
+  );
+  fs.mkdirSync(path.dirname(sourcePath), { recursive: true });
+  const writeContract = (version, minimum) =>
+    fs.writeFileSync(
+      sourcePath,
+      `export const CURRENT_MANAGED_WORKFLOW_SCHEMA_VERSION = ${version};\n` +
+        `export const MINIMUM_ROLLBACK_COMPATIBLE_MANAGED_WORKFLOW_SCHEMA_VERSION = ${minimum};\n`,
+    );
+  try {
+    for (const [version, minimum] of [
+      [20, 17],
+      [21, 18],
+    ]) {
+      writeContract(version, minimum);
+      assert.deepEqual(readManagedWorkflowSchemaReleaseContract(directory), {
+        version,
+        minimumRollbackCompatibleVersion: minimum,
+      });
+    }
+    writeContract(20, 21);
+    assert.throws(() => readManagedWorkflowSchemaReleaseContract(directory), /cannot exceed/);
+    fs.writeFileSync(sourcePath, 'export const CURRENT_MANAGED_WORKFLOW_SCHEMA_VERSION = 20;\n');
+    assert.throws(() => readManagedWorkflowSchemaReleaseContract(directory), /Could not read/);
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
 });
 
 test('promotion preserves exact autoscaling evidence in the immutable manifest digest', () => {

@@ -300,6 +300,19 @@ export class StudioMetrics {
   recordWorkflowRecordingPersistenceFailure(): void {
     this.incrementCounter('rivet_workflow_recording_persistence_failures_total', {});
   }
+  setWorkflowRecordingEvidence(input: {
+    pending: number;
+    unavailable: number;
+    unknown: number;
+    pendingBytes: number;
+    oldestSeconds: number;
+  }): void {
+    this.setGauge('rivet_workflow_run_evidence_pending', {}, input.pending);
+    this.setGauge('rivet_workflow_run_evidence_unavailable', {}, input.unavailable);
+    this.setGauge('rivet_workflow_run_evidence_unknown_outcomes', {}, input.unknown);
+    this.setGauge('rivet_workflow_run_evidence_pending_bytes', {}, input.pendingBytes);
+    this.setGauge('rivet_workflow_run_evidence_oldest_pending_seconds', {}, input.oldestSeconds);
+  }
 
   recordRecordingInputCacheEvent(
     event: 'hit' | 'miss' | 'shared' | 'load' | 'evicted' | 'expired' | 'oversized',

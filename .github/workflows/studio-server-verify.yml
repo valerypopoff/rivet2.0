@@ -406,6 +406,9 @@ jobs:
       - name: Verify PostgreSQL recording families, presence and query bounds
         if: matrix.lane == 'managed'
         run: yarn workspace @valerypopoff/rivet-studio-server-api run test:statistics-managed
+      - name: Verify recording crash recovery and immutable handoffs
+        if: matrix.lane == 'managed'
+        run: yarn workspace @valerypopoff/rivet-studio-server-api run test:recording-durability-managed
       - name: Verify VM-to-managed copy, retry, and exact readback
         if: matrix.lane == 'managed'
         run: yarn workspace @valerypopoff/rivet-studio-server-api run test:migration-managed

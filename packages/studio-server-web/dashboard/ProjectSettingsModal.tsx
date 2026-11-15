@@ -1,7 +1,7 @@
 import Button, { LoadingButton } from '@atlaskit/button';
 import ModalDialog, { ModalBody, ModalTransition } from '@atlaskit/modal-dialog';
 import TextField from '@atlaskit/textfield';
-import { type FC, useEffect, useMemo, type ReactNode, useState } from 'react';
+import { type FC, Fragment, useEffect, useMemo, type ReactNode, useState } from 'react';
 
 import {
   formatLastPublishedAtLabel,
@@ -229,62 +229,39 @@ export const ProjectSettingsModal: FC<ProjectSettingsModalProps> = ({
   const workflowPublishButtonLabel = isUnpublishedProject ? 'Publish' : 'Update';
   const showWebAppOauthSettings = routeConfig.webAppsAuthMode === 'oauth';
   const renderTabs = () => (
-    <SegmentedControl className="project-settings-section-switcher" label="Project settings sections" role="tablist">
-      <SegmentedControlButton
-        selected={activeTab === 'workflow'}
-        role="tab"
-        aria-selected={activeTab === 'workflow'}
-        disabled={!canCloseModal}
-        onClick={() => setActiveTab('workflow')}
-      >
-        Endpoint
-      </SegmentedControlButton>
-      <SegmentedControlButton
-        selected={activeTab === 'web-apps'}
-        role="tab"
-        aria-selected={activeTab === 'web-apps'}
-        disabled={!canCloseModal}
-        onClick={() => setActiveTab('web-apps')}
-      >
-        Web apps
-      </SegmentedControlButton>
-      <SegmentedControlButton
-        selected={activeTab === 'llm-health'}
-        role="tab"
-        aria-selected={activeTab === 'llm-health'}
-        disabled={!canCloseModal}
-        onClick={() => setActiveTab('llm-health')}
-      >
-        LLM profile suspension
-      </SegmentedControlButton>
-      <SegmentedControlButton
-        selected={activeTab === 'classifier-health'}
-        role="tab"
-        aria-selected={activeTab === 'classifier-health'}
-        disabled={!canCloseModal}
-        onClick={() => setActiveTab('classifier-health')}
-      >
-        Decision AI profile suspension
-      </SegmentedControlButton>
-      <SegmentedControlButton
-        selected={activeTab === 'history'}
-        role="tab"
-        aria-selected={activeTab === 'history'}
-        disabled={!canCloseModal}
-        onClick={() => setActiveTab('history')}
-      >
-        Published version history
-      </SegmentedControlButton>
-      <SegmentedControlButton
-        selected={activeTab === 'danger'}
-        role="tab"
-        aria-selected={activeTab === 'danger'}
-        disabled={!canCloseModal}
-        onClick={() => setActiveTab('danger')}
-      >
-        Danger zone
-      </SegmentedControlButton>
-    </SegmentedControl>
+    <div
+      className="project-settings-tabs project-settings-vertical-tabs"
+      role="tablist"
+      aria-orientation="vertical"
+      aria-label="Project settings sections"
+    >
+      {(
+        [
+          ['workflow', 'Endpoint'],
+          ['web-apps', 'Web apps'],
+          ['llm-health', 'LLM profile suspension'],
+          ['classifier-health', 'Decision AI profile suspension'],
+          ['history', 'Published version history'],
+          ['danger', 'Danger zone'],
+        ] as const
+      ).map(([id, label]) => (
+        <Fragment key={id}>
+          {id === 'llm-health' || id === 'history' || id === 'danger' ? (
+            <div className="project-settings-tab-separator" role="separator" aria-hidden="true" />
+          ) : null}
+          <button
+            type="button"
+            className={`project-settings-tab${activeTab === id ? ' active' : ''}`}
+            role="tab"
+            aria-selected={activeTab === id}
+            disabled={!canCloseModal}
+            onClick={() => setActiveTab(id)}
+          >
+            {label}
+          </button>
+        </Fragment>
+      ))}
+    </div>
   );
   const renderWorkflowSettings = () => (
     <div className="project-settings-tab-panel" role="tabpanel">
@@ -574,7 +551,6 @@ export const ProjectSettingsModal: FC<ProjectSettingsModalProps> = ({
                       <span className="project-settings-modal-title">{baseFileName}</span>
                     </div>
                   </div>
-                  {renderTabs()}
                 </div>
                 <button
                   type="button"
@@ -587,62 +563,65 @@ export const ProjectSettingsModal: FC<ProjectSettingsModalProps> = ({
                 </button>
               </div>
 
-              <div className="project-settings-modal-content">
-                {!loadingWebApps && !reviewedPublication ? (
-                  <div className="project-settings-publication-conflict" role="alert">
-                    <span>
-                      {publicationConflict
-                        ? 'The project or its publication changed during your attempt. Review the latest state before trying again; your edits remain here.'
-                        : 'Publication state could not be loaded. Review the latest state before changing publication.'}
-                    </span>
-                    <Button appearance="subtle" onClick={() => void reviewLatestPublication()}>
-                      Review latest
-                    </Button>
-                  </div>
-                ) : null}
-                {activeTab === 'workflow' ? renderWorkflowSettings() : null}
-                {activeTab === 'web-apps' ? renderWebAppsSettings() : null}
-                {activeTab === 'classifier-health' ? (
-                  <LLMProfileHealthSettings
-                    key="classifier"
-                    family="classifier"
-                    activeProject={activeProject}
-                    onOpenRecording={(recordingId) => {
-                      onClose();
-                      onOpenRecording(recordingId);
-                    }}
-                  />
-                ) : null}
-                {activeTab === 'llm-health' ? (
-                  <LLMProfileHealthSettings
-                    activeProject={activeProject}
-                    onOpenRecording={(recordingId) => {
-                      onClose();
-                      onOpenRecording(recordingId);
-                    }}
-                  />
-                ) : null}
-                {activeTab === 'history' ? (
-                  <div className="project-settings-tab-panel" role="tabpanel" aria-label="Published version history">
-                    <WorkflowPublishedVersionHistoryPanel
-                      project={displayProject}
-                      isOpen={isOpen}
-                      onBusyChange={setHistoryBusy}
-                      onPreviewVersion={(relativePath, versionId) => {
+              <div className="project-settings-modal-content project-settings-sections-layout">
+                <aside>{renderTabs()}</aside>
+                <div className="project-settings-section-content">
+                  {!loadingWebApps && !reviewedPublication ? (
+                    <div className="project-settings-publication-conflict" role="alert">
+                      <span>
+                        {publicationConflict
+                          ? 'The project or its publication changed during your attempt. Review the latest state before trying again; your edits remain here.'
+                          : 'Publication state could not be loaded. Review the latest state before changing publication.'}
+                      </span>
+                      <Button appearance="subtle" onClick={() => void reviewLatestPublication()}>
+                        Review latest
+                      </Button>
+                    </div>
+                  ) : null}
+                  {activeTab === 'workflow' ? renderWorkflowSettings() : null}
+                  {activeTab === 'web-apps' ? renderWebAppsSettings() : null}
+                  {activeTab === 'classifier-health' ? (
+                    <LLMProfileHealthSettings
+                      key="classifier"
+                      family="classifier"
+                      activeProject={activeProject}
+                      onOpenRecording={(recordingId) => {
                         onClose();
-                        onPreviewPublishedVersion(relativePath, versionId);
-                      }}
-                      onRestored={async (response) => {
-                        try {
-                          await onPublishedVersionRestored(response);
-                        } finally {
-                          await reviewLatestPublication();
-                        }
+                        onOpenRecording(recordingId);
                       }}
                     />
-                  </div>
-                ) : null}
-                {activeTab === 'danger' ? renderDangerSection() : null}
+                  ) : null}
+                  {activeTab === 'llm-health' ? (
+                    <LLMProfileHealthSettings
+                      activeProject={activeProject}
+                      onOpenRecording={(recordingId) => {
+                        onClose();
+                        onOpenRecording(recordingId);
+                      }}
+                    />
+                  ) : null}
+                  {activeTab === 'history' ? (
+                    <div className="project-settings-tab-panel" role="tabpanel" aria-label="Published version history">
+                      <WorkflowPublishedVersionHistoryPanel
+                        project={displayProject}
+                        isOpen={isOpen}
+                        onBusyChange={setHistoryBusy}
+                        onPreviewVersion={(relativePath, versionId) => {
+                          onClose();
+                          onPreviewPublishedVersion(relativePath, versionId);
+                        }}
+                        onRestored={async (response) => {
+                          try {
+                            await onPublishedVersionRestored(response);
+                          } finally {
+                            await reviewLatestPublication();
+                          }
+                        }}
+                      />
+                    </div>
+                  ) : null}
+                  {activeTab === 'danger' ? renderDangerSection() : null}
+                </div>
               </div>
             </div>
           </ModalBody>

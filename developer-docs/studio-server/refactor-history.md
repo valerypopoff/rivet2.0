@@ -4,6 +4,249 @@ This document records intentional architecture and cleanup changes that future m
 
 It is not a changelog. Keep entries focused on why a refactor happened, which ownership boundary changed, and which verification paths should be kept alive.
 
+## 2026-11-15 - Project-tree Bundle Action Ownership
+
+`useWorkflowBundleActions.ts` collects bundle modal state, conversion and
+duplication requests, merge initiation, and upload/deletion completion handling.
+The project-tree controller composes the hook and forwards its existing public
+members. Tree synchronization, comparison, drag/drop interpretation and the
+modal implementations retain their existing owners.
+
+Keep the synchronous conversion/duplication guard, action-lifetime checks and
+fresh-tree reconciliation together. Obsolete completions still reconcile
+accepted mutations while suppressing stale presentation. Download target and
+visibility remain independent so closing and reopening preserves the mounted
+export job. Merge close restores focus to a connected opener.
+Committed-folder expansion flattens the fresh tree once and uses its current
+location. The existing conversion/duplication scenario includes a copy moved
+under another parent before reconciliation, preserving coverage of stable
+identity and ancestor expansion.
+
+Controlled-response browser cases cover changing project selection during
+duplication success and conversion rejection. Existing bundle browser scenarios
+cover modal lifetime, focus, capability fallback, uncertain outcomes and tree
+synchronization. The [separation record](bundle-actions-separation-plan.md)
+contains verification results and the extraction's behavior contract.
+
+An adjacent review reproduced an older deletion race. The editor chose its
+target by path despite receiving the deleted project ID, so a delayed result
+could close and clear a replacement project. Deletion now uses that ID for tab,
+revision and local-state cleanup, with normalized-path compatibility for older
+callers. Dashboard selection follows the editor's actual close transition.
+Regression checks cover path reuse, a moved/deleted tab, an already-closed tab
+and legacy commands, plus receipt recovery after selecting another project.
+An additional browser reproduction found that deletion could finish before an
+earlier project load and leave the deleted member open. Deletion now shares the
+existing project-command queue, preserving receive order with opens, refreshes,
+path moves and reconciliation. Its regression holds the real editor's project
+load until the server deletion completes, then verifies the member tab closes.
+Command context reads project, tab and loaded-path state from the Jotai store
+instead of mirrored React refs. This makes the preceding queued command's
+updates visible immediately and removes three redundant refs and two props.
+Keep the two real-editor deletion regressions and their acknowledged project-ID
+checks. Pending menu guards share the navigation scenarios, common deletion
+presentation is checked once, and failed-reload assertions stay with the
+conflict-settlement test. This removes duplicate setups while keeping coverage
+of path reuse, command ordering, explicit confirmation and uncertain outcomes.
+
+## 2026-11-15 - Evaluation HTTP Ownership
+
+The Evaluation API previously combined shared-library operations, hosted job
+controls and run evidence in one file. `hosted-evaluation-http.ts` and
+`evaluation-library-http.ts` now register their five handlers each on the
+original router. The parent keeps thirteen run/evidence handlers, both parsers
+and five existing exports. Stores, scheduling, notifications and workflow
+execution are unchanged; registration occurs only at startup.
+
+Full-app HTTP tests cover authorization before parsing, hosted admission/error
+translation, disabled submissions with accessible state/cancel, and coordinator
+ownership of deletion. A real filesystem-library scenario checks revision
+conflicts, ordered notifications, idempotent imports and an accepted mutation
+finishing exactly once after its client disconnects. Preserve these behavior
+checks rather than introducing permanent source-shape tests. Suite normalization,
+in-use dataset rejection and atomic suite/dataset removal also run through the
+real HTTP route; invalid hosted-state queries must not reach the coordinator. The
+[separation record](evaluation-http-separation-plan.md) holds local verification
+and timing evidence.
+
+An adjacent review found an older stream-opening race: a library mutation could
+finish between the initial revision read and notification subscription. The
+stream owner now subscribes before that read and retains only the latest event
+until handover, with epoch and failed/disconnected-read handling. This correction
+uses one snapshot read and changes no workflow execution path.
+
+Keep library import/conflict coverage in the real HTTP library fixture and the
+incremental-run fixture focused on start, progress and finalization. Shared
+profile tests own authentication coverage. Stream races use complete parsed
+events and controlled handoffs; isolated event tests retain only reset/error
+cases that cannot be exercised conveniently through normal HTTP. Avoid copying
+the same setup or adding sleeps to prove ordering.
+
+## 2026-11-14 - App Settings Upgrade And Migration HTTP Ownership
+
+`local-upgrade-http.ts` owns sixteen local-upgrade handlers and their download
+guard; `vm-migration-http.ts` owns ten VM migration handlers and four schemas.
+The parent App Settings router keeps its three parser instances, early VM guard,
+ordinary settings and compatibility exports. Handler bodies, middleware order
+and the existing service singletons are preserved, with no added execution work.
+
+Profile tests retain authorization-before-parsing, exact body limits, storage
+error responses and route absence on execution/evaluation. Recordings,
+publication and storage-operator routes share one server fixture per profile;
+keep their distinct assertions without duplicating setup. The isolated backup
+and repair scenarios exercise pre-header errors, post-header failures and
+client-disconnected responses retaining accepted work until the callback settles.
+Completion observes the real accepted-work release, without an event-loop delay;
+stream consumers reject premature closure even when no `error` event is emitted.
+Direct status-read checks retain operator authorization without mutation intent.
+Full-app checks also establish that trusted-client access to ordinary settings
+cannot bypass either migration guard, including when ordinary UI authentication
+is disabled. Download tests reject timeout-driven closure as false evidence of
+correct callback cleanup.
+The migration browser fixture now supplies setup eligibility so tab visibility
+does not depend on an ambient server. See the
+[separation record](app-settings-http-separation-plan.md) for local results.
+
+## 2026-11-14 - Publication And Version-history HTTP Ownership
+
+`publication-http.ts` owns the thirteen publication/history handlers and their
+schemas. Two registration calls preserve the original blocks and leave reference
+routes between them; no nested router or request-time abstraction is added.
+The existing parser, notifier, publication services and storage owners are reused.
+
+The history fixture exercises actual HTTP reads, downloads, annotations and
+restoration while checking saved bytes, unchanged state after rejection, and tree
+notifications, including binary dataset restoration through HTTP. Recording and
+publication checks share full-app fixtures per profile and preserve authentication
+before parsing and route absence on execution/evaluation. Existing publication,
+endpoint access and web-app suites retain execution-dependent behavior. See the
+[separation record](publication-http-separation-plan.md) for local evidence.
+
+## 2026-11-14 - Recording And Run-statistics HTTP Ownership
+
+The workflow parent router mixed recording browsing, input search, replay and
+statistics with unrelated project mutations and publication routes.
+`recording-http.ts` now owns the ten recording/statistics registrations and
+their six schemas. A single registration call keeps the existing router,
+middleware instances and ordering; no extra router traversal or execution work
+is introduced. Search, storage and execution implementations remain unchanged.
+
+`api-profile.test.ts` checks route exposure and operator access in all four
+profiles; remaining shared validation branches run once on the control profile.
+`workflow-recordings-http.test.ts` uses the control API harness and directly
+persisted fixtures for browsing and deletion. Actual execution-to-recording tests
+keep the execution harness. Its cancellation test checks that disconnecting one
+of two searches cancels only its input read, retains accepted work until
+completion and forwards ordinary failures. Completion checks use the accepted-work
+drain rather than an event-loop timing assumption.
+The [implementation record](recording-http-separation-plan.md) contains the
+structural comparison, compiled measurements and browser verification. Keep
+that distinction: mocked browser journeys prove UI compatibility; actual API
+tests and compiled probes exercise the handlers.
+
+## 2026-11-14 - Web-app HTTP And Workflow Endpoint Ownership
+
+### Why
+
+One module owned six routers, mixing workflow bearer authorization and execution
+with web-app browser authorization, action preparation and HTML rendering. The
+shared runtime/session owners already existed; combining HTTP and WebSocket
+execution would change their deliberate lifecycle differences.
+
+### Ownership
+
+- `web-app-http.ts` owns published/latest web-app HTTP routes, including one
+  shared action-preflight counter and prepared-request map.
+- `execution.ts` owns workflow endpoints and keeps all compatibility exports.
+- `execution-http-support.ts` owns common response/timing/telemetry functions
+  and published capacity acquisition. Function bodies and request ordering are
+  preserved apart from removing the unreachable missing-graph branch after
+  successful preflight; this is not another middleware or execution framework.
+- App mounts, shared runtime options, `ExecutionSession`, storage adapters and
+  the WebSocket gateway remain unchanged.
+
+### Verification To Preserve
+
+- Profile and body-admission tests retain authorization-before-parsing, dynamic
+  paths and distinct error envelopes. Web-app HTTP/Socket tests cover revisions,
+  browser storage, context filtering and recordings. A missing draft UI graph
+  must still reject malformed action JSON with 404 before parsing, while its
+  published snapshot remains executable.
+- `workflow-async-process.test.ts` retains real early-response, client-loss,
+  concurrent-request and shutdown coverage; registry unit tests alone do not
+  prove that routes hold their permits through physical completion.
+- The [separation record](web-app-http-separation-plan.md) tracks local checks
+  and paired HTTP measurements. Timing measurements count complete responses
+  and persisted recordings; queue drain alone cannot prove recording success.
+- Published/latest HTML and JSON snapshot checks share a fixture while asserting
+  each surface separately. Coordinator and preflight unit tests advance controlled
+  clocks; actual HTTP, WebSocket and process-shutdown tests retain their real
+  transport coverage.
+
+## 2026-11-14 - Workflow Storage Compatibility Facade
+
+### Why
+
+The workflow storage facade mixed routing with filesystem transactions, project
+materialization and repeated publication dispatch. SQL backends already shared
+narrow repository contracts; forcing legacy filesystem storage into the same
+combined adapter would hide real result and path differences.
+
+### Ownership
+
+- `legacy-project-storage.ts` owns filesystem tree/hosted IO and identity-safe
+  save orchestration around the existing transaction helper. Derived statistics
+  remain post-commit, with execution invalidation guaranteed by `finally`.
+- `legacy-execution-storage.ts` owns filesystem execution/reference loading and
+  cache/policy invalidation. One web-app loader handles published snapshots and
+  saved drafts without duplicating materialization. `filesystem-project-identity.ts`
+  shares the physical ID scan between save reconciliation and Subgraph resolution.
+- `storage-backend.ts` keeps compatibility exports and shared routing/policy.
+  One publication-selector callback replaces seven private dispatch helpers.
+  Command snapshots, invalid-command error precedence and legacy writer admission
+  retain their existing timing. Recording persistence reuses its existing option
+  contract and remains asynchronous.
+- `WorkflowStorageServices` and serving/offline resource composition are
+  unchanged. No schema, stored format, protocol, cache design or feature changed.
+
+### Verification To Preserve
+
+- `hosted-project-title.test.ts` checks legacy save result shape, save identity
+  and request capture before waiting and after file promotion. Returned and tree
+  revisions must describe the stored project/dataset pair. Stale-save conflicts
+  cover project-only and dataset-only edits independently; fixture cleanup has
+  one suite owner.
+- The hosted Save As browser case verifies new project identity and a subsequent
+  in-place save against disposable PostgreSQL/MinIO. Its forwarded browser routes
+  drain before the API fixture closes, preserving failure evidence and cleanup.
+- `workflow-publication-filesystem.test.ts` covers snapshots, unknown-command
+  rejection before storage construction and writer ordering against a later read.
+- Existing execution/cache, tree, web-app, SQLite, recording and owner suites
+  remain the behavior checks. `test:async-managed` exercises actual managed
+  serving with local PostgreSQL/MinIO; mocked browser cases prove UI compatibility.
+- The existing local-upgrade runtime's ordinary SQLite serving case checks the
+  real facade's save, publish, published/latest split and unpublish, while the
+  parent checks that the retained legacy files are unchanged. Adapter-only tests
+  do not replace this routing coverage.
+- `workflow-execution-filesystem.test.ts` verifies saved graphs are refreshed
+  without rebuilding the routing index, including after statistics writes fail.
+  Equal-size edits retain the original file timestamp so metadata revalidation
+  cannot conceal missing invalidation. Assert returned graphs instead of private
+  cache-method calls.
+- Backup status tests create only private control storage. Archive tests add real
+  source files and fingerprint them; status-only cases need no recording payload
+  or source-tree scan.
+- See [workflow-storage-routing-plan.md](./workflow-storage-routing-plan.md) for
+  the selected browser checks and paired endpoint measurements.
+
+Final verification also isolated an existing Windows local-upgrade defect:
+status readers could make atomic progress-file replacement fail with `EPERM`.
+The separate control-record fix retries only the same frozen record's promotion,
+with a small Windows-only bound; preparation, backup status and repair-journal
+writers share that primitive. It never repeats work or changes endpoint IO.
+Real-handle regressions fail before the repair and pass afterward. Backup-status
+failure also cleans its owned temporary file while preserving prior evidence.
+
 ## 2026-09-03 - Crash-Safe Filesystem Project Saves
 
 ### Why
@@ -13,7 +256,7 @@ The filesystem hosted-save path previously replaced `.rivet-project` before writ
 ### Ownership
 
 - `filesystem-project-transactions.ts` owns validation, exclusive staging, checksummed journals, backup/promotion order, the durable committed marker, cleanup, startup and path-specific recovery, the storage capability probe, and the shared filesystem read/write coordinator.
-- `storage-backend.ts` keeps hosted identity validation and cache invalidation, but canonical project/dataset persistence crosses the transaction helper. Derived project statistics update only after the committed marker and are never recovery evidence.
+- `legacy-project-storage.ts` now keeps hosted identity validation and calls the injected execution invalidator; `storage-backend.ts` selects it for filesystem IO. Canonical project/dataset persistence crosses the transaction helper. Derived project statistics update only after the committed marker and are never recovery evidence.
 - Server startup does not listen until recovery completes. Ambiguous evidence fails closed and remains on disk. Shutdown drains the coordinator, while hard-stop correctness comes from journal recovery.
 - The Kubernetes chart remains managed-storage-only and singleton at the backend. Its StatefulSet uses ordered, single-ordinal rolling replacement—the StatefulSet equivalent of a no-overlap Recreate rollout—and execution replicas remain the scaling boundary.
 - This closes mixed filesystem project/dataset generations. Stale-revision conflict detection between administrators remains separate work; the save-target identity check prevents cross-project writes but does not reject two edits based on the same older revision.

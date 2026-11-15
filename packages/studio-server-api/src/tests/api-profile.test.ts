@@ -19,12 +19,15 @@ import { buildDeploymentStatus, getDeploymentTopology } from '../deployment-stat
 import { isWebAppSocketRouteEnabled } from '../web-app-action-websocket.js';
 import { createHttpError } from '../utils/httpError.js';
 import { MAX_LOCAL_EDITOR_RECORDING_REQUEST_BYTES } from '../routes/workflows/local-editor-recording-limits.js';
+import { MAX_EVALUATION_RECORDING_BYTES } from '../routes/workflows/evaluation-runs.js';
 import { writeWorkflowEndpointAuthSettings } from '../workflow-endpoint-auth-settings.js';
 import { enterVmMigrationMaintenance, leaveVmMigrationMaintenance } from '../vm-migration-maintenance.js';
 import { LocalMetadataTransitionJournal } from '../local-metadata/transition-journal.js';
 import { createProxySettingsSnapshot } from '../proxy-settings-snapshot.js';
 import { setLegacyRestorePaused, setLegacyRestoreWarmup } from '../legacy-restore/service.js';
 import { configureRequestReceiveDeadlines } from '../legacy-restore/receive-deadline.js';
+import { disposeWorkflowStorage } from '../routes/workflows/storage-backend.js';
+import { resetWorkflowRecordingStorageForTests } from '../routes/workflows/recordings.js';
 
 // test-style: fixture-read: Only the test-owned temporary SQLite journal is read to verify recovery requests leave its bytes unchanged.
 
@@ -32,6 +35,7 @@ const relevantEnvKeys = [
   'RIVET_KEY',
   'RIVET_CORS_ALLOWED_ORIGINS',
   'RIVET_WORKFLOWS_ROOT',
+  'RIVET_WORKFLOW_RECORDINGS_ROOT',
   'RIVET_APP_DATA_ROOT',
   'RIVET_RUNTIME_LIBRARIES_ROOT',
   'RIVET_WORKSPACE_ROOT',
@@ -44,6 +48,15 @@ const relevantEnvKeys = [
   'RIVET_LEGACY_RESTORE_ROOT',
   'RIVET_LOCAL_METADATA_CONTROL_ROOT',
   'RIVET_LOCAL_METADATA_BOOT_REVISION',
+  'RIVET_LOCAL_METADATA_BOOT_GENERATION',
+  'RIVET_LOCAL_METADATA_UPGRADE_ENABLED',
+  'RIVET_LOCAL_METADATA_UI_ROOT',
+  'RIVET_LOCAL_METADATA_UI_PREPARE_AVAILABLE',
+  'RIVET_LOCAL_METADATA_UI_RESTART_AVAILABLE',
+  'RIVET_LOCAL_METADATA_SUPERVISOR_TOKEN',
+  'RIVET_BACKEND_HEALTH_PORT',
+  'RIVET_VM_MIGRATION_EDITOR_CONTROL',
+  'RIVET_WORKFLOW_STORAGE_BACKEND',
   'RIVET_LEGACY_RESTORE_ENABLED',
 ] as const;
 
@@ -122,6 +135,7 @@ async function withApiEnv(
   process.env.RIVET_KEY = 'phase4-shared-key';
   process.env.RIVET_WORKSPACE_ROOT = tempRoot;
   process.env.RIVET_WORKFLOWS_ROOT = path.join(tempRoot, 'workflows');
+  process.env.RIVET_WORKFLOW_RECORDINGS_ROOT = path.join(tempRoot, 'recordings');
   process.env.RIVET_APP_DATA_ROOT = path.join(tempRoot, 'app-data');
   process.env.RIVET_RUNTIME_LIBRARIES_ROOT = path.join(tempRoot, 'runtime-libraries');
 
@@ -182,6 +196,276 @@ function trustedProxyHeaders(): Record<string, string> {
     'x-rivet-proxy-auth': getExpectedProxyAuthToken(),
   };
 }
+
+for (const profile of ['control', 'combined', 'execution', 'evaluation'] as const) {
+  test(`${profile} preserves control-plane HTTP access and validation`, async (t) => {
+    await withApiEnv({ RIVET_SERVER_UI_AUTH_MODE: 'key' }, async () => {
+      t.mock.method(console, 'error', () => {});
+      const server = await startServer(profile);
+      const exposed = profile === 'control' || profile === 'combined';
+      const operator = { ...trustedProxyHeaders(), cookie: `rivet_ui_token=${getExpectedUiSessionToken()}` };
+      try {
+        for (const [pathname, method, body, status, error] of [
+          ['/recordings/runs?page=0', 'GET', undefined, 500, 'Internal server error'],
+          ['/recordings/missing', 'DELETE', undefined, 404, 'Recording not found'],
+          ['/run-statistics/query', 'POST', '{', 400, undefined],
+          ['/projects/published-versions', 'GET', undefined, 400, 'Missing relativePath'],
+          ['/projects/published-versions/restore', 'POST', '{', 400, undefined],
+          ['/projects/web-apps', 'GET', undefined, 400, 'Missing relativePath'],
+          ['/projects/web-apps/publish', 'POST', '{', 400, undefined],
+          ['/projects/publish', 'POST', '{', 400, undefined],
+          ['/evaluation-runs?projectId=project-a', 'GET', undefined, 200, undefined],
+          ['/evaluation-runs/history', 'GET', undefined, 400, 'Invalid evaluation history query.'],
+          ['/evaluation-runs/hosted', 'POST', '{', 400, undefined],
+          ['/evaluation-runs/library/mutations', 'POST', '{', 400, undefined],
+          ['/evaluation-runs/recordings/missing', 'PUT', '{', 400, undefined],
+        ] as const) {
+          for (const headers of [{}, trustedProxyHeaders(), operator]) {
+            const response = await fetch(`${server.baseUrl}/api/workflows${pathname}`, {
+              method,
+              headers: { ...headers, 'content-type': 'application/json' },
+              body,
+            });
+            const expectedStatus = !exposed ? 404 : headers === operator ? status : 403;
+            const expectedError = !exposed ? 'Not found' : headers === operator ? error : 'Forbidden';
+            assert.equal(response.status, expectedStatus, `${method} ${pathname}`);
+            const result = await response.json();
+            if (expectedError) assert.deepEqual(result, { error: expectedError });
+            else if (expectedStatus === 200) assert.deepEqual(result, []);
+            else assert.equal(typeof result.error, 'string');
+          }
+        }
+        // Validation is shared; exercise its remaining branches on one mounted profile.
+        if (profile === 'control') {
+          for (const [pathname, method, body, status, message] of [
+            ['/run-statistics/targets?surface=invalid', 'GET', undefined, 500, 'Internal server error'],
+            ['/run-statistics/query', 'POST', '{}', 400, undefined],
+            [
+              '/run-statistics/query',
+              'POST',
+              JSON.stringify({
+                target: { surface: 'endpoint', workflowId: 'fixture' },
+                runKind: 'both',
+                period: { from: '2026-11-14T12:00:00Z', to: '2026-11-13T12:00:00Z' },
+              }),
+              400,
+              undefined,
+            ],
+            ['/recordings/runs', 'POST', '{', 404, 'Not found'],
+            ['/projects/published-versions?relativePath=..%2Foutside', 'GET', undefined, 400, 'Invalid relativePath'],
+            ['/projects/web-apps?relativePath=..%2Foutside', 'GET', undefined, 400, 'Invalid relativePath'],
+            [
+              '/projects/published-versions?relativePath=%20%2Fmissing.rivet-project%2F%20',
+              'GET',
+              undefined,
+              404,
+              'Project not found',
+            ],
+            ['/projects/published-versions', 'POST', '{', 404, 'Not found'],
+            ['/projects/publish', 'POST', '{}', 400, 'Missing relativePath'],
+            ['/evaluation-runs/unknown/path', 'GET', undefined, 404, 'Not found'],
+            ['/evaluation-runs/library', 'POST', '{', 404, 'Not found'],
+          ] as const) {
+            const response = await fetch(`${server.baseUrl}/api/workflows${pathname}`, {
+              method,
+              headers: { ...operator, 'content-type': 'application/json' },
+              body,
+            });
+            assert.equal(response.status, status, `${method} ${pathname}`);
+            const result = await response.json();
+            if (message) assert.deepEqual(result, { error: message });
+            else assert.equal(typeof result.error, 'string');
+          }
+        }
+        if (exposed) {
+          const response = await fetch(`${server.baseUrl}/api/workflows/recordings/runs?pageSize=1`, {
+            headers: operator,
+          });
+          assert.equal(response.status, 200);
+          assert.match(response.headers.get('cache-control') ?? '', /no-store/);
+          const page = await response.json();
+          assert.equal(page.totalRuns, 0);
+          assert.deepEqual(page.runs, []);
+        }
+        const headers = {
+          ...operator,
+          'content-type': 'application/json',
+          'x-rivet-migration-intent': '1',
+        };
+        const base = `${server.baseUrl}/api/app-settings`;
+        const setup = await fetch(`${base}/local-upgrade/setup`, { headers });
+        assert.equal(setup.status, exposed ? 200 : 404);
+        if (exposed) {
+          assert.equal(setup.headers.get('cache-control'), 'no-store');
+          assert.equal((await setup.json()).controlRootConfigured, false);
+        } else assert.deepEqual(await setup.json(), { error: 'Not found' });
+
+        for (const route of ['/local-upgrade/prepare', '/local-upgrade/preparation', '/vm-migration/run']) {
+          const response = await fetch(base + route, { method: 'POST', headers, body: '{' });
+          assert.equal(response.status, exposed ? 400 : 404, route);
+          const result = await response.json();
+          if (exposed) assert.equal(typeof result.error, 'string');
+          else assert.deepEqual(result, { error: 'Not found' });
+        }
+        if (!exposed) return;
+
+        const { 'x-rivet-migration-intent': _intent, ...ordinaryHeaders } = headers;
+        for (const route of ['/local-upgrade', '/vm-migration']) {
+          const status = await fetch(base + route, { headers: ordinaryHeaders });
+          assert.equal(status.status, 200, `${route} status needs no mutation intent`);
+          assert.equal(status.headers.get('cache-control'), 'no-store');
+          assert.equal((await status.json()).available, false);
+          const unsigned = await fetch(base + route, { headers: trustedProxyHeaders() });
+          assert.equal(unsigned.status, 403, `${route} status requires an operator`);
+          await unsigned.arrayBuffer();
+          const response = await fetch(`${base}${route}/unknown`, { headers });
+          assert.equal(response.status, 404);
+          assert.deepEqual(await response.json(), { error: 'Not found' });
+        }
+        const unsupported = await fetch(`${base}/local-upgrade/setup`, { method: 'PUT', headers, body: '{' });
+        assert.equal(unsupported.status, 404);
+        assert.deepEqual(await unsupported.json(), { error: 'Not found' });
+        const head = await fetch(`${base}/local-upgrade/setup`, { method: 'HEAD', headers });
+        assert.equal(head.status, 200);
+        assert.equal(head.headers.get('cache-control'), 'no-store');
+        assert.equal(await head.text(), '');
+        const preflight = await fetch(`${base}/local-upgrade/prepare`, {
+          method: 'OPTIONS',
+          headers: { origin: server.baseUrl, 'access-control-request-method': 'POST' },
+        });
+        assert.equal(preflight.status, 204);
+
+        const settings = await fetch(`${base}/runtime-limits`, { headers: ordinaryHeaders });
+        assert.equal(settings.status, 200);
+        await settings.arrayBuffer();
+        const updated = await fetch(`${base}/runtime-limits`, {
+          method: 'PATCH',
+          headers: ordinaryHeaders,
+          body: JSON.stringify({ commandTimeoutSeconds: 73 }),
+        });
+        assert.equal(updated.status, 200);
+        assert.equal((await updated.json()).commandTimeoutSeconds, 73);
+      } finally {
+        await server.close();
+        await resetWorkflowRecordingStorageForTests();
+        await disposeWorkflowStorage();
+      }
+    });
+  });
+}
+
+test('storage operator authorization precedes parsing and retains separate JSON limits', async (t) => {
+  await withApiEnv({ RIVET_SERVER_UI_AUTH_MODE: 'key' }, async () => {
+    t.mock.method(console, 'error', () => {});
+    const server = await startServer('control');
+    const base = `${server.baseUrl}/api/app-settings`;
+    const operator = { ...trustedProxyHeaders(), cookie: `rivet_ui_token=${getExpectedUiSessionToken()}` };
+    const authorized = { ...operator, 'x-rivet-migration-intent': '1' };
+    try {
+      for (const route of ['/local-upgrade/prepare', '/local-upgrade/preparation', '/vm-migration/run']) {
+        for (const headers of [
+          {},
+          trustedProxyHeaders(),
+          operator,
+          { ...authorized, 'sec-fetch-site': 'cross-site' },
+          { ...authorized, origin: 'not an origin' },
+          { ...authorized, origin: 'https://another-host.invalid' },
+        ]) {
+          const response = await fetch(base + route, {
+            method: 'POST',
+            headers: { ...headers, 'content-type': 'application/json' },
+            body: '{',
+          });
+          assert.equal(response.status, 403, route);
+          assert.equal(typeof (await response.json()).error, 'string');
+        }
+      }
+      const head = await fetch(`${base}/local-upgrade/setup`, { method: 'HEAD', headers: operator });
+      assert.equal(head.status, 403, 'HEAD retains the existing intent requirement');
+      assert.equal(await head.text(), '');
+
+      for (const [route, limit] of [
+        ['/local-upgrade/prepare', 16 * 1024],
+        ['/local-upgrade/preparation', 1024 * 1024],
+      ] as const) {
+        for (const extra of [0, 1]) {
+          const response = await fetch(base + route, {
+            method: 'POST',
+            headers: { ...authorized, 'content-type': 'application/json' },
+            body: 'null' + ' '.repeat(limit - 4 + extra),
+          });
+          assert.equal(response.status, extra ? 413 : 500, `${route}: ${limit + extra} bytes`);
+          const result = await response.json();
+          assert.equal(
+            result.error,
+            extra
+              ? "Request body exceeds this route's allowed size."
+              : 'Storage operation failed. Check source integrity and reload status before retrying.',
+          );
+          if (!extra) assert.equal(typeof result.code, 'string');
+        }
+      }
+      for (const [route, error] of [
+        [
+          '/vm-migration/test-database',
+          'Could not read and write destination PostgreSQL. Check its connection and DDL permissions.',
+        ],
+        [
+          '/vm-migration/test-object-storage',
+          'Could not read and write destination S3. Check its location and permissions.',
+        ],
+      ]) {
+        const response = await fetch(base + route, {
+          method: 'POST',
+          headers: { ...authorized, 'content-type': 'application/json' },
+          body: 'null',
+        });
+        assert.equal(response.status, 400);
+        assert.deepEqual(await response.json(), { error });
+      }
+
+      const trust = await fetch(`${base}/trusted-clients`, {
+        method: 'PATCH',
+        headers: { ...operator, 'content-type': 'application/json' },
+        body: JSON.stringify({ trustedClients: ['127.0.0.1'] }),
+      });
+      assert.equal(trust.status, 200);
+      await trust.arrayBuffer();
+      const trustedClient = {
+        ...trustedProxyHeaders(),
+        'x-rivet-client-ip': '127.0.0.1',
+        'x-rivet-migration-intent': '1',
+        'content-type': 'application/json',
+      };
+      for (const mode of ['key', 'none']) {
+        process.env.RIVET_SERVER_UI_AUTH_MODE = mode;
+        const ordinary = await fetch(`${base}/runtime-limits`, { headers: trustedClient });
+        assert.equal(ordinary.status, 200, `ordinary ${mode} access must reach the protected-route checks`);
+        await ordinary.arrayBuffer();
+        for (const [method, route] of [
+          ['GET', '/local-upgrade/setup'],
+          ['GET', '/local-upgrade'],
+          ['GET', '/vm-migration'],
+          ['GET', '/local-upgrade/unknown'],
+          ['GET', '/vm-migration/unknown'],
+          ['POST', '/local-upgrade/prepare'],
+          ['POST', '/local-upgrade/preparation'],
+          ['POST', '/vm-migration/run'],
+        ]) {
+          const response = await fetch(base + route, {
+            method,
+            headers: trustedClient,
+            ...(method === 'POST' ? { body: '{' } : {}),
+          });
+          assert.equal(response.status, 403, `${mode}: ${method} ${route}`);
+          assert.deepEqual(await response.json(), { error: 'Migration requires a signed-in operator session.' });
+        }
+      }
+    } finally {
+      await server.close();
+    }
+  });
+});
 
 test('graph reference review requires authentication and validates bounded JSON input', async () => {
   await withApiEnv({}, async () => {
@@ -1056,34 +1340,38 @@ test('local editor replay uploads are authenticated before their elevated reques
   });
 });
 
-test('local editor replay uploads reject oversized Content-Length before receiving the body', async () => {
+test('recording uploads reject oversized Content-Length before receiving the body', async () => {
   await withApiEnv({}, async () => {
     const server = await startServer('control');
     try {
-      // The route must reject from headers alone. Sending 48 MiB here races
-      // the server's intentional early connection close and obscures the 413.
-      const status = await new Promise<number | undefined>((resolve, reject) => {
-        const request = http.request(
-          `${server.baseUrl}/api/workflows/local-editor-recordings/`,
-          {
-            method: 'POST',
-            headers: {
-              ...trustedProxyHeaders(),
-              'content-type': 'application/json',
-              'content-length': String(MAX_LOCAL_EDITOR_RECORDING_REQUEST_BYTES + 1),
+      // Reject from headers alone; sending a large body races the early close.
+      for (const [route, method, limit] of [
+        ['/api/workflows/local-editor-recordings/', 'POST', MAX_LOCAL_EDITOR_RECORDING_REQUEST_BYTES],
+        ['/api/workflows/evaluation-runs/recordings/large', 'PUT', MAX_EVALUATION_RECORDING_BYTES],
+      ] as const) {
+        const status = await new Promise<number | undefined>((resolve, reject) => {
+          const request = http.request(
+            `${server.baseUrl}${route}`,
+            {
+              method,
+              headers: {
+                ...trustedProxyHeaders(),
+                'content-type': 'application/json',
+                'content-length': String(limit + 1),
+              },
+              signal: AbortSignal.timeout(5_000),
             },
-            signal: AbortSignal.timeout(5_000),
-          },
-          (response) => {
-            response.once('error', reject);
-            response.once('end', () => resolve(response.statusCode));
-            response.resume();
-          },
-        );
-        request.once('error', reject);
-        request.end();
-      });
-      assert.equal(status, 413);
+            (response) => {
+              response.once('error', reject);
+              response.once('end', () => resolve(response.statusCode));
+              response.resume();
+            },
+          );
+          request.once('error', reject);
+          request.end();
+        });
+        assert.equal(status, 413, route);
+      }
     } finally {
       await server.close();
     }

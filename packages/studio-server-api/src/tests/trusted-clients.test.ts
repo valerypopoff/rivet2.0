@@ -196,9 +196,9 @@ for (const kind of ['tree', 'evaluation', 'filesystem-job', 'managed-job'] as co
         app.use('/runtime-libraries', runtimeLibrariesRouter);
         eventPath = '/runtime-libraries/jobs/test-job/stream';
       } else {
-        app.get(eventPath, (req, res) => kind === 'tree'
+        app.get(eventPath, async (req, res) => kind === 'tree'
           ? openWorkflowTreeEventStream(req, res)
-          : openEvaluationLibraryEventStream(req, res, 0));
+          : await openEvaluationLibraryEventStream(req, res, async () => 0));
       }
       const server = http.createServer(app);
       await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));

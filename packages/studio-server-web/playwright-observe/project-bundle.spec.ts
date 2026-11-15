@@ -9,7 +9,12 @@ import {
   projectBundleFixture,
   extractProjectBundleFixture,
 } from '../../studio-server-api/src/tests/helpers/project-bundle-fixture';
-import { authenticateIfNeeded, mockHostedEditorBootstrap, waitForDashboardReady } from './helpers/hostedEditorObserve';
+import {
+  openBundleActions,
+  authenticateIfNeeded,
+  mockHostedEditorBootstrap,
+  waitForDashboardReady,
+} from './helpers/hostedEditorObserve';
 import { expectStudioModalSizing } from './helpers/modalSizing';
 
 function bundleProject(id: string) {
@@ -57,6 +62,7 @@ async function openFixtureBundleDownload(page: Page) {
   await authenticateIfNeeded(page);
   await waitForDashboardReady(page);
   await page.getByRole('button', { name: /^(Expand|Collapse) Portable feature bundle$/ }).click({ button: 'right' });
+  await openBundleActions(page);
   await page.getByRole('menuitem', { name: 'Download bundle', exact: true }).click();
   return page.getByTestId('workflow-project-bundle-modal');
 }
@@ -165,12 +171,14 @@ test('download dependencies survives closing the dialog and runs the real downlo
     const row = page.getByRole('button', { name: /^(Expand|Collapse) Portable feature bundle$/ });
     await row.click();
     await page.locator('.project-row').filter({ hasText: 'Portable root' }).click({ button: 'right' });
+    await openBundleActions(page);
     const downloadProject = page.getByRole('menuitem', { name: 'Download project', exact: true });
     const downloadBundle = page.getByRole('menuitem', { name: 'Download bundle', exact: true });
     await expect(downloadProject).toBeVisible();
     await expect(downloadBundle).toHaveCount(0);
     await page.keyboard.press('Escape');
     await row.click({ button: 'right' });
+    await openBundleActions(page);
     await expect(downloadBundle).toBeVisible();
     const bundleIcon = downloadBundle.locator('svg');
     await expect(bundleIcon).toHaveAttribute('aria-hidden', 'true');
@@ -220,6 +228,7 @@ test('download dependencies survives closing the dialog and runs the real downlo
       await page.reload();
       await waitForDashboardReady(page);
       await row.click({ button: 'right' });
+      await openBundleActions(page);
       await downloadBundle.click();
       await expect(prepare).toBeEnabled();
     };
@@ -258,6 +267,7 @@ test('download dependencies survives closing the dialog and runs the real downlo
     await page.emulateMedia({ reducedMotion: 'no-preference' });
     await page.getByRole('button', { name: 'Close bundle download' }).click();
     await row.click({ button: 'right' });
+    await openBundleActions(page);
     await page.getByRole('menuitem', { name: 'Download bundle', exact: true }).click();
     await expect(spinner).toBeVisible();
     refuseCancellation = true;
@@ -436,6 +446,7 @@ test('reopened failed export retries the durable version choice rather than the 
   await authenticateIfNeeded(page);
   await waitForDashboardReady(page);
   await page.getByRole('button', { name: /^(Expand|Collapse) Portable feature bundle$/ }).click({ button: 'right' });
+  await openBundleActions(page);
   await page.getByRole('menuitem', { name: 'Download bundle', exact: true }).click();
   const dialog = page.getByTestId('workflow-project-bundle-modal');
   await expect(dialog.getByRole('status')).toContainText('Export: failed.');
@@ -498,6 +509,7 @@ test('late bundle admission cannot regress packaging and duplicate clicks admit 
     await authenticateIfNeeded(page);
     await waitForDashboardReady(page);
     await page.getByRole('button', { name: /^(Expand|Collapse) Portable feature bundle$/ }).click({ button: 'right' });
+    await openBundleActions(page);
     await page.getByRole('menuitem', { name: 'Download bundle', exact: true }).click();
     const dialog = page.getByTestId('workflow-project-bundle-modal');
     await dialog.getByRole('button', { name: 'Prepare bundle', exact: true }).evaluate((element) => {
@@ -712,6 +724,7 @@ for (const phase of ['ready', 'failed'] as const) {
       await page
         .getByRole('button', { name: /^(Expand|Collapse) Alternate feature bundle$/ })
         .click({ button: 'right' });
+      await openBundleActions(page);
       await page.getByRole('menuitem', { name: 'Download bundle', exact: true }).click();
       await expect(dialog.getByRole('heading', { name: 'Alternate feature', exact: true })).toBeVisible();
       await dialog.getByRole('button', { name: 'Close bundle download' }).click();
@@ -719,6 +732,7 @@ for (const phase of ['ready', 'failed'] as const) {
       await page
         .getByRole('button', { name: /^(Expand|Collapse) Portable feature bundle$/ })
         .click({ button: 'right' });
+      await openBundleActions(page);
       await page.getByRole('menuitem', { name: 'Download bundle', exact: true }).click();
       await expect(dialog.getByRole('button', { name: 'Cancel export', exact: true })).toBeDisabled();
       await expect.poll(() => reopenedReads).toBe(2);

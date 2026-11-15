@@ -38,7 +38,7 @@ import { collectSourceAppSettings, migrateAppSettings } from './migrate-app-sett
 import { migrateOperationalSqlite, validateOperationalMigrationSource } from './migrate-operational-sqlite.js';
 import {
   migrateRuntimeLibraries,
-  readSourceManifest,
+  readSourceRuntimeSelection,
   validateRuntimeLibraryDirectory,
   assertRuntimeLibraryArchiveSpace,
 } from './migrate-runtime-libraries.js';
@@ -310,6 +310,14 @@ async function importSourceRecordings(
           })
         : await listWorkflowRecordingRunsPage(root, sourceWorkflow.workflowId, page, pageSize, 'all');
       for (const run of runsPage.runs) {
+        if (
+          run.status === 'accepted' ||
+          run.status === 'running' ||
+          run.status === 'unknown' ||
+          (run.evidence && run.evidence.availability !== 'available')
+        ) {
+          throw new Error('Only playable recordings can be migrated.');
+        }
         const readArtifact = (artifact: 'recording' | 'replay-project' | 'replay-dataset') =>
           native
             ? native.workflows.readWorkflowRecordingArtifact(run.id, artifact)
@@ -599,15 +607,11 @@ export async function prepareLegacyRestoreSource(
   for await (const _recording of iterateSourceRecordings(roots.recordings, workflows)) recordings++;
   const settings = await collectSourceAppSettings(roots.appData, target);
   await validateOperationalMigrationSource(roots.appData);
-  const manifest = await readSourceManifest(roots.runtimeLibraries);
+  const { manifest, directory } = await readSourceRuntimeSelection(roots.runtimeLibraries);
   if (Object.keys(manifest.packages).length) {
-    if (!options.runtimePlatformValidated)
-      await assertPortableRuntimeTree(path.join(roots.runtimeLibraries, 'current'));
-    await validateRuntimeLibraryDirectory(path.join(roots.runtimeLibraries, 'current'));
-    const archiveAllowance = await assertRuntimeLibraryArchiveSpace(
-      path.join(roots.runtimeLibraries, 'current'),
-      path.dirname(roots.runtimeLibraries),
-    );
+    if (!options.runtimePlatformValidated) await assertPortableRuntimeTree(directory!);
+    await validateRuntimeLibraryDirectory(directory!);
+    const archiveAllowance = await assertRuntimeLibraryArchiveSpace(directory!, path.dirname(roots.runtimeLibraries));
     if (archiveAllowance > BigInt(localSourceBundleLimit()))
       throw new LocalUpgradeDiagnosticError('source-bundle-limit');
   }

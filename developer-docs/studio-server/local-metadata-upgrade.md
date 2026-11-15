@@ -22,6 +22,14 @@ for the separate-control-identity restore fence and clone limitations.
 
 ## Ownership and supported deployment
 
+HTTP setup, preparation, actions and archive downloads are registered by
+`routes/local-upgrade-http.ts` on the existing App Settings router. The parent
+retains the shared 16 KiB and 1 MiB parsers; setup/prepare keep their explicit
+operator guard before the remaining local-upgrade prefix guard. Durable jobs,
+backup certification and restart coordination remain in
+`local-metadata/operator-service.ts`. The [HTTP separation record](app-settings-http-separation-plan.md)
+describes the preserved contracts and local verification.
+
 This is an explicit, non-destructive upgrade for the supervised single-host VM/Compose deployment. It does not select S3 or PostgreSQL, and a Storage-tab Save never starts it. Kubernetes uses managed storage instead. Upgrade availability is automatic for eligible, authenticated deployments; removing or setting the retired `RIVET_LOCAL_METADATA_UPGRADE_ENABLED` variable does not disable it. Availability never authorizes a copy or write resumption by itself.
 
 Remaining delivery and production qualification work is tracked in the [completion plan](./local-metadata-upgrade-completion-plan.md). Its acceptance gates distinguish repository readiness from a completed rehearsal on this VM's actual data.
@@ -237,7 +245,20 @@ rechecked checkbox. Independent authoritative backup/recovery status stays usabl
 One bounded (1 MiB), schema-validated `preparation.json` record is retained in the
 private control root with mode 0600, atomic replacement and fsync. It holds stage,
 inventory/fingerprint result and fixed failure text, never raw exceptions or
-credentials. Oversized informational results are discarded so a bounded failure
+credentials. On Windows, an open status reader can make replacement fail with
+`EPERM`. Preparation, backup-status and project-ID repair journal writers share
+`replaceControlFile` in `filesystem-transaction-primitives.ts`. Only promotion of
+the same frozen temporary record is retried: at most five attempts with four
+delays totaling 150 ms, plus filesystem time. Other errors propagate immediately;
+a persistent sharing/permission failure still fails. Source inspection, backup
+creation, project repair and workflow execution are never repeated by this retry.
+Each caller keeps its schema, fsync and ownership rules and removes its temporary
+record after success or failure. Failed backup-status publication preserves the
+previous evidence. Moving an obsolete backup status to a new name is unchanged;
+it does not have the same destination-replacement failure.
+Overlapping-reader regressions use real open Windows files; admission regressions
+verify persistent `EPERM` and `EIO` never start work.
+Oversized informational results are discarded so a bounded failure
 can still be retained. Status binds each record read to the admission/worker
 activity revision and rereads once if that lifecycle changes during IO. Repeated
 changes report unavailable preparation status rather than a false interruption;

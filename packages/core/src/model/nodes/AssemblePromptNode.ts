@@ -24,7 +24,7 @@ export type AssemblePromptNode = ChartNode<'assemblePrompt', AssemblePromptNodeD
 export type AssemblePromptNodeData = {
   computeTokenCount?: boolean;
 
-  /** Remove messages that contain no meaningful text or rich content. */
+  /** Remove messages without meaningful content. Enabled unless explicitly disabled. */
   filterEmptyPrompts?: boolean;
 
   isLastMessageCacheBreakpoint?: boolean;
@@ -32,12 +32,17 @@ export type AssemblePromptNodeData = {
 };
 
 function isEmptyPromptMessage(message: ChatMessage): boolean {
-  // Tool protocol messages remain meaningful even when their textual content is empty.
+  // Tool protocol and reasoning-continuity messages remain meaningful without text.
   if (message.type === 'function') {
     return false;
   }
 
-  if (message.type === 'assistant' && (message.function_call != null || (message.function_calls?.length ?? 0) > 0)) {
+  if (
+    message.type === 'assistant' &&
+    (message.function_call != null ||
+      (message.function_calls?.length ?? 0) > 0 ||
+      (message.openRouterReasoningDetails?.length ?? 0) > 0)
+  ) {
     return false;
   }
 
@@ -57,7 +62,7 @@ export class AssemblePromptNodeImpl extends NodeImpl<AssemblePromptNode> {
         width: 250,
       },
       data: {
-        filterEmptyPrompts: false,
+        filterEmptyPrompts: true,
       },
     };
 
@@ -119,6 +124,8 @@ export class AssemblePromptNodeImpl extends NodeImpl<AssemblePromptNode> {
         The number of inputs is dynamic based on the number of connections.
 
         Strings are converted to User type chat messages.
+
+        Empty or whitespace-only text messages are filtered by default. Rich content, tool exchanges and reasoning continuity are preserved.
       `,
       infoBoxTitle: 'Assemble Prompt Node',
       contextMenuTitle: 'Assemble Prompt',
@@ -137,9 +144,9 @@ export class AssemblePromptNodeImpl extends NodeImpl<AssemblePromptNode> {
         type: 'toggle',
         label: 'Filter empty prompts',
         dataKey: 'filterEmptyPrompts',
-        defaultValue: false,
+        defaultValue: true,
         helperMessage:
-          'Removes text-only messages whose content is empty or whitespace. Rich-content and tool-protocol messages are preserved.',
+          'Removes text-only messages whose content is empty or whitespace. Rich content, tool exchanges and reasoning continuity are preserved.',
       },
       {
         type: 'toggle',
@@ -154,7 +161,7 @@ export class AssemblePromptNodeImpl extends NodeImpl<AssemblePromptNode> {
 
   getBody(): NodeBody | Promise<NodeBody> {
     return [
-      this.data.filterEmptyPrompts ? 'Filter empty prompts: Enabled' : '',
+      this.data.filterEmptyPrompts !== false ? 'Filter empty prompts: Enabled' : '',
       this.data.useIsLastMessageCacheBreakpointInput
         ? 'Last message cache breakpoint: From input'
         : this.data.isLastMessageCacheBreakpoint
@@ -183,11 +190,15 @@ export class AssemblePromptNodeImpl extends NodeImpl<AssemblePromptNode> {
         continue;
       }
 
-      const inMessages = arrayizeDataValue(unwrapDataValue(inputMessage));
+      const value = unwrapDataValue(inputMessage);
+      if (value.value == null) continue;
+
+      const inMessages = arrayizeDataValue(value);
       for (const message of inMessages) {
+        if (message.value == null) continue;
         const outMessage = message.type === 'chat-message' ? message.value : coerceType(message, 'chat-message');
 
-        if (this.data.filterEmptyPrompts && isEmptyPromptMessage(outMessage)) {
+        if (this.data.filterEmptyPrompts !== false && isEmptyPromptMessage(outMessage)) {
           continue;
         }
 

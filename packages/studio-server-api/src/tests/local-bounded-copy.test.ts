@@ -27,7 +27,9 @@ test(
         format: 'esm',
         target: 'node24',
         logLevel: 'silent',
-        banner: { js: "import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);" },
+        banner: {
+          js: "import { createRequire as __createFixtureRequire } from 'node:module'; const require = __createFixtureRequire(import.meta.url);",
+        },
       });
       const { stdout } = await promisify(execFile)(process.execPath, ['--max-old-space-size=192', bundledWorker], {
         env: { ...process.env, NODE_OPTIONS: '' },

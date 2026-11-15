@@ -207,6 +207,26 @@ describe('data coercion runtime behavior', () => {
     assert.deepEqual(inferType([]), { type: 'any[]', value: [] });
   });
 
+  it('preserves multipart chat messages from untyped scalar and array wrappers', () => {
+    const message: ChatMessage = {
+      type: 'user',
+      message: ['Caption', { type: 'image', mediaType: 'image/png', data: new Uint8Array([1]) }],
+      isCacheBreakpoint: true,
+    };
+    for (const type of ['object', 'any'] as const) {
+      assert.equal(coerceTypeOptional({ type, value: message }, 'chat-message'), message);
+    }
+    const result = coerceTypeOptional({ type: 'any[]', value: [message] }, 'chat-message[]');
+    assert.deepEqual(result, [message]);
+    assert.equal(result?.[0], message);
+    for (const content of [null, false, 123]) {
+      assert.equal(
+        coerceTypeOptional({ type: 'object', value: { type: 'user', message: content } }, 'chat-message'),
+        undefined,
+      );
+    }
+  });
+
   it('unwraps function values once before applying the target coercer', () => {
     let calls = 0;
     const value: DataValue = {

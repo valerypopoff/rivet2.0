@@ -603,11 +603,15 @@ rounds and the candidate's lock proof. During lock contention, both DDL and read
 rejections are observed immediately, even if the reader connection fails first;
 leases are released only after the accepted queries settle.
 
-The reviewed behavioral matrix covers **17 → 18** (recording metadata) and
-**18 → 19** (nullable revision reference summaries). The latter additionally uses
-both image-owned revision writers and cross-reads, confirms NULL summaries from
-the predecessor and indexed summaries from the candidate, and tests contended
-DDL on `workflow_revisions`. It does not certify arbitrary changes to projects,
+The reviewed behavioral matrix covers **17 → 18** (recording metadata),
+**18 → 19** (nullable revision reference summaries) and **19 → 20** (durable
+recording evidence). The revision-summary expansion additionally uses both
+image-owned revision writers and cross-reads, confirms NULL summaries from the
+predecessor and indexed summaries from the candidate, and tests contended DDL on
+`workflow_revisions`. The evidence expansion retains the ordinary recording and
+revision write formats and tests bounded deletion-trigger installation while a
+recording writer holds its lock. New evidence admission stays off until all
+serving and maintenance/GC owners have been updated. The matrix does not certify arbitrary changes to projects,
 publication, schedules or third-party SQL. Future expands must extend the matrix
 with their affected repositories and data, then receive their own exact-image
 qualification. New certificate creation and rolling admission reject missing,
@@ -625,12 +629,13 @@ then `yarn node deploy/studio-server/scripts/verify-managed-workflow-schema.mjs`
 The existing managed CI lane runs the real PostgreSQL migration/lock tests; no
 new CI job or cloud rehearsal is added. To exercise the same workers locally,
 set `RIVET_SCHEMA_PREDECESSOR_IMAGE` and `RIVET_SCHEMA_CANDIDATE_IMAGE` to cached
-immutable image IDs (18 and 19 for the current expansion). The schema gate creates its own loopback-only DB
+immutable image IDs (19 and 20 for the current expansion). The schema gate creates its own loopback-only DB
 and internal network, runs both participants, and removes only those resources.
 Optional `RIVET_SCHEMA_PREDECESSOR_MODULES`/`RIVET_SCHEMA_CANDIDATE_MODULES` mount
 compiled diagnostic source trees; such a run is explicitly **not exact-release
-image qualification**. The local review used historical source `f6dcd0ce9` and the
-current compiled candidate this way, separately from the actual PostgreSQL gate.
+image qualification**. The earlier 18 → 19 review used historical source
+`f6dcd0ce9` and a compiled candidate this way, separately from the actual
+PostgreSQL gate. The 19 → 20 release requires its own exact-image proof.
 
 Customer execution continuity and developer editing remain separate contracts.
 These DB checks neither enable `singleton-overlap` nor qualify its placement,
@@ -647,7 +652,7 @@ schema 17 and the rollback-compatible floor remains 17, subject to the normal
 exact-image compatibility checks. A schema-18 binary must not serve against an
 unmigrated database because its recording queries require the new column.
 
-The checked-in Helm defaults must use the exact current schema (19), not the
+The checked-in Helm defaults must use the exact current schema (20), not the
 rollback floor (17), for both serving bounds. A release operation may widen the
 reader window only through the existing verified rollback procedure. Rollback
 values must not confuse a release's predecessor-compatibility floor with
@@ -657,7 +662,13 @@ rendering contracts compare migration commands with the API's current schema
 constant. Predecessor tests derive their newer-than-candidate rejection case from
 that constant; the disposable folder-repair gate still starts at schema 16 and
 asserts every forward migration, including 17's repair, 18's recording metadata
-and 19's nullable reference summaries.
+and 19's nullable reference summaries and 20's durable recording evidence.
+
+Schema 20 adds [durable recording evidence](recording-durability.md). Its writes
+are opt-in through `RIVET_RECORDING_DURABILITY_ENABLED`; keep this false until
+all serving replicas and the maintenance/GC owner understand pending artifact
+references. Disabling new admission does not disable finalization or recovery of
+already accepted work. Drain those handoffs before rolling the GC owner back.
 
 Schema 19 adds nullable `workflow_revisions.reference_summary` for
 [fast incoming graph-reference checks](graph-reference-check-plan.md). New

@@ -10,7 +10,9 @@ import {
 } from '@valerypopoff/rivet2-core';
 import { createScopedNodeProcess, type NodeExecutionEnvironment } from '@valerypopoff/rivet2-node';
 import { inspect } from 'node:util';
-import { createCodeRunnerRequire } from './codeRunnerRequire.mjs';
+import { createRequire } from 'node:module';
+import { isAbsolute } from 'node:path';
+import { resolveCodeRunnerRequireAnchor } from './codeRunnerRequire.mjs';
 import { getSharedCodeWorkerPool, type AppExecutorCodeWorkerPool } from './codeRunnerWorkerPool.mjs';
 import { createCodeWorkerRunRequest } from './codeRunnerWorkerHost.mjs';
 
@@ -22,6 +24,8 @@ export {
 export type { AppExecutorCodeWorkerPoolStats } from './codeRunnerWorkerPool.mjs';
 
 export class AppExecutorWorkerCodeRunner implements CodeRunner {
+  private binding: Promise<{ anchor: string; require: NodeJS.Require }> | undefined;
+
   constructor(
     private readonly onConsole?: (message: CodeConsoleMessage) => void,
     private readonly options: {
@@ -38,8 +42,13 @@ export class AppExecutorWorkerCodeRunner implements CodeRunner {
     contextValues?: Record<string, DataValue>,
     globalValues?: Record<string, DataValue>,
   ): Promise<Outputs> {
+    let binding: { anchor: string; require: NodeJS.Require } | undefined;
     if (options.includeRequire || options.includeRivet) {
-      await prepareRuntimeLibrariesForCodeRunner();
+      this.binding ??= prepareRuntimeLibrariesForCodeRunner().catch((error) => {
+        this.binding = undefined;
+        throw error;
+      });
+      binding = await this.binding;
     }
 
     if (options.includeRivet) {
@@ -53,7 +62,7 @@ export class AppExecutorWorkerCodeRunner implements CodeRunner {
         graphInputs,
         contextValues,
         globalValues,
-        createCodeRunnerRequire(),
+        binding!.require,
         this.onConsole,
         this.options.executionEnvironment,
       );
@@ -69,6 +78,7 @@ export class AppExecutorWorkerCodeRunner implements CodeRunner {
       this.onConsole,
       this.options.workerPool ?? getSharedCodeWorkerPool(),
       this.options.executionEnvironment,
+      binding?.anchor,
     );
   }
 }
@@ -76,13 +86,25 @@ export class AppExecutorWorkerCodeRunner implements CodeRunner {
 async function prepareRuntimeLibrariesForCodeRunner() {
   const prepare = (
     globalThis as typeof globalThis & {
-      __RIVET_PREPARE_RUNTIME_LIBRARIES__?: (force?: boolean) => Promise<void> | void;
+      __RIVET_PREPARE_RUNTIME_LIBRARIES__?: (force?: boolean) => Promise<unknown> | unknown;
     }
   ).__RIVET_PREPARE_RUNTIME_LIBRARIES__;
 
-  if (typeof prepare === 'function') {
-    await prepare(true);
-  }
+  const snapshot = typeof prepare === 'function' ? await prepare(true) : null;
+  let anchor: string;
+  if (snapshot === null && !process.env.RIVET_RUNTIME_LIBRARIES_ROOT?.trim()) anchor = resolveCodeRunnerRequireAnchor();
+  else if (
+    typeof snapshot === 'object' &&
+    snapshot !== null &&
+    'version' in snapshot &&
+    snapshot.version === 1 &&
+    'requireAnchorPath' in snapshot &&
+    typeof snapshot.requireAnchorPath === 'string' &&
+    isAbsolute(snapshot.requireAnchorPath)
+  )
+    anchor = snapshot.requireAnchorPath;
+  else throw new Error('Runtime-library preparation did not return a verified snapshot.');
+  return { anchor, require: createRequire(anchor) };
 }
 
 async function runCodeInWorker(
@@ -95,9 +117,19 @@ async function runCodeInWorker(
   onConsole?: (message: CodeConsoleMessage) => void,
   workerPool = getSharedCodeWorkerPool(),
   executionEnvironment?: NodeExecutionEnvironment,
+  requireAnchorPath?: string,
 ): Promise<Outputs> {
   return workerPool.run(
-    createCodeWorkerRunRequest(code, inputs, options, graphInputs, contextValues, globalValues, executionEnvironment),
+    createCodeWorkerRunRequest(
+      code,
+      inputs,
+      options,
+      graphInputs,
+      contextValues,
+      globalValues,
+      executionEnvironment,
+      requireAnchorPath,
+    ),
     onConsole,
   );
 }

@@ -1,6 +1,12 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { getLocalMetadataServingSelection } from '../local-metadata/serving-selection.js';
+import {
+  readRuntimeCacheManifest,
+  selectRuntimeLibrarySource,
+  type RuntimeLibrarySnapshot,
+  type RuntimeCacheManifest,
+} from '@valerypopoff/rivet-studio-server-bootstrap/runtime-release-cache';
 
 import type { RuntimeLibraryEntry } from '../../../studio-server-shared/runtime-library-types.js';
 
@@ -10,6 +16,7 @@ export interface RuntimeLibraryManifest {
   packages: Record<string, RuntimeLibraryEntry>;
   updatedAt: string;
   activeReleaseId?: string;
+  runtimeCache?: RuntimeCacheManifest['runtimeCache'];
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -26,16 +33,16 @@ function getRuntimeLibrariesRoot(): string {
 
 let localAuthority: {
   read(): RuntimeLibraryManifest;
-  prepare(): Promise<void>;
+  prepare(): Promise<RuntimeLibrarySnapshot>;
   activate(staging: string, manifest: RuntimeLibraryManifest): Promise<void>;
 } | null = null;
 export function configureLocalRuntimeLibraryAuthority(authority: typeof localAuthority): void {
   localAuthority = authority;
 }
-export async function prepareLocalRuntimeLibraries(): Promise<void> {
-  if (!getLocalMetadataServingSelection()) return;
+export async function prepareLocalRuntimeLibraries(): Promise<RuntimeLibrarySnapshot | null> {
+  if (!getLocalMetadataServingSelection()) return null;
   if (!localAuthority) throw new Error('Local runtime-library authority is not initialized.');
-  await localAuthority.prepare();
+  return localAuthority.prepare();
 }
 export async function activateLocalRuntimeLibraryCandidate(
   staging: string,
@@ -56,7 +63,10 @@ function manifestPath(): string {
 }
 
 export function currentDir(): string {
-  return path.join(getRuntimeLibrariesRoot(), 'current');
+  const root = getRuntimeLibrariesRoot();
+  return getLocalMetadataServingSelection()
+    ? path.join(root, 'current')
+    : selectRuntimeLibrarySource(root).directory ?? path.join(root, 'current');
 }
 
 export function stagingDir(): string {
@@ -105,6 +115,7 @@ export function normalizeManifest(value: unknown): RuntimeLibraryManifest {
   return {
     packages,
     updatedAt: typeof value.updatedAt === 'string' ? value.updatedAt : defaults.updatedAt,
+    ...(value.runtimeCache ? { runtimeCache: value.runtimeCache as RuntimeLibraryManifest['runtimeCache'] } : {}),
     ...(typeof value.activeReleaseId === 'string' && value.activeReleaseId.trim()
       ? { activeReleaseId: value.activeReleaseId.trim() }
       : {}),
@@ -127,6 +138,13 @@ export function readManifest(): RuntimeLibraryManifest {
 
     throw error;
   }
+}
+
+/** Display normalization must not turn missing/corrupt authority into an empty mutation base. */
+export function readManifestForMutation(): RuntimeLibraryManifest {
+  return getLocalMetadataServingSelection()
+    ? readManifest()
+    : normalizeManifest(readRuntimeCacheManifest(getRuntimeLibrariesRoot()));
 }
 
 export function writeManifest(manifest: RuntimeLibraryManifest): void {

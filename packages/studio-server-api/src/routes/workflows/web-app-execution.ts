@@ -25,6 +25,9 @@ import {
 } from '../../web-app-oauth.js';
 import { enqueueWorkflowExecutionRecordingPersistence } from './recordings.js';
 import { getWorkflowRecordingCreatedAt } from '../../../../studio-server-shared/workflow-recording-time.js';
+import type { RunEvidenceHandle } from '@valerypopoff/rivet-studio-server-shared/workflow-run-evidence.js';
+import { unavailableRunEvidence } from './run-evidence.js';
+import { deferEvidenceWork } from './recording-evidence-work.js';
 import { trackLLMProfileHealthRecordingOutcome } from '../../llm-profile-health/recording-outcomes.js';
 import {
   getLLMProfileHealthStore,
@@ -211,6 +214,8 @@ export function resolveWebAppUiGraph(executionProject: WorkflowExecutionProject)
 }
 
 export type WorkflowExecutionRecordingSnapshot = {
+  evidenceHandle?: RunEvidenceHandle;
+  evidenceCompletion?: Promise<void>;
   createdAt?: string;
   recorder: ExecutionRecorder | null;
   status: 'succeeded' | 'failed' | 'suspicious';
@@ -453,7 +458,10 @@ export function enqueueExecutionRecording(
   const recorder = recording.recorder;
 
   if (!recorder) {
-    void reportLLMProfileHealthRecordingOutcome(options.executionIdentity, 'disabled');
+    void reportLLMProfileHealthRecordingOutcome(
+      options.executionIdentity,
+      recording.evidenceHandle ? 'persistence-failed' : 'disabled',
+    );
     return;
   }
 
@@ -466,44 +474,63 @@ export function enqueueExecutionRecording(
     runKind: options.runKind,
     phase: 'serialization',
   };
-  const accepted = enqueueWorkflowExecutionRecordingPersistence(async () => {
-    try {
-      const executedDatasets = shouldSnapshotWorkflowRecordingDatasets()
-        ? await datasetProvider.exportDatasetsForProject(project.metadata.id).catch((error) => {
-            reportRecordingFailure(error, diagnostic);
-            return [];
-          })
-        : [];
-      const recordingSerialized = recorder.serialize();
-      diagnostic.phase = 'persistence';
-      const recordingId = await persistWorkflowExecutionRecordingWithBackend({
-        createdAt,
-        sourceProject: project,
-        sourceProjectPath: projectVirtualPath,
-        executedProject: project,
-        executedAttachedData: attachedData,
-        executedDatasets,
-        endpointName: options.endpointName,
-        recordingSerialized,
-        runKind: options.runKind,
-        status: recording.status,
-        durationMs: recording.durationMs,
-        cost: recording.cost,
-        errorMessage: recording.errorMessage,
-        executionIdentity: options.executionIdentity,
-        onPersisted: async (recordingId) => {
-          await reportLLMProfileHealthRecordingOutcome(options.executionIdentity, 'available', recordingId);
-        },
-      });
-      if (recordingId == null) {
-        await reportLLMProfileHealthRecordingOutcome(options.executionIdentity, 'disabled');
+  const accepted = enqueueWorkflowExecutionRecordingPersistence(
+    async () => {
+      let captureReason: 'capture_incomplete' | 'serialization_failed' = 'capture_incomplete';
+      try {
+        await recording.evidenceCompletion;
+        const executedDatasets = shouldSnapshotWorkflowRecordingDatasets()
+          ? await datasetProvider.exportDatasetsForProject(project.metadata.id).catch((error) => {
+              if (recording.evidenceHandle) throw error;
+              reportRecordingFailure(error, diagnostic);
+              return [];
+            })
+          : [];
+        captureReason = 'serialization_failed';
+        const recordingSerialized = recorder.serialize();
+        diagnostic.phase = 'persistence';
+        const recordingId = await persistWorkflowExecutionRecordingWithBackend({
+          evidenceHandle: recording.evidenceHandle,
+          createdAt,
+          sourceProject: project,
+          sourceProjectPath: projectVirtualPath,
+          executedProject: project,
+          executedAttachedData: attachedData,
+          executedDatasets,
+          endpointName: options.endpointName,
+          recordingSerialized,
+          runKind: options.runKind,
+          status: recording.status,
+          durationMs: recording.durationMs,
+          cost: recording.cost,
+          errorMessage: recording.errorMessage,
+          executionIdentity: options.executionIdentity,
+          onPersisted: async (recordingId) => {
+            await reportLLMProfileHealthRecordingOutcome(options.executionIdentity, 'available', recordingId);
+          },
+        });
+        if (recordingId == null) {
+          await reportLLMProfileHealthRecordingOutcome(options.executionIdentity, 'disabled');
+        }
+      } catch (error) {
+        await unavailableRunEvidence(
+          recording.evidenceHandle,
+          diagnostic.phase === 'serialization' ? captureReason : 'persistence_failed',
+        );
+        await reportLLMProfileHealthRecordingOutcome(options.executionIdentity, 'persistence-failed');
+        throw error;
       }
-    } catch (error) {
-      await reportLLMProfileHealthRecordingOutcome(options.executionIdentity, 'persistence-failed');
-      throw error;
-    }
-  }, diagnostic);
+    },
+    diagnostic,
+    0,
+    { deferredCapture: true, acceptedEvidence: !!recording.evidenceHandle },
+  );
   if (!accepted) {
+    if (recording.evidenceHandle)
+      void deferEvidenceWork(async () => {
+        await recording.evidenceCompletion;
+        await unavailableRunEvidence(recording.evidenceHandle, 'capacity');
+      });
     void reportLLMProfileHealthRecordingOutcome(options.executionIdentity, 'queue-dropped');
   }
 }
@@ -519,11 +546,21 @@ export function enqueueWebAppActionRecording(
     runKind: 'published' | 'latest';
     executionIdentity?: WorkflowRecordingExecutionIdentity;
     cost?: WorkflowRunCost;
+    evidenceHandle?: RunEvidenceHandle;
+    evidenceCompletion?: Promise<void>;
   },
 ): void {
   enqueueExecutionRecording(
     executionProject,
-    { recorder, durationMs, status, errorMessage, cost: options.cost },
+    {
+      recorder,
+      durationMs,
+      status,
+      errorMessage,
+      cost: options.cost,
+      evidenceHandle: options.evidenceHandle,
+      evidenceCompletion: options.evidenceCompletion,
+    },
     options,
   );
 }

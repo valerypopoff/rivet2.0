@@ -96,7 +96,8 @@ try {
   await pool.query(`CREATE TABLE managed_workflow_schema_migrations (
     version INTEGER PRIMARY KEY CHECK(version > 0), name TEXT NOT NULL, checksum TEXT NOT NULL CHECK(char_length(checksum)=64),
     application_version TEXT, applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`);
-  for (const migration of MANAGED_WORKFLOW_SCHEMA_MIGRATIONS.filter((entry) => entry.version <= 18)) {
+  const baselineVersion = 18;
+  for (const migration of MANAGED_WORKFLOW_SCHEMA_MIGRATIONS.filter((entry) => entry.version <= baselineVersion)) {
     await pool.query(migration.sql);
     await pool.query('INSERT INTO managed_workflow_schema_migrations(version,name,checksum) VALUES($1,$2,$3)', [
       migration.version,
@@ -108,7 +109,11 @@ try {
     migrationPolicy: 'rolling',
     logger: { log() {}, warn() {} },
   });
-  assert.deepEqual(migrated.appliedVersions, [19]);
+  const pendingVersions = MANAGED_WORKFLOW_SCHEMA_MIGRATIONS.filter((entry) => entry.version > baselineVersion).map(
+    (entry) => entry.version,
+  );
+  assert.ok(pendingVersions.includes(19), 'The upgrade must exercise the reference-index migration.');
+  assert.deepEqual(migrated.appliedVersions, pendingVersions);
   assert.equal((await verifyManagedWorkflowSchema(pool)).currentVersion, CURRENT_MANAGED_WORKFLOW_SCHEMA_VERSION);
   const probes = await import(
     new URL('../../../../deploy/studio-server/scripts/lib/schema-compatibility-probe.mjs', import.meta.url).href

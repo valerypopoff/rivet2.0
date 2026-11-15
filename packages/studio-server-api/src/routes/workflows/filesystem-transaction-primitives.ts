@@ -1,5 +1,21 @@
 import { fsync as fsyncCallback } from 'node:fs';
 import fs from 'node:fs/promises';
+import { setTimeout as delay } from 'node:timers/promises';
+
+/** Promote a frozen control record. The caller owns staging, durability and
+ * cleanup; only a known Windows sharing failure retries, never the operation. */
+export async function replaceControlFile(temporary: string, destination: string): Promise<void> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await fs.rename(temporary, destination);
+      return;
+    } catch (error) {
+      if (process.platform !== 'win32' || (error as NodeJS.ErrnoException).code !== 'EPERM' || attempt === 4)
+        throw error;
+      await delay(10 * 2 ** attempt);
+    }
+  }
+}
 
 export function syncFileDescriptor(descriptor: number): Promise<void> {
   return new Promise((resolve, reject) => {

@@ -25,6 +25,13 @@ the selected project-only artifact through the existing revision/blob decoder.
 Malformed artifacts give located errors without exposing project contents/storage
 keys. Newer is returned as an authoritative path/identity, not another snapshot.
 
+The read-only `/compare/changes` route uses Core's project comparison engine for
+the reviewed pairs, so cosmetic edits, paired project names and corresponding
+Subgraph targets agree with editor inspection. It compares two pairs at a time,
+with at most four artifact reads after releasing SQL connections. Saved Changed
+and editor Unsaved indicators remain separate. An explicit Retry check repeats
+only that read; it preserves the reviewed mapping and pinned Older revisions.
+
 `useWorkflowBundleComparison` owns transient modal/confirmed/pending selection state.
 `editorBundleComparison` owns reference reads and attachment behind the serialized
 editor queue; normal workspace loading, tab activation, saves and conflicts retain
@@ -140,6 +147,11 @@ combined adapter. This is a TypeScript dependency boundary, not authorization or
 a new backend instance. Filesystem migration compatibility remains in its legacy
 adapter; do not delete it as unused serving code.
 
+The [workflow storage routing refactor](./workflow-storage-routing-plan.md)
+separates filesystem project IO and execution loading from the compatibility
+facade. It preserves these resource owners and intentional backend differences.
+The plan records the preservation requirements and local verification.
+
 The serving composition root injects `managed/operations.ts` to create shared
 profile-health/Evaluation stores and the optional Evaluation coordinator with
 narrow execution-source callbacks. Construction occurs once during owned backend
@@ -218,8 +230,13 @@ scratch and configured-consumer readiness URLs. Job-only environment rendering
 cannot enable the feature or provide distributed writer fencing.
 
 Deletion uses a closed table registry, rejects external foreign keys/custom
-triggers/RLS/inheritance, takes table locks and truncates with RESTRICT. Workflow-object
-deletion captures exact references whose resource identities match their owning
+triggers/RLS/inheritance, takes table locks and truncates with RESTRICT. The registry
+includes the recording-evidence journal. Only exact source-owned topology and
+recording-deletion triggers are recognized, including their definitions, function
+bodies and execution settings; a matching trigger name alone is insufficient.
+Schema changes must keep this registry aligned and pass the managed restore
+integration, including evidence-row clearing and unrelated-data preservation.
+Workflow-object deletion captures exact references whose resource identities match their owning
 rows, constrains them to the effective workflow namespace and binds their
 ETag/current version. Unversioned deletion is conditional; unrelated objects,
 unreferenced objects and unproven historical versions are not swept.
@@ -443,17 +460,81 @@ to the existing authoritative tree reconciler rather than retaining an overflow
 queue or replaying uncertain mutations.
 
 `legacy-workflow-commands.ts` owns legacy project/publication locking and
-post-mutation invalidation. The compatibility facade selects an adapter; it no
-longer duplicates those command bodies. Hosted IO and legacy execution lookup
-retain their existing specialized paths. This is not a generic repository or
-SQL framework.
+post-mutation invalidation hooks. `legacy-project-storage.ts` owns filesystem
+tree/hosted IO, identity-safe saves and post-commit statistics. It receives the
+execution invalidator from composition in the compatibility facade. Hosted saves
+capture their input before adapter acquisition or writer waits; filesystem saves
+reuse the normalized written contents for statistics and the returned revision.
+`legacy-execution-storage.ts` owns filesystem execution/reference loaders,
+targeted web-app access-policy reads and cache/policy invalidation; the existing
+execution cache and source implementations remain unchanged. Published and
+latest web-app loads share one implementation after selecting the executable
+file; source paths and publication bindings still identify the saved project.
+`filesystem-project-identity.ts` supplies the physical ID scan shared by saves
+and cross-project Subgraphs, independently of UI/tree projections.
+
+`storage-backend.ts` retains mode selection, compatibility exports, capability
+guards, indexed-reference admission/deadlines and shared recording policy.
+Publication dispatch selects one narrow repository inside each supported command
+case, after synchronously capturing the reviewed command. Unsupported commands
+reject before opening storage; filesystem commands enter their existing writer
+without another await. Short project/recording delegations remain explicit. This
+is not a universal repository or SQL framework; legacy IO result nullability and
+mode-specific web-app binding/path mapping remain deliberate.
 
 Web-app preparation, request-context normalization, runtime options and recording
 identity live in `web-app-execution.ts`, shared by HTTP and WebSocket adapters.
 Authentication HTML belongs to `web-app-auth-presentation.ts`; HTTP routing,
-redirects, body admission and response delivery remain in `execution.ts`.
+redirects, action body admission and web-app response delivery belong to
+`web-app-http.ts`. `execution.ts` owns the four workflow endpoint routers and
+retains compatibility re-exports for both web-app routers and shared helpers.
+`execution-http-support.ts` holds the existing common HTTP response, timing,
+telemetry and published-admission helpers without registering routes or adding
+request work. The web-app module owns one preflight counter and prepared-action
+map shared by its published/latest routers; app mounts and their middleware
+ordering remain unchanged.
 WebSocket origin checks, session fencing and early-response behavior remain
 transport-specific. Neither adapter acquires a second run-session owner.
+The [web-app HTTP separation plan](web-app-http-separation-plan.md) records the
+extraction scope, compatibility contracts and verification evidence.
+
+Recording catalogs, run search, replay downloads, deletion and run-statistics
+HTTP routes live in `routes/workflows/recording-http.ts`. Its registration
+function attaches the existing handlers directly to `workflowsRouter`; it
+receives the parent's timing middleware, JSON parser and request-abort helper.
+The parent retains GET cache headers, graph-reference cancellation and the
+compatibility exports. Storage, search, statistics and execution owners are
+unchanged. See the [recording HTTP separation record](recording-http-separation-plan.md).
+
+Publication and saved-version HTTP handlers live in `routes/workflows/publication-http.ts`.
+Two startup registration functions retain the original history and publication
+blocks on `workflowsRouter`, with the graph-reference routes between them. They
+reuse the parent JSON parser and existing tree notifier; publication policy,
+reviewed-state capture, transactions and execution remain in their existing
+services. The small private path schemas call the same shared normalizer.
+See the [publication HTTP separation record](publication-http-separation-plan.md).
+
+App Settings keeps ordinary settings, session projection, parser instances and
+compatibility exports in `routes/app-settings.ts`. Startup registration attaches
+the sixteen local-upgrade handlers from `routes/local-upgrade-http.ts` and ten
+VM-migration handlers from `routes/vm-migration-http.ts` to that same router.
+There is no nested router or new operation owner: the local and VM services keep
+their existing shared job state. Authentication order, bounded parsing and
+streamed download settlement remain unchanged. The
+[HTTP separation record](app-settings-http-separation-plan.md) documents checks.
+
+The Evaluation API keeps one router in `routes/workflows/evaluation-runs.ts`,
+with its two body parsers, compatibility exports and thirteen run/evidence
+handlers. Startup registration attaches five hosted-control handlers from
+`hosted-evaluation-http.ts` and five shared-library handlers from
+`evaluation-library-http.ts`. The existing stores, coordinator and library
+notifier still own operations and lifetime; these modules only handle HTTP.
+No nested router or request-time forwarding is added. See the
+[Evaluation HTTP separation record](evaluation-http-separation-plan.md).
+The library notification stream subscribes before its initial revision read and
+carries the newest observed revision into its opening state. A concurrent save
+cannot fall between the read and subscription. Failed reads and disconnected
+clients release the temporary listener; this adds no workflow execution work.
 
 Workflow contracts live in `routes/workflows/data-backend.ts`, independently of
 the PostgreSQL implementation. Project IO, publication, execution sources and

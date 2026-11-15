@@ -9,6 +9,7 @@ import { createManagedWorkflowS3ClientConfig } from '../routes/workflows/managed
 import { getManagedDbPoolConfig } from '../routes/workflows/managed/db.js';
 
 const WORKFLOW_TABLES = [
+  'workflow_run_evidence',
   'workflow_recordings',
   'workflow_endpoints',
   'workflow_web_apps',

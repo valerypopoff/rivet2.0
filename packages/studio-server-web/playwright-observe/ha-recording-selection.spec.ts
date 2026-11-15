@@ -43,7 +43,7 @@ for (const status of ['succeeded', 'failed'] as const) {
     const owned = [run('owned-recording', 'owned', '2026-01-01T00:00:00.000Z')];
     const traffic = Array.from({ length: 120 }, (_, i) => run(`traffic-${i}`, 'traffic', '2026-02-01T00:00:00.000Z'));
     const name = 'Owned browser fixture';
-    await page.route('**/api/workflows/recordings/workflows', (route) =>
+    await page.route(/\/api\/workflows\/recordings\/workflows(?:\?.*)?$/, (route) =>
       route.fulfill({
         json: {
           workflows: [

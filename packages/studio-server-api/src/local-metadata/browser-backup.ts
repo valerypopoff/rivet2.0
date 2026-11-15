@@ -7,6 +7,7 @@ import { z } from 'zod';
 import type { LocalMetadataSourceRoots } from './source-identity.js';
 import { fingerprintVmMigrationSource } from '../scripts/vm-migration-source-manifest.js';
 import {
+  replaceControlFile,
   syncDirectory,
   syncFileDescriptor,
   writeDurableExclusive,
@@ -66,9 +67,13 @@ export async function readBrowserBackup(control: string): Promise<BrowserBackup 
 
 export async function saveBrowserBackup(control: string, state: BrowserBackup): Promise<void> {
   const temp = path.join(control, `browser-backup-${randomUUID()}.tmp`);
-  await writeDurableExclusive(temp, JSON.stringify(backupSchema.parse(state)), 0o600);
-  await fs.rename(temp, stateFile(control));
-  await syncDirectory(control);
+  try {
+    await writeDurableExclusive(temp, JSON.stringify(backupSchema.parse(state)), 0o600);
+    await replaceControlFile(temp, stateFile(control));
+    await syncDirectory(control);
+  } finally {
+    await fs.rm(temp, { force: true });
+  }
 }
 
 /** Remove obsolete certification from admission without parsing it. A corrupt

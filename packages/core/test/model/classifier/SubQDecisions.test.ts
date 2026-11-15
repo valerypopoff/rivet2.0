@@ -3,6 +3,7 @@ import { afterEach, test } from 'node:test';
 import { AssembleMessageNodeImpl, ClassifierEvaluateNodeImpl, ClassifierProfileNodeImpl } from '../../../src/index.js';
 import {
   getClassifierProvider,
+  getClassifierSystemTokenPricing,
   calculateClassifierUsageCost,
   type ClassifierProviderEvaluateArgs,
 } from '../../../src/model/classifier/providers.js';
@@ -29,7 +30,7 @@ const questions: ClassifierQuestionDefinition[] = [
   { questionId: 'gate', type: 'noul', instructions: 'Ready?' },
 ];
 const response = {
-  model: 'subq-snap-1.1',
+  model: 'subq-snap-1.2',
   answers: {
     route: { type: 'choice', choice: 'yes', confidence: 0.8, probabilities: { yes: 0.8, no: 0.2 } },
     score: {
@@ -58,6 +59,21 @@ const context = () =>
   }) as InternalProcessContext;
 
 void test('SubQ uses its native fixed endpoint, exact structured questions and request-level input-only pricing', async () => {
+  assert.equal(provider.defaultModel, 'subq-snap-1.2');
+  assert.deepEqual(
+    provider.modelOptions?.map(({ value, label }) => ({ value, label })),
+    [
+      { value: 'subq-snap-1.2', label: 'Snap 1.2' },
+      { value: 'subq-snap-1.1', label: 'Snap 1.1 (deprecated)' },
+    ],
+  );
+  for (const model of ['subq-snap-1.2', 'subq-snap-1.1']) {
+    assert.equal(provider.supportsImages?.(model), true);
+    assert.deepEqual(getClassifierSystemTokenPricing('subq', model), {
+      inputPerMillionTokens: 0.04,
+      outputPerMillionTokens: 0,
+    });
+  }
   const input = args();
   const result = await provider.evaluate({
     ...input,
@@ -67,7 +83,7 @@ void test('SubQ uses its native fixed endpoint, exact structured questions and r
       assert.equal(init?.redirect, 'error');
       assert.deepEqual(init?.headers, { Authorization: 'Bearer fixture-key', 'Content-Type': 'application/json' });
       assert.deepEqual(JSON.parse(String(init?.body)), {
-        model: 'subq-snap-1.1',
+        model: 'subq-snap-1.2',
         state: input.state,
         questions: Object.fromEntries(questions.map(({ questionId, ...question }) => [questionId, question])),
       });
@@ -90,11 +106,26 @@ void test('SubQ uses its native fixed endpoint, exact structured questions and r
     }),
     'fixture-key',
   );
-  for (const responseModel of ['subq-snap-1.1', 'subq-snap-future', 'subq-preview'])
+  for (const responseModel of ['subq-snap-1.2', 'subq-snap-1.1', 'subq-snap-future', 'subq-preview'])
     assert.equal(
       calculateClassifierUsageCost(provider, response.usage, { requestedModel: provider.defaultModel, responseModel }),
-      responseModel === provider.defaultModel ? 0.00004 : undefined,
+      ['subq-snap-1.2', 'subq-snap-1.1'].includes(responseModel) ? 0.00004 : undefined,
     );
+  const legacy = await provider.evaluate({
+    ...input,
+    model: 'subq-snap-1.1',
+    fetchImplementation: async (_url, init) => {
+      assert.equal(JSON.parse(String(init?.body)).model, 'subq-snap-1.1');
+      return Response.json(response);
+    },
+  });
+  assert.equal(
+    calculateClassifierUsageCost(provider, legacy.response.usage, {
+      requestedModel: 'subq-snap-1.1',
+      responseModel: legacy.response.model,
+    }),
+    0.00004,
+  );
   assert.equal(
     calculateClassifierUsageCost(provider, response.usage, {
       requestedModel: 'subq-snap-future',

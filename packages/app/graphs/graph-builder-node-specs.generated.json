@@ -1,6 +1,6 @@
 {
   "formatVersion": 1,
-  "catalogFingerprint": "fnv1a64:09e495680541f50c",
+  "catalogFingerprint": "fnv1a64:2e826de29f69e08b",
   "entries": [
     {
       "authoringChoiceId": "registered:abortGraph",
@@ -96,7 +96,7 @@
       "authoringChoiceId": "registered:assemblePrompt",
       "nodeType": "assemblePrompt",
       "displayName": "Assemble Prompt",
-      "description": "An LLM Chat Node takes a single Prompt input, which can be one message or an array of messages that forms the message chain. The Assemble Prompt Node is used to assemble multiple chat messages into a single prompt. It takes multiple chat messages or strings as inputs and outputs one prompt array containing all the messages. If a string is connected to any of the inputs, it will be converted to a User type chat message with the string as the message.",
+      "description": "An LLM Chat Node takes a single Prompt input, which can be one message or an array of messages that forms the message chain. The Assemble Prompt Node is used to assemble multiple chat messages into a single prompt. It takes multiple chat messages or strings as inputs and outputs one prompt array containing all the messages. If a string is connected to any of the inputs, it will be converted to a User type chat message with the string as the message. Empty and whitespace only text messages are ignored by default. Ordinary message text is kept exactly as supplied. Image, document, URL, tool exchange and reasoning messages remain intact even when they have no text. Turn off Filter empty prompts if you intentionally need empty messages; an explicitly saved Off setting is respected.",
       "aliases": [],
       "capabilities": {
         "createWithDefaults": true,

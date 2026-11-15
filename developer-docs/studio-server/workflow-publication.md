@@ -1,6 +1,33 @@
 # Workflow Publication
 
+Project Settings uses the same sidebar navigation pattern as Rivet Server
+settings. Endpoint, Web apps, profile suspension, history and Danger zone stay
+in a vertical tab list with their existing actions and busy locks. Separators
+group Endpoint/Web apps, the two profile-suspension tabs, Published version
+history, and Danger zone. These are visual dividers, not additional tab stops.
+Wide dialogs scroll the selected panel independently; narrow dialogs stack navigation above
+the panel and scroll the layout so controls remain reachable.
+Short windows constrain the layout's minimum height and scroll its sidebar as
+needed, keeping the close control in view.
+The regular editor CI suite covers this layout in `modal-sizing.spec.ts`,
+including narrow and 400-pixel-high windows.
+Published-version history timestamps use the English `10 Oct 2026, 14:30:00`
+format in the viewer's local timezone, keeping the time visible after the date.
+The exact stored timestamp remains available on hover.
+
 Workflows can be published as HTTP endpoints, and project-contained Rivet web apps can be published as browser pages. This document describes the current publication, execution, app-serving, and recording model.
+
+Publication and saved-version HTTP routes live in
+`routes/workflows/publication-http.ts`, registered directly on the parent workflow
+router with its existing parser and middleware order. The
+[separation record](publication-http-separation-plan.md) describes the preserved
+contracts and local validation. Publication services, reviewed-state policy and
+storage transactions remain unchanged.
+
+Project and saved-version downloads share the attachment-header encoder in
+`workflow-download.ts`. It keeps an ASCII fallback and an RFC 5987 UTF-8 filename;
+apostrophes and parentheses are percent-encoded so Unicode names survive browser
+downloads even when they contain punctuation.
 
 In the current deployment model:
 
@@ -356,7 +383,7 @@ In Project Settings:
 - `Unpublish` sits next to the workflow endpoint row whenever the workflow is currently published or has unpublished changes
 - `Delete project` appears only in the `Danger zone` tab, with an irreversible-deletion disclaimer; it is enabled only when verified publication details confirm the workflow endpoint is unpublished and no web apps remain published. Failed or incoherent publication reads keep deletion disabled until an explicit successful review; stale tree metadata alone is not sufficient. When deletion is blocked by publication, the unpublish prerequisite message appears below the delete button. `Published version history` is a separate tab, not an Endpoint footer button or nested modal.
 - endpoint validation in the dashboard mirrors the server: only `Published` and `Unpublished changes` projects reserve endpoint names; fully unpublished projects may keep a saved draft endpoint without blocking another project from publishing there
-- Project Settings has `Endpoint`, `Web apps`, `LLM profile suspension`, `Published version history`, and `Danger zone` tabs. The `Endpoint` tab owns normal endpoint publication. Its endpoint help always describes the currently saved publication until the user clicks `Publish` or `Update`. Endpoint and web-app slug validation errors render directly below their slug controls, before any publication URL/help text. The `Web apps` tab lists `Project.uiGraphs` when present, shows `No web apps in the project.` when there are none, shows `No web apps are published.` above the available list when none are published yet, and lets each web app publish, update, or unpublish its own compact prefixed slug row under `${RIVET_PUBLISHED_APPS_BASE_PATH:-/apps}` without requiring or changing the workflow endpoint publication. Once a web app is published, the displayed `/apps/<slug>` path is a link that opens in a new browser tab using the current Rivet server origin; the `/apps-latest/<slug>` latest-draft link is shown only while that app row is in `Unpublished changes` and the UI graph still exists in the current draft. The app's `Update` button remains disabled until the slug draft changes or the row reports `Unpublished changes`. When web-app OAuth mode is enabled, each row also exposes an allowed-email list. Saving that access list is an access-control update only; it does not republish the app or change its publication status.
+- Project Settings has `Endpoint`, `Web apps`, `LLM profile suspension`, `Decision AI profile suspension`, `Published version history`, and `Danger zone` tabs. The `Endpoint` tab owns normal endpoint publication. Its endpoint help always describes the currently saved publication until the user clicks `Publish` or `Update`. Endpoint and web-app slug validation errors render directly below their slug controls, before any publication URL/help text. The `Web apps` tab lists `Project.uiGraphs` when present, shows `No web apps in the project.` when there are none, shows `No web apps are published.` above the available list when none are published yet, and lets each web app publish, update, or unpublish its own compact prefixed slug row under `${RIVET_PUBLISHED_APPS_BASE_PATH:-/apps}` without requiring or changing the workflow endpoint publication. Once a web app is published, the displayed `/apps/<slug>` path is a link that opens in a new browser tab using the current Rivet server origin; the `/apps-latest/<slug>` latest-draft link is shown only while that app row is in `Unpublished changes` and the UI graph still exists in the current draft. The app's `Update` button remains disabled until the slug draft changes or the row reports `Unpublished changes`. When web-app OAuth mode is enabled, each row also exposes an allowed-email list. Saving that access list is an access-control update only; it does not republish the app or change its publication status.
 
 The Endpoint tab separates the access control from the route help with a thin divider. Internal-only access applies to both published and latest-draft routes: when the project has unpublished changes, the help shows the private latest-draft URL below the private published URL. Both URLs come from deployment configuration (`http://api/internal/...` in Docker Compose; separate control-plane and execution Service URLs in Kubernetes).
 
@@ -808,7 +835,7 @@ Filename format is:
 
 Project Settings exposes a `Published version history` tab alongside Endpoint, Web apps, LLM profile suspension, and Danger zone. `WorkflowPublishedVersionHistoryPanel` lists publish events newest-first, marks the version that is currently serving the published endpoint as `Current`, lets the user star or unstar special versions, add a short comment label for each version, paginates the list after 10 versions, and lets the user download, preview, or restore any stored project snapshot. History is embedded in the settings tab; the obsolete standalone modal/controller state has been removed. History mutations lock tab navigation and modal dismissal until they settle. After restore, the settings publication snapshot is refreshed before the user can return to endpoint/web-app actions. Review first disarms the old publication preconditions, so a failed refresh leaves publication actions disabled until explicit fresh review succeeds.
 
-The Danger zone tab is the only place inside Project Settings that exposes Delete project. It explains irreversible removal of the project, dataset sidecars, publication history, and recordings, and warns about dependent projects/schedules. The existing fully-unpublished guard and final confirmation remain required; the other tabs do not render a delete footer. Settings tabs wrap on narrow screens. Descriptive/help text across project settings, app settings, scheduled runs, recordings, statistics, published items, and history shares the 14px/1.5 tokens in `modal-sizing.css`.
+The Danger zone tab is the only place inside Project Settings that exposes Delete project. It explains irreversible removal of the project, dataset sidecars, publication history, and recordings, and warns about dependent projects/schedules. The existing fully-unpublished guard and final confirmation remain required; the other tabs do not render a delete footer. Settings tabs stay vertical and stack above the panel on narrow screens. Descriptive/help text across project settings, app settings, scheduled runs, recordings, statistics, published items, and history shares the 14px/1.5 tokens in `modal-sizing.css`.
 
 Stars and comments are persisted with the published version record:
 

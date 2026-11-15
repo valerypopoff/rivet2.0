@@ -8,7 +8,12 @@ import * as tar from 'tar';
 
 import { ManagedRuntimeLibrariesLocalCache } from '../runtime-libraries/managed/local-cache.js';
 import { readManifest } from '../runtime-libraries/manifest.js';
+import { selectRuntimeLibrarySource } from '@valerypopoff/rivet-studio-server-bootstrap/runtime-release-cache';
 import type { ManagedRuntimeLibrariesConfig } from '../runtime-libraries/config.js';
+import { createRequire } from 'node:module';
+import { withScopedEnv } from './helpers/runtime-library-harness.js';
+
+// test-style: fixture-read: verifies only package archives and cache files created by this test.
 
 type Deferred<T> = {
   promise: Promise<T>;
@@ -30,6 +35,11 @@ async function createReleaseArchive(marker: string): Promise<Buffer> {
 
   try {
     await fs.mkdir(path.join(source, 'node_modules'), { recursive: true });
+    await fs.mkdir(path.join(source, 'node_modules', 'fixture'));
+    await fs.writeFile(
+      path.join(source, 'node_modules', 'fixture', 'index.js'),
+      `module.exports=${JSON.stringify(marker)};`,
+    );
     await fs.writeFile(path.join(source, 'package.json'), JSON.stringify({ name: marker }), 'utf8');
     await fs.writeFile(path.join(source, 'marker.txt'), marker, 'utf8');
     await tar.c({ cwd: source, file: archivePath, portable: true, noMtime: true }, ['.']);
@@ -117,7 +127,9 @@ test('a forced local-cache refresh waits for an older sync and publishes the new
 
     assert.equal(releaseQueries, 2);
     assert.equal(readManifest().activeReleaseId, 'release-new');
-    await fs.access(path.join(runtimeRoot, 'current', 'marker.txt'));
+    const selected = selectRuntimeLibrarySource(runtimeRoot);
+    assert.equal(await fs.readFile(path.join(selected.directory!, 'marker.txt'), 'utf8'), 'new');
+    assert.equal((await fs.readdir(runtimeRoot)).filter((name) => name.startsWith('cache-')).length, 2);
   } finally {
     if (previousRuntimeRoot === undefined) {
       delete process.env.RIVET_RUNTIME_LIBRARIES_ROOT;
@@ -125,5 +137,52 @@ test('a forced local-cache refresh waits for an older sync and publishes the new
       process.env.RIVET_RUNTIME_LIBRARIES_ROOT = previousRuntimeRoot;
     }
     await fs.rm(runtimeRoot, { recursive: true, force: true });
+  }
+});
+
+test('managed initialization uses the authoritative archive rather than trusting matching legacy metadata', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-legacy-cache-'));
+  try {
+    await withScopedEnv(['RIVET_RUNTIME_LIBRARIES_ROOT'], { RIVET_RUNTIME_LIBRARIES_ROOT: root }, async () => {
+      const packages = { fixture: { name: 'fixture', version: '1.0.0' } };
+      await fs.mkdir(path.join(root, 'current', 'node_modules', 'fixture'), { recursive: true });
+      await fs.writeFile(path.join(root, 'current', 'package.json'), '{}');
+      await fs.writeFile(path.join(root, 'current', 'node_modules', 'fixture', 'index.js'), 'module.exports="stale";');
+      await fs.writeFile(
+        path.join(root, 'manifest.json'),
+        JSON.stringify({ packages, activeReleaseId: 'A', updatedAt: '' }),
+      );
+      const archive = await createReleaseArchive('authoritative');
+      let downloads = 0;
+      const cache = new ManagedRuntimeLibrariesLocalCache(
+        {
+          query: async () => ({ rows: [{ release_id: 'A', packages_json: packages, artifact_blob_key: 'A.tar' }] }),
+        } as never,
+        {
+          getBuffer: async () => {
+            downloads++;
+            return archive;
+          },
+        } as never,
+        { syncPollIntervalMs: 60_000 } as ManagedRuntimeLibrariesConfig,
+      );
+      const first = await cache.sync(true);
+      assert.equal(createRequire(first.requireAnchorPath)('fixture'), 'authoritative');
+      assert.equal(downloads, 1);
+      const second = await cache.sync(true);
+      assert.equal(first.directory, second.directory);
+      assert.equal(downloads, 1, 'A validated current-format cache does not need another download.');
+      await fs.unlink(path.join(root, 'manifest.json'));
+      const repaired = await cache.sync(true);
+      assert.equal(createRequire(repaired.requireAnchorPath)('fixture'), 'authoritative');
+      assert.equal(downloads, 2, 'Lost cache metadata is rebuilt from authority, without changing old runs.');
+      assert.equal(
+        createRequire(path.join(root, 'current', 'package.json'))('fixture'),
+        'stale',
+        'Legacy readers retain their original files.',
+      );
+    });
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
   }
 });

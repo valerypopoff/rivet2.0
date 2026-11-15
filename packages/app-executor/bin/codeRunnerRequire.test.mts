@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test';
 import * as assert from 'node:assert/strict';
 import { join } from 'node:path';
-import { mkdtemp, mkdir, writeFile, rename, rm, symlink, unlink } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, rm, symlink, unlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import {
   createCodeRunnerRequire,
@@ -24,10 +24,8 @@ void describe('app-executor codeRunnerRequire', () => {
       '/data/runtime-libraries/current/custom-anchor.cjs',
     );
   });
-  void it('invalidates nested CommonJS packages after atomic runtime release replacement and removal', async () => {
+  void it('keeps old module instances when a new physical release is selected', async () => {
     const root = await mkdtemp(join(tmpdir(), 'rivet-runtime-refresh-'));
-    const current = join(root, 'current');
-    const env = { RIVET_CODE_RUNNER_REQUIRE_ROOT: current };
     const stage = async (name: string, value?: number) => {
       const directory = join(root, name);
       await mkdir(join(directory, 'node_modules', 'example'), { recursive: true });
@@ -41,19 +39,16 @@ void describe('app-executor codeRunnerRequire', () => {
       return directory;
     };
     try {
-      await rename(await stage('first', 84), current);
-      const nestedEnv = { RIVET_CODE_RUNNER_REQUIRE_ROOT: join(current, 'node_modules') };
-      assert.equal(createCodeRunnerRequire(env)('example'), 84);
-      assert.equal(createCodeRunnerRequire(nestedEnv)('example'), 84);
-      const second = await stage('second', 42);
-      await rename(current, join(root, 'retained-first'));
-      await rename(second, current);
-      assert.equal(createCodeRunnerRequire(nestedEnv)('example'), 42);
-      assert.equal(createCodeRunnerRequire(env)('example'), 42);
-      const empty = await stage('empty');
-      await rename(current, join(root, 'retained-second'));
-      await rename(empty, current);
-      assert.throws(() => createCodeRunnerRequire(env)('example'), /Cannot find module|ENOENT/);
+      const first = await stage('first', 84);
+      const old = createCodeRunnerRequire({ RIVET_CODE_RUNNER_REQUIRE_ROOT: first });
+      assert.equal(old('example'), 84);
+      const state = old.cache[old.resolve('example')];
+      const second = createCodeRunnerRequire({ RIVET_CODE_RUNNER_REQUIRE_ROOT: await stage('second', 42) });
+      assert.equal(second('example'), 42);
+      assert.equal(old('example'), 84);
+      assert.equal(old.cache[old.resolve('example')], state);
+      const empty = createCodeRunnerRequire({ RIVET_CODE_RUNNER_REQUIRE_ROOT: await stage('empty') });
+      assert.throws(() => empty('example'), /Cannot find module|ENOENT/);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

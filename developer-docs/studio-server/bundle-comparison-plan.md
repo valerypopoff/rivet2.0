@@ -2,7 +2,8 @@
 
 Status: implemented in the local `F:/Programming/Rivet2.0` checkout and validated
 locally on 2026-11-12, with the simplified controls and explicit-exit lifecycle
-updated on 2026-11-13. This document retains the current design and acceptance scope.
+updated on 2026-11-13, and saved-change statuses updated on 2026-11-15.
+This document retains the current design and acceptance scope.
 Commit, publication and deployment remain separate actions; no database/schema
 change, migration, backfill or cloud operation is part of this implementation.
 
@@ -94,13 +95,14 @@ Published-version selectors are outside this initial feature.
 3. Once both are selected, load a lightweight catalog and show a bordered
    **Match projects** section, using Merge bundle's table/select styling.
    Selecting bundles alone must not change the tree or open editor projects.
-4. Show columns **Project in <Older bundle>** and **Corresponding project in
-   <Newer bundle>**. List every Older member, including unchanged and
+4. Show columns **Project in Older (<bundle name>)** and **Corresponding project in
+   Newer (<bundle name>)**. List every Older member, including unchanged and
    disconnected projects. Use project names and bundle-relative subpaths;
    hide `.rivet-project` in all display labels.
 5. Each row selects a Newer project or **No corresponding project**. Prefill
    clear suggestions and retain Suggested in their dropdowns. Show unclaimed
-   Newer members in an **Only in Newer** list so every member is accounted for.
+   Newer members in an **Only in Newer (<bundle name>)** list so every member is
+   accounted for.
 6. Enforce one-to-one matching. Ambiguous choices remain unresolved until the
    user chooses a counterpart or No corresponding project. Disable Compare
    bundles for unresolved/invalid choices or loading metadata. Empty bundles
@@ -113,6 +115,9 @@ Roles and correspondence are chosen only in the setup modal. To change them or
 capture fresh saved references, exit and start a new comparison. Changing bundle
 identities clears choices for the previous identities. Modal Swap reverses the
 logical pairs and updates labels, retaining the user's decisions.
+Use Older/Newer consistently as comparison roles. Tree roots, toolbar and editor
+labels lead with the role and retain the actual bundle names; names are never
+rewritten to match a role.
 
 ### Navigate the comparison
 
@@ -126,11 +131,20 @@ logical pairs and updates labels, retaining the user's decisions.
   Collapsed ancestors show the normal library's selected-descendant cue without
   overriding the user's collapsed folders.
   Clicking an Older row does not make that side editable.
-- Show all members, omitting the default Paired label. Show Only in older, Only in newer or a located
-  Unavailable status. These labels describe correspondence, not ancestry or
-  proof that a project was historically added/deleted. A failure affects its
-  pair, not the whole feature.
-- The comparison sidebar provides only **Exit comparison**. Swap and matching
+- Show all members, omitting the default Paired label. Older has no Only in older
+  label. Newer shows Added in green for unmatched Newer members and Removed in red
+  for read-only inspections of unmatched Older members at their old relative paths.
+  These rows do not create or restore server projects. Changed in yellow marks
+  saved-content differences against the pinned Older revision using the editor's
+  comparison engine. Unsaved edits have a separate indicator. These labels compare
+  the selected bundles, not historical ancestry.
+  Located availability errors affect their pair, not the whole feature. Pending
+  change checks show Checking; a failed check shows Check failed rather than
+  silently treating projects as unchanged, with a read-only Retry check recovery
+  action. Retrying keeps the reviewed pairs and pinned Older versions. Sessions
+  with no matched pairs need no status request. Neither blocks pair navigation.
+- The comparison sidebar's normal toolbar provides only **Exit comparison**. Failed
+  saved-change checks expose contextual **Retry check** recovery. Swap and matching
   remain in the setup modal. Existing tabs and Newer dirty indicators stay available.
 - Comparison-tree rows are navigation controls. Do not wire projected rows to
   normal rename/delete/move/drop/merge actions. Newer graph/project editing in
@@ -156,23 +170,19 @@ and exclude it from ordinary project recovery. Removed graphs, ghost nodes and
 inspectors must remain navigable. Do not impose this restriction on real Newer
 projects.
 
-### Removed-graph inspection is required new work
+### Removed-graph inspection contract
 
-The existing graph list renders removed graphs, but
-`components/graphList/FolderItem.tsx` deliberately ignores clicks on those rows.
-Do not assume the current comparison API already opens them.
-
-Add a session-owned reference-graph view through the App workspace owner. It
+Removed graph rows open a session-owned reference-graph view through the App
+workspace owner. `components/graphList/FolderItem.tsx` forwards their selection
+while disabling drag/drop and ordinary graph context-menu mutations. The view
 selects a removed graph for the existing ghost rendering using an empty,
 read-only canvas placeholder, while the actual Older definition stays in the
 reference. Never load that Older graph into Newer's authored graph collection.
 
-This view must have no live-graph commit or execution capability. The current
-`activeProjectComparisonState` overlays the displayed graph into its comparison
-input, and graph-save/dirty/snapshot owners merge the displayed graph into the
-project. Make those owners distinguish a reference view from an authored live
-graph, so inspection cannot resurrect a deleted graph or make it appear changed
-instead of removed. A read-only border or boolean alone is insufficient.
+This view has no live-graph commit or execution capability. Comparison and
+graph-save/dirty/snapshot owners distinguish the reference view from an authored
+live graph, so inspection cannot resurrect a deleted graph or make it appear
+changed instead of removed. A read-only border or boolean alone is insufficient.
 Save of a real Newer project while inspecting a removed graph must still save
 its actual authored contents, excluding the placeholder and reference graph.
 Normal graph selection/Exit returns to a valid authored target; reference views
@@ -205,8 +215,8 @@ reference to the live editable project. Reuse those contracts.
   showing the modal. Renamed or ambiguous counterparts can be chosen manually.
   No fuzzy suffix stripping or silent first-candidate choice is needed.
 - Once confirmed, every pair is fixed, including accepted suggestions. Late
-  reads can offer a correction through Match projects but cannot silently alter
-  a pair, overwrite a manual decision, or switch the displayed comparison.
+  reads cannot silently alter a pair, overwrite a manual decision, or switch the
+  displayed comparison. Corrections require Exit and a new setup review.
 - Represent unresolved choice and explicit No corresponding project as distinct
   states. Account for each member exactly once, including one-sided pairs after
   Swap. Do not turn an unfinished choice, HTTP failure or deleted artifact into
@@ -233,14 +243,17 @@ Add an optional identity context to Core comparison and field-detail helpers:
 
 - Normalize only recognized owner/reference identity and discovery-path fields,
   including self references, legacy references/aliases, Library source nodes
-  and variants. Keep actual titles/renames, graph IDs, targetVersion, boundaries
-  and other authored settings meaningful.
+  and variants. Ignore paired project names/locations, but keep node/graph
+  titles/renames, graph IDs, targetVersion, boundaries and other authored settings meaningful.
 - Use identical rules for equality and inspector changed-path calculation.
   Retain raw saved/live values for inspection and display; no synthetic or
   normalized identity becomes an authored change.
-- Factor the pure reference traversal into a browser-safe Core/shared helper
-  if needed. The existing server remapper changes copied Subgraph versions to
-  Saved latest, so it cannot be called to normalize comparisons.
+- The Server's Changed check calls Core's `compareProjects`, with the same
+  identity context and cosmetic exclusions as the editor. Do not hash serialized
+  projects or use the duplication remapper: it changes
+  copied Subgraph versions to Saved latest. For a bound, matched Subgraph,
+  ignore picker scope and treat missing targetVersion as Saved latest; retain
+  real Published/latest, graph, boundary and other authored differences.
 - Derive comparison values without mutating either project, its references,
   dirty baseline, undo state or serialization. Save and Run must always see
   the real authored Newer contents, never rewritten comparison identities.
@@ -292,6 +305,7 @@ Add a small read service beside the existing managed bundle service:
 | ---------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `POST /api/workflows/bundles/compare/manifest` | Accept two distinct bundle IDs. In one short consistent metadata snapshot, return roots/folders, member project IDs/names/paths, Saved latest revision IDs and optional published revision IDs, plus capture time. No project blobs.                                                                                                                                  |
 | `POST /api/workflows/bundles/compare/pair`     | Accept explicit Older reference descriptor or null, and Newer project descriptor or null, with at least one side present. Validate both memberships/identities in a short metadata read, return exact Older project contents when present and authoritative current Newer binding metadata when present. No Newer content download, arbitrary path/blob key or write. |
+| `POST /api/workflows/bundles/compare/changes`  | Accept the reviewed one-to-one mapping and pinned Older revision IDs. Validate membership and revision ownership, then compare matched saved contents against current Newer drafts. Return changed Newer IDs without modifying either bundle.                                                                                                                         |
 
 Return the validated current Newer binding with the pair read, including actual
 project identity, path and bundle membership. This is a metadata read, not a
@@ -311,6 +325,15 @@ cancellation-aware storage and asynchronous deserialization, with existing
 artifact limits and located failures. Never scan the whole library/history,
 run merge preview, construct execution closures or eagerly load legacy datasets
 merely to compare.
+
+The background changes read checks only reviewed matched pairs, in batches of
+two pairs/four artifacts after releasing SQL connections, under the existing 30-second request
+deadline. It normalizes copied project IDs, internal reference labels and location
+hints. It ignores paired project names/paths and the same cosmetic changes as
+the editor, while retaining graph/node IDs, Subgraph version choices and other
+meaningful editor-visible changes. Distinct revision IDs alone do not imply changes.
+Refresh after Newer saves; cancel superseded requests and ignore stale results.
+See [Project bundles](project-bundles.md) for the current status contract.
 
 The pair read's Older descriptor is bundle/project/captured revision; its Newer
 descriptor is bundle/project. Both descriptors are required fields whose explicit
@@ -540,8 +563,11 @@ Each step delivers its tests before the next dependent step. Implement in
   abandoned pool waiters or stale UI callbacks.
 - **Compatibility / cost of opening:** older API without bundleCompare hides the
   action. Ordinary project comparison, merge/download and normal preview tabs
-  retain behavior. Request counts show lightweight catalog plus selected-pair
-  work, not eager whole-bundle/library/dataset or execution-closure downloads.
+  retain behavior. Pair opening downloads only the selected Older content;
+  background saved-change checks read reviewed matched pairs with bounded
+  concurrency. Neither scans the library/history, downloads dataset blobs or
+  constructs execution closures. Check failures remain visible without blocking
+  comparison, and Removed inspections never restore projects.
 
 Run targeted Core/API/App/web tests through their existing package test owners,
 affected type/lint checks, shared-export/bridge validation and test registration,

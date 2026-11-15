@@ -7,7 +7,12 @@ import os from 'node:os';
 import { collectProjectBundle } from '../../studio-server-api/src/routes/workflows/project-bundle';
 import { prepareProjectBundleImport } from '../../studio-server-api/src/routes/workflows/project-bundle-import';
 import { projectBundleFixture } from '../../studio-server-api/src/tests/helpers/project-bundle-fixture';
-import { authenticateIfNeeded, mockHostedEditorBootstrap, waitForDashboardReady } from './helpers/hostedEditorObserve';
+import {
+  openBundleActions,
+  authenticateIfNeeded,
+  mockHostedEditorBootstrap,
+  waitForDashboardReady,
+} from './helpers/hostedEditorObserve';
 import type { WorkflowFolderItem, WorkflowProjectItem } from '../dashboard/types';
 import { expectStudioModalSizing } from './helpers/modalSizing';
 
@@ -111,6 +116,7 @@ for (const kind of ['archive', 'folder'] as const)
       await authenticateIfNeeded(page);
       await waitForDashboardReady(page);
       await page.getByRole('button', { name: 'Expand Imports', exact: true }).click({ button: 'right' });
+      await openBundleActions(page);
       await expect(page.getByRole('menuitem', { name: 'Upload project', exact: true })).toBeVisible();
       await expect(page.getByRole('menuitem', { name: 'Download bundle', exact: true })).toHaveCount(0);
       const action = page.getByRole('menuitem', { name: 'Upload bundle', exact: true });

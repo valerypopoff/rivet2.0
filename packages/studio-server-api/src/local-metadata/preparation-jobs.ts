@@ -8,7 +8,11 @@ import {
   LOCAL_UPGRADE_FAILURE_REASONS,
   type LocalUpgradePreparation,
 } from '../../../studio-server-shared/local-upgrade-types.js';
-import { syncDirectory, writeDurableExclusive } from '../routes/workflows/filesystem-transaction-primitives.js';
+import {
+  replaceControlFile,
+  syncDirectory,
+  writeDurableExclusive,
+} from '../routes/workflows/filesystem-transaction-primitives.js';
 import { createHttpError } from '../utils/httpError.js';
 import { duplicateRepairAnalysisSchema } from './duplicate-project-repair.js';
 import { localUpgradeFailure } from './upgrade-diagnostics.js';
@@ -179,7 +183,7 @@ export class LocalUpgradePreparationJobs {
     const temporary = path.join(this.root, `preparation-${randomUUID()}.tmp`);
     try {
       await writeDurableExclusive(temporary, text, 0o600);
-      await fs.rename(temporary, path.join(this.root, 'preparation.json'));
+      await replaceControlFile(temporary, path.join(this.root, 'preparation.json'));
       await syncDirectory(this.root);
     } finally {
       await fs.rm(temporary, { force: true });

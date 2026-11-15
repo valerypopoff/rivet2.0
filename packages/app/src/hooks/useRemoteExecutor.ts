@@ -759,6 +759,9 @@ export function useRemoteExecutor() {
       }
 
       const remoteLocalRecordingPersistence = await prepareEditorRecordingPersistence({
+        project: projectWithCurrentGraph,
+        graphId: graphToRun,
+        source: 'node',
         eligible: recordExecutions && sessionState.target?.type === 'internal-hosted',
         projectPath: loadedProject.path,
         provider: localExecutionRecordingPersistence,

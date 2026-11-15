@@ -82,7 +82,13 @@ export type WorkflowRecordingRunSummary = {
   /** Logical run creation/start for new captures; legacy/imported rows may retain save time. */
   createdAt: string;
   runKind: WorkflowRecordingRunKind;
-  status: WorkflowRecordingStatus;
+  status: WorkflowRecordingStatus | 'accepted' | 'running' | 'unknown';
+  /** Only a committed artifact can be opened. Absent on legacy playable rows. */
+  evidence?: {
+    availability: import('./workflow-run-evidence.js').RecordingAvailability;
+    reason?: import('./workflow-run-evidence.js').RecordingUnavailableReason;
+    childCoverage: 'unknown' | 'complete' | 'incomplete';
+  };
   durationMs: number;
   cost?: WorkflowRunCost;
   endpointNameAtExecution: string;
@@ -129,6 +135,9 @@ export function sumWorkflowRecordingCounts(rows: readonly WorkflowRecordingCount
 }
 
 export type WorkflowRecordingRunsPageResponse = {
+  /** Attempts whose payload cannot be tested by the active input predicate. */
+  unsearchableRuns?: number;
+  playableRuns?: number;
   /** Empty for Any; sub-runs pages identify the primary recording. Each run retains its actual workflowId. */
   workflowId: string;
   /** Counts before predicates; input searches count only root candidates, never child context rows. */
@@ -284,6 +293,8 @@ export type WorkflowRunStatisticsBucket = WorkflowRunStatisticsMetrics & {
 };
 
 export type WorkflowRunStatisticsResponse = {
+  /** Excluded attempts without a confirmed outcome/duration; not zero-cost successes. */
+  incompleteRuns?: number;
   target: WorkflowRunStatisticsTarget;
   period: WorkflowRunStatisticsPeriod;
   current: WorkflowRunStatisticsMetrics;

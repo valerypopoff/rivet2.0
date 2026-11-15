@@ -1,5 +1,14 @@
 # Recording input search performance
 
+## HTTP ownership
+
+`routes/workflows/recording-http.ts` owns recording browsing/search, replay,
+deletion and statistics HTTP handlers. It registers directly on the existing
+workflow router, after its cache policy and behind the app's operator-auth
+boundary. Search/cache/storage algorithms stay in their existing modules.
+The [separation record](recording-http-separation-plan.md) documents the preserved
+cancellation, pagination and response contracts and local validation.
+
 ## Request-ID search improvements — November 11, 2026
 
 The [implementation plan and measurements](recording-request-id-search-plan.md)
@@ -267,6 +276,11 @@ medians of 1.44 and 1.95 seconds respectively; the catalog response still arrive
 at 5.19 seconds. These include Playwright interaction and modal animation time.
 They demonstrate removal of the blocking dependency, not faster database queries
 or a verified sub-half-second/production latency guarantee.
+
+These opening timings are historical measurements. The normal browser suite now
+tests the same ordering with explicitly held catalog/browse responses, and tests
+pending and completed search reuse together. It does not repeat the five-second
+measurement waits on every run.
 
 Three follow-up runs measured retained controls at a median of 71 ms and retained
 results at 86 ms, with no new requests. A separate 100-recording loopback benchmark

@@ -1,8 +1,14 @@
 import { expect, test } from '@playwright/test';
-import { authenticateIfNeeded, waitForDashboardReady } from './helpers/hostedEditorObserve';
+import { authenticateIfNeeded, mockHostedEditorBootstrap, waitForDashboardReady } from './helpers/hostedEditorObserve';
 import { seedHostedEditorProject } from './helpers/hostedEditorStorage';
 
-test('Assemble Prompt exposes opt-in empty-prompt filtering in its settings and body', async ({ page }) => {
+test('Assemble Prompt enables empty-prompt filtering by default and allows opting out', async ({ page }) => {
+  await page.route('**/api/**', (route) => {
+    if (new URL(route.request().url()).pathname === '/api/workflows/tree')
+      return route.fulfill({ json: { root: '/workflows', folders: [], projects: [] } });
+    return route.fulfill({ status: 503, json: { error: 'Isolated Assemble Prompt fixture' } });
+  });
+  await mockHostedEditorBootstrap(page);
   const suffix = String(Date.now());
   await seedHostedEditorProject(page, {
     graphId: `assemble-prompt-${suffix}-graph`,
@@ -32,20 +38,20 @@ test('Assemble Prompt exposes opt-in empty-prompt filtering in its settings and 
     has: editor.locator('.node-title', { hasText: /^Assemble Prompt$/ }),
   });
   await expect(node).toHaveCount(1);
-  await expect(node.getByText('Filter empty prompts: Enabled', { exact: true })).toHaveCount(0);
+  await expect(node.getByText('Filter empty prompts: Enabled', { exact: true })).toBeVisible();
+  await expect(node.locator('.assemble-prompt-node-body-label')).toHaveText('Filter empty prompts:');
+  await expect(node.locator('.assemble-prompt-node-body-label')).toHaveCSS('opacity', '0.6');
 
   await node.locator('.node-title').click();
   const setting = editor.getByLabel('Filter empty prompts');
-  await expect(setting).not.toBeChecked();
+  await expect(setting).toBeChecked();
   await editor
     .locator('.toggle-editor-field', { has: editor.getByText('Filter empty prompts', { exact: true }) })
     .locator('.scalable-toggle')
     .click();
 
-  await expect(setting).toBeChecked();
-  await expect(node.getByText('Filter empty prompts: Enabled', { exact: true })).toBeVisible();
-  await expect(node.locator('.assemble-prompt-node-body-label')).toHaveText('Filter empty prompts:');
-  await expect(node.locator('.assemble-prompt-node-body-label')).toHaveCSS('opacity', '0.6');
+  await expect(setting).not.toBeChecked();
+  await expect(node.getByText('Filter empty prompts: Enabled', { exact: true })).toHaveCount(0);
 
   const cacheBreakpointInputToggle = editor.getByRole('button', {
     name: 'Use an input port for Is Last Message Cache Breakpoint',
@@ -64,6 +70,6 @@ test('Assemble Prompt exposes opt-in empty-prompt filtering in its settings and 
     .locator('.scalable-toggle')
     .click();
 
-  await expect(setting).not.toBeChecked();
-  await expect(node.getByText('Filter empty prompts: Enabled', { exact: true })).toHaveCount(0);
+  await expect(setting).toBeChecked();
+  await expect(node.getByText('Filter empty prompts: Enabled', { exact: true })).toBeVisible();
 });

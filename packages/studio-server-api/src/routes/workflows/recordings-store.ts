@@ -5,6 +5,12 @@ import { reportRecordingFailure, type RecordingDiagnosticContext } from './recor
 
 type WorkflowRecordingPersistenceTask = () => Promise<void>;
 
+export type RecordingQueueAdmission = {
+  deferredCapture?: boolean;
+  /** An existing run-evidence handle keeps its accepted capture when recording is switched off. */
+  acceptedEvidence?: boolean;
+};
+
 type QueuePolicySnapshot = { path: string; value: { readonly maxPendingWrites: number } };
 type QueuePolicySource = {
   descriptor: { getPath(): string };
@@ -32,7 +38,13 @@ export function createWorkflowRecordingStore(options: {
   let storageReadyRoot = '';
   let cleanupPromise: Promise<void> | null = null;
   let cleanupRequested = false;
-  let persistenceQueue: Array<{ run: WorkflowRecordingPersistenceTask; context?: RecordingDiagnosticContext }> = [];
+  let persistenceQueue: Array<{
+    run: WorkflowRecordingPersistenceTask;
+    context?: RecordingDiagnosticContext;
+    retainedBytes: number;
+  }> = [];
+  let retainedBytes = 0;
+  const maxRetainedBytes = 256 * 1024 * 1024;
   let persistenceQueuePromise: Promise<void> | null = null;
   let persistenceQueueStartImmediate: ReturnType<typeof setImmediate> | null = null;
   let lastDroppedPersistenceLogAt = 0;
@@ -189,6 +201,8 @@ export function createWorkflowRecordingStore(options: {
         } catch (error) {
           recordStudioMetrics((metrics) => metrics.recordWorkflowRecordingPersistenceFailure());
           reportRecordingFailure(error, { phase: 'persistence', ...task.context });
+        } finally {
+          retainedBytes = Math.max(0, retainedBytes - task.retainedBytes);
         }
       }
     })().finally(() => {
@@ -236,19 +250,30 @@ export function createWorkflowRecordingStore(options: {
     initializeQueuePolicy,
     disposeQueuePolicy,
 
-    enqueuePersistence(task: WorkflowRecordingPersistenceTask, context?: RecordingDiagnosticContext): boolean {
-      if (!isWorkflowRecordingEnabled() || resettingWorkflowRecordingStorageForTests) {
+    enqueuePersistence(
+      task: WorkflowRecordingPersistenceTask,
+      context?: RecordingDiagnosticContext,
+      payloadBytes = 0,
+      admission: RecordingQueueAdmission = {},
+    ): boolean {
+      if (!Number.isSafeInteger(payloadBytes) || payloadBytes < 0) throw new Error('Invalid retained recording bytes.');
+      if ((!admission.acceptedEvidence && !isWorkflowRecordingEnabled()) || resettingWorkflowRecordingStorageForTests) {
         return false;
       }
 
       const limit = getQueueLimit();
-      if (limit > 0 && getPendingPersistenceWriteCount() >= limit) {
+      const effectiveLimit = limit || (admission.deferredCapture ? 64 : 0);
+      if (
+        (effectiveLimit > 0 && getPendingPersistenceWriteCount() >= effectiveLimit) ||
+        retainedBytes + payloadBytes > maxRetainedBytes
+      ) {
         recordStudioMetrics((metrics) => metrics.recordWorkflowRecordingPersistenceDrop());
-        logDroppedWorkflowRecordingPersistence(limit, context);
+        logDroppedWorkflowRecordingPersistence(effectiveLimit, context);
         return false;
       }
 
-      persistenceQueue.push({ run: task, context });
+      retainedBytes += payloadBytes;
+      persistenceQueue.push({ run: task, context, retainedBytes: payloadBytes });
       scheduleWorkflowRecordingPersistenceQueue();
       return true;
     },
@@ -307,6 +332,7 @@ export function createWorkflowRecordingStore(options: {
         await pendingCleanup?.catch(() => {});
         await options.resetDatabaseForTests();
       } finally {
+        retainedBytes = 0;
         resettingWorkflowRecordingStorageForTests = false;
       }
     },

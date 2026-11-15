@@ -15,8 +15,8 @@ import type { ManagedRuntimeLibrariesContext } from './context.js';
 export function createManagedRuntimeLibrariesJobWorker(options: {
   context: ManagedRuntimeLibrariesContext;
   isStopped(): boolean;
-  syncForLocalUse(force: boolean): Promise<void>;
-  getProcessManagedSync(): ((force?: boolean) => Promise<void>) | undefined;
+  syncForLocalUse(force: boolean): Promise<unknown>;
+  getProcessManagedSync(): ((force?: boolean) => Promise<unknown>) | undefined;
   jobStore: {
     appendJobLog(jobId: string, message: string, source?: 'system' | 'stdout' | 'stderr'): Promise<void>;
     failJob(jobId: string, error: unknown): Promise<boolean>;

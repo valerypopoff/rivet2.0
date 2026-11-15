@@ -5,7 +5,7 @@ import type {
   BundleComparisonManifest,
   BundleComparisonPairRequest,
 } from '../../studio-server-shared/workflow-bundle-comparison-types';
-import { mockHostedEditorBootstrap, waitForDashboardReady } from './helpers/hostedEditorObserve';
+import { openBundleActions, mockHostedEditorBootstrap, waitForDashboardReady } from './helpers/hostedEditorObserve';
 import { expectStudioModalSizing } from './helpers/modalSizing';
 
 const olderId = '5c07c7c1-62b1-4140-911b-03c714e580b1';
@@ -110,7 +110,10 @@ async function fixture(page: Page, bundleCompare = true, paths?: { older: string
         return route.fulfill({
           json: {
             root: '/managed/workflows',
-            capabilities: { explicitBundles: true, ...(bundleCompare ? { bundleCompare: true } : {}) },
+            capabilities: {
+              explicitBundles: true,
+              ...(bundleCompare ? { namespaceMutations: true, bundleMerge: true, bundleCompare: true } : {}),
+            },
             folders: [older, newer].map((c) => ({
               id: c.name,
               bundleId: c.bundleId,
@@ -141,6 +144,8 @@ async function fixture(page: Page, bundleCompare = true, paths?: { older: string
         return route.fulfill({
           json: body.olderId === olderId ? manifest : { ...manifest, older: newer, newer: older },
         });
+      if (path === '/api/workflows/bundles/compare/changes')
+        return route.fulfill({ json: { changedNewerIds: ['new-a'] } });
       if (path === '/api/workflows/bundles/compare/pair') {
         reads.push(body);
         if (block) await block;
@@ -219,6 +224,7 @@ async function select(page: Page, label: string, text: string) {
 }
 async function begin(page: Page) {
   await page.getByRole('button', { name: /^(Expand|Collapse) Working bundle$/ }).click({ button: 'right' });
+  await openBundleActions(page);
   await page.getByRole('menuitem', { name: 'Compare with another bundle…', exact: true }).click();
   await select(page, 'Older bundle', 'Original');
   const modal = page.getByRole('dialog', { name: 'Compare bundles', exact: true });
@@ -243,6 +249,7 @@ test('bundle picker values show names, paths stay below and in menus, and the ic
   const paths = { older: 'Projects/Original', newer: 'Trash/Work in progress/Working' };
   const f = await fixture(page, true, paths);
   await page.getByRole('button', { name: 'Expand Working bundle', exact: true }).click({ button: 'right' });
+  await openBundleActions(page);
   await page.getByRole('menuitem', { name: 'Compare with another bundle…', exact: true }).click();
   const modal = page.getByRole('dialog', { name: 'Compare bundles', exact: true });
   const older = modal.locator('.bundle-comparison-older');
@@ -304,6 +311,7 @@ test('bundle picker values show names, paths stay below and in menus, and the ic
 test('comparison uses the shared backdrop, surface, spacing and dismissal controls', async ({ page }, testInfo) => {
   const f = await fixture(page);
   await page.getByRole('button', { name: /^(Expand|Collapse) Working bundle$/ }).click({ button: 'right' });
+  await openBundleActions(page);
   await page.getByRole('menuitem', { name: 'Compare with another bundle…', exact: true }).click();
   let modal = page.getByRole('dialog', { name: 'Compare bundles', exact: true });
   await expect(modal.getByRole('combobox', { name: 'Older bundle', exact: true })).toBeFocused();
@@ -371,6 +379,11 @@ test('comparison uses the shared backdrop, surface, spacing and dismissal contro
 test('matches both bundles, saves only Newer, and inspects removed graphs without restoring them', async ({ page }) => {
   const f = await fixture(page);
   const modal = await begin(page);
+  await expect(modal.getByRole('columnheader')).toHaveText([
+    'Project in Older (Original)',
+    'Corresponding project in Newer (Working)',
+  ]);
+  await expect(modal.getByText('Only in Newer (Working)', { exact: true })).toBeVisible();
   await expect(modal).toContainText('No corresponding project (Suggested)');
   await expect(modal.getByRole('list')).toContainText('Added member — Added');
   await expect(modal.getByRole('row')).toHaveCount(4);
@@ -378,11 +391,15 @@ test('matches both bundles, saves only Newer, and inspects removed graphs withou
   await modal.getByRole('button', { name: 'Compare bundles', exact: true }).click();
   const editor = page.frameLocator('iframe.dashboard-editor-frame');
   await expect(editor.locator('.node.compare-changed')).toHaveCount(1);
+  await expect(editor.locator('.project-compare-notice')).toContainText(
+    'Compare mode: Newer · Working against Older · Original (saved)',
+  );
   const tree = page.getByLabel('Compared bundles', { exact: true });
   await expect(tree.locator(':scope > details')).toHaveCount(2);
+  await expect(tree.locator(':scope > details > summary')).toHaveText(['Older · Original', 'Newer · Working']);
   await expect(tree.locator('[aria-current="true"]')).toHaveCount(2);
   await tree.getByRole('button', { name: 'Compare Older project Dependency' }).click();
-  await expect(editor.locator('.node-body')).toContainText('Unchanged');
+  await expect(editor.locator('.node[data-nodeid="text"] .node-body')).toContainText('Unchanged');
   await expect(editor.locator('.node.compare-changed')).toHaveCount(0);
   await tree.getByRole('button', { name: 'Compare Newer project Main project' }).click();
   await expect(editor.locator('.node.compare-changed')).toHaveCount(1);
@@ -450,9 +467,16 @@ test('comparison rows reuse normal sizing and highlight color, mute Older, and o
   await (await begin(page)).getByRole('button', { name: 'Compare bundles', exact: true }).click();
   const tree = page.getByLabel('Compared bundles', { exact: true });
   await expect(tree.locator('[aria-current="true"]')).toHaveCount(2);
+  await expect(tree.getByRole('button', { name: `Compare Newer project ${longName}`, exact: true })).toHaveAttribute(
+    'title',
+    `${longName}\nNested/Dependency`,
+  );
+  await expect(tree.locator(':scope > details > summary').first()).toHaveAttribute('title', f.older.relativePath);
   await expect(tree.getByText('Paired', { exact: true })).toHaveCount(0);
-  await expect(tree.getByText('Only in older', { exact: true })).toBeVisible();
-  await expect(tree.getByText('Only in newer', { exact: true })).toBeVisible();
+  await expect(tree.getByText('Only in older', { exact: true })).toHaveCount(0);
+  await expect(tree.getByText('Removed', { exact: true })).toBeVisible();
+  await expect(tree.getByText('Changed', { exact: true })).toBeVisible();
+  await expect(tree.getByText('Added', { exact: true })).toBeVisible();
   await expect(
     page.getByText('Older uses saved versions. Unsaved edits stay in their original tabs.', { exact: true }),
   ).toHaveCount(0);
@@ -591,9 +615,9 @@ test('a crowded matching modal keeps its actions reachable and Escape dismisses 
   const modal = await begin(page);
   await expect(modal.locator('tbody tr')).toHaveCount(63);
   const mobileLabels = modal.locator('td .workflow-bundle-merge-mobile-column');
-  await expect(mobileLabels.first()).toHaveText('Project in Original');
+  await expect(mobileLabels.first()).toHaveText('Project in Older (Original)');
   await expect(mobileLabels.first()).toBeVisible();
-  await expect(mobileLabels.nth(1)).toHaveText('Corresponding project in Working');
+  await expect(mobileLabels.nth(1)).toHaveText('Corresponding project in Newer (Working)');
   await expect(mobileLabels.nth(1)).toBeVisible();
   await expect(modal.getByRole('button', { name: 'Compare bundles', exact: true })).toBeInViewport();
   await expect(modal.getByRole('button', { name: 'Cancel', exact: true })).toBeInViewport();
@@ -747,7 +771,7 @@ test('the sidebar only offers Exit and closing every real tab keeps the reviewed
   await expect(editor.locator('.node.compare-changed')).toHaveCount(1);
   await expect(tree.locator('[aria-current="true"]')).toHaveCount(2);
   await expect(page.locator('.bundle-comparison-title')).toHaveText(
-    'Original (Older, saved) → Working (Newer, editable)',
+    'Older · Original (saved) → Newer · Working (editable)',
   );
   expect(f.saves).toHaveLength(0);
   await page.getByRole('button', { name: 'Exit comparison', exact: true }).click();
@@ -836,14 +860,21 @@ test('modal Swap preserves unsaved real tabs, uses saved Older versions, and inn
   await swapped.getByRole('button', { name: 'Swap', exact: true }).click();
   await swapped.getByRole('button', { name: 'Compare bundles', exact: true }).click();
   await expect(page.locator('.bundle-comparison-title')).toHaveText(
-    'Working (Older, saved) → Original (Newer, editable)',
+    'Older · Working (saved) → Newer · Original (editable)',
+  );
+  await expect(page.getByLabel('Compared bundles', { exact: true }).locator(':scope > details > summary')).toHaveText([
+    'Older · Working',
+    'Newer · Original',
+  ]);
+  await expect(editor.locator('.project-compare-notice')).toContainText(
+    'Compare mode: Newer · Original against Older · Working (saved)',
   );
   await expect(editor.locator('.node[data-nodeid="text"] .node-body')).toContainText('Before');
   await expect(page.getByLabel('Compared bundles', { exact: true })).toContainText('Unsaved edits excluded');
   await page.getByRole('button', { name: 'Exit comparison', exact: true }).click();
   await (await begin(page)).getByRole('button', { name: 'Compare bundles', exact: true }).click();
   await expect(page.locator('.bundle-comparison-title')).toHaveText(
-    'Original (Older, saved) → Working (Newer, editable)',
+    'Older · Original (saved) → Newer · Working (editable)',
   );
   await expect.poll(currentTransform).toBe(dirtyPosition);
   await expect(page.locator('.active-project-save-button')).toBeVisible();
@@ -986,7 +1017,7 @@ test('Subgraph navigation and PgUp/PgDn keep comparison attached to the actual r
     .locator('.node[data-nodeid="go-to-dependency"]')
     .getByRole('button', { name: 'Go to subgraph', exact: true })
     .click();
-  await expect(editor.locator('.node-body')).toContainText('Unchanged');
+  await expect(editor.locator('.node[data-nodeid="text"] .node-body')).toContainText('Unchanged');
   const tree = page.getByLabel('Compared bundles', { exact: true });
   await expect(tree.getByRole('button', { name: 'Compare Newer project Dependency' })).toHaveAttribute(
     'aria-current',
@@ -1000,7 +1031,7 @@ test('Subgraph navigation and PgUp/PgDn keep comparison attached to the actual r
     'true',
   );
   await page.keyboard.press('PageDown');
-  await expect(editor.locator('.node-body')).toContainText('Unchanged');
+  await expect(editor.locator('.node[data-nodeid="text"] .node-body')).toContainText('Unchanged');
   await expect(tree.getByRole('button', { name: 'Compare Newer project Dependency' })).toHaveAttribute(
     'aria-current',
     'true',
@@ -1039,6 +1070,10 @@ test('a failed post-activation membership check stays located and does not autom
 
 test('empty bundles show two empty roots without opening an arbitrary project', async ({ page }) => {
   const f = await fixture(page);
+  const checks: string[] = [];
+  page.on('request', (request) => {
+    if (request.url().endsWith('/api/workflows/bundles/compare/changes')) checks.push(request.url());
+  });
   f.older.projects = [];
   f.newer.projects = [];
   await (await begin(page)).getByRole('button', { name: 'Compare bundles', exact: true }).click();
@@ -1047,6 +1082,7 @@ test('empty bundles show two empty roots without opening an arbitrary project', 
   await expect(tree.getByText('No projects', { exact: true })).toHaveCount(2);
   expect(f.loads).toHaveLength(0);
   expect(f.reads).toHaveLength(0);
+  expect(checks).toHaveLength(0);
   await page.getByRole('button', { name: 'Exit comparison', exact: true }).click();
   await expect(tree).toHaveCount(0);
 });
@@ -1085,8 +1121,12 @@ for (const hasRealTab of [true, false]) {
 test('older APIs keep normal bundle actions and hide unsupported comparison', async ({ page }) => {
   const f = await fixture(page, false);
   await page.getByRole('button', { name: /^(Expand|Collapse) Working bundle$/ }).click({ button: 'right' });
+  await openBundleActions(page);
   await expect(page.getByRole('menuitem', { name: 'Download bundle', exact: true })).toBeVisible();
   await expect(page.getByRole('menuitem', { name: 'Compare with another bundle…', exact: true })).toHaveCount(0);
+  const submenu = page.getByRole('menu', { name: 'Bundle actions', exact: true });
+  await expect(submenu.locator(':scope > [role="separator"]')).toHaveCount(0);
+  await expect(submenu.locator(':scope > :last-child')).toHaveText('Convert to ordinary folder');
   expect(f.reads).toHaveLength(0);
 });
 
@@ -1118,5 +1158,276 @@ for (const phase of ['active', 'pending'] as const) {
     expect(f.loads.length).toBe(beforeLoads);
     await page.getByRole('button', { name: 'Exit comparison', exact: true }).click();
     await expect(page.getByLabel('Compared bundles', { exact: true })).toHaveCount(0);
+  });
+}
+
+test('bundle submenu supports keyboard navigation and removed rows remain inspections', async ({ page }, testInfo) => {
+  await fixture(page);
+  await page.getByRole('button', { name: 'Expand Working bundle', exact: true }).click({ button: 'right' });
+  const menu = page.getByRole('menu', { name: 'Actions for Working', exact: true });
+  const trigger = menu.getByRole('menuitem', { name: 'Bundle actions', exact: true });
+  const serverArrow = trigger.locator('svg.workflow-bundle-submenu-arrow');
+  await expect(serverArrow).toHaveAttribute('viewBox', '0 0 7 14');
+  await expect(serverArrow).toHaveCSS('width', '7px');
+  await expect(serverArrow).toHaveCSS('height', '14px');
+  await expect(page.getByRole('menuitem', { name: 'Download bundle', exact: true })).toHaveCount(0);
+  expect(await menu.locator(':scope > [role="menuitem"]').allTextContents()).toEqual([
+    'Rename bundle',
+    expect.stringContaining('Bundle actions'),
+    'New folder',
+    'New project',
+    'Upload project',
+    'Delete bundle',
+  ]);
+  await trigger.focus();
+  await page.keyboard.press('ArrowRight');
+  await expect(page.getByRole('menuitem', { name: 'Download bundle', exact: true })).toBeFocused();
+  const submenu = page.getByRole('menu', { name: 'Bundle actions', exact: true });
+  expect(
+    await submenu
+      .locator(':scope > *')
+      .evaluateAll((items) =>
+        items.map((item) => (item.getAttribute('role') === 'separator' ? '---' : item.textContent?.trim())),
+      ),
+  ).toEqual([
+    'Download bundle',
+    'Duplicate bundle',
+    'Convert to ordinary folder',
+    '---',
+    'Merge into another bundle…',
+    '---',
+    'Compare with another bundle…',
+  ]);
+  for (const name of ['Duplicate bundle', 'Convert to ordinary folder']) {
+    await expect(submenu.getByRole('menuitem', { name, exact: true }).locator('svg')).toBeVisible();
+  }
+  const expectRightSubmenu = async () => {
+    await expect
+      .poll(() =>
+        menu.evaluate((element) => {
+          const child = element.querySelector('.workflow-bundle-submenu');
+          if (!child) return false;
+          const mainBox = element.getBoundingClientRect();
+          const childBox = child.getBoundingClientRect();
+          return (
+            mainBox.top >= 7 &&
+            mainBox.bottom <= window.innerHeight - 7 &&
+            childBox.top >= 7 &&
+            childBox.bottom <= window.innerHeight - 7 &&
+            childBox.left >= mainBox.right &&
+            childBox.right <= window.innerWidth - 7
+          );
+        }),
+      )
+      .toBe(true);
+    expect(
+      await submenu.getByRole('menuitem').evaluateAll((items) =>
+        items.every((item) => {
+          const style = getComputedStyle(item);
+          const singleLineHeight =
+            parseFloat(style.lineHeight) + parseFloat(style.paddingTop) + parseFloat(style.paddingBottom);
+          return item.getBoundingClientRect().height <= singleLineHeight + 1 && item.scrollWidth <= item.clientWidth;
+        }),
+      ),
+    ).toBe(true);
+  };
+  const openAt = async (clientX: number, clientY: number) => {
+    await page.getByRole('button', { name: 'Expand Working bundle', exact: true }).evaluate(
+      (element, point) => {
+        element.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, ...point }));
+      },
+      { clientX, clientY },
+    );
+    await trigger.focus();
+    await page.keyboard.press('ArrowRight');
+  };
+  await expectRightSubmenu();
+  await page.keyboard.press('Escape');
+  await openAt(1580, 990);
+  await expect.poll(async () => (await menu.boundingBox())?.x ?? 0).toBeGreaterThan(1000);
+  await expect.poll(async () => (await menu.boundingBox())?.y ?? 0).toBeGreaterThan(600);
+  await expectRightSubmenu();
+  await page.screenshot({ path: testInfo.outputPath('menu-bottom-right.png') });
+  await page.setViewportSize({ width: 620, height: 850 });
+  await expectRightSubmenu();
+  await page.keyboard.press('Escape');
+  await openAt(600, 120);
+  await expectRightSubmenu();
+  await page.setViewportSize({ width: 1600, height: 1000 });
+  await page.keyboard.press('Escape');
+  await expect(trigger).toBeFocused();
+  await expect(page.getByRole('menu', { name: 'Actions for Working', exact: true })).toBeVisible();
+  await page.keyboard.press('Enter');
+  await expect(page.getByRole('menuitem', { name: 'Download bundle', exact: true })).toBeFocused();
+  await page.keyboard.press('ArrowUp');
+  await expect(page.getByRole('menuitem', { name: 'Compare with another bundle…', exact: true })).toBeFocused();
+  await page.keyboard.press('ArrowLeft');
+  await expect(trigger).toBeFocused();
+  await page.keyboard.press('Space');
+  await expect(page.getByRole('menuitem', { name: 'Download bundle', exact: true })).toBeFocused();
+  await trigger.hover();
+  const download = await submenu.getByRole('menuitem', { name: 'Download bundle', exact: true }).boundingBox();
+  expect(download).toBeTruthy();
+  await page.mouse.move(download!.x + download!.width / 2, download!.y + download!.height / 2, { steps: 8 });
+  await expect(submenu).toBeVisible();
+  await page.keyboard.press('Escape');
+  await page.keyboard.press('Escape');
+  await (await begin(page)).getByRole('button', { name: 'Compare bundles', exact: true }).click();
+  const tree = page.getByLabel('Compared bundles', { exact: true });
+  const removed = tree.getByRole('button', { name: 'Compare Newer project Removed member', exact: true });
+  await expect(removed.getByText('Removed', { exact: true })).toHaveCSS('color', 'rgb(255, 143, 143)');
+  await expect(tree.getByText('Added', { exact: true })).toHaveCSS('color', 'rgb(132, 214, 160)');
+  await expect(tree.getByText('Changed', { exact: true })).toHaveCSS('color', 'rgb(255, 224, 138)');
+  await expect(
+    tree
+      .getByRole('button', { name: 'Compare Newer project Dependency', exact: true })
+      .locator('.comparison-project-status'),
+  ).toHaveCount(0);
+  await expect(
+    tree
+      .getByRole('button', { name: 'Compare Older project Removed member', exact: true })
+      .locator('.comparison-project-status'),
+  ).toHaveCount(0);
+  await page.screenshot({ path: testInfo.outputPath('comparison-statuses.png') });
+  const editor = page.frameLocator('iframe.dashboard-editor-frame');
+  await editor.locator('.node-canvas').click({ button: 'right', position: { x: 900, y: 650 } });
+  const addNode = editor
+    .locator('.context-menu-items > div')
+    .filter({ has: editor.getByText('Add node', { exact: true }) });
+  const editorArrow = addNode.locator(':scope > svg.context-menu-submenu-arrow');
+  await expect(editorArrow).toHaveAttribute('viewBox', '0 0 7 14');
+  await expect(editorArrow).toHaveCSS('width', '7px');
+  await expect(editorArrow).toHaveCSS('height', '14px');
+  await addNode.hover();
+  await expect(editor.getByText('Common', { exact: true })).toBeVisible();
+  await page.keyboard.press('Escape');
+  await removed.click();
+  await expect(editor.locator('.node.compare-removed')).not.toHaveCount(0);
+  await expect(editor.getByRole('button', { name: 'Run project', exact: true })).toHaveCount(0);
+});
+
+test('failed saved-change checks can retry without saving and still refresh after saves', async ({ page }) => {
+  const f = await fixture(page);
+  let checks = 0;
+  await page.route('**/api/workflows/bundles/compare/changes', (route) => {
+    checks++;
+    const body = route.request().postDataJSON();
+    expect(body.pairs.find((pair: { olderId: string }) => pair.olderId === 'old-a').olderRevisionId).toBe(
+      'saved-old-a',
+    );
+    return checks === 1
+      ? route.fulfill({ status: 503, json: { error: 'Saved snapshots temporarily unavailable' } })
+      : route.fulfill({ json: { changedNewerIds: [] } });
+  });
+  await (await begin(page)).getByRole('button', { name: 'Compare bundles', exact: true }).click();
+  const tree = page.getByLabel('Compared bundles', { exact: true });
+  const current = tree.getByRole('button', { name: 'Compare Newer project Main project', exact: true });
+  await expect(current.getByText('Check failed', { exact: true })).toBeVisible();
+  await expect(current).toHaveAttribute('title', 'Saved snapshots temporarily unavailable');
+  await expect(tree.getByText('Added', { exact: true })).toBeVisible();
+  await expect(tree.getByText('Removed', { exact: true })).toBeVisible();
+  const editor = page.frameLocator('iframe.dashboard-editor-frame');
+  await expect(editor.locator('.node.compare-changed')).toHaveCount(1);
+  const readsBefore = f.reads.length;
+  const loadsBefore = f.loads.length;
+  await page.getByRole('button', { name: 'Retry check', exact: true }).click();
+  await expect.poll(() => checks).toBe(2);
+  await expect(current.locator('.comparison-project-status')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Retry check', exact: true })).toHaveCount(0);
+  expect(f.saves).toHaveLength(0);
+  expect(f.reads).toHaveLength(readsBefore);
+  expect(f.loads).toHaveLength(loadsBefore);
+  await editor.locator('.node[data-nodeid="text"]').click();
+  await page.keyboard.press('Control+s');
+  await expect.poll(() => f.saves.length).toBe(1);
+  await expect.poll(() => checks).toBe(3);
+  await expect(current.locator('.comparison-project-status')).toHaveCount(0);
+  await expect(tree.getByText('Check failed', { exact: true })).toHaveCount(0);
+});
+
+for (const change of ['corresponding', 'unrelated', 'setting', 'rename', 'cosmetic'] as const) {
+  test(`Subgraph ${change} targets use the reviewed correspondence in tree and editor inspection`, async ({ page }) => {
+    const f = await fixture(page);
+    if (change === 'rename') {
+      f.newer.projects[0]!.name = 'Renamed project';
+      f.newer.projects[0]!.relativePath = 'Renamed.rivet-project';
+    }
+    for (const [id, targetId] of [
+      ['old-a', 'old-b'],
+      ['new-a', change === 'unrelated' ? 'new-only' : 'new-b'],
+    ]) {
+      const project = deserializeProject(f.snapshots.get(id!)!)[0];
+      if (change === 'rename' && id === 'new-a') project.metadata.title = 'Renamed project';
+      project.graphs = {
+        main: {
+          metadata: { id: 'main', name: 'Main Graph' },
+          nodes: [
+            {
+              id: 'call',
+              type: 'subGraph',
+              title: 'Call dependency',
+              data: {
+                graphId: 'main',
+                targetProjectId: targetId,
+                ...(id === 'new-a'
+                  ? {
+                      targetScope: 'same-bundle',
+                      targetVersion: 'latest',
+                      ...(change === 'setting' ? { useErrorOutput: true } : {}),
+                    }
+                  : {}),
+              },
+              visualData: { x: change === 'cosmetic' && id === 'new-a' ? 600 : 400, y: 250, width: 260 },
+            },
+          ],
+          connections: [],
+        },
+      } as never;
+      f.snapshots.set(id!, serializeProject(project) as string);
+    }
+    await page.route('**/api/workflows/bundles/compare/changes', (route) =>
+      route.fulfill({
+        json: {
+          changedNewerIds: change === 'unrelated' || change === 'setting' ? ['new-a'] : [],
+        },
+      }),
+    );
+    const modal = await begin(page);
+    if (change === 'rename') await select(page, 'Counterpart for Main project', 'Renamed project — Renamed');
+    await modal.getByRole('button', { name: 'Compare bundles', exact: true }).click();
+    const row = page.getByLabel('Compared bundles', { exact: true }).getByRole('button', {
+      name: `Compare Newer project ${change === 'rename' ? 'Renamed project' : 'Main project'}`,
+      exact: true,
+    });
+    const editor = page.frameLocator('iframe.dashboard-editor-frame');
+    const node = editor.locator('.node[data-nodeid="call"]');
+    await expect(node).toBeVisible();
+    if (change !== 'unrelated' && change !== 'setting') {
+      await expect(row.locator('.comparison-project-status')).toHaveCount(0);
+      await expect(node).not.toHaveClass(/compare-changed/);
+      await expect(node.locator('.project-compare-changes-button')).toHaveCount(0);
+      if (change === 'cosmetic') {
+        const title = node.locator('.node-title');
+        const box = await title.boundingBox();
+        expect(box).toBeTruthy();
+        await page.mouse.move(box!.x + 70, box!.y + 15);
+        await page.mouse.down();
+        await page.mouse.move(box!.x + 110, box!.y + 45, { steps: 8 });
+        await page.mouse.up();
+        await expect(row.getByText('· Unsaved', { exact: true })).toBeVisible();
+        await expect(row.locator('.comparison-project-status')).toHaveCount(0);
+        await expect(node).not.toHaveClass(/compare-changed/);
+      }
+    } else {
+      await expect(row.getByText('Changed', { exact: true })).toBeVisible();
+      await expect(node).toHaveClass(/compare-changed/);
+      await node.locator('.project-compare-changes-button').click();
+      await expect(editor.getByText('Node config changes', { exact: true })).toBeVisible();
+      const headers = editor.locator('.project-compare-field-header');
+      if (change === 'setting') await expect(headers).toHaveText(['Node settings: useErrorOutput']);
+      else await expect(headers.filter({ hasText: 'Node settings: targetProjectId' })).toHaveCount(1);
+      await editor.getByRole('button', { name: 'Done', exact: true }).click();
+    }
+    expect(f.saves).toHaveLength(0);
   });
 }

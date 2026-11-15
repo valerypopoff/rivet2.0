@@ -1385,10 +1385,15 @@ test.describe('Project settings modal', () => {
 
     const { modal } = await openProjectSettingsModal(page, project);
     const projectSettingsSections = modal.getByRole('tablist', { name: 'Project settings sections' });
-    await expect(projectSettingsSections).toHaveClass(/segmented-control/);
-    await expect(modal.locator('.project-settings-modal-header-row').getByRole('tablist')).toHaveCount(1);
-    await expect(modal.locator('.project-settings-modal-content').getByRole('tablist')).toHaveCount(0);
-    await expect(projectSettingsSections.getByRole('tab', { name: 'Endpoint' })).toHaveCSS('height', '28px');
+    await expect(projectSettingsSections).toHaveAttribute('aria-orientation', 'vertical');
+    await expect(modal.locator('.project-settings-modal-header-row').getByRole('tablist')).toHaveCount(0);
+    await expect(modal.locator('.project-settings-modal-content').getByRole('tablist')).toHaveCount(1);
+    const tabs = projectSettingsSections.getByRole('tab');
+    const first = (await tabs.nth(0).boundingBox())!;
+    const second = (await tabs.nth(1).boundingBox())!;
+    expect(second.y).toBeGreaterThan(first.y + first.height);
+    expect(second.x).toBeCloseTo(first.x);
+    expect(second.width).toBeCloseTo(first.width);
     await expect(projectSettingsSections.getByRole('tab', { name: 'Endpoint' })).toHaveAttribute(
       'aria-selected',
       'true',
@@ -1835,6 +1840,9 @@ test.describe('Project settings modal', () => {
     await expect(historyModal).toContainText(endpointName);
     await expect(historyModal).toContainText('Current');
     await expect(historyModal.getByRole('listitem')).toHaveCount(10);
+    const firstPublishedDate = historyModal.locator('.published-version-history-date').first();
+    await expect(firstPublishedDate).toHaveText(/^\d{1,2} Apr 2026, \d{2}:\d{2}:\d{2}$/);
+    await expect(firstPublishedDate).toHaveAttribute('title', '2026-04-08T10:30:00.000Z');
     await expect(historyModal.getByRole('button', { name: 'Preview' })).toHaveCount(10);
     await expect(historyModal.getByRole('button', { name: 'Restore' })).toHaveCount(10);
     await expect(historyModal.getByRole('button', { name: 'Star published version' })).toHaveCount(10);

@@ -7,6 +7,7 @@ import type { ManagedWorkflowStorageConfig } from '../routes/workflows/storage-c
 import { acquireManagedPostgresPool, getManagedPostgresPoolMetrics } from '../managed-postgres-pool.js';
 import { getManagedDbPoolConfig } from '../routes/workflows/managed/db.js';
 import { createManagedWorkflowContext } from '../routes/workflows/managed/context.js';
+import { deferEvidenceWork } from '../routes/workflows/recording-evidence-work.js';
 
 const config: ManagedWorkflowStorageConfig = {
   databaseMode: 'managed',
@@ -20,6 +21,37 @@ const config: ManagedWorkflowStorageConfig = {
   objectStoragePrefix: '',
   objectStorageForcePathStyle: true,
 };
+
+test('backend drains accepted recording work before closing its evidence owner', async (t) => {
+  const before = getManagedPostgresPoolMetrics();
+  const events: string[] = [];
+  const backend = new ManagedWorkflowBackend(
+    config,
+    {
+      dispose() {
+        events.push('storage-closed');
+      },
+    } as ManagedWorkflowBlobStore,
+    { migrationMode: 'verify' },
+  );
+  const disposeEvidence = backend.evidence.dispose.bind(backend.evidence);
+  t.mock.method(backend.evidence, 'dispose', async () => {
+    events.push('evidence-closed');
+    await disposeEvidence();
+  });
+  const accepted = deferEvidenceWork(async () => {
+    events.push('accepted-write');
+    backend.evidence.track({ id: 'accepted-run', token: 'accepted-token' });
+  });
+  t.after(async () => {
+    await accepted;
+    await disposeEvidence();
+    await backend.dispose();
+  });
+  await backend.dispose();
+  assert.deepEqual(events, ['accepted-write', 'evidence-closed', 'storage-closed']);
+  assert.deepEqual(getManagedPostgresPoolMetrics(), before);
+});
 
 test('context shutdown settles every object client and retains all cleanup failures', async (t) => {
   const previous = process.env.RIVET_MANAGED_MAINTENANCE_ENABLED;

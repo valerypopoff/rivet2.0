@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test';
 import { startHostedSubgraphRuntime } from '../../studio-server-api/src/tests/helpers/hosted-subgraph-runtime';
 import type { WorkflowTreeResponse } from '../../studio-server-shared/workflow-types';
-import { mockHostedEditorBootstrap, waitForDashboardReady } from './helpers/hostedEditorObserve';
+import { openBundleActions, mockHostedEditorBootstrap, waitForDashboardReady } from './helpers/hostedEditorObserve';
 import { projectBundleFixture } from '../../studio-server-api/src/tests/helpers/project-bundle-fixture';
 import { collectProjectBundle } from '../../studio-server-api/src/routes/workflows/project-bundle';
 import { zipSync, strToU8 } from 'fflate';
@@ -65,11 +65,13 @@ test('structural authoring preserves real PostgreSQL/MinIO data after lost creat
     const folderRow = () =>
       page.getByRole('button', { name: /(?:Expand|Collapse) Structural UI(?: bundle)?$/, exact: true });
     await folderRow().click({ button: 'right' });
+    await openBundleActions(page);
     page.once('dialog', (dialog) => dialog.accept('Created member'));
     await page.getByRole('menuitem', { name: 'New project', exact: true }).click();
     await expect(page.locator('.project-row', { hasText: 'Created member' })).toBeVisible();
     const fixture = projectBundleFixture();
     await folderRow().click({ button: 'right' });
+    await openBundleActions(page);
     const chooser = page.waitForEvent('filechooser');
     await page.getByRole('menuitem', { name: 'Upload project', exact: true }).click();
     await (
@@ -82,17 +84,21 @@ test('structural authoring preserves real PostgreSQL/MinIO data after lost creat
     const uploaded = page.locator('.project-row', { hasText: 'Uploaded member' });
     await expect(uploaded).toBeVisible();
     await uploaded.click({ button: 'right' });
+    await openBundleActions(page);
     await page.getByRole('menuitem', { name: 'Duplicate', exact: true }).click();
     await expect(page.locator('.project-row', { hasText: 'Uploaded member [unpublished] Copy' })).toBeVisible();
     await folderRow().click({ button: 'right' });
+    await openBundleActions(page);
     page.once('dialog', (dialog) => dialog.accept());
     await page.getByRole('menuitem', { name: 'Convert to bundle', exact: true }).click();
     await expect(folderRow()).toHaveAttribute('aria-label', /Structural UI bundle$/);
     await folderRow().click({ button: 'right' });
+    await openBundleActions(page);
     await page.getByRole('menuitem', { name: 'Duplicate bundle', exact: true }).click();
     const copied = page.getByRole('button', { name: 'Collapse Structural UI copy bundle', exact: true });
     await expect(copied).toBeVisible();
     await copied.click({ button: 'right' });
+    await openBundleActions(page);
     await page.getByRole('menuitem', { name: 'Delete bundle', exact: true }).click();
     const deletion = page.getByRole('dialog', { name: 'Delete bundle', exact: true });
     await deletion.getByRole('textbox', { name: 'Bundle name', exact: true }).fill('Structural UI copy');
@@ -124,6 +130,7 @@ test('structural authoring preserves real PostgreSQL/MinIO data after lost creat
       },
     });
     await page.getByRole('button', { name: 'Collapse Import target', exact: true }).click({ button: 'right' });
+    await openBundleActions(page);
     await page.getByRole('menuitem', { name: 'Upload bundle', exact: true }).click();
     const upload = page.getByRole('dialog', { name: 'Upload bundle', exact: true });
     await upload.getByLabel('Bundle archive').setInputFiles({
@@ -272,6 +279,7 @@ for (const topology of ['single-host', 'replicated'] as const) {
         const checks = serviceAccess().length;
         const since = executorEvents.length;
         await node.locator('.node-title').click({ button: 'right' });
+        await openBundleActions(page);
         await frame.getByText('Run to here', { exact: true }).click();
         await expect.poll(() => freshEvents(since).some((event) => event.message === 'done')).toBe(true);
         expect(freshEvents(since).some((event) => event.message === 'nodeFinish' && event.data?.node?.id === id)).toBe(
@@ -363,6 +371,7 @@ for (const topology of ['single-host', 'replicated'] as const) {
       const checks = serviceAccess().length;
       const since = executorEvents.length;
       await first.locator('.node-title').click({ button: 'right' });
+      await openBundleActions(page);
       await frame.getByText('Run to here', { exact: true }).click();
       await expect.poll(() => freshEvents(since).some((event) => event.message === 'done')).toBe(true);
       expect(

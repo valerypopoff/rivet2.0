@@ -4,11 +4,13 @@ import { createHash, randomUUID } from 'node:crypto';
 import { EventEmitter, once } from 'node:events';
 import { createReadStream } from 'node:fs';
 import fs from 'node:fs/promises';
+import { createRequire } from 'node:module';
 import { createServer, createConnection } from 'node:net';
 import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { pathToFileURL } from 'node:url';
 import * as tar from 'tar';
+import { selectRuntimeLibrarySource } from '@valerypopoff/rivet-studio-server-bootstrap/runtime-release-cache';
 
 async function port() {
   const server = createServer();
@@ -322,7 +324,6 @@ export async function verifySupervisedLegacyRestore({
     executorEnvOverrides: {
       RIVET_APP_DATA_ROOT: directories.editor,
       RIVET_RUNTIME_LIBRARIES_ROOT: path.join(directories.editor, 'libraries'),
-      RIVET_CODE_RUNNER_REQUIRE_ROOT: path.join(directories.editor, 'libraries/current/node_modules'),
     },
     signalSource: signals,
     // Exercise the production supervisor envelope; restore disposal includes
@@ -512,8 +513,11 @@ export async function verifySupervisedLegacyRestore({
       body: '{}',
     });
     assert.equal(internalRun.status, 200, await internalRun.text()); // Test-owned empty graph, no provider calls.
-    for (const role of ['control', 'editor', 'execution', 'evaluation'])
-      await fs.access(path.join(directories[role], 'libraries/current/node_modules/tiny-lib/index.js'));
+    for (const role of ['control', 'editor', 'execution', 'evaluation']) {
+      const selected = selectRuntimeLibrarySource(path.join(directories[role], 'libraries'));
+      assert.ok(selected.snapshot, `${role} must select a verified runtime-library snapshot`);
+      assert.equal(createRequire(selected.snapshot.requireAnchorPath)('tiny-lib'), 1);
+    }
     console.log(
       `Legacy restore: ${expectModifiedBackup ? 'modified backup with recordings removed and explicit override' : 'original backup'}, compiled worker/editor and automatic supervised restarts passed.`,
     );

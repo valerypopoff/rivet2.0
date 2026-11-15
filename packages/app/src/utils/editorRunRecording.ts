@@ -14,6 +14,7 @@ export type EditorRecordingPersistenceTarget = {
   provider: LocalExecutionRecordingPersistenceProvider;
   projectPath: string;
   correlationId: string;
+  evidenceHandle?: { id: string; token: string };
 };
 
 /** Adapters decide eligibility (playback, executor target, web-app execution). */
@@ -21,16 +22,35 @@ export async function prepareEditorRecordingPersistence(input: {
   eligible: boolean;
   projectPath?: string | null;
   provider?: LocalExecutionRecordingPersistenceProvider;
+  project?: Project;
+  graphId?: GraphId;
+  source?: 'browser' | 'node';
 }): Promise<EditorRecordingPersistenceTarget | undefined> {
   if (!input.eligible || !input.projectPath || !input.provider) return undefined;
   try {
     if (!(await input.provider.getCapability())) return undefined;
-  } catch {
+  } catch (error) {
+    if (input.provider.begin) throw error;
     // A failed capability read must not prevent an ordinary editor run.
     return undefined;
   }
   const id = globalThis.crypto?.randomUUID?.() ?? `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
-  return { provider: input.provider, projectPath: input.projectPath, correlationId: `rvt-local-${id}` };
+  let correlationId = `rvt-local-${id}`;
+  let evidenceHandle: { id: string; token: string } | undefined;
+  if (input.provider.begin && input.project && input.graphId) {
+    const registered = await input.provider.begin({
+      projectId: input.project.metadata.id,
+      projectPath: input.projectPath,
+      graphId: input.graphId,
+      correlationId,
+      source: input.source ?? 'browser',
+    });
+    if (registered) {
+      correlationId = registered.correlationId;
+      evidenceHandle = registered.handle;
+    }
+  }
+  return { provider: input.provider, projectPath: input.projectPath, correlationId, evidenceHandle };
 }
 
 /**
@@ -55,6 +75,16 @@ export async function persistEditorRunRecording(input: {
   const durationMs = Math.max(0, performance.now() - input.startedAt);
   const metadata = { source: input.source, graphId: input.graphId, projectId: input.project.metadata.id };
   try {
+    try {
+      await input.persistence?.provider.complete?.(
+        input.persistence.correlationId,
+        input.status,
+        durationMs,
+        input.persistence.evidenceHandle,
+      );
+    } catch (error) {
+      logRuntimeDebug('Editor outcome update could not be confirmed.', { ...metadata, error });
+    }
     const recordingSerialized = input.recorder.serialize();
     try {
       input.onSerialized?.(recordingSerialized);
@@ -67,6 +97,7 @@ export async function persistEditorRunRecording(input: {
     const projectContents = serializeProject(input.project) as string;
     const datasetsContents = serializeDatasets(await input.exportDatasets());
     await target.provider.persist({
+      ...(target.evidenceHandle ? { evidenceHandle: target.evidenceHandle } : {}),
       createdAt: input.createdAt,
       projectId: input.project.metadata.id,
       projectPath: target.projectPath,
@@ -81,7 +112,10 @@ export async function persistEditorRunRecording(input: {
   } catch (error) {
     if (input.persistence) {
       try {
-        await input.persistence.provider.markUnavailable(input.persistence.correlationId);
+        await input.persistence.provider.markUnavailable(
+          input.persistence.correlationId,
+          input.persistence.evidenceHandle,
+        );
       } catch (outcomeError) {
         logRuntimeDebug('Editor recording could not report its unavailable artifact.', {
           ...metadata,

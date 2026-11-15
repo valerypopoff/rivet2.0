@@ -333,7 +333,7 @@ export async function fetchHostedConfig(options: { signal?: AbortSignal } = {}):
 export async function fetchWorkflowRecordingWorkflows(
   options: { signal?: AbortSignal } = {},
 ): Promise<WorkflowRecordingWorkflowListResponse> {
-  const response = await fetch(`${API}/workflows/recordings/workflows`, {
+  const response = await fetch(`${API}/workflows/recordings/workflows?includeEvidence=true`, {
     cache: 'no-store',
     signal: options.signal,
   });
@@ -355,6 +355,7 @@ export async function fetchWorkflowRecordingRuns(
   },
 ): Promise<WorkflowRecordingRunsPageResponse> {
   const query = new URLSearchParams({
+    includeEvidence: 'true',
     page: String(options.page),
     pageSize: String(options.pageSize),
     status: options.status,
@@ -389,7 +390,7 @@ export async function fetchRecordingSubRuns(
   context?: 'all' | 'project',
 ): Promise<WorkflowRecordingRunsPageResponse> {
   const response = await fetch(
-    `${API}/workflows/recordings/${encodeURIComponent(recordingId)}/sub-runs?page=${page}&pageSize=100${context ? `&context=${context}` : ''}`,
+    `${API}/workflows/recordings/${encodeURIComponent(recordingId)}/sub-runs?includeEvidence=true&page=${page}&pageSize=100${context ? `&context=${context}` : ''}`,
     { cache: 'no-store', signal },
   );
   return workflowJsonResponse<WorkflowRecordingRunsPageResponse>(response);

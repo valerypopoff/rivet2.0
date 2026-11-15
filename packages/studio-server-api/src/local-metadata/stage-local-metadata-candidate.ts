@@ -6,7 +6,10 @@ import {
   readVmMigrationSourceParts,
 } from '../scripts/vm-migration-source-manifest.js';
 import { migrateLocalAppSettings } from '../scripts/migrate-local-app-settings.js';
-import { createSourceArchive, readSourceManifest } from '../scripts/migrate-runtime-libraries.js';
+import {
+  createRuntimeLibraryDirectoryArchive,
+  readSourceRuntimeSelection,
+} from '../scripts/migrate-runtime-libraries.js';
 import { LocalWorkflowCatalog } from './workflow-catalog.js';
 import { stageFrozenRecordingCatalog, stageFrozenWorkflowCatalog } from './stage-workflow-catalog.js';
 import { collectSourceFolderPaths, iterateSourceWorkflows } from './filesystem-workflow-source.js';
@@ -129,12 +132,12 @@ export async function stageLocalMetadataCandidate(options: {
     );
     await options.assertFrozen();
     await options.onStage?.('runtime-libraries');
-    const manifest = await readSourceManifest(options.source.runtimeLibraries);
+    const { manifest, directory } = await readSourceRuntimeSelection(options.source.runtimeLibraries);
     const runtimeLibraryPackages = Object.keys(manifest.packages).length;
     const runtimeState = {
       manifest,
       archive: runtimeLibraryPackages
-        ? await withLocalSourceBudget(() => createSourceArchive(options.source.runtimeLibraries))
+        ? await withLocalSourceBudget(() => createRuntimeLibraryDirectoryArchive(directory!))
         : null,
     };
     if (!options.verifyOnly) await catalog.importRuntimeLibraryState(runtimeState);

@@ -5,15 +5,15 @@ import { EventEmitter } from 'node:events';
 import type { ChildProcess } from 'node:child_process';
 
 import {
-  currentDir,
+  getRootPath,
   activateLocalRuntimeLibraryCandidate,
   ensureDirectories,
-  readManifest,
+  readManifestForMutation,
   stagingDir,
-  writeManifest,
   type RuntimeLibraryEntry,
   type RuntimeLibraryManifest,
 } from './manifest.js';
+import { publishRuntimeLibraryCandidate } from '@valerypopoff/rivet-studio-server-bootstrap/runtime-release-cache';
 import { buildChildProcessEnv, execStreaming, terminateChildProcess } from '../utils/exec.js';
 import type {
   JobStatus,
@@ -171,7 +171,7 @@ class JobRunner extends EventEmitter {
       this.setStatus(job, 'running');
       this.appendLog(job, '--- Starting install job ---');
 
-      const manifest = readManifest();
+      const manifest = readManifestForMutation();
       const candidatePackages = { ...manifest.packages };
       for (const pkg of job.packages) {
         candidatePackages[pkg.name] = {
@@ -195,7 +195,7 @@ class JobRunner extends EventEmitter {
       this.setStatus(job, 'running');
       this.appendLog(job, '--- Starting remove job ---');
 
-      const manifest = readManifest();
+      const manifest = readManifestForMutation();
       const candidatePackages = { ...manifest.packages };
       for (const pkg of job.packages) {
         if (!(pkg.name in candidatePackages)) {
@@ -276,8 +276,7 @@ class JobRunner extends EventEmitter {
       this.throwIfCancelled(job);
       const nextManifest = { ...manifest, packages: candidatePackages, updatedAt: new Date().toISOString() };
       if (!(await activateLocalRuntimeLibraryCandidate(staging, nextManifest))) {
-        this.activateStaging(staging);
-        writeManifest(nextManifest);
+        await publishRuntimeLibraryCandidate(getRootPath(), staging, nextManifest);
       }
 
       this.appendLog(job, 'Current runtime libraries are now active');
@@ -355,32 +354,6 @@ class JobRunner extends EventEmitter {
     }
 
     return errors;
-  }
-
-  private activateStaging(staging: string): void {
-    const current = currentDir();
-    const backup = `${current}.previous`;
-
-    fs.rmSync(backup, { recursive: true, force: true });
-
-    try {
-      if (fs.existsSync(current)) {
-        fs.renameSync(current, backup);
-      }
-
-      fs.renameSync(staging, current);
-      fs.rmSync(backup, { recursive: true, force: true });
-    } catch (error) {
-      if (!fs.existsSync(current) && fs.existsSync(backup)) {
-        try {
-          fs.renameSync(backup, current);
-        } catch {
-          // ignore restoration failure and surface the original error
-        }
-      }
-
-      throw error;
-    }
   }
 
   private failJob(job: JobState, err: unknown): void {

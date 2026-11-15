@@ -19,6 +19,51 @@ to distinguish real failures from expected negative-test errors, downstream
 refusals and unstarted jobs. This is a local preparation aid, not another CI gate
 or cloud-test requirement.
 
+The pinned-Yarn API shard smoke test accepts both TAP and spec-reporter summary
+prefixes. Node's default reporter can vary with the output stream; a successful
+selected shard must report a nonzero passing count, zero failures and exit zero,
+without invoking the intentionally broken global Yarn shim. A reporter-prefix
+difference alone must not fail this check.
+
+## Schema and browser fixture contracts
+
+The release-manifest schema reader is tested against isolated source files with
+different current/rollback versions, including invalid contracts. Do not pin that
+parser test to the repository's current schema number. The reference-index
+integration keeps its historical schema-18 starting point and verifies every
+registered pending migration, including reference indexing at schema 19. Expected
+upgrades derive from that baseline rather than a fixed single-element list.
+After a schema change, run `studio-server:verify:production-cutover` and the API's
+`test:references-managed` and `test:migration-managed`, alongside the schema-specific
+unit tests. New application tables and DML triggers must also update the closed
+legacy-restore inventory. Schema 20's recording-evidence table and exact deletion
+trigger are included; altered/custom triggers and external dependencies still
+fail before deletion. The real restore fixture verifies evidence-row clearing
+and preservation of unrelated SQL/S3 data.
+
+Negative migration scenarios restore their deliberately corrupt source state
+immediately, before any later valid-copy scenario. In particular, the legacy
+`active-release` marker used to prove frozen-source rejection must be removed
+before the SQLite runtime archive is created. Production's ambiguous-layout
+rejection stays strict; a later scenario must not inherit test-only corruption.
+Supervised restore checks resolve each role's verified runtime-library snapshot
+and load the fixture package. They must not assume a mutable `current/` directory
+or set an obsolete require-root override after immutable releases are adopted.
+
+Bundle submenu ordering has consumers in both `bundle-merge.spec.ts` and
+`bundle-comparison.spec.ts`; keep both assertions aligned with the shared menu.
+Cross-project navigation fixtures use coherent saved titles, tree names and
+filenames. Contradictory metadata repeatedly simulated remote renames, stacking
+notifications over the editor and intercepting the drag's mouse-down. The
+navigation test verifies no unexpected rename notices and waits for title
+actionability before its real mouse gesture. Movement, unsaved-state and history
+assertions remain required; hiding toasts or forcing the gesture is not a repair.
+
+Local-upgrade containment guards compare exact bigint device/inode identities.
+The guard regression supplies distinct large inode IDs that collide as Numbers,
+then a true source/control alias. This keeps Windows verification meaningful
+without relaxing the source-root exclusion used by the container runtime.
+
 ## Browser shard budget and hosted variability
 
 [Verify Studio Server 43434671248, editor shard 3](https://github.com/valerypopoff/rivet2.0/actions/runs/43434671248/job/131919256700)
@@ -361,9 +406,11 @@ available ARM capacity. Read the job's check annotations before choosing recover
 a missing log alone cannot distinguish cancellation from a failed build.
 
 Recover the unstarted job once at the same commit and preserve successful
-artifacts. Finish its publication before the next requested push: `publish-pages`
-checks the live branch head before publishing assets and Pages, so advancing
-`develop` during recovery makes the recovered release stale. An allocation failure
+artifacts. Read the job's `check_run_url` annotations when logs are unavailable;
+the workflow's overall failure label alone does not identify a code defect.
+Finish publication before advancing that release's branch: `publish-pages`
+checks the live branch head before publishing assets and Pages (`develop` for
+Developer Desktop Release, `main` for Stable Desktop Release). An allocation failure
 does not justify changing platform labels, bypassing signing or replaying completed
 builds. A second allocation failure remains a provider-capacity blocker.
 
@@ -416,7 +463,7 @@ all recovery/no-replay assertions remain unchanged. A cancelled test still
 fails the release gate; retain its log and require the fresh candidate's complete
 image workflow to pass before provider activation.
 
-The current schema version (19) differs from its rollback floor (17). Helm defaults
+The current schema version (20) differs from its rollback floor (17). Helm defaults
 and migration commands must use the current version. Forward rollback uses the
 previous image's own schema version as its lower reader bound, not that image's
 rollback floor; only the upper bound expands to the already-migrated successor.
@@ -425,8 +472,10 @@ Historical upgrade fixtures still begin
 at their original schema and assert all pending migrations rather than assuming
 that the repair under test is forever the last migration. Keep the chart, compiled
 PostgreSQL gate and release-manifest tests together when changing this contract.
-The existing managed lane now exercises the real 18 → 19 rolling-policy
-lock timeout, rollback and queued-reader recovery. Schema-changing HA image
+The existing managed lane now exercises the real 18 → 20 rolling-policy
+expansion, including bounded trigger-install contention, rollback and reader
+availability. It also runs the local recording-durability crash fixture.
+Schema-changing HA image
 qualification runs both image-owned recording and revision repositories and binds their
 receipts into the certificate; an old-image startup verifier alone is insufficient.
 Unchanged-schema candidates avoid those extra image workers. See the

@@ -57,21 +57,19 @@ function getHostedProjectPathMoveInputs(moves: WorkflowProjectPathMove[]) {
 
 async function clearDeletedHostedProjectState(
   context: EditorCommandBridgeContext,
-  projectIds: Iterable<ProjectId>,
+  projectId: ProjectId,
 ): Promise<void> {
-  for (const projectId of projectIds) {
-    try {
-      await context.getWorkspace().deleteProjectContext(projectId);
-    } catch (error) {
-      console.error('Failed to clear local context for deleted project:', error);
-    }
-    try {
-      await clearHostedDatasetsForProject(projectId);
-    } catch (error) {
-      console.error('Failed to clear hosted datasets for deleted project:', error);
-    }
-    clearOpenedProjectSession(projectId);
+  try {
+    await context.getWorkspace().deleteProjectContext(projectId);
+  } catch (error) {
+    console.error('Failed to clear local context for deleted project:', error);
   }
+  try {
+    await clearHostedDatasetsForProject(projectId);
+  } catch (error) {
+    console.error('Failed to clear hosted datasets for deleted project:', error);
+  }
+  clearOpenedProjectSession(projectId);
 }
 
 export async function handleWorkflowPathsMovedCommand(
@@ -374,33 +372,35 @@ export async function handleDeleteWorkflowProjectCommand(
 ): Promise<void> {
   const deletedPath = command.path;
   const projects = context.getProjects();
-  const deletedProjectId = projects.openedProjectsSortedIds.find(
-    (projectId) => projects.openedProjects[projectId]?.fsPath === deletedPath,
-  );
-  const deletedProjectIds = new Set<ProjectId>();
-  if (command.projectId) {
-    deletedProjectIds.add(command.projectId as ProjectId);
-  }
+  const deletedProjectId = command.projectId
+    ? (command.projectId as ProjectId)
+    : projects.openedProjectsSortedIds.find(
+        (projectId) =>
+          normalizeWorkflowPath(projects.openedProjects[projectId]?.fsPath ?? '') ===
+          normalizeWorkflowPath(deletedPath),
+      );
   if (deletedProjectId) {
-    deletedProjectIds.add(deletedProjectId);
     if (context.preview.previewProjectRef.current?.projectId === deletedProjectId) {
       context.preview.clearPreviewProject(context.preview.previewProjectRef.current);
     }
     removeOpenedProjectPathAliasesForProject(context, deletedProjectId);
   }
-  context.openedProjectPathAliases.delete(normalizeWorkflowPath(deletedPath));
-  clearHostedProjectRevisionPath(deletedPath);
+  if (!deletedProjectId) context.openedProjectPathAliases.delete(normalizeWorkflowPath(deletedPath));
+  clearHostedProjectRevisionPath(deletedPath, deletedProjectId);
 
   let closed = false;
-  if (deletedProjectId) {
+  if (deletedProjectId && projects.openedProjects[deletedProjectId]) {
     try {
       closed = await context.getWorkspace().closeProject(deletedProjectId);
     } catch (error) {
       console.error('Failed to close deleted workflow project:', error);
     }
   }
-  await clearDeletedHostedProjectState(context, deletedProjectIds);
-  if (!closed && context.getLoadedProject().path === deletedPath) {
+  if (deletedProjectId) await clearDeletedHostedProjectState(context, deletedProjectId);
+  const deletedProjectStillActive = deletedProjectId
+    ? context.getCurrentProject().metadata.id === deletedProjectId
+    : normalizeWorkflowPath(context.getLoadedProject().path ?? '') === normalizeWorkflowPath(deletedPath);
+  if (!closed && deletedProjectStillActive) {
     context.markLoadedProjectClosed();
   }
 }

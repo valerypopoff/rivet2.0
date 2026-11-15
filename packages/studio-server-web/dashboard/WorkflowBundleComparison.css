@@ -54,6 +54,17 @@
   font-weight: 600;
   overflow-wrap: anywhere;
 }
+.bundle-comparison-check-error {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.bundle-comparison-check-error > span {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
 .workflow-library-panel .comparison-project-row[data-comparison-role='older'].active {
   background: color-mix(in srgb, var(--workflow-library-row-highlight) 50%, transparent);
 }
@@ -71,6 +82,15 @@
 .bundle-comparison-tree .comparison-project-status {
   flex: 0 0 auto;
   white-space: nowrap;
+}
+.bundle-comparison-tree .comparison-project-status[data-change='removed'] {
+  color: #ff8f8f;
+}
+.bundle-comparison-tree .comparison-project-status[data-change='added'] {
+  color: #84d6a0;
+}
+.bundle-comparison-tree .comparison-project-status[data-change='changed'] {
+  color: #ffe08a;
 }
 .bundle-comparison-tree .comparison-folder {
   padding-left: 14px;

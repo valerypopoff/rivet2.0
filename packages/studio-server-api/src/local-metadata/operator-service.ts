@@ -39,7 +39,7 @@ import { checkRuntimeLibrariesHealth, prepareRuntimeLibrariesForExecution } from
 import { FilesystemRivetEvaluationStore } from '../evaluation-runs/filesystem-store.js';
 import { FilesystemRivetLLMProfileHealthStore } from '../llm-profile-health/filesystem-store.js';
 import { createRequire } from 'node:module';
-import { readSourceManifest } from '../scripts/migrate-runtime-libraries.js';
+import { readSourceRuntimeSelection } from '../scripts/migrate-runtime-libraries.js';
 import { DatabaseSync } from 'node:sqlite';
 import { assertEmptyLocalOperationalDatabase, assertLocalOperationalSchema } from './operational-schema.js';
 import {
@@ -1017,9 +1017,9 @@ export async function transitionLocalUpgrade(
         } else {
           // Filesystem getState() creates staging directories. Recovery probes
           // must not change the retained source snapshot even for empty domains.
-          const manifest = await readSourceManifest(certificate.source.runtimeLibraries);
-          const require = createRequire(path.join(certificate.source.runtimeLibraries, 'current', 'package.json'));
-          for (const name of Object.keys(manifest.packages)) require.resolve(name);
+          const { manifest, directory } = await readSourceRuntimeSelection(certificate.source.runtimeLibraries);
+          const require = directory ? createRequire(path.join(directory, 'package.json')) : null;
+          for (const name of Object.keys(manifest.packages)) require!.resolve(name);
         }
         const healthPort = Number(process.env.RIVET_BACKEND_HEALTH_PORT);
         if (!Number.isInteger(healthPort) || healthPort < 1 || healthPort > 65535)

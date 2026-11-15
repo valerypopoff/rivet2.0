@@ -1,5 +1,12 @@
 # VM local storage to managed PostgreSQL and S3 migration
 
+The ten VM migration HTTP handlers and request schemas live in
+`routes/vm-migration-http.ts`; `routes/app-settings.ts` installs their prefix
+operator guard before registering handlers and supplies the existing 16 KiB
+parser. Connection checks, maintenance, copying and recovery still belong to
+`vm-migration-service.ts`. This is the same operation contract, not a separate
+migration controller. See the [HTTP separation record](app-settings-http-separation-plan.md).
+
 ## Restore a downloaded legacy backup into initialized Kubernetes
 
 For a disposable destination, use **Settings → Storage → Restore legacy backup**.

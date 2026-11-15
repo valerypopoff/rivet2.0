@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import { createHostedLocalExecutionRecordingPersistence } from '../dashboard/hostedLocalExecutionRecordingPersistence.js';
 import { WORKFLOW_RECORDING_CREATED_AT_HEADER } from '../../studio-server-shared/workflow-recording-time.js';
+import { hostedRecordingEvidenceHandle } from '../dashboard/hostedLocalExecutionRecordingPersistence.js';
 
 const exampleInput = {
   projectId: 'project-1' as never,
@@ -16,6 +17,83 @@ const exampleInput = {
     graphId: 'graph-1',
   },
 };
+
+for (const status of [400, 409, 413]) {
+  test(`a rejected upload (${status}) cannot be accepted using an older ready handoff`, async (t) => {
+    let uploads = 0,
+      reads = 0;
+    t.mock.method(globalThis, 'fetch', async (url: unknown) => {
+      if (String(url).endsWith('/runs/read')) {
+        reads++;
+        return Response.json({ availability: 'pending', handoffReady: true });
+      }
+      uploads++;
+      return Response.json({ error: 'The upload was rejected.' }, { status });
+    });
+    const provider = createHostedLocalExecutionRecordingPersistence();
+    await assert.rejects(
+      provider.persist({
+        ...exampleInput,
+        evidenceHandle: { id: 'fixture-run', token: 'fixture-token' },
+      }),
+      /upload was rejected/,
+    );
+    assert.equal(uploads, 1);
+    assert.equal(reads, 0);
+  });
+}
+
+for (const deleted of [false, true]) {
+  test(`durable bridge reads uncertain writes back and ${deleted ? 'rejects deleted evidence' : 'retries only identical replay bytes'}`, async (t) => {
+    let registration: { handle: { id: string; token: string }; correlationId: string } | undefined;
+    const uploads: string[] = [];
+    let registrations = 0;
+    t.mock.method(globalThis, 'fetch', async (url: unknown, init?: RequestInit) => {
+      const path = String(url);
+      if (path.endsWith('/capability')) return Response.json({ supported: true, durability: 'run-evidence-v1' });
+      if (path.endsWith('/runs/begin')) {
+        registrations++;
+        registration = JSON.parse(String(init?.body));
+        throw new Error('Registration acknowledgement lost');
+      }
+      if (path.endsWith('/runs/read'))
+        return Response.json({
+          id: registration!.handle.id,
+          availability: uploads.length && deleted ? 'deleted' : 'pending',
+          handoffReady: deleted,
+        });
+      if (path.endsWith('/runs/outcome')) return Response.json({ state: 'failed' });
+      if (path.endsWith('/outcome')) return new Response(null, { status: 204 });
+      uploads.push(String(init?.body));
+      if (uploads.length === 1) throw new Error('Upload acknowledgement lost');
+      return Response.json({ availability: 'available', recordingId: registration!.handle.id });
+    });
+    const provider = createHostedLocalExecutionRecordingPersistence();
+    await provider.getCapability();
+    const accepted = await provider.begin!({
+      ...exampleInput,
+      graphId: 'graph-1',
+      correlationId: exampleInput.executionIdentity.correlationId,
+      source: 'node',
+    });
+    assert.ok(accepted);
+    try {
+      await provider.complete!(accepted.correlationId, 'failed', 12);
+      const input = {
+        ...exampleInput,
+        executionIdentity: { ...exampleInput.executionIdentity, correlationId: accepted.correlationId },
+      };
+      if (deleted) await assert.rejects(provider.persist(input), /acknowledgement/);
+      else await provider.persist(input);
+      assert.equal(registrations, 1);
+      assert.equal(uploads.length, deleted ? 1 : 2);
+      assert.equal(new Set(uploads).size, 1);
+      assert.equal(hostedRecordingEvidenceHandle(accepted.correlationId), undefined);
+    } finally {
+      await provider.markUnavailable(accepted.correlationId);
+    }
+  });
+}
 
 test('start time is sent as optional upload metadata without changing older APIs strict JSON body', async (t) => {
   const createdAt = '2026-10-19T10:00:00.000Z';
@@ -44,7 +122,7 @@ for (const [label, firstResponse] of [
     globalThis.fetch = async () => (++calls === 1 ? firstResponse() : Response.json({ supported: true }));
     try {
       const provider = createHostedLocalExecutionRecordingPersistence();
-      assert.equal(await provider.getCapability(), false);
+      await assert.rejects(provider.getCapability(), /could not be confirmed/);
       assert.equal(await provider.getCapability(), true);
       assert.equal(calls, 2);
     } finally {
@@ -75,7 +153,7 @@ test('local recording requests have bounded lifetimes and a timed-out capability
   };
   try {
     const provider = createHostedLocalExecutionRecordingPersistence();
-    assert.equal(await provider.getCapability(), false);
+    await assert.rejects(provider.getCapability(), /could not be confirmed/);
     assert.equal(await provider.getCapability(), true);
     await provider.persist(exampleInput);
     await provider.markUnavailable(exampleInput.executionIdentity.correlationId);
@@ -108,7 +186,7 @@ test('hosted local recording bridge retries capability after a transient failure
   };
   try {
     const provider = createHostedLocalExecutionRecordingPersistence();
-    assert.equal(await provider.getCapability(), false);
+    await assert.rejects(provider.getCapability(), /could not be confirmed/);
     assert.equal(await provider.getCapability(), true);
     assert.equal(calls, 2);
   } finally {
@@ -124,7 +202,7 @@ test('hosted local recording bridge retries capability after a transient server 
   };
   try {
     const provider = createHostedLocalExecutionRecordingPersistence();
-    assert.equal(await provider.getCapability(), false);
+    await assert.rejects(provider.getCapability(), /could not be confirmed/);
     assert.equal(await provider.getCapability(), true);
     assert.equal(calls, 2);
   } finally {

@@ -124,38 +124,45 @@ test('recordings store reruns cleanup when a second cleanup request arrives mid-
   store.scheduleCleanup();
   store.scheduleCleanup();
   releaseFirstCleanup();
-  await new Promise((resolve) => setTimeout(resolve, 0));
-  await new Promise((resolve) => setTimeout(resolve, 0));
+  await store.flush();
 
   assert.equal(cleanupCount, 2);
 });
 
-test('recordings store runs persistence tasks asynchronously and drains them in FIFO order', async () => {
-  await withRunRecordingsAppSettings({ maxPendingWrites: 0 }, async () => {
-    const persisted: string[] = [];
-    const store = createWorkflowRecordingStore({
-      async rebuildIndex() {},
-      async cleanupStorage() {},
-      async setSchemaVersion() {},
-      async resetDatabaseForTests() {},
+test(
+  'recordings store runs persistence tasks asynchronously and drains them in FIFO order',
+  { timeout: 5_000 },
+  async () => {
+    await withRunRecordingsAppSettings({ maxPendingWrites: 0 }, async () => {
+      const persisted: string[] = [];
+      let secondFinished!: () => void;
+      const finished = new Promise<void>((resolve) => {
+        secondFinished = resolve;
+      });
+      const store = createWorkflowRecordingStore({
+        async rebuildIndex() {},
+        async cleanupStorage() {},
+        async setSchemaVersion() {},
+        async resetDatabaseForTests() {},
+      });
+
+      const firstAccepted = store.enqueuePersistence(async () => {
+        persisted.push('first');
+      });
+      const secondAccepted = store.enqueuePersistence(async () => {
+        persisted.push('second');
+        secondFinished();
+      });
+
+      assert.equal(firstAccepted, true);
+      assert.equal(secondAccepted, true);
+      assert.deepEqual(persisted, []);
+
+      await finished;
+      assert.deepEqual(persisted, ['first', 'second']);
     });
-
-    const firstAccepted = store.enqueuePersistence(async () => {
-      persisted.push('first');
-    });
-    const secondAccepted = store.enqueuePersistence(async () => {
-      persisted.push('second');
-    });
-
-    assert.equal(firstAccepted, true);
-    assert.equal(secondAccepted, true);
-    assert.deepEqual(persisted, []);
-
-    await waitForImmediate();
-
-    assert.deepEqual(persisted, ['first', 'second']);
-  });
-});
+  },
+);
 
 test('recordings store flush starts scheduled work and waits for persistence and cleanup', async () => {
   await withRunRecordingsAppSettings({ maxPendingWrites: 0 }, async () => {

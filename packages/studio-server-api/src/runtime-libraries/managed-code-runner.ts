@@ -1,4 +1,3 @@
-import fs from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { performance } from 'node:perf_hooks';
@@ -11,11 +10,12 @@ import {
 } from '@valerypopoff/rivet2-node';
 
 import { prepareRuntimeLibrariesForExecution } from './backend.js';
+import type { RuntimeLibrarySnapshot } from '@valerypopoff/rivet-studio-server-bootstrap/runtime-release-cache';
 
 type Inputs = Record<string, { type: string; value: unknown } | undefined>;
 type Outputs = Record<string, DataValue>;
 
-type PrepareRuntimeLibraries = () => Promise<void>;
+type PrepareRuntimeLibraries = () => Promise<RuntimeLibrarySnapshot | null>;
 type LoadRivetModule = () => Promise<unknown>;
 type CompiledCodeFunction = (...args: unknown[]) => Promise<Outputs>;
 
@@ -48,20 +48,12 @@ interface ManagedCodeRunnerOptions {
   loadRivet?: LoadRivetModule;
 }
 
-interface ManagedRequireSnapshot {
-  cacheKey: string;
-  groupKey: string;
-  nodeModulesPath: string;
-}
-
 const COMPILED_CODE_CACHE_LIMIT = 1000;
 const MANAGED_REQUIRE_CACHE_LIMIT = 100;
 let compiledCodeCache = createCompiledCodeCache(COMPILED_CODE_CACHE_LIMIT);
 const managedRequireCache = new LRUCache<string, NodeRequire>({
   max: MANAGED_REQUIRE_CACHE_LIMIT,
 });
-const managedRequireGroups = new Map<string, ManagedRequireSnapshot>();
-const managedRequireNodeModulesPaths = new Set<string>();
 let compiledCodeCacheLimit = COMPILED_CODE_CACHE_LIMIT;
 
 function createCompiledCodeCache(limit: number): LRUCache<string, CompiledCodeFunction> {
@@ -162,15 +154,13 @@ function createCompiledCodeFunction(code: string, argNames: string[]): CompiledC
 }
 
 export function resetManagedCodeRunnerCacheForTests(): void {
-  for (const nodeModulesPath of managedRequireNodeModulesPaths) {
-    clearNodeRequireCacheUnder(nodeModulesPath);
+  for (const anchor of managedRequireCache.keys()) {
+    clearNodeRequireCacheUnder(path.dirname(anchor));
   }
 
   compiledCodeCacheLimit = COMPILED_CODE_CACHE_LIMIT;
   compiledCodeCache = createCompiledCodeCache(compiledCodeCacheLimit);
   managedRequireCache.clear();
-  managedRequireGroups.clear();
-  managedRequireNodeModulesPaths.clear();
 }
 
 export function getManagedCodeRunnerCacheSizeForTests(): number {
@@ -186,111 +176,37 @@ export function setManagedCodeRunnerCacheLimitForTests(limit: number): void {
   compiledCodeCache = createCompiledCodeCache(compiledCodeCacheLimit);
 }
 
-function readRuntimeLibrariesSnapshotId(runtimeLibrariesRoot: string, nodeModulesPath: string): string {
-  try {
-    const manifestPath = path.join(runtimeLibrariesRoot, 'manifest.json');
-    const rawManifest = fs.readFileSync(manifestPath, 'utf8');
-    const manifest = JSON.parse(rawManifest) as { activeReleaseId?: unknown; updatedAt?: unknown };
-    if (typeof manifest.activeReleaseId === 'string' && manifest.activeReleaseId.trim()) {
-      return `release:${manifest.activeReleaseId.trim()}`;
-    }
-
-    if (typeof manifest.updatedAt === 'string' && manifest.updatedAt.trim()) {
-      return `updated:${manifest.updatedAt.trim()}`;
-    }
-  } catch {
-    // Missing or invalid manifests fall back to the active package tree timestamp.
-  }
-
-  try {
-    const nodeModulesStat = fs.statSync(nodeModulesPath);
-    return `node-modules:${nodeModulesStat.mtimeMs}`;
-  } catch {
-    // If there is no package tree yet, the path-only snapshot is the safest available fallback.
-  }
-
-  return 'unversioned';
-}
-
-function getManagedRequireSnapshot(runtimeLibrariesRoot: string, nodeModulesPath: string): ManagedRequireSnapshot {
-  const resolvedRoot = path.resolve(runtimeLibrariesRoot);
-  const resolvedNodeModulesPath = fs.realpathSync.native(nodeModulesPath);
-  const snapshotId = readRuntimeLibrariesSnapshotId(runtimeLibrariesRoot, resolvedNodeModulesPath);
-  const groupKey = `${resolvedRoot}\0${path.resolve(nodeModulesPath)}`;
-
-  return {
-    cacheKey: `${groupKey}\0${resolvedNodeModulesPath}\0${snapshotId}`,
-    groupKey,
-    nodeModulesPath: resolvedNodeModulesPath,
-  };
-}
-
 function clearNodeRequireCacheUnder(nodeModulesPath: string): void {
-  const normalizedNodeModulesPath = normalizeCachePathForComparison(nodeModulesPath);
-  const root = `${normalizedNodeModulesPath}${path.sep}`;
-  const moduleRequire = createRequire(import.meta.url);
-
-  for (const cachePath of Object.keys(moduleRequire.cache)) {
-    const normalizedCachePath = normalizeCachePathForComparison(cachePath);
-    if (normalizedCachePath === normalizedNodeModulesPath || normalizedCachePath.startsWith(root)) {
-      delete moduleRequire.cache[cachePath];
-    }
-  }
+  const normalize = (value: string) =>
+    process.platform === 'win32' ? path.resolve(value).toLowerCase() : path.resolve(value);
+  const root = normalize(nodeModulesPath) + path.sep;
+  const require = createRequire(import.meta.url);
+  for (const file of Object.keys(require.cache)) if (normalize(file).startsWith(root)) delete require.cache[file];
 }
 
-function normalizeCachePathForComparison(value: string): string {
-  const resolved = path.resolve(value);
-  return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+function getCachedManagedRequire(snapshot: RuntimeLibrarySnapshot): NodeRequire {
+  const key = snapshot.requireAnchorPath;
+  const cached = managedRequireCache.get(key);
+  if (cached) return cached;
+  const require = createRequire(key);
+  managedRequireCache.set(key, require);
+  return require;
 }
-
-function invalidateManagedRequireCacheIfReleaseChanged(snapshot: ManagedRequireSnapshot): void {
-  const previous = managedRequireGroups.get(snapshot.groupKey);
-  if (previous?.cacheKey === snapshot.cacheKey) {
-    return;
-  }
-
-  if (previous) {
-    managedRequireCache.delete(previous.cacheKey);
-    clearNodeRequireCacheUnder(previous.nodeModulesPath);
-    managedRequireNodeModulesPaths.delete(previous.nodeModulesPath);
-  }
-
-  managedRequireGroups.set(snapshot.groupKey, snapshot);
-}
-
-function getCachedManagedRequire(snapshot: ManagedRequireSnapshot): NodeRequire {
-  invalidateManagedRequireCacheIfReleaseChanged(snapshot);
-  managedRequireNodeModulesPaths.add(snapshot.nodeModulesPath);
-
-  const cached = managedRequireCache.get(snapshot.cacheKey);
-  if (cached) {
-    return cached;
-  }
-
-  const virtualEntry = path.join(snapshot.nodeModulesPath, '__virtual.cjs');
-  const requireFn = createRequire(virtualEntry);
-  managedRequireCache.set(snapshot.cacheKey, requireFn);
-  return requireFn;
-}
-
 /**
  * A wrapper-owned CodeRunner that resolves packages from the active managed
- * runtime-library release. Falls back to standard Node module resolution
- * (NODE_PATH) when no managed release exists.
+ * runtime-library release, pinned on its first successful preparation.
+ * Only an explicitly unconfigured runtime uses ambient Node resolution.
  */
 export class ManagedCodeRunner implements CodeRunner {
   private readonly prepareRuntimeLibraries: PrepareRuntimeLibraries;
   private readonly loadRivet: LoadRivetModule;
   private readonly telemetry: ManagedCodeRunnerTelemetry | null;
   private readonly executionEnvironment: NodeExecutionEnvironment | undefined;
-  private prepareForRequirePromise: Promise<void> | null = null;
-  private requireSnapshot: ManagedRequireSnapshot | null = null;
+  private prepareForRequirePromise: Promise<RuntimeLibrarySnapshot | null> | null = null;
+  private requireSnapshot: RuntimeLibrarySnapshot | null | undefined;
   private requireFn: NodeRequire | null = null;
 
-  constructor(
-    private readonly runtimeLibrariesRoot: string,
-    options: ManagedCodeRunnerOptions = {},
-  ) {
+  constructor(_runtimeLibrariesRoot: string, options: ManagedCodeRunnerOptions = {}) {
     this.prepareRuntimeLibraries = options.prepareRuntimeLibraries ?? prepareRuntimeLibrariesForExecution;
     this.loadRivet = options.loadRivet ?? (() => import('@valerypopoff/rivet2-node'));
     this.telemetry = options.telemetry ?? null;
@@ -381,46 +297,41 @@ export class ManagedCodeRunner implements CodeRunner {
       return this.requireFn;
     }
 
-    const nodeModulesPath = this.currentNodeModulesPath();
-    if (nodeModulesPath) {
-      this.requireSnapshot ??= getManagedRequireSnapshot(this.runtimeLibrariesRoot, nodeModulesPath);
-      this.requireFn = getCachedManagedRequire(this.requireSnapshot);
-      return this.requireFn;
-    }
-
-    // Fallback: standard require using NODE_PATH
-    return createRequire(import.meta.url);
-  }
-
-  private currentNodeModulesPath(): string | null {
-    const nodeModulesPath = path.join(this.runtimeLibrariesRoot, 'current', 'node_modules');
-    return fs.existsSync(nodeModulesPath) ? nodeModulesPath : null;
+    if (this.requireSnapshot === undefined) throw new Error('Runtime-library snapshot has not been prepared.');
+    this.requireFn = this.requireSnapshot
+      ? getCachedManagedRequire(this.requireSnapshot)
+      : createRequire(import.meta.url);
+    return this.requireFn;
   }
 
   private async prepareRuntimeLibrariesForRequire(): Promise<void> {
-    if (shouldForcePrepareEveryCode()) {
-      await this.prepareRuntimeLibrariesForCode();
-      this.requireSnapshot = null;
-      this.requireFn = null;
+    if (this.requireSnapshot !== undefined) {
+      if (shouldForcePrepareEveryCode()) await this.prepareRuntimeLibrariesForCode();
       return;
     }
 
     this.prepareForRequirePromise ??= this.prepareRuntimeLibrariesForCode();
-    await this.prepareForRequirePromise;
+    try {
+      this.requireSnapshot = await this.prepareForRequirePromise;
+    } catch (error) {
+      this.prepareForRequirePromise = null;
+      throw error;
+    }
   }
 
-  private async prepareRuntimeLibrariesForCode(): Promise<void> {
-    if (!this.telemetry) {
-      await this.prepareRuntimeLibraries();
-      return;
-    }
-
-    this.telemetry.prepareCalls += 1;
-    const startedAt = performance.now();
+  private async prepareRuntimeLibrariesForCode(): Promise<RuntimeLibrarySnapshot | null> {
+    if (this.telemetry) this.telemetry.prepareCalls += 1;
+    const startedAt = this.telemetry ? performance.now() : 0;
     try {
-      await this.prepareRuntimeLibraries();
+      const snapshot = await this.prepareRuntimeLibraries();
+      if (
+        snapshot === undefined ||
+        (snapshot !== null && (snapshot.version !== 1 || !path.isAbsolute(snapshot.requireAnchorPath)))
+      )
+        throw new Error('Runtime-library preparation did not return a verified snapshot.');
+      return snapshot;
     } finally {
-      this.recordPrepareMs(performance.now() - startedAt);
+      if (this.telemetry) this.recordPrepareMs(performance.now() - startedAt);
     }
   }
 

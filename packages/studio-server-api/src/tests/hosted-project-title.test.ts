@@ -129,38 +129,59 @@ test('filesystem saveHostedProject rewrites the YAML title to the file tree name
   const suffix = randomUUID();
   const renamedName = `Renamed Tree Name ${suffix}`;
   const projectPath = path.join(workflowsRoot, `${renamedName}.rivet-project`);
-  const cleanupPaths = new Set<string>();
+  await fs.writeFile(projectPath, workflowFs.createBlankProjectFile(renamedName), 'utf8');
+  const loaded = await workflowStorageBackend.loadHostedProject(projectPath);
 
-  function trackProjectPath(projectPath: string) {
-    cleanupPaths.add(projectPath);
-    const sidecars = workflowFs.getProjectSidecarPaths(projectPath);
-    cleanupPaths.add(sidecars.dataset);
-    cleanupPaths.add(sidecars.settings);
-    cleanupPaths.add(sidecars.stats);
-  }
+  const result = await workflowStorageBackend.saveHostedProject({
+    projectPath,
+    contents: rewriteProjectMetadata(loaded.contents, {
+      title: 'Editor Settings Name',
+      description: 'description from editor save',
+    }),
+    datasetsContents: loaded.datasetsContents,
+  });
+  assert.equal(result.path, projectPath);
+  assert.equal(result.project, null);
+  assert.equal(result.created, false);
+  assert.match(result.revisionId ?? '', /^fs-sha256:[a-f0-9]{64}$/);
 
-  try {
-    trackProjectPath(projectPath);
-    await fs.writeFile(projectPath, workflowFs.createBlankProjectFile(renamedName), 'utf8');
-    const loaded = await workflowStorageBackend.loadHostedProject(projectPath);
-
-    await workflowStorageBackend.saveHostedProject({
-      projectPath,
-      contents: rewriteProjectMetadata(loaded.contents, {
-        title: 'Editor Settings Name',
-        description: 'description from editor save',
-      }),
-      datasetsContents: loaded.datasetsContents,
-    });
-
-    const saved = await fs.readFile(projectPath, 'utf8');
-    const [savedProject] = loadProjectAndAttachedDataFromString(saved);
-    assert.equal(savedProject.metadata.title, renamedName);
-    assert.equal(savedProject.metadata.description, 'description from editor save');
-  } finally {
-    await Promise.all([...cleanupPaths].map((projectPath) => fs.rm(projectPath, { force: true }).catch(() => {})));
-  }
+  const saved = await fs.readFile(projectPath, 'utf8');
+  const [savedProject] = loadProjectAndAttachedDataFromString(saved);
+  assert.equal(savedProject.metadata.title, renamedName);
+  assert.equal(savedProject.metadata.description, 'description from editor save');
 });
+
+for (const phase of ['queued', 'promoted'] as const) {
+  test(`hosted save captures its request before ${phase} caller changes`, async (t) => {
+    const name = `Captured ${phase}`;
+    const projectPath = path.join(workflowsRoot, `${name}.rivet-project`);
+    const original = workflowFs.createBlankProjectFile(name);
+    await fs.writeFile(projectPath, original, 'utf8');
+    const submitted = rewriteProjectMetadata(original, { title: name, description: 'submitted edit' });
+    const submittedDatasets = createDatasetsContents('submitted data');
+    const options = { projectPath, contents: submitted, datasetsContents: submittedDatasets };
+    const changeCaller = () => {
+      options.contents = rewriteProjectMetadata(original, { title: name, description: 'later caller edit' });
+      options.datasetsContents = createDatasetsContents('later caller data');
+    };
+    if (phase === 'promoted') {
+      const rename = fs.rename;
+      t.mock.method(fs, 'rename', async (...args: Parameters<typeof fs.rename>) => {
+        await rename(...args);
+        if (String(args[1]) === projectPath) changeCaller();
+      });
+    }
+    const pending = workflowStorageBackend.saveHostedProject(options);
+    if (phase === 'queued') changeCaller();
+    const saved = await pending;
+    const loaded = await workflowStorageBackend.loadHostedProject(projectPath);
+    assert.equal(loaded.contents, submitted);
+    assert.equal(loaded.datasetsContents, submittedDatasets);
+    assert.equal(saved.revisionId, loaded.revisionId);
+    const tree = await workflowStorageBackend.getWorkflowTree();
+    assert.equal(tree.projects.find((item) => item.absolutePath === projectPath)?.revisionId, loaded.revisionId);
+  });
+}
 
 test('filesystem saveHostedProject rejects an existing path owned by another project', async () => {
   const suffix = randomUUID();
@@ -190,67 +211,72 @@ test('filesystem saveHostedProject rejects an existing path owned by another pro
   assert.equal(await fs.readFile(sidecars.dataset, 'utf8'), targetDatasets);
 });
 
-test('filesystem in-place save rejects a remote project or dataset edit made after load', async () => {
-  const suffix = randomUUID();
-  const projectName = `Conflict protected ${suffix}`;
-  const projectPath = path.join(workflowsRoot, `${projectName}.rivet-project`);
-  const sidecars = workflowFs.getProjectSidecarPaths(projectPath);
-  const initialContents = workflowFs.createBlankProjectFile(projectName);
-  const [initialProject] = loadProjectAndAttachedDataFromString(initialContents);
-  const initialDatasets = createDatasetsContents('initial');
-  await fs.writeFile(projectPath, initialContents, 'utf8');
-  await fs.writeFile(sidecars.dataset, initialDatasets, 'utf8');
+for (const edited of ['project', 'dataset'] as const) {
+  test(`filesystem in-place save rejects a remote ${edited} edit made after load`, async () => {
+    const suffix = randomUUID();
+    const projectName = `Conflict protected ${suffix}`;
+    const projectPath = path.join(workflowsRoot, `${projectName}.rivet-project`);
+    const sidecars = workflowFs.getProjectSidecarPaths(projectPath);
+    const initialContents = workflowFs.createBlankProjectFile(projectName);
+    const [initialProject] = loadProjectAndAttachedDataFromString(initialContents);
+    const initialDatasets = createDatasetsContents('initial');
+    await fs.writeFile(projectPath, initialContents, 'utf8');
+    await fs.writeFile(sidecars.dataset, initialDatasets, 'utf8');
 
-  const opened = await workflowStorageBackend.loadHostedProject(projectPath);
-  assert.match(opened.revisionId ?? '', /^fs-sha256:[a-f0-9]{64}$/);
+    const opened = await workflowStorageBackend.loadHostedProject(projectPath);
+    assert.match(opened.revisionId ?? '', /^fs-sha256:[a-f0-9]{64}$/);
 
-  const remoteContents = rewriteProjectMetadata(initialContents, {
-    title: projectName,
-    description: 'remote administrator edit',
-  });
-  const remoteDatasets = createDatasetsContents('remote');
-  await fs.writeFile(projectPath, remoteContents, 'utf8');
-  await fs.writeFile(sidecars.dataset, remoteDatasets, 'utf8');
-  const remote = await workflowStorageBackend.loadHostedProject(projectPath);
-  assert.notEqual(remote.revisionId, opened.revisionId);
+    const remoteContents =
+      edited === 'project'
+        ? rewriteProjectMetadata(initialContents, {
+            title: projectName,
+            description: 'remote administrator edit',
+          })
+        : initialContents;
+    const remoteDatasets = edited === 'dataset' ? createDatasetsContents('remote') : initialDatasets;
+    await fs.writeFile(projectPath, remoteContents, 'utf8');
+    await fs.writeFile(sidecars.dataset, remoteDatasets, 'utf8');
+    const remote = await workflowStorageBackend.loadHostedProject(projectPath);
+    assert.notEqual(remote.revisionId, opened.revisionId);
 
-  await assert.rejects(
-    workflowStorageBackend.saveHostedProject({
-      projectPath,
-      contents: rewriteProjectMetadata(initialContents, {
-        title: projectName,
-        description: 'local editor edit',
+    await assert.rejects(
+      workflowStorageBackend.saveHostedProject({
+        projectPath,
+        contents: rewriteProjectMetadata(initialContents, {
+          title: projectName,
+          description: 'local editor edit',
+        }),
+        datasetsContents: initialDatasets,
+        projectId: initialProject.metadata.id,
+        saveIntent: 'in-place',
+        expectedRevisionId: opened.revisionId,
       }),
-      datasetsContents: initialDatasets,
+      (error: unknown) => {
+        assert.equal((error as { status?: number }).status, 409);
+        assert.match((error as Error).message, /changed since it was opened/i);
+        return true;
+      },
+    );
+
+    assert.equal(await fs.readFile(projectPath, 'utf8'), remoteContents);
+    assert.equal(await fs.readFile(sidecars.dataset, 'utf8'), remoteDatasets);
+
+    const saved = await workflowStorageBackend.saveHostedProject({
+      projectPath,
+      contents: rewriteProjectMetadata(remoteContents, {
+        title: projectName,
+        description: 'local editor edit after choosing keep mine',
+      }),
+      datasetsContents: remoteDatasets,
       projectId: initialProject.metadata.id,
       saveIntent: 'in-place',
-      expectedRevisionId: opened.revisionId,
-    }),
-    (error: unknown) => {
-      assert.equal((error as { status?: number }).status, 409);
-      assert.match((error as Error).message, /changed since it was opened/i);
-      return true;
-    },
-  );
-
-  assert.equal(await fs.readFile(projectPath, 'utf8'), remoteContents);
-  assert.equal(await fs.readFile(sidecars.dataset, 'utf8'), remoteDatasets);
-
-  const saved = await workflowStorageBackend.saveHostedProject({
-    projectPath,
-    contents: rewriteProjectMetadata(remoteContents, {
-      title: projectName,
-      description: 'local editor edit after choosing keep mine',
-    }),
-    datasetsContents: remoteDatasets,
-    projectId: initialProject.metadata.id,
-    saveIntent: 'in-place',
-    expectedRevisionId: remote.revisionId,
+      expectedRevisionId: remote.revisionId,
+    });
+    assert.notEqual(saved.revisionId, remote.revisionId);
+    const [persistedProject] = loadProjectAndAttachedDataFromString(await fs.readFile(projectPath, 'utf8'));
+    assert.equal(persistedProject.metadata.description, 'local editor edit after choosing keep mine');
   });
-  assert.notEqual(saved.revisionId, remote.revisionId);
-  const [persistedProject] = loadProjectAndAttachedDataFromString(await fs.readFile(projectPath, 'utf8'));
-  assert.equal(persistedProject.metadata.description, 'local editor edit after choosing keep mine');
-});
+}
 
 test('filesystem in-place save follows a project moved by another administrator instead of recreating its stale path', async () => {
   const suffix = randomUUID();

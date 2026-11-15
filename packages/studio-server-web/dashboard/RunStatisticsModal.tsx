@@ -477,6 +477,9 @@ export const RunStatisticsModal: FC<RunStatisticsModalProps> = ({ isOpen, onClos
                               {includeWarnings ? <OutcomeCard label="Warnings" tone="warning" count={statistics.currentStatusCounts.suspicious} total={includedStatusTotal} /> : null}
                             </div>
                           </div> : null}
+                          {statistics.incompleteRuns ? <div className="run-statistics-warning" role="status">
+                            {statistics.incompleteRuns} run attempts have incomplete execution telemetry and are excluded from these totals.
+                          </div> : null}
                           <section className="run-statistics-section" role="region" aria-label="Timing statistics">
                             <div className="run-statistics-chart-header">
                               <div className="run-statistics-chart-heading">Duration</div>

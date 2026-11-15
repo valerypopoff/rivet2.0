@@ -1,8 +1,11 @@
 import type { PreparedClassifierEvaluation } from './providers.js';
 import { systemOneState, type PreparedClassifierState } from './state.js';
 
-/** https://docs.subq.ai/using-the-api/models/ (verified 2026-10-24). */
-export const SUBQ_DECISION_MODELS = ['subq-snap-1.1'];
+/** Default first. https://docs.subq.ai/using-the-api/models/ (verified 2026-11-15). */
+export const SUBQ_DECISION_MODELS = [
+  { value: 'subq-snap-1.2', label: 'Snap 1.2', aggregateTokenUsageOnly: true },
+  { value: 'subq-snap-1.1', label: 'Snap 1.1 (deprecated)', aggregateTokenUsageOnly: true },
+] as const;
 
 /** SubQ separates images from State and requires typed, bare-base64 objects. */
 export function subqDecisionState(state: PreparedClassifierState): Record<string, unknown> {

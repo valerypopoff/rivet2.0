@@ -52,7 +52,12 @@ COPY deploy/studio-server/images/lib/remove-dependency-test-fixtures.mjs deploy/
 COPY --from=esbuild-security /out /opt/rivet-esbuild/
 # Keep metadata normalization in the install's writable layer: a later RUN
 # would copy up the entire installed tree merely to change file timestamps.
+# Bind the vendored CLI for this RUN and nested scripts before Corepack can fetch Yarn.
 RUN --mount=type=cache,target=/root/.cache/yarn \
+    cp .yarn/releases/yarn-4.17.1.cjs /usr/local/lib/rivet-yarn.cjs && \
+    chmod 0755 /usr/local/lib/rivet-yarn.cjs && \
+    ln -sf /usr/local/lib/rivet-yarn.cjs /usr/local/bin/yarn && \
+    ln -sf /usr/local/lib/rivet-yarn.cjs /usr/local/bin/yarnpkg && \
     yarn config set supportedArchitectures --json '{"os":["current"],"cpu":["current"],"libc":["current"]}' && \
     YARN_NODE_LINKER=node-modules YARN_CHECKSUM_BEHAVIOR=ignore yarn install --immutable && \
     node /opt/rivet-dependencies/remove-dependency-test-fixtures.mjs /app/node_modules && \

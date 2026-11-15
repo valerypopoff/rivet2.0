@@ -9793,6 +9793,7 @@ __metadata:
     "@types/pg": "npm:^8.15.5"
     "@types/ws": "npm:^8.18.1"
     "@types/yazl": "npm:^3.3.0"
+    "@valerypopoff/rivet-studio-server-bootstrap": "workspace:^"
     "@valerypopoff/rivet-studio-server-shared": "workspace:^"
     "@valerypopoff/rivet2-core": "workspace:^"
     "@valerypopoff/rivet2-evaluations": "workspace:^"
@@ -9815,7 +9816,7 @@ __metadata:
   languageName: unknown
   linkType: soft
 
-"@valerypopoff/rivet-studio-server-bootstrap@workspace:packages/studio-server-bootstrap":
+"@valerypopoff/rivet-studio-server-bootstrap@workspace:^, @valerypopoff/rivet-studio-server-bootstrap@workspace:packages/studio-server-bootstrap":
   version: 0.0.0-use.local
   resolution: "@valerypopoff/rivet-studio-server-bootstrap@workspace:packages/studio-server-bootstrap"
   dependencies:

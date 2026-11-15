@@ -67,8 +67,8 @@ type HostedDatasetProvider = AppDatasetProvider & {
   ) => Promise<void>;
 };
 
-export function clearHostedProjectRevisionPath(path: string | null | undefined): void {
-  clearTrackedHostedProjectRevisionPath(path);
+export function clearHostedProjectRevisionPath(path: string | null | undefined, projectId?: string): void {
+  clearTrackedHostedProjectRevisionPath(path, projectId);
 }
 
 export function remapHostedProjectRevisionPaths(

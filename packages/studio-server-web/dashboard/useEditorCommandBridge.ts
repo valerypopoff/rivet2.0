@@ -1,4 +1,4 @@
-import type { Project, ProjectId } from '@valerypopoff/rivet2-core';
+import type { ProjectId } from '@valerypopoff/rivet2-core';
 import { createEditorBundleComparison } from './editorBundleComparison';
 import { beginDevelopmentCommand } from './developmentActivity';
 import { useSetAtom, useStore } from 'jotai';
@@ -8,6 +8,8 @@ import { useIOProvider, type RivetWorkspaceHost } from '../../app/src/host';
 import { clearLoadedRecordingForPathState, rebindLoadedRecordingPathState } from '../../app/src/state/execution';
 import {
   loadedProjectState,
+  projectState,
+  projectsState,
   projectUnsavedChangesState,
   type OpenedProjectsInfo,
 } from '../../app/src/state/savedGraphs';
@@ -30,11 +32,7 @@ import {
   handleOpenPublishedPreviewCommand,
   handleOpenRecordingCommand,
 } from './editorDetachedProjectCommands';
-import type {
-  EditorCommandBridgeContext,
-  LoadedProjectInfo,
-  SerializedEditorCommand,
-} from './editorCommandBridgeContext';
+import type { EditorCommandBridgeContext, SerializedEditorCommand } from './editorCommandBridgeContext';
 import {
   handleDeleteWorkflowProjectCommand,
   handleReconcileWorkflowProjectBindingsCommand,
@@ -49,8 +47,6 @@ import type { usePreviewProjectLifecycle } from './usePreviewProjectLifecycle';
 import type { useWorkflowRecordingBridge } from './useWorkflowRecordingBridge';
 
 export function useEditorCommandBridge({
-  currentProject,
-  loadedProject,
   openProject,
   preview,
   projects,
@@ -59,8 +55,6 @@ export function useEditorCommandBridge({
   selectedExecutor,
   workspaceHost,
 }: {
-  currentProject: Project;
-  loadedProject: LoadedProjectInfo;
   openProject: ReturnType<typeof useOpenWorkflowProject>;
   preview: ReturnType<typeof usePreviewProjectLifecycle>;
   projects: OpenedProjectsInfo;
@@ -74,9 +68,6 @@ export function useEditorCommandBridge({
   const clearLoadedRecordingForPath = useSetAtom(clearLoadedRecordingForPathState);
   const rebindLoadedRecordingPath = useSetAtom(rebindLoadedRecordingPathState);
   const ioProvider = useIOProvider();
-  const projectsRef = useRef(projects);
-  const loadedProjectRef = useRef(loadedProject);
-  const currentProjectRef = useRef(currentProject);
   const openOverlayRef = useRef(openOverlay);
   const selectedExecutorRef = useRef(selectedExecutor);
   const workspaceRef = useRef(workspaceHost);
@@ -84,21 +75,20 @@ export function useEditorCommandBridge({
   const serializedCommandQueueRef = useRef<Promise<void>>(Promise.resolve());
   const openedProjectPathAliasesRef = useRef(new Map<string, ProjectId>());
 
-  projectsRef.current = projects;
-  loadedProjectRef.current = loadedProject;
-  currentProjectRef.current = currentProject;
   openOverlayRef.current = openOverlay;
   selectedExecutorRef.current = selectedExecutor;
   workspaceRef.current = workspaceHost;
   openProjectRef.current = openProject;
 
-  const editableProjects = () =>
-    projectsRef.current.openedProjectsSortedIds.flatMap((projectId) => {
-      const project = projectsRef.current.openedProjects[projectId];
+  const editableProjects = () => {
+    const currentProjects = store.get(projectsState);
+    return currentProjects.openedProjectsSortedIds.flatMap((projectId) => {
+      const project = currentProjects.openedProjects[projectId];
       return project?.fsPath && !isHostedVirtualProjectPath(project.fsPath)
         ? [{ projectId, title: project.title }]
         : [];
     });
+  };
   const publishHostedProjectConflicts = () =>
     postMessageToDashboard({
       type: 'workflow-project-conflicts',
@@ -124,7 +114,8 @@ export function useEditorCommandBridge({
       rebindLoadedRecordingPath: (fromPath, toPath) => {
         rebindLoadedRecordingPath({ fromPath, toPath });
       },
-      getCurrentProject: () => currentProjectRef.current,
+      // A queued command can finish before React renders its state updates.
+      getCurrentProject: () => store.get(projectState),
       getSelectedExecutor: () => selectedExecutorRef.current,
       loadProjectData: async (path, options) => {
         const provider = ioProvider as {
@@ -135,9 +126,9 @@ export function useEditorCommandBridge({
         }
         return provider.loadProjectDataNoPrompt(path, options);
       },
-      getLoadedProject: () => loadedProjectRef.current,
+      getLoadedProject: () => store.get(loadedProjectState),
       getOpenProject: () => openProjectRef.current,
-      getProjects: () => projectsRef.current,
+      getProjects: () => store.get(projectsState),
       getWorkspace: () => workspaceRef.current,
       markLoadedProjectClosed: () => setLoadedProject({ loaded: false, path: '' }),
       openedProjectPathAliases: openedProjectPathAliasesRef.current,
@@ -172,6 +163,9 @@ export function useEditorCommandBridge({
           return;
         case 'open-project':
           await handleOpenProjectCommand(context, command);
+          return;
+        case 'delete-workflow-project':
+          await handleDeleteWorkflowProjectCommand(context, command);
           return;
         case 'refresh-open-project-from-disk':
           await handleRefreshOpenProjectCommand(context, command);
@@ -236,15 +230,6 @@ export function useEditorCommandBridge({
         case 'trigger-editor-duplicate-shortcut':
           replayEditorDuplicateShortcut(event.data.modifier);
           break;
-        case 'delete-workflow-project': {
-          const finish = beginDevelopmentCommand();
-          try {
-            await handleDeleteWorkflowProjectCommand(context, event.data);
-          } finally {
-            finish();
-          }
-          break;
-        }
         case 'open-project':
         case 'open-recording':
         case 'open-published-version-preview':
@@ -254,6 +239,7 @@ export function useEditorCommandBridge({
           enqueueSerializedCommand(event.data);
           break;
         case 'workflow-paths-moved':
+        case 'delete-workflow-project':
         case 'reconcile-workflow-project-bindings':
         case 'resolve-workflow-project-content-change':
         case 'capture-workflow-project-reconciliation':

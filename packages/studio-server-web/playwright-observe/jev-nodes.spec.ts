@@ -794,8 +794,8 @@ for (const { label, defaultModel, modelLabel, keyName, environmentVariable } of 
   },
   {
     label: 'SubQ',
-    defaultModel: 'subq-snap-1.1',
-    modelLabel: 'subq-snap-1.1',
+    defaultModel: 'subq-snap-1.2',
+    modelLabel: 'Snap 1.2',
     keyName: 'subqApiKey',
     environmentVariable: 'SUBQ_API_KEY',
   },
@@ -863,6 +863,27 @@ for (const { label, defaultModel, modelLabel, keyName, environmentVariable } of 
     await settings.getByRole('button', { name: 'Close modal', exact: true }).click();
   });
 
+test('saved SubQ Snap 1.1 stays deprecated and can switch to Snap 1.2 in run and Profile editors', async ({ page }) => {
+  const editor = await openFixture(
+    page,
+    fixture
+      .replace('\'[evaluate]:jevEvaluate "Jev Evaluate"\'', '\'[evaluate]:classifierEvaluate "Decision AI run"\'')
+      .replace('model: jev-latest', 'provider: subq\n            model: subq-snap-1.1'),
+  );
+  const evaluate = editor.locator('.node[data-nodeid="evaluate"]');
+  await expect(evaluate).toContainText('Model: subq-snap-1.1');
+  await evaluate.locator('button.edit-button').dispatchEvent('click');
+  await expect(editor.getByText('Snap 1.1 (deprecated)', { exact: true })).toBeVisible();
+  await expect(editor.locator('.projects-container .project.active')).not.toHaveClass(/\bhas-unsaved-changes\b/);
+  await editor.getByRole('button', { name: 'Export Decision AI settings to profile node', exact: true }).click();
+  const profile = editor.locator('.node').filter({ has: editor.locator('.port-label', { hasText: /^Profile$/ }) });
+  await expect(profile).toContainText('Model: subq-snap-1.1');
+  await profile.locator('button.edit-button').dispatchEvent('click');
+  await expect(editor.getByText('Snap 1.1 (deprecated)', { exact: true })).toBeVisible();
+  await selectDecisionModel(editor, 'Snap 1.2');
+  await expect(profile).toContainText('Model: subq-snap-1.2');
+});
+
 for (const savedModel of ['missing', 'blank']) {
   test(`Decision AI selects an implicit default with ${savedModel} Model in run and Profile menus`, async ({
     page,
@@ -888,7 +909,7 @@ for (const savedModel of ['missing', 'blank']) {
         ['OpenAI', 'gpt-6-luna'],
         ['OpenRouter', 'Microsoft Decision-1 (9b)'],
         ['Perplexity', 'pplx-decider-v1.1 (27b)'],
-        ['SubQ', 'subq-snap-1.1'],
+        ['SubQ', 'Snap 1.2'],
         ['Baseten', 'Elephant-1 (9b)'],
       ] as const) {
         const provider = editor.getByRole('combobox', { name: 'Provider', exact: true });
@@ -1017,7 +1038,7 @@ test('Decision AI model selectors preserve custom names and input ports across a
     ['OpenAI', 'gpt-6-luna', ['gpt-6-luna']],
     ['OpenRouter', 'microsoft/microsoft-decision-1', ['Microsoft Decision-1 (9b)']],
     ['Perplexity', 'pplx-decider-v1.1-27b', ['pplx-decider-v1.1 (27b)', 'pplx-decider-v1 (27b)']],
-    ['SubQ', 'subq-snap-1.1', ['subq-snap-1.1']],
+    ['SubQ', 'subq-snap-1.2', ['Snap 1.2', 'Snap 1.1 (deprecated)']],
     ['Baseten', 'decision-models/baseten-elephant-9b-latest', ['Elephant-1 (9b)', 'Mammoth-1 (27b)', 'Joey-1 (2b)']],
   ] as const) {
     const provider = editor.getByRole('combobox', { name: 'Provider', exact: true });

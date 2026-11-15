@@ -1,9 +1,11 @@
-import { loadProjectAndAttachedDataFromString } from '@valerypopoff/rivet2-node';
+import { compareProjects, loadProjectAndAttachedDataFromString, type Project } from '@valerypopoff/rivet2-node';
 import type {
   BundleComparisonCatalog,
   BundleComparisonManifest,
   BundleComparisonPairRequest,
   BundleComparisonPairResult,
+  BundleComparisonChangesRequest,
+  BundleComparisonChanges,
 } from '@valerypopoff/rivet-studio-server-shared/workflow-bundle-comparison-types.js';
 import { createHttpError } from '../../utils/httpError.js';
 import { getManagedWorkflowProjectVirtualPath } from './virtual-paths.js';
@@ -13,6 +15,64 @@ import type { FolderRow, RevisionRow, WorkflowRow } from './managed/types.js';
 
 export function createManagedBundleComparisonService(context: ManagedWorkflowContext) {
   return {
+    async changes(input: BundleComparisonChangesRequest, signal: AbortSignal): Promise<BundleComparisonChanges> {
+      if (input.olderId.toLowerCase() === input.newerId.toLowerCase())
+        throw createHttpError(400, 'Choose two different bundles.');
+      if (
+        new Set(input.pairs.map((p) => p.olderId)).size !== input.pairs.length ||
+        new Set(input.pairs.map((p) => p.newerId)).size !== input.pairs.length
+      )
+        throw createHttpError(400, 'Comparison pairs must be one-to-one.');
+      if (!input.pairs.length) return { changedNewerIds: [] };
+      await context.initialize();
+      const requested = input.pairs.flatMap((p) => [
+        { bundle_id: input.olderId, project_id: p.olderId, revision_id: p.olderRevisionId },
+        { bundle_id: input.newerId, project_id: p.newerId, revision_id: null },
+      ]);
+      const rows = await queryReferences<{ project: WorkflowRow | null; revision: RevisionRow | null }>(
+        context.pool,
+        `
+        SELECT row_to_json(w) AS project, row_to_json(r) AS revision
+        FROM jsonb_to_recordset($1::jsonb) AS q(bundle_id uuid,project_id text,revision_id text)
+        LEFT JOIN workflow_folders f ON f.bundle_id=q.bundle_id
+        LEFT JOIN workflows w ON w.workflow_id=q.project_id
+          AND left(w.relative_path,length(f.relative_path)+1)=f.relative_path || '/'
+        LEFT JOIN workflow_revisions r ON r.workflow_id=w.workflow_id
+          AND r.revision_id=COALESCE(q.revision_id,w.current_draft_revision_id)`,
+        [JSON.stringify(requested)],
+        signal,
+      );
+      if (rows.length !== requested.length || rows.some((row) => !row.project || !row.revision))
+        throw createHttpError(409, 'A compared project or saved revision is unavailable. Restart comparison.');
+      const identity = {
+        pairs: input.pairs.map((p) => ({ beforeProjectId: p.olderId, afterProjectId: p.newerId })),
+      };
+      const revisions = new Map(rows.map((row) => [row.project!.workflow_id, row.revision!]));
+      const load = async (id: string): Promise<Project> => {
+        const contents = await context.revisions.readRevisionProjectContents(revisions.get(id)!, { signal });
+        signal.throwIfAborted();
+        const [project] = loadProjectAndAttachedDataFromString(contents);
+        if (project.metadata.id !== id)
+          throw createHttpError(409, 'The saved snapshot has a different project identity.');
+        return project;
+      };
+      const changedNewerIds: string[] = [];
+      // Keep at most two parsed pairs/four artifact reads in flight, rather than retaining the whole bundle.
+      for (let offset = 0; offset < input.pairs.length; offset += 2) {
+        signal.throwIfAborted();
+        const changes = await Promise.all(
+          input.pairs.slice(offset, offset + 2).map(async (p) => {
+            const [before, after] = await Promise.all([load(p.olderId), load(p.newerId)]);
+            const comparison = compareProjects(before, after, identity);
+            return comparison.metadataChanged || Object.values(comparison.summary).some((count) => count > 0)
+              ? p.newerId
+              : null;
+          }),
+        );
+        changedNewerIds.push(...changes.filter((id): id is string => id !== null));
+      }
+      return { changedNewerIds };
+    },
     async manifest(olderId: string, newerId: string, signal: AbortSignal): Promise<BundleComparisonManifest> {
       if (olderId.toLowerCase() === newerId.toLowerCase()) throw createHttpError(400, 'Choose two different bundles.');
       await context.initialize();

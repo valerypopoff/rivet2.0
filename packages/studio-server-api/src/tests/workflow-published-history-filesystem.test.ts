@@ -2,8 +2,17 @@ import assert from 'node:assert/strict';
 // test-style: fixture-read: reads serialized project fixtures and test-owned persisted artifacts, never implementation source.
 import fs from 'node:fs/promises';
 import test from 'node:test';
-import { observeFilesystemExecutionInvalidations } from './helpers/workflow-api-harness.js';
+import { observeFilesystemExecutionInvalidations, readJson } from './helpers/workflow-api-harness.js';
 import { createFilesystemWorkflowSuiteHarness } from './helpers/workflow-filesystem-suite-harness.js';
+import type {
+  WorkflowProjectWebAppsResponse,
+  WorkflowPublishedVersionCommentResponse,
+  WorkflowPublishedVersionPreviewResponse,
+  WorkflowPublishedVersionRestoreResponse,
+  WorkflowPublishedVersionStarResponse,
+  WorkflowPublishedVersionsResponse,
+  WorkflowTreeResponse,
+} from '../../../studio-server-shared/workflow-types.js';
 
 const {
   workflowsRoot,
@@ -12,6 +21,8 @@ const {
   workflowPublication,
   workflowStorageBackend,
   filesystemExecutionCache,
+  rivetNode,
+  withWorkflowApiServer,
   resetAndEnsureWorkflowsRoot,
   cleanupWorkflowSuite,
 } = await createFilesystemWorkflowSuiteHarness();
@@ -19,146 +30,187 @@ const {
 test.beforeEach(resetAndEnsureWorkflowsRoot);
 test.after(cleanupWorkflowSuite);
 
-test('each filesystem publish creates a downloadable published version history entry', async (t) => {
-  const created = await workflowMutations.createWorkflowProjectItem('', 'PublishedHistory');
+test('published history HTTP routes preserve saved bytes, annotations and reviewed restoration', async (t) => {
+  const created = await workflowMutations.createWorkflowProjectItem('', "PublishedHistory café's (draft)");
   const firstContents = await fs.readFile(created.absolutePath, 'utf8');
-  const firstDatasetContents = 'first published dataset';
-  await fs.writeFile(workflowFs.getWorkflowDatasetPath(created.absolutePath), firstDatasetContents, 'utf8');
+  // Invalid UTF-8 distinguishes preserving the snapshot bytes from decoding and
+  // re-encoding them. The JSON preview still exposes the existing text view.
+  const firstDatasetBytes = Buffer.from([0, 255, 254, 13, 10]);
+  const firstDatasetContents = firstDatasetBytes.toString('utf8');
+  const datasetPath = workflowFs.getWorkflowDatasetPath(created.absolutePath);
+  await fs.writeFile(datasetPath, firstDatasetBytes);
 
   await workflowMutations.publishWorkflowProjectItem(created.relativePath, {
     endpointName: 'published-history-endpoint',
   });
 
-  const secondContents = firstContents.replace('description: ""', 'description: "second published version"');
+  const secondProject = rivetNode.loadProjectFromString(firstContents);
+  secondProject.metadata.description = 'second published version';
+  const secondContents = rivetNode.serializeProject(secondProject);
+  assert.ok(typeof secondContents === 'string');
+  assert.notEqual(secondContents, firstContents);
   await fs.writeFile(created.absolutePath, secondContents, 'utf8');
   await fs.writeFile(workflowFs.getWorkflowDatasetPath(created.absolutePath), 'second published dataset', 'utf8');
   await workflowMutations.publishWorkflowProjectItem(created.relativePath, {
     endpointName: 'published-history-endpoint',
   });
 
-  const history = await workflowStorageBackend.listWorkflowPublishedVersionsWithBackend(created.relativePath);
-  assert.equal(history.versions.length, 2);
-  assert.equal(history.versions[0]?.isCurrent, true);
-  assert.equal(history.versions[1]?.isCurrent, false);
-  assert.equal(history.versions[0]?.endpointName, 'published-history-endpoint');
-  assert.equal(history.versions[0]?.isStarred, false);
-  assert.equal(history.versions[0]?.comment, '');
+  await withWorkflowApiServer(async (baseUrl) => {
+    const url = `${baseUrl}/projects/published-versions`;
+    const query = new URLSearchParams({ relativePath: created.relativePath });
+    const request = (action: string, body: object, method = 'POST') =>
+      fetch(`${url}/${action}`, {
+        method,
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ relativePath: created.relativePath, ...body }),
+      });
+    const readHistory = () => fetch(`${url}?${query}`).then(readJson<WorkflowPublishedVersionsResponse>);
+    const treeState = async () => (await readJson<WorkflowTreeResponse>(await fetch(`${baseUrl}/tree`))).sync;
+    const reviewedState = async () => {
+      const snapshot = await readJson<WorkflowProjectWebAppsResponse>(
+        await fetch(`${baseUrl}/projects/web-apps?${query}`),
+      );
+      return {
+        expectedProjectId: snapshot.projectId,
+        expectedPublicationVersion: snapshot.publicationVersion,
+        expectedDraftRevisionId: snapshot.draftRevisionId,
+      };
+    };
+    const history = await readHistory();
+    assert.equal(history.versions.length, 2);
+    assert.equal(history.versions[0]?.isCurrent, true);
+    assert.equal(history.versions[1]?.isCurrent, false);
+    assert.equal(history.versions[0]?.endpointName, 'published-history-endpoint');
+    assert.equal(history.versions[0]?.isStarred, false);
+    assert.equal(history.versions[0]?.comment, '');
 
-  const starredVersion = await workflowStorageBackend.setWorkflowPublishedVersionStarWithBackend(
-    created.relativePath,
-    history.versions[1]!.id,
-    true,
-  );
-  assert.equal(starredVersion.isStarred, true);
+    for (const route of ['/projects/published-versions', '/projects/web-apps']) {
+      const normal = await fetch(`${baseUrl}${route}?${query}`);
+      assert.equal(normal.status, 200);
+      assert.equal(normal.headers.get('cache-control'), 'no-store, no-cache, must-revalidate');
+      assert.equal(normal.headers.get('pragma'), 'no-cache');
+      const body = await normal.text();
+      const trailingSlash = await fetch(`${baseUrl}${route}/?${query}`);
+      assert.equal(trailingSlash.status, 200);
+      assert.equal(await trailingSlash.text(), body);
+      const head = await fetch(`${baseUrl}${route}?${query}`, { method: 'HEAD' });
+      assert.equal(head.status, 200);
+      assert.equal(await head.text(), '');
+      for (const name of ['content-type', 'content-length', 'etag']) {
+        assert.equal(head.headers.get(name), normal.headers.get(name), name);
+      }
+      // The existing middleware applies its cache policy to GET only.
+      assert.equal(head.headers.get('cache-control'), null);
+    }
 
-  const commentedVersion = await workflowStorageBackend.setWorkflowPublishedVersionCommentWithBackend(
-    created.relativePath,
-    history.versions[1]!.id,
-    '  baseline before model switch  ',
-  );
-  assert.equal(commentedVersion.comment, 'baseline before model switch');
+    const beforeAnnotations = await treeState();
+    const starred = await readJson<WorkflowPublishedVersionStarResponse>(
+      await request('star', { versionId: history.versions[1]!.id, isStarred: true }, 'PATCH'),
+    );
+    assert.deepEqual(Object.keys(starred), ['version']);
+    assert.deepEqual(starred.version, { ...history.versions[1], isStarred: true });
 
-  const historyAfterStar = await workflowStorageBackend.listWorkflowPublishedVersionsWithBackend(created.relativePath);
-  assert.equal(historyAfterStar.versions.find((version) => version.id === history.versions[1]!.id)?.isStarred, true);
-  assert.equal(
-    historyAfterStar.versions.find((version) => version.id === history.versions[1]!.id)?.comment,
-    'baseline before model switch',
-  );
+    const commented = await readJson<WorkflowPublishedVersionCommentResponse>(
+      await request(
+        'comment',
+        { versionId: history.versions[1]!.id, comment: '  baseline before model switch  ' },
+        'PATCH',
+      ),
+    );
+    assert.deepEqual(Object.keys(commented), ['version']);
+    assert.deepEqual(commented.version, { ...starred.version, comment: 'baseline before model switch' });
 
-  const currentDownload = await workflowStorageBackend.readWorkflowPublishedVersionDownloadWithBackend(
-    created.relativePath,
-    history.versions[0]!.id,
-  );
-  const previousDownload = await workflowStorageBackend.readWorkflowPublishedVersionDownloadWithBackend(
-    created.relativePath,
-    history.versions[1]!.id,
-  );
+    const historyAfterStar = await readHistory();
+    assert.deepEqual(historyAfterStar, { versions: [history.versions[0], commented.version] });
 
-  assert.equal(currentDownload.contents, secondContents);
-  assert.equal(previousDownload.contents, firstContents);
-  assert.match(currentDownload.fileName, /^PublishedHistory \[published /);
+    for (const [version, contents] of [
+      [history.versions[0]!, secondContents],
+      [history.versions[1]!, firstContents],
+    ] as const) {
+      const download = await request('download', { versionId: version.id });
+      assert.equal(download.status, 200);
+      assert.equal(download.headers.get('content-type'), 'application/x-yaml; charset=utf-8');
+      const fileName = `${created.name} [published ${version.publishedAt
+        .replace('T', ' ')
+        .replace(/\.\d{3}Z$/, 'Z')
+        .replace(/:/g, '-')}].rivet-project`;
+      assert.equal(
+        download.headers.get('content-disposition'),
+        `attachment; filename="${fileName.replace('é', '_')}"; filename*=UTF-8''PublishedHistory%20caf%C3%A9%27s%20%28draft%29${encodeURIComponent(fileName.slice(created.name.length))}`,
+      );
+      assert.equal(await download.text(), contents);
+    }
+    const preview = await readJson<WorkflowPublishedVersionPreviewResponse>(
+      await request('preview', { versionId: history.versions[1]!.id }),
+    );
+    assert.deepEqual(preview, { contents: firstContents, datasetsContents: firstDatasetContents });
+    assert.deepEqual(await treeState(), beforeAnnotations, 'Reading and annotating history do not notify the tree.');
 
-  const cacheInvalidations = observeFilesystemExecutionInvalidations(
-    t,
-    filesystemExecutionCache.getFilesystemExecutionCache(),
-  );
+    const stale = await reviewedState();
+    secondProject.metadata.description = 'unpublished changes made after review';
+    const editedContents = rivetNode.serializeProject(secondProject);
+    assert.ok(typeof editedContents === 'string');
+    assert.notEqual(editedContents, secondContents);
+    await fs.writeFile(created.absolutePath, editedContents);
+    for (const [action, body, method, status] of [
+      ['preview', { versionId: 'missing-version' }, 'POST', 404],
+      ['star', { versionId: history.versions[1]!.id, isStarred: 'true' }, 'PATCH', 400],
+      ['comment', { versionId: history.versions[1]!.id, comment: 'x'.repeat(241) }, 'PATCH', 400],
+      ['restore', { versionId: history.versions[1]!.id, preconditions: stale }, 'POST', 409],
+    ] as const) {
+      const response = await request(action, body, method);
+      assert.equal(response.status, status, action);
+      const error = await response.json();
+      assert.equal(typeof error.error, 'string');
+      if (action === 'restore') assert.equal(error.code, 'publication_draft_changed');
+    }
+    assert.deepEqual(await readHistory(), historyAfterStar, 'Rejected requests do not change saved history.');
+    assert.equal(await fs.readFile(created.absolutePath, 'utf8'), editedContents);
+    assert.deepEqual(await treeState(), beforeAnnotations, 'Rejected requests do not notify the tree.');
 
-  const restored = await workflowStorageBackend.restoreWorkflowPublishedVersionWithBackend(
-    created.relativePath,
-    history.versions[1]!.id,
-  );
-  assert.equal(restored.version.isCurrent, true);
-  assert.notEqual(restored.version.id, history.versions[1]!.id);
-  assert.equal(restored.version.endpointName, 'published-history-endpoint');
-  assert.equal(restored.project.settings.status, 'published');
-  assert.equal(cacheInvalidations.markedIndexDirty, true);
-  assert.deepEqual(cacheInvalidations.invalidatedMaterializationPathCalls.at(-1), [created.absolutePath]);
+    const cacheInvalidations = observeFilesystemExecutionInvalidations(
+      t,
+      filesystemExecutionCache.getFilesystemExecutionCache(),
+    );
 
-  const restoredHistory = await workflowStorageBackend.listWorkflowPublishedVersionsWithBackend(created.relativePath);
-  assert.equal(restoredHistory.versions.length, 3);
-  assert.equal(restoredHistory.versions[0]?.id, restored.version.id);
-  assert.equal(restoredHistory.versions[0]?.isCurrent, true);
-  assert.equal(restoredHistory.versions.filter((version) => version.isCurrent).length, 1);
+    const restored = await readJson<WorkflowPublishedVersionRestoreResponse>(
+      await request('restore', { versionId: history.versions[1]!.id, preconditions: await reviewedState() }),
+    );
+    assert.deepEqual(Object.keys(restored).sort(), ['project', 'version']);
+    assert.equal(restored.version.isCurrent, true);
+    assert.notEqual(restored.version.id, history.versions[1]!.id);
+    assert.equal(restored.version.endpointName, 'published-history-endpoint');
+    assert.equal(restored.project.settings.status, 'published');
+    assert.equal(cacheInvalidations.markedIndexDirty, true);
+    assert.deepEqual(cacheInvalidations.invalidatedMaterializationPathCalls.at(-1), [created.absolutePath]);
+    assert.deepEqual(await treeState(), { ...beforeAnnotations, revision: beforeAnnotations.revision + 1 });
 
-  const restoredDownload = await workflowStorageBackend.readWorkflowPublishedVersionDownloadWithBackend(
-    created.relativePath,
-    restored.version.id,
-  );
-  const restoredPreview = await workflowStorageBackend.readWorkflowPublishedVersionPreviewWithBackend(
-    created.relativePath,
-    restored.version.id,
-  );
-  assert.equal(restoredDownload.contents, firstContents);
-  assert.equal(restoredPreview.datasetsContents, firstDatasetContents);
-  assert.equal(await fs.readFile(created.absolutePath, 'utf8'), firstContents);
-  assert.equal(
-    await fs.readFile(workflowFs.getWorkflowDatasetPath(created.absolutePath), 'utf8'),
-    firstDatasetContents,
-  );
+    const restoredHistory = await readHistory();
+    assert.equal(restoredHistory.versions.length, 3);
+    assert.equal(restoredHistory.versions[0]?.id, restored.version.id);
+    assert.equal(restoredHistory.versions[0]?.isCurrent, true);
+    assert.equal(restoredHistory.versions.filter((version) => version.isCurrent).length, 1);
 
-  await workflowMutations.unpublishWorkflowProjectItem(created.relativePath);
-  const historyAfterUnpublish = await workflowStorageBackend.listWorkflowPublishedVersionsWithBackend(
-    created.relativePath,
-  );
+    const restoredDownload = await request('download', { versionId: restored.version.id });
+    assert.equal(restoredDownload.status, 200);
+    const restoredPreview = await readJson<WorkflowPublishedVersionPreviewResponse>(
+      await request('preview', { versionId: restored.version.id }),
+    );
+    assert.equal(await restoredDownload.text(), firstContents);
+    assert.equal(restoredPreview.datasetsContents, firstDatasetContents);
+    assert.equal(await fs.readFile(created.absolutePath, 'utf8'), firstContents);
+    assert.deepEqual(await fs.readFile(datasetPath), firstDatasetBytes);
+    assert.deepEqual(
+      await fs.readFile(workflowFs.getPublishedWorkflowSnapshotDatasetPath(workflowsRoot, restored.version.id)),
+      firstDatasetBytes,
+    );
 
-  assert.equal(historyAfterUnpublish.versions.length, 3);
-  assert.equal(
-    historyAfterUnpublish.versions.some((version) => version.isCurrent),
-    false,
-  );
-  assert.equal(
-    historyAfterUnpublish.versions.find((version) => version.id === history.versions[1]!.id)?.isStarred,
-    true,
-  );
-  assert.equal(
-    historyAfterUnpublish.versions.find((version) => version.id === history.versions[1]!.id)?.comment,
-    'baseline before model switch',
-  );
-});
-
-test('restoring a published version preserves dataset sidecar bytes', async () => {
-  const created = await workflowMutations.createWorkflowProjectItem('', 'PublishedHistoryBytes');
-  const datasetPath = workflowFs.getWorkflowDatasetPath(created.absolutePath);
-  const originalBytes = Buffer.from([0, 255, 254, 13, 10]);
-  await fs.writeFile(datasetPath, originalBytes);
-  await workflowMutations.publishWorkflowProjectItem(created.relativePath, {
-    endpointName: 'published-history-bytes',
+    await workflowMutations.unpublishWorkflowProjectItem(created.relativePath);
+    const historyAfterUnpublish = await readHistory();
+    assert.deepEqual(historyAfterUnpublish, {
+      versions: restoredHistory.versions.map((version) => ({ ...version, isCurrent: false })),
+    });
   });
-  const history = await workflowStorageBackend.listWorkflowPublishedVersionsWithBackend(created.relativePath);
-  const versionId = history.versions[0]?.id;
-  assert.ok(versionId);
-
-  await fs.writeFile(datasetPath, 'changed dataset');
-  await workflowStorageBackend.restoreWorkflowPublishedVersionWithBackend(created.relativePath, versionId);
-
-  assert.deepEqual(await fs.readFile(datasetPath), originalBytes);
-  const restoredHistory = await workflowStorageBackend.listWorkflowPublishedVersionsWithBackend(created.relativePath);
-  assert.deepEqual(
-    await fs.readFile(
-      workflowFs.getPublishedWorkflowSnapshotDatasetPath(workflowsRoot, restoredHistory.versions[0]!.id),
-    ),
-    originalBytes,
-  );
 });
 
 test('a direct request for corrupt noncurrent history reports corruption instead of not found', async () => {
