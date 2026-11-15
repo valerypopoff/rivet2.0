@@ -13,6 +13,15 @@ an inherited stress-test baseline. Source, image, configuration and schema check
 still apply. Full stress testing is an explicit configuration choice; developer
 overlap and releases without the bounded profile retain their full suite.
 
+The retained-browser probe reads resume identity from the `executor-session`
+handshake for both executor protocols. It waits separately for
+`executor-session-ready`, which confirms replay has settled. Protocol 2 does not
+repeat `resumed` in its ready message. When the proxy is replaced, every original
+socket must still close and every live replacement must be a resumed, ready
+session before the probe sends Resume once. A fresh unrelated session cannot
+satisfy that check. Diagnostics record protocol/resume metadata, never session
+capabilities. The HA contract suite covers both protocols and replay readiness.
+
 The optional [developer-backend overlap protocol](developer-backend-overlap.md)
 adds `singleton-overlap` without changing serial `singleton` or replicated-control
 defaults. It retains seven normal compact pods and temporarily adds one backend,
