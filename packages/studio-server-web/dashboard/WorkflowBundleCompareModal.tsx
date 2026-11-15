@@ -226,8 +226,8 @@ export function WorkflowBundleCompareModal({
                 >
                   <thead>
                     <tr>
-                      <th scope="col">Project in {manifest.older.name}</th>
-                      <th scope="col">Corresponding project in {manifest.newer.name}</th>
+                      <th scope="col">Project in Older ({manifest.older.name})</th>
+                      <th scope="col">Corresponding project in Newer ({manifest.newer.name})</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -252,7 +252,7 @@ export function WorkflowBundleCompareModal({
                         <tr key={project.projectId}>
                           <td>
                             <span className="workflow-bundle-merge-mobile-column" aria-hidden="true">
-                              Project in {manifest.older.name}
+                              Project in Older ({manifest.older.name})
                             </span>
                             <strong>{project.name}</strong>
                             {displayBundleMergePath(project.relativePath) !== project.name ? (
@@ -263,7 +263,7 @@ export function WorkflowBundleCompareModal({
                           </td>
                           <td>
                             <span className="workflow-bundle-merge-mobile-column" aria-hidden="true">
-                              Corresponding project in {manifest.newer.name}
+                              Corresponding project in Newer ({manifest.newer.name})
                             </span>
                             <label className="bundle-comparison-sr-only" htmlFor={`match-${project.projectId}`}>
                               Counterpart for {project.name}
@@ -298,7 +298,7 @@ export function WorkflowBundleCompareModal({
                 </table>
                 {!manifest.older.projects.length ? <p>No projects in the Older bundle.</p> : null}
                 <div>
-                  <strong>Only in {manifest.newer.name}</strong>
+                  <strong>Only in Newer ({manifest.newer.name})</strong>
                   <ul>
                     {manifest.newer.projects
                       .filter((p) => !Object.values(choices).includes(p.projectId))

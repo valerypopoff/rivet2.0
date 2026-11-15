@@ -32,29 +32,35 @@ export function useWorkflowBundleComparison(
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [changedProjects, setChangedProjects] = useState<ReadonlySet<string> | null>(null);
   const [changeError, setChangeError] = useState('');
+  const [changeCheck, setChangeCheck] = useState(0);
   const manifest = session?.manifest;
   const pairs = session?.pairs;
   useEffect(() => {
     setChangedProjects(null);
     setChangeError('');
     if (!manifest || !pairs) return;
+    const matched = pairs.flatMap((pair) =>
+      pair.olderId && pair.newerId
+        ? [
+            {
+              olderId: pair.olderId,
+              newerId: pair.newerId,
+              olderRevisionId: manifest.older.projects.find((p) => p.projectId === pair.olderId)!.revisionId,
+            },
+          ]
+        : [],
+    );
+    if (!matched.length) {
+      setChangedProjects(new Set());
+      return;
+    }
     const abort = new AbortController();
     void readBundleComparison<BundleComparisonChanges>(
       'changes',
       {
         olderId: manifest.older.bundleId,
         newerId: manifest.newer.bundleId,
-        pairs: pairs.flatMap((pair) =>
-          pair.olderId && pair.newerId
-            ? [
-                {
-                  olderId: pair.olderId,
-                  newerId: pair.newerId,
-                  olderRevisionId: manifest.older.projects.find((p) => p.projectId === pair.olderId)!.revisionId,
-                },
-              ]
-            : [],
-        ),
+        pairs: matched,
       },
       abort.signal,
     )
@@ -66,7 +72,7 @@ export function useWorkflowBundleComparison(
           setChangeError(error instanceof Error ? error.message : 'Could not compare saved projects.');
       });
     return () => abort.abort();
-  }, [manifest, pairs, saveSequence]);
+  }, [manifest, pairs, saveSequence, changeCheck]);
   const alive = useRef(true);
   const opener = useRef<HTMLElement | null>(null);
   // Actual displayed project, or the navigation baseline when nothing is attached.
@@ -146,8 +152,8 @@ export function useWorkflowBundleComparison(
           },
           pairs: next.pairs,
           labels: {
-            referenceLabel: `${next.manifest.older.name} · Older (saved)`,
-            currentLabel: `${next.manifest.newer.name} · Newer`,
+            referenceLabel: `Older · ${next.manifest.older.name} (saved)`,
+            currentLabel: `Newer · ${next.manifest.newer.name}`,
           },
           referenceCatalog: next.manifest.older,
         },
@@ -300,6 +306,11 @@ export function useWorkflowBundleComparison(
     errors,
     changedProjects,
     changeError,
+    retryChanges: () => {
+      if (!sessionRef.current || !changeError) return;
+      setChangeError('');
+      setChangeCheck((value) => value + 1);
+    },
     navigate,
     exit,
     apply,

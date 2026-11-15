@@ -113,10 +113,20 @@ export function compareProjects(
     afterProjectId: after.metadata.id,
     metadataChanged: !areComparisonValuesEqual(
       identity
-        ? { ...before.metadata, id: comparisonProjectIdentity(before.metadata.id, 'before', identity), path: undefined }
+        ? {
+            ...before.metadata,
+            id: comparisonProjectIdentity(before.metadata.id, 'before', identity),
+            path: undefined,
+            title: undefined,
+          }
         : before.metadata,
       identity
-        ? { ...after.metadata, id: comparisonProjectIdentity(after.metadata.id, 'after', identity), path: undefined }
+        ? {
+            ...after.metadata,
+            id: comparisonProjectIdentity(after.metadata.id, 'after', identity),
+            path: undefined,
+            title: undefined,
+          }
         : after.metadata,
     ),
     graphs,

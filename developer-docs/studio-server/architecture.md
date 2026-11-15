@@ -25,6 +25,13 @@ the selected project-only artifact through the existing revision/blob decoder.
 Malformed artifacts give located errors without exposing project contents/storage
 keys. Newer is returned as an authoritative path/identity, not another snapshot.
 
+The read-only `/compare/changes` route uses Core's project comparison engine for
+the reviewed pairs, so cosmetic edits, paired project names and corresponding
+Subgraph targets agree with editor inspection. It compares two pairs at a time,
+with at most four artifact reads after releasing SQL connections. Saved Changed
+and editor Unsaved indicators remain separate. An explicit Retry check repeats
+only that read; it preserves the reviewed mapping and pinned Older revisions.
+
 `useWorkflowBundleComparison` owns transient modal/confirmed/pending selection state.
 `editorBundleComparison` owns reference reads and attachment behind the serialized
 editor queue; normal workspace loading, tab activation, saves and conflicts retain

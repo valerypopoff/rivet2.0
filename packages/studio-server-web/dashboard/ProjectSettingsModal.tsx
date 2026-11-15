@@ -1,7 +1,7 @@
 import Button, { LoadingButton } from '@atlaskit/button';
 import ModalDialog, { ModalBody, ModalTransition } from '@atlaskit/modal-dialog';
 import TextField from '@atlaskit/textfield';
-import { type FC, useEffect, useMemo, type ReactNode, useState } from 'react';
+import { type FC, Fragment, useEffect, useMemo, type ReactNode, useState } from 'react';
 
 import {
   formatLastPublishedAtLabel,
@@ -245,17 +245,21 @@ export const ProjectSettingsModal: FC<ProjectSettingsModalProps> = ({
           ['danger', 'Danger zone'],
         ] as const
       ).map(([id, label]) => (
-        <button
-          key={id}
-          type="button"
-          className={`project-settings-tab${activeTab === id ? ' active' : ''}`}
-          role="tab"
-          aria-selected={activeTab === id}
-          disabled={!canCloseModal}
-          onClick={() => setActiveTab(id)}
-        >
-          {label}
-        </button>
+        <Fragment key={id}>
+          {id === 'llm-health' || id === 'history' || id === 'danger' ? (
+            <div className="project-settings-tab-separator" role="separator" aria-hidden="true" />
+          ) : null}
+          <button
+            type="button"
+            className={`project-settings-tab${activeTab === id ? ' active' : ''}`}
+            role="tab"
+            aria-selected={activeTab === id}
+            disabled={!canCloseModal}
+            onClick={() => setActiveTab(id)}
+          >
+            {label}
+          </button>
+        </Fragment>
       ))}
     </div>
   );

@@ -1,8 +1,4 @@
-import { loadProjectAndAttachedDataFromString } from '@valerypopoff/rivet2-node';
-import type { ProjectId } from '@valerypopoff/rivet2-node';
-import { createHash } from 'node:crypto';
-import { mutationRequestText } from '../../../../studio-server-shared/workflow-mutation-contract.js';
-import { remapBundleProject } from './remap-bundle-project.js';
+import { compareProjects, loadProjectAndAttachedDataFromString, type Project } from '@valerypopoff/rivet2-node';
 import type {
   BundleComparisonCatalog,
   BundleComparisonManifest,
@@ -48,37 +44,34 @@ export function createManagedBundleComparisonService(context: ManagedWorkflowCon
       );
       if (rows.length !== requested.length || rows.some((row) => !row.project || !row.revision))
         throw createHttpError(409, 'A compared project or saved revision is unavailable. Restart comparison.');
-      const ids = new Map(input.pairs.map((p) => [p.olderId, p.newerId as ProjectId]));
-      const titles = new Map(rows.map((row) => [row.project!.workflow_id, row.project!.name]));
-      const hashes = new Map<string, string>();
-      for (let offset = 0; offset < rows.length; offset += 4) {
+      const identity = {
+        pairs: input.pairs.map((p) => ({ beforeProjectId: p.olderId, afterProjectId: p.newerId })),
+      };
+      const revisions = new Map(rows.map((row) => [row.project!.workflow_id, row.revision!]));
+      const load = async (id: string): Promise<Project> => {
+        const contents = await context.revisions.readRevisionProjectContents(revisions.get(id)!, { signal });
         signal.throwIfAborted();
-        await Promise.all(
-          rows.slice(offset, offset + 4).map(async (row) => {
-            const id = row.project!.workflow_id;
-            const contents = await context.revisions.readRevisionProjectContents(row.revision!, { signal });
-            signal.throwIfAborted();
-            const [project, attached] = loadProjectAndAttachedDataFromString(contents);
-            if (project.metadata.id !== id)
-              throw createHttpError(409, 'The saved snapshot has a different project identity.');
-            if (ids.has(id)) remapBundleProject(project, ids, { titles, preserveVersions: true });
-            delete project.metadata.path;
-            for (const reference of project.references ?? [])
-              if (titles.has(reference.id)) {
-                delete reference.hintPaths;
-                reference.title = titles.get(ids.get(reference.id) ?? reference.id);
-              }
-            hashes.set(id, createHash('sha256').update(mutationRequestText(null, { project, attached })).digest('hex'));
+        const [project] = loadProjectAndAttachedDataFromString(contents);
+        if (project.metadata.id !== id)
+          throw createHttpError(409, 'The saved snapshot has a different project identity.');
+        return project;
+      };
+      const changedNewerIds: string[] = [];
+      // Keep at most two parsed pairs/four artifact reads in flight, rather than retaining the whole bundle.
+      for (let offset = 0; offset < input.pairs.length; offset += 2) {
+        signal.throwIfAborted();
+        const changes = await Promise.all(
+          input.pairs.slice(offset, offset + 2).map(async (p) => {
+            const [before, after] = await Promise.all([load(p.olderId), load(p.newerId)]);
+            const comparison = compareProjects(before, after, identity);
+            return comparison.metadataChanged || Object.values(comparison.summary).some((count) => count > 0)
+              ? p.newerId
+              : null;
           }),
         );
+        changedNewerIds.push(...changes.filter((id): id is string => id !== null));
       }
-      return {
-        changedNewerIds: input.pairs
-          .filter(
-            (p) => titles.get(p.olderId) !== titles.get(p.newerId) || hashes.get(p.olderId) !== hashes.get(p.newerId),
-          )
-          .map((p) => p.newerId),
-      };
+      return { changedNewerIds };
     },
     async manifest(olderId: string, newerId: string, signal: AbortSignal): Promise<BundleComparisonManifest> {
       if (olderId.toLowerCase() === newerId.toLowerCase()) throw createHttpError(400, 'Choose two different bundles.');

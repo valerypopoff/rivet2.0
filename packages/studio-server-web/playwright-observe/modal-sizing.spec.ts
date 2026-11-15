@@ -149,6 +149,24 @@ test('project settings uses vertical sections on wide and narrow viewports', asy
   await page.locator('.active-project-more-button').click();
   const modal = page.getByTestId('workflow-project-settings-modal');
   await expect(modal).toBeVisible();
+  const tabs = modal.getByRole('tablist', { name: 'Project settings sections' });
+  expect(
+    await tabs
+      .locator(':scope > *')
+      .evaluateAll((items) =>
+        items.map((item) => (item.getAttribute('role') === 'separator' ? '---' : item.textContent?.trim())),
+      ),
+  ).toEqual([
+    'Endpoint',
+    'Web apps',
+    '---',
+    'LLM profile suspension',
+    'Decision AI profile suspension',
+    '---',
+    'Published version history',
+    '---',
+    'Danger zone',
+  ]);
   for (const viewport of [
     { width: 1600, height: 900 },
     { width: 620, height: 900 },
@@ -156,7 +174,6 @@ test('project settings uses vertical sections on wide and narrow viewports', asy
     { width: 620, height: 400 },
   ]) {
     await page.setViewportSize(viewport);
-    const tabs = modal.getByRole('tablist', { name: 'Project settings sections' });
     await expect(tabs).toHaveAttribute('aria-orientation', 'vertical');
     await modal.getByRole('tab', { name: 'Danger zone', exact: true }).click();
     const deleteProject = modal.getByRole('button', { name: 'Delete project', exact: true });

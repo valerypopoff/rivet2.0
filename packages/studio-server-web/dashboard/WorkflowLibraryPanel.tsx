@@ -383,7 +383,7 @@ export const WorkflowLibraryPanel: FC<WorkflowLibraryPanelProps> = ({
             <div className="bundle-comparison-toolbar">
               <div className="bundle-comparison-title">
                 {comparison.session
-                  ? `${comparison.session.manifest.older.name} (Older, saved) → ${comparison.session.manifest.newer.name} (Newer, editable)`
+                  ? `Older · ${comparison.session.manifest.older.name} (saved) → Newer · ${comparison.session.manifest.newer.name} (editable)`
                   : 'Opening bundle comparison…'}
               </div>
               <Button onClick={comparison.exit}>Exit comparison</Button>
@@ -392,6 +392,12 @@ export const WorkflowLibraryPanel: FC<WorkflowLibraryPanelProps> = ({
           {comparison.error ? (
             <div className="workflow-project-bundle-error" role="alert">
               {comparison.error}
+            </div>
+          ) : null}
+          {comparison.session && comparison.changeError ? (
+            <div className="workflow-project-bundle-error bundle-comparison-check-error" role="alert">
+              <span>{comparison.changeError}</span>
+              <Button onClick={comparison.retryChanges}>Retry check</Button>
             </div>
           ) : null}
           {membershipChanged ? (

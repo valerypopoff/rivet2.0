@@ -1840,6 +1840,9 @@ test.describe('Project settings modal', () => {
     await expect(historyModal).toContainText(endpointName);
     await expect(historyModal).toContainText('Current');
     await expect(historyModal.getByRole('listitem')).toHaveCount(10);
+    const firstPublishedDate = historyModal.locator('.published-version-history-date').first();
+    await expect(firstPublishedDate).toHaveText(/^\d{1,2} Apr 2026, \d{2}:\d{2}:\d{2}$/);
+    await expect(firstPublishedDate).toHaveAttribute('title', '2026-04-08T10:30:00.000Z');
     await expect(historyModal.getByRole('button', { name: 'Preview' })).toHaveCount(10);
     await expect(historyModal.getByRole('button', { name: 'Restore' })).toHaveCount(10);
     await expect(historyModal.getByRole('button', { name: 'Star published version' })).toHaveCount(10);

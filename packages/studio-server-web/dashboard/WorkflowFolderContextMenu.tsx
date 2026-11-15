@@ -1,6 +1,5 @@
 import {
   autoUpdate,
-  flip,
   safePolygon,
   useHover,
   useClick,
@@ -13,9 +12,12 @@ import {
   type VirtualElement,
 } from '@floating-ui/react';
 import ArrowUpIcon from 'majesticons/line/arrow-up-line.svg?react';
+import CopyIcon from '@atlaskit/icon/glyph/copy';
 import DeleteBinIcon from 'majesticons/line/delete-bin-line.svg?react';
+import FolderIcon from 'majesticons/line/folder-line.svg?react';
 import MergeIcon from 'majesticons/line/git-merge-line.svg?react';
 import PlusIcon from 'majesticons/line/plus-line.svg?react';
+import SubmenuArrowIcon from '../../app/src/assets/icons/submenu-arrow.svg?react';
 import { useLayoutEffect, useState, type ReactNode, type KeyboardEvent, type FC } from 'react';
 import type { WorkflowFolderItem } from './types';
 import { BundleTransferIcon } from './BundleTransferIcon';
@@ -63,7 +65,15 @@ function createVirtualContextTarget(x: number, y: number): VirtualElement {
   };
 }
 
-function BundleActionsSubmenu({ children }: { children: ReactNode }) {
+const BUNDLE_SUBMENU_OFFSET = 12;
+
+function BundleActionsSubmenu({
+  children,
+  onWidthChange,
+}: {
+  children: ReactNode;
+  onWidthChange(width: number): void;
+}) {
   const [open, setOpen] = useState(false);
   const { refs, floatingStyles, context } = useFloating({
     open,
@@ -71,8 +81,20 @@ function BundleActionsSubmenu({ children }: { children: ReactNode }) {
     placement: 'right-start',
     strategy: 'fixed',
     whileElementsMounted: autoUpdate,
-    middleware: [offset(4), flip(), shift({ padding: 8 })],
+    middleware: [offset(BUNDLE_SUBMENU_OFFSET), shift({ padding: 8 })],
   });
+  useLayoutEffect(() => {
+    const element = refs.floating.current;
+    if (!open || !element) return;
+    const measure = () => onWidthChange(element.getBoundingClientRect().width);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    return () => {
+      observer.disconnect();
+      onWidthChange(0);
+    };
+  }, [open, refs.floating, onWidthChange]);
   const hover = useHover(context, { handleClose: safePolygon() });
   const click = useClick(context, { keyboardHandlers: false });
   const role = useRole(context, { role: 'menu' });
@@ -102,15 +124,13 @@ function BundleActionsSubmenu({ children }: { children: ReactNode }) {
       >
         <WorkflowBundleIcon className="workflow-project-context-menu-item-icon" aria-hidden="true" />
         <span>Bundle actions</span>
-        <span className="workflow-bundle-submenu-arrow" aria-hidden="true">
-          ›
-        </span>
+        <SubmenuArrowIcon className="workflow-bundle-submenu-arrow" aria-hidden="true" focusable="false" />
       </button>
       {open ? (
         <div
           ref={refs.setFloating}
           style={floatingStyles}
-          className="workflow-project-context-menu"
+          className="workflow-project-context-menu workflow-bundle-submenu"
           aria-label="Bundle actions"
           {...getFloatingProps({
             onKeyDown(event: KeyboardEvent<HTMLDivElement>) {
@@ -152,6 +172,7 @@ export const WorkflowFolderContextMenu: FC<WorkflowFolderContextMenuProps> = ({
   onUploadBundle,
   onDelete,
 }) => {
+  const [submenuWidth, setSubmenuWidth] = useState(0);
   useHostedSurfaceDismiss(onClose, isOpen);
   const { context, refs, floatingStyles, update } = useFloating({
     open: isOpen,
@@ -162,7 +183,19 @@ export const WorkflowFolderContextMenu: FC<WorkflowFolderContextMenuProps> = ({
     },
     placement: 'bottom-start',
     strategy: 'fixed',
-    middleware: [offset(6), shift({ padding: 8 })],
+    whileElementsMounted: autoUpdate,
+    middleware: [
+      offset(6),
+      shift({
+        crossAxis: true,
+        padding: {
+          top: 8,
+          bottom: 8,
+          left: 8,
+          right: 8 + (submenuWidth ? submenuWidth + BUNDLE_SUBMENU_OFFSET : 0),
+        },
+      }),
+    ],
   });
 
   const dismiss = useDismiss(context);
@@ -176,7 +209,7 @@ export const WorkflowFolderContextMenu: FC<WorkflowFolderContextMenuProps> = ({
 
     refs.setPositionReference(createVirtualContextTarget(x, y));
     void update();
-  }, [isOpen, refs, update, x, y]);
+  }, [isOpen, refs, update, x, y, submenuWidth]);
 
   if (!isOpen || !folder) {
     return null;
@@ -194,7 +227,7 @@ export const WorkflowFolderContextMenu: FC<WorkflowFolderContextMenuProps> = ({
         <span>Rename {folder.bundleId ? 'bundle' : 'folder'}</span>
       </button>
       {bundleActions && folder.bundleId ? (
-        <BundleActionsSubmenu>
+        <BundleActionsSubmenu onWidthChange={setSubmenuWidth}>
           <button
             type="button"
             className="workflow-project-context-menu-item"
@@ -211,31 +244,11 @@ export const WorkflowFolderContextMenu: FC<WorkflowFolderContextMenuProps> = ({
             onClick={bundleActions.duplicate}
             disabled={bundleActions.busy}
           >
-            Duplicate bundle
+            <span className="workflow-project-context-menu-item-icon" aria-hidden="true">
+              <CopyIcon label="" size="small" />
+            </span>
+            <span>Duplicate bundle</span>
           </button>
-          {bundleActions.merge ? (
-            <button
-              type="button"
-              className="workflow-project-context-menu-item"
-              role="menuitem"
-              onClick={bundleActions.merge}
-              disabled={bundleActions.busy}
-            >
-              <MergeIcon className="workflow-project-context-menu-item-icon" aria-hidden="true" />
-              Merge into another bundle…
-            </button>
-          ) : null}
-          {bundleActions.compare ? (
-            <button
-              type="button"
-              className="workflow-project-context-menu-item"
-              role="menuitem"
-              disabled={bundleActions.busy}
-              onClick={bundleActions.compare}
-            >
-              Compare with another bundle…
-            </button>
-          ) : null}
           {bundleActions.canConvert ? (
             <button
               type="button"
@@ -244,9 +257,38 @@ export const WorkflowFolderContextMenu: FC<WorkflowFolderContextMenuProps> = ({
               onClick={bundleActions.convert}
               disabled={bundleActions.busy}
             >
-              <WorkflowBundleIcon className="workflow-project-context-menu-item-icon" aria-hidden="true" />
+              <FolderIcon className="workflow-project-context-menu-item-icon" aria-hidden="true" />
               <span>Convert to ordinary folder</span>
             </button>
+          ) : null}
+          {bundleActions.merge ? (
+            <>
+              <div className="workflow-project-context-menu-separator" role="separator" aria-hidden="true" />
+              <button
+                type="button"
+                className="workflow-project-context-menu-item"
+                role="menuitem"
+                onClick={bundleActions.merge}
+                disabled={bundleActions.busy}
+              >
+                <MergeIcon className="workflow-project-context-menu-item-icon" aria-hidden="true" />
+                Merge into another bundle…
+              </button>
+            </>
+          ) : null}
+          {bundleActions.compare ? (
+            <>
+              <div className="workflow-project-context-menu-separator" role="separator" aria-hidden="true" />
+              <button
+                type="button"
+                className="workflow-project-context-menu-item"
+                role="menuitem"
+                disabled={bundleActions.busy}
+                onClick={bundleActions.compare}
+              >
+                Compare with another bundle…
+              </button>
+            </>
           ) : null}
         </BundleActionsSubmenu>
       ) : bundleActions?.canConvert ? (

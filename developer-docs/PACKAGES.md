@@ -2,6 +2,27 @@
 
 > Detailed package-by-package reference for the current monorepo.
 
+## Version update: 2026-11-15 — recording evidence, runtime snapshots and bundle tools
+
+Each package's last actual version bump is `d02b3c656`. This review includes
+committed changes through `e120aa379` and the pending comparison, menu and
+Project Settings refinements.
+
+| Packages                        | Version             | Changes since the last bump                                                                                                                                                                                                                                                                   |
+| ------------------------------- | ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| App                             | `2.36.1` → `2.37.0` | Adds optional recording-evidence lifecycle hooks and editor integration; ships the new Snap 1.2 choice/default, empty-prompt handling and shared submenu arrow refinements.                                                                                                                   |
+| Core, Node, CLI, Evaluations    | `2.30.0` → `2.31.0` | Core adds Snap 1.2, keeps deprecated Snap 1.1 selectable, filters empty prompt messages safely and corrects paired-project comparison. Node, CLI and Evaluations have no package-local source changes and follow public-family lockstep.                                                      |
+| App Executor                    | `2.22.0` → `2.23.0` | Adds the optional run-settlement observer and supports pinned runtime-library ownership; bundles the new Core release.                                                                                                                                                                        |
+| All five Studio Server packages | `1.38.1` → `1.39.0` | Adds asynchronous recoverable recording evidence and truthful history/statistics states; pins immutable runtime-library releases; improves bundle statuses, menus, comparison and settings. All five workspaces change locally; HTTP/storage/controller refactors preserve existing behavior. |
+| Docs                            | `2.28.1` → `2.29.0` | Documents pending/unavailable recording evidence, search/statistics limits, Snap 1.2 and empty-prompt behavior.                                                                                                                                                                               |
+
+These are compatible feature releases. Desktop Tauri/Cargo metadata follows App;
+the CLI Docker fallback follows the public family. Existing workspace dependency
+ranges remain valid. Versioning itself adds no database migration, chart change,
+dependency upgrade or activation of the local execution-isolation prototype.
+Publication and deployment remain separate actions. See
+[release preparation](BUILD-AND-CI.md#prepared-release-versions-2026-11-15).
+
 ## Version update: 2026-11-13 — executor recovery and failed recordings
 
 All package baselines are the last version-changing commit, `dca880e38`. Review

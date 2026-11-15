@@ -70,12 +70,16 @@ export function WorkflowBundleComparisonTree({
             setClosed((prev) => (prev[key] === !open ? prev : { ...prev, [key]: !open }));
           }}
         >
-          <summary className={containsSelection ? 'contains-selection' : undefined}>
-            {root ? `${catalog.name} · ${role}` : path.split('/').at(-1)}
+          <summary
+            title={root ? catalog.relativePath : path}
+            className={containsSelection ? 'contains-selection' : undefined}
+          >
+            {root ? `${role} · ${catalog.name}` : path.split('/').at(-1)}
             {containsSelection ? <span className="bundle-comparison-sr-only"> · Contains selected project</span> : null}
           </summary>
           {[...children].sort().map((name) => folder(prefix + name))}
           {projects.map(({ project: p, pair, removed }) => {
+            const path = displayBundleMergePath(p.relativePath);
             const pairKey = bundleComparisonPairKey(pair);
             const changeStatus =
               role === 'Older'
@@ -84,7 +88,7 @@ export function WorkflowBundleComparisonTree({
                   ? 'Removed'
                   : !pair.olderId
                     ? 'Added'
-                    : dirtyProjects.has(p.projectId) || changedProjects?.has(p.projectId)
+                    : changedProjects?.has(p.projectId)
                       ? 'Changed'
                       : changeError
                         ? 'Check failed'
@@ -103,7 +107,11 @@ export function WorkflowBundleComparisonTree({
                 onClick={() => onSelect(pair)}
                 title={
                   errors[pairKey] ||
-                  (changeError && pair.newerId && pair.olderId ? changeError : displayBundleMergePath(p.relativePath))
+                  (changeError && pair.newerId && pair.olderId
+                    ? changeError
+                    : path === p.name
+                      ? p.name
+                      : `${p.name}\n${path}`)
                 }
               >
                 <span className="comparison-project-name">

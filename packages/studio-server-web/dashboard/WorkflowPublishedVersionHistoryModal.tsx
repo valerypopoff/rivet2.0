@@ -37,7 +37,14 @@ function formatPublishedVersionDate(value: string): string {
     return value;
   }
 
-  return date.toLocaleString();
+  return date.toLocaleString('en-GB', {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  });
 }
 
 function createCommentDrafts(versions: WorkflowPublishedVersionSummary[]): Record<string, string> {
@@ -378,7 +385,7 @@ export const WorkflowPublishedVersionHistoryPanel: FC<WorkflowPublishedVersionHi
               <div className="published-version-history-row" role="listitem" key={version.id}>
                 <div className="published-version-history-details">
                   <div className="published-version-history-date-row">
-                    <span className="published-version-history-date">
+                    <span className="published-version-history-date" title={version.publishedAt}>
                       {formatPublishedVersionDate(version.publishedAt)}
                     </span>
                     {version.isCurrent ? (

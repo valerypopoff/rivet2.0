@@ -148,6 +148,8 @@ navigation supersedes a request, and request ID for acknowledgements. An optiona
 the reference owner; it must not end the Server's reviewed bundle session.
 Runtime readers validate membership/uniqueness, labels, bounds and selected pair.
 An unknown acknowledgement triggers one state read, never an automatic open replay.
+Comparison side labels lead with Older/Newer and retain the actual bundle names;
+the editor reuses them for its comparison notice and field inspector.
 
 `editorBundleComparison.ts` prepares Older before normal Newer activation through
 `handleOpenProjectCommand`. It validates Newer's live bundle/path again before
@@ -171,6 +173,8 @@ The sidebar has no Swap, rematch or refresh handlers: roles/matches and fresh
 saved Older versions are chosen through a new setup after Exit. Iframe replacement
 invalidates pending acknowledgements and detaches selection without replaying it
 or removing the two-bundle view.
+The contextual Retry check control only repeats the Server's saved-change read.
+It sends no editor activation command and does not recapture Older references.
 Starting a new native comparison also supersedes bundle work during project
 activation, not just reference reads. Activation may clear an old reference as
 part of closing its virtual tab; a newly installed reference instead cancels the

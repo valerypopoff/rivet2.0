@@ -99,7 +99,6 @@ export function remapBundleProject(
   options: {
     graphs?: ReadonlyMap<string, string>;
     titles?: ReadonlyMap<string, string>;
-    preserveVersions?: boolean;
   } = {},
 ): Set<string> {
   const external = new Set<string>();
@@ -125,7 +124,7 @@ export function remapBundleProject(
     data[field] = mapped;
     if (typeof data.graphId === 'string')
       data.graphId = options.graphs?.get(bundleGraphKey(id, data.graphId)) ?? data.graphId;
-    if (node.type === 'subGraph' && !options.preserveVersions) data.targetVersion = 'latest';
+    if (node.type === 'subGraph') data.targetVersion = 'latest';
   }
   return external;
 }

@@ -2134,6 +2134,25 @@ version. It checks npm before publishing each package and skips package versions
 that are already present in the registry, so re-running the same main-branch
 workflow does not turn an already-published package into a hard failure.
 
+### Prepared release versions (2026-11-15)
+
+Review since the actual version bump `d02b3c656`, through `e120aa379` and the
+pending comparison/settings fixes, prepares App `2.37.0`, the public
+Core/Node/CLI/Evaluations family `2.31.0`, App Executor `2.23.0`, all five
+Studio Server packages `1.39.0`, and Docs `2.29.0`. The
+[package matrix](PACKAGES.md#version-update-2026-11-15--recording-evidence-runtime-snapshots-and-bundle-tools)
+separates package-local additions from public-family companions. New recording
+capabilities, optional lifecycle hooks and model support warrant minor releases;
+the included refactors and fixes do not require major versions.
+
+Synchronize desktop Tauri/Cargo metadata and the CLI Docker fallback. Validate
+with `yarn verify:desktop-version`, `yarn check:npm-publish-versions`,
+`yarn check:pnp:fresh`, `yarn studio-server:verify:repo-structure` and
+`node scripts/checks/check-doc-links.mjs`. Regenerate install state with the
+checked-in Yarn release and immutable lockfile/cache; retain existing dependency
+ranges. Helm metadata and database schema numbers remain independent. Preparing
+versions neither publishes packages nor deploys a release.
+
 ### Prepared release versions (2026-11-13)
 
 The last version-changing commit for all tracks is `dca880e38`. Review through

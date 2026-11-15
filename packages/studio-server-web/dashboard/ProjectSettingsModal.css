@@ -165,6 +165,12 @@
   text-align: left;
 }
 
+.project-settings-tab-separator {
+  flex-shrink: 0;
+  margin: 4px 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+
 .project-settings-section-content {
   min-width: 0;
   min-height: 0;

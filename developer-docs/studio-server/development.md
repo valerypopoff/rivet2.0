@@ -1901,22 +1901,23 @@ committing or pushing the source never applies that recovery to a live cluster.
 
 The five private `@valerypopoff/rivet-studio-server-*` workspaces form one
 Studio Server product and use one lockstep package version. Their current
-version is `1.38.0`. `yarn studio-server:verify:repo-structure` rejects version
+version is `1.39.0`. `yarn studio-server:verify:repo-structure` rejects version
 drift between the API, web, executor, shared, and bootstrap manifests.
-This minor release covers changes since the Studio Server bump in `5b3a3fae7`
-through `3551e25c7`, plus the current export UI/status fixes: bounded saved bundle
-comparison reads, project matching and projected navigation, editable Newer
-projects, pinned Older references and cancellation/ownership handling.
-API/Web/Shared change locally; unchanged Bootstrap/Executor workspaces are release
-companions, not separate implementations of these features. Comparison adds no
-schema migration or reference-index backfill.
+This minor release covers changes since the Studio Server bump in `d02b3c656`
+through `e120aa379` and the pending comparison/settings fixes: asynchronous
+recoverable recording evidence, immutable runtime-library snapshots, bundle
+change statuses and navigation/menu refinements. All five workspaces have local
+implementation changes; the route/storage/controller refactors preserve behavior.
+Local execution-isolation tooling remains a prototype, not a production runtime
+switch. Schema 20 belongs to the recording-evidence implementation, not this
+metadata update; versioning adds no migration or reference-index backfill.
 Backend overlap was covered by `1.31.0`; compact HA/autoscaling by `1.30.0`.
 This version update does not enable optional rollout features or establish new
 GKE qualification; see the [performance implementation status](rolling-update-performance-plan.md).
 Bump all five manifests together even when only one workspace has runtime
 changes; run the repository-structure check before
 building a release candidate. See the prepared release matrix in
-[Build and CI](../BUILD-AND-CI.md#prepared-bundle-comparison-release-versions-2026-11-12) for the
+[Build and CI](../BUILD-AND-CI.md#prepared-release-versions-2026-11-15) for the
 separate desktop, sidecar, documentation and public runtime version decisions.
 
 These private package versions are release metadata, not npm publication or

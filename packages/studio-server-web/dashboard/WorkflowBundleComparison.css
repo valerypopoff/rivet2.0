@@ -54,6 +54,17 @@
   font-weight: 600;
   overflow-wrap: anywhere;
 }
+.bundle-comparison-check-error {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.bundle-comparison-check-error > span {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
 .workflow-library-panel .comparison-project-row[data-comparison-role='older'].active {
   background: color-mix(in srgb, var(--workflow-library-row-highlight) 50%, transparent);
 }
