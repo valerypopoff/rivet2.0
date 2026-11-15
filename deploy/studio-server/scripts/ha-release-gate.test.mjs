@@ -18,7 +18,11 @@ import {
 import { HA_BROWSER_CONTRACT } from './lib/ha-release-evidence.mjs';
 import { HA_ROUTING_PROPAGATION_MS } from './lib/ha-routing-withdrawal.mjs';
 import { maintenanceValidationValues } from './lib/managed-release-cutover.mjs';
-import { assertProbedSchemaTransition, probeSchemaLockContention, readSchemaRepositoryReceipt } from './lib/schema-compatibility-probe.mjs';
+import {
+  assertProbedSchemaTransition,
+  probeSchemaLockContention,
+  readSchemaRepositoryReceipt,
+} from './lib/schema-compatibility-probe.mjs';
 
 test('reviewed schema expands include nullable reference summaries without approving future migrations', () => {
   assert.doesNotThrow(() => assertProbedSchemaTransition(17, 18));
@@ -34,6 +38,7 @@ import {
   publishHaBrowserBaseline,
   waitForHaFrontendReplacement,
   hasHaBrowserReadyTransport,
+  observeHaBrowserSessionMessage,
   assertHaBrowserWebPods,
   launchHaBrowser,
 } from './lib/ha-browser-probe.mjs';
@@ -66,7 +71,12 @@ test('HA probes use the prepared CI browser without a host-browser fallback', as
   assert.equal(calls.length, 1);
   await assert.rejects(
     launchHaBrowser(
-      { ...chromium, connect: async () => { throw Error('CI browser unavailable'); } },
+      {
+        ...chromium,
+        connect: async () => {
+          throw Error('CI browser unavailable');
+        },
+      },
       env,
     ),
     /CI browser unavailable/,
@@ -878,6 +888,28 @@ test('an unacknowledged begin cannot arm the lease-loss fault during runner clea
   assert.equal(fault.state.beginAccepted, false);
   assert.equal(fault.state.injected, false);
   assert.deepEqual(f.calls, ['replace'], 'cleanup records its original outcome without injecting another fault');
+});
+
+test('retained browser uses the session handshake for v1/v2 resume identity and waits for replay readiness', async (t) => {
+  for (const protocol of [1, 2]) {
+    await t.test(`protocol ${protocol}`, () => {
+      const state = { closed: false, ready: false, resumed: false };
+      const originals = [{ closed: true }];
+      const ready = {
+        message: 'executor-session-ready',
+        data: { protocol, ...(protocol === 1 ? { resumed: true } : {}) },
+      };
+      observeHaBrowserSessionMessage(state, { message: 'executor-session', data: { protocol, resumed: true } });
+      assert.equal(hasHaBrowserReadyTransport([state], originals), false, 'handshake alone is not finished replay');
+      observeHaBrowserSessionMessage(state, ready);
+      assert.equal(hasHaBrowserReadyTransport([state], originals), true, `protocol ${protocol} finished replay`);
+
+      observeHaBrowserSessionMessage(state, { message: 'executor-session', data: { protocol, resumed: false } });
+      assert.equal(state.ready, false, 'another handshake resets readiness');
+      observeHaBrowserSessionMessage(state, ready);
+      assert.equal(hasHaBrowserReadyTransport([state], originals), false, 'a fresh session cannot replace the run');
+    });
+  }
 });
 
 test('retained browser waits for all old sockets to close and all replacement sessions to finish replay', () => {

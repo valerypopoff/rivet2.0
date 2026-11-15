@@ -64,6 +64,13 @@ The guard regression supplies distinct large inode IDs that collide as Numbers,
 then a true source/control alias. This keeps Windows verification meaningful
 without relaxing the source-root exclusion used by the container runtime.
 
+Main's exact-image HA browser probe uses the same executor protocol semantics as
+the editor: `executor-session` identifies a resumed session;
+`executor-session-ready` separately ends replay. Protocol 2 omits the resume flag
+from the ready frame. Keep both protocols in `ha-release-gate.test.mjs`; preserve
+the original-socket closure and resumed-session checks. A successful image build
+does not establish promotion when this main-only gate fails.
+
 ## Browser shard budget and hosted variability
 
 [Verify Studio Server 43434671248, editor shard 3](https://github.com/valerypopoff/rivet2.0/actions/runs/43434671248/job/131919256700)

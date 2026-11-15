@@ -32,6 +32,14 @@ export async function selectHaBrowserRecordingWorkflow(page, workflowName, expec
   await expect(modal.locator('.run-recordings-workflow-name')).toHaveText(workflowName);
 }
 
+// Protocol 2's replay-ready frame does not repeat the handshake's resume identity.
+export function observeHaBrowserSessionMessage(state, message) {
+  if (message.message === 'executor-session') {
+    state.ready = false;
+    state.resumed = message.data?.resumed === true;
+  } else if (message.message === 'executor-session-ready') state.ready = true;
+}
+
 // Pod removal is not proof that a browser has observed its socket closing.
 // Wait for every original observer to leave and for ordered session replay on
 // its replacements before sending a control once. Never retry an uncertain send.
@@ -197,14 +205,18 @@ export async function startHaBrowserProbe(gate, baseUrl, rootDir, { build, label
     socket.on('framereceived', (frame) => {
       try {
         const message = JSON.parse(String(frame.payload));
-        if (message.message === 'executor-session-ready') {
-          state.ready = true;
-          state.resumed = message.data?.resumed === true;
-        }
+        observeHaBrowserSessionMessage(state, message);
         if (
-          ['start', 'done', 'error', 'pause', 'resume', 'executor-owner-retiring', 'executor-session-ready'].includes(
-            message.message,
-          )
+          [
+            'start',
+            'done',
+            'error',
+            'pause',
+            'resume',
+            'executor-owner-retiring',
+            'executor-session',
+            'executor-session-ready',
+          ].includes(message.message)
         ) {
           record({
             direction: 'received',
@@ -212,6 +224,7 @@ export async function startHaBrowserProbe(gate, baseUrl, rootDir, { build, label
             requestId: message.requestId,
             projectId: message.data?.project?.metadata?.id,
             sequence: message.rivetSequence,
+            protocol: message.data?.protocol,
             resumed: message.data?.resumed,
           });
         }
