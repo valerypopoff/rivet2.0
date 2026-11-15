@@ -22,6 +22,7 @@ import {
   assertProbedSchemaTransition,
   probeSchemaLockContention,
   readSchemaRepositoryReceipt,
+  SCHEMA_PROBE_TIMING,
 } from './lib/schema-compatibility-probe.mjs';
 
 test('reviewed schema expands include nullable reference summaries without approving future migrations', () => {
@@ -428,6 +429,7 @@ test('an uncertain latest fixture publication cannot be recreated by a later pro
 test('predecessor schema verification respects the rollback floor without concealing compatible failures', async () => {
   const artifacts = new Map();
   const calls = [];
+  let verificationJob;
   const gate = {
     config: {
       namespace: 'fixture',
@@ -436,8 +438,9 @@ test('predecessor schema verification respects the rollback floor without concea
       previousApiImage: { repository: 'example.test/api', digest: `sha256:${'e'.repeat(64)}`, schemaVersion: 16 },
     },
     artifact: async (name, value) => artifacts.set(name, value),
-    kubectl: async (args) => {
+    kubectl: async (args, extra) => {
       calls.push(args);
+      if (args[0] === 'apply') verificationJob = parse(extra.input);
       return { stdout: 'verified', stderr: '' };
     },
   };
@@ -453,6 +456,12 @@ test('predecessor schema verification respects the rollback floor without concea
     ['apply', 'wait', 'logs'],
   );
   assert.equal(JSON.parse(artifacts.get('previous-api-schema-compatibility.json')).skipped, false);
+  assert.deepEqual(verificationJob.spec.template.spec.imagePullSecrets, [{ name: 'registry' }]);
+  gate.config.imagePullSecrets = [];
+  gate.config.imagePullPolicy = 'IfNotPresent';
+  await ManagedReleaseGate.prototype.verifyPreviousApiSchemaCompatibility.call(gate);
+  assert.deepEqual(verificationJob.spec.template.spec.imagePullSecrets, []);
+  assert.equal(verificationJob.spec.template.spec.containers[0].imagePullPolicy, 'IfNotPresent');
 
   gate.kubectl = async () => {
     throw new Error('verification failed');
@@ -547,6 +556,44 @@ test('reader connection loss is observed immediately while contended DDL settles
   assert.equal(releases, 3);
 });
 
+test('lock probe measures the application read without charging peer cleanup to it', async (t) => {
+  t.mock.timers.enable({ apis: ['Date'] });
+  for (const slowRead of [false, true]) {
+    let index = 0,
+      ddlAttempts = 0,
+      migrated = false;
+    const pool = {
+      connect: async () => {
+        const role = index++;
+        return {
+          processID: 42,
+          query: async (sql) => {
+            if (role === 1 && sql === 'fixture DDL') {
+              if (++ddlAttempts === 1) throw Object.assign(Error('lock timeout'), { code: '55P03' });
+              migrated = true;
+            }
+            if ((role === 1 && sql === 'ROLLBACK') || (role === 2 && sql === 'COMMIT')) t.mock.timers.tick(3000);
+            if (sql.includes('pg_relation_filenode')) return { rows: [{ id: 1 }] };
+            if (sql.includes('pg_locks')) return { rowCount: 1, rows: [] };
+            if (role === 2 && sql.includes('WHERE recording_id=')) {
+              if (slowRead) t.mock.timers.tick(2501);
+              return { rows: [{ recording_id: 'preserved', ...(migrated ? { cost_json: null } : {}) }] };
+            }
+            if (sql.includes('count(*)')) return { rows: [{ n: 10001 }] };
+            return { rows: [] };
+          },
+          release: () => {},
+        };
+      },
+    };
+    const run = () =>
+      probeSchemaLockContention(pool, `rivet_schema_probe_${'a'.repeat(32)}`, { version: 18, sql: 'fixture DDL' });
+    if (slowRead) await assert.rejects(run, /Queued application read exceeded its 2500ms bound/);
+    else await run();
+    assert.equal(ddlAttempts, slowRead ? 1 : 2);
+  }
+});
+
 test('local and Kubernetes schema receipts reject wrong roles, versions, incomplete rounds and missing lock proof', () => {
   for (const [role, version] of [
     ['previous', 17],
@@ -569,8 +616,8 @@ test('local and Kubernetes schema receipts reject wrong roles, versions, incompl
   }
 });
 
-test('mixed schema gate launches two exact-image repository workers and rejects partial receipts', async () => {
-  for (const fault of [
+test('mixed schema gate checks exact images, Job failures and complete receipts', { timeout: 5000 }, async (t) => {
+  const faults = [
     null,
     'missing',
     'wrong-version',
@@ -584,12 +631,24 @@ test('mixed schema gate launches two exact-image repository workers and rejects 
     'wrong-owner',
     'failed-pod',
     'peer-pending',
+    'failed-job',
+    'read-forbidden',
+    'malformed-job',
+    'pending-job',
+  ];
+  for (const { fault, pullSecrets, pullPolicy, transientRead } of [
+    ...faults.map((fault) => ({ fault })),
+    { fault: null, pullSecrets: [], pullPolicy: 'IfNotPresent' },
+    { fault: null, pullSecrets: [{ name: 'private-registry' }], pullPolicy: 'IfNotPresent' },
+    { fault: null, transientRead: true },
   ]) {
     const artifacts = new Map(),
       calls = [];
     let jobs,
       code,
       logged = false;
+    let pendingObservers = 0;
+    const jobReads = new Map();
     let releasePeer,
       peerStarted,
       peerSettled = false;
@@ -627,6 +686,8 @@ test('mixed schema gate launches two exact-image repository workers and rejects 
       config: {
         namespace: 'fixture',
         registry: { secretName: 'registry' },
+        imagePullSecrets: pullSecrets,
+        imagePullPolicy: pullPolicy,
         previousApiImage: { repository: 'fixture/api', digest: `sha256:${'a'.repeat(64)}`, schemaVersion: 17 },
         images: { api: { repository: 'fixture/api', digest: `sha256:${'b'.repeat(64)}` } },
         managedWorkflowSchema: { version: 18 },
@@ -640,7 +701,14 @@ test('mixed schema gate launches two exact-image repository workers and rejects 
           assert.equal(jobs.length, 2);
           for (const job of jobs) {
             assert.equal(job.spec.backoffLimit, 0);
+            assert.equal(job.spec.activeDeadlineSeconds, SCHEMA_PROBE_TIMING.jobSeconds);
             assert.equal(job.spec.template.spec.automountServiceAccountToken, false);
+            assert.deepEqual(job.spec.template.spec.imagePullSecrets, pullSecrets ?? [{ name: 'registry' }]);
+            assert.equal(job.spec.template.spec.containers[0].imagePullPolicy, pullPolicy ?? 'Always');
+            assert.deepEqual(job.spec.template.spec.containers[0].resources, {
+              requests: { cpu: '500m', memory: '512Mi' },
+              limits: { memory: '512Mi' },
+            });
             assert.ok(job.spec.template.spec.containers[0].image.includes('@sha256:'));
           }
         }
@@ -652,8 +720,35 @@ test('mixed schema gate launches two exact-image repository workers and rejects 
           return { stdout: JSON.stringify(pod) };
         }
         if (args[0] === 'get' && args[1] === 'job') {
+          const reads = (jobReads.get(args[2]) ?? 0) + 1;
+          jobReads.set(args[2], reads);
+          if (reads === 2) {
+            assert.ok(args.includes('--request-timeout=10s'));
+            if (fault === 'read-forbidden') throw Error('Error from server (Forbidden): fixture');
+            if (transientRead) throw Error('Error from server (ServiceUnavailable): fixture');
+            if (fault === 'malformed-job') return { stdout: '{' };
+            if (fault === 'peer-pending') {
+              if (args[2].endsWith('-previous')) throw Error('fixture first worker failed');
+              peerStarted();
+              await peerWait;
+            }
+            peerSettled = true;
+          }
           const job = structuredClone(jobs.find((j) => j.metadata.name === args[2]));
           job.metadata.uid = fault === 'changed-job' && peerSettled ? 'foreign' : `uid-${job.metadata.name}`;
+          job.status = {
+            conditions: [
+              {
+                type: fault === 'failed-job' ? 'Failed' : 'Complete',
+                status: 'True',
+                reason: fault === 'failed-job' ? 'BackoffLimitExceeded' : undefined,
+              },
+            ],
+          };
+          if (fault === 'pending-job') {
+            job.status.conditions = [];
+            if (reads === 2 && ++pendingObservers === 2) peerStarted();
+          }
           return { stdout: JSON.stringify(job) };
         }
         if (args[0] === 'get' && args[1] === 'pods') {
@@ -664,14 +759,6 @@ test('mixed schema gate launches two exact-image repository workers and rejects 
               items: [podFor(job)],
             }),
           };
-        }
-        if (args[0] === 'wait') {
-          if (fault === 'peer-pending') {
-            if (args[2].endsWith('-previous')) throw Error('fixture first worker failed');
-            peerStarted();
-            await peerWait;
-          }
-          peerSettled = true;
         }
         if (args[0] === 'logs') {
           logged = true;
@@ -696,7 +783,21 @@ test('mixed schema gate launches two exact-image repository workers and rejects 
     };
     if (fault) gate.schemaCompatibility = { stale: true };
     const run = () => ManagedReleaseGate.prototype.verifyMixedSchemaRepositories.call(gate);
-    if (fault === 'peer-pending') {
+    if (fault === 'pending-job') {
+      t.mock.timers.enable({ apis: ['Date', 'setTimeout'] });
+      try {
+        const running = run();
+        running.catch(() => {});
+        await started;
+        await new Promise((resolve) => setImmediate(resolve));
+        t.mock.timers.tick((SCHEMA_PROBE_TIMING.jobSeconds + 10) * 1000 + 1);
+        await assert.rejects(running, (error) =>
+          error.errors.every((e) => /exceeded its Job deadline/.test(e.message)),
+        );
+      } finally {
+        t.mock.timers.reset();
+      }
+    } else if (fault === 'peer-pending') {
       let settled = false;
       const running = run().finally(() => {
         settled = true;
@@ -718,6 +819,16 @@ test('mixed schema gate launches two exact-image repository workers and rejects 
     if (fault)
       assert.equal(gate.schemaCompatibility, undefined, 'A failed attempt cannot retain earlier success evidence');
     assert.equal(calls.filter((c) => c[0] === 'create').length, 1, 'Never replay a fixture write');
+    assert.equal(
+      calls.filter((c) => c[0] === 'wait').length,
+      0,
+      'Observe failed Jobs without waiting for a success-only timeout',
+    );
+    if (fault === 'read-forbidden')
+      assert.ok(
+        [...jobReads.values()].every((count) => count <= 2),
+        'Do not retry authorization failures',
+      );
   }
 });
 

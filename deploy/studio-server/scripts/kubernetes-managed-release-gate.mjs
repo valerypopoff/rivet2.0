@@ -23,7 +23,9 @@ import {
   assertProbedSchemaTransition,
   assertSchemaCompatibilityEvidence,
   readSchemaRepositoryReceipt,
+  SCHEMA_PROBE_TIMING,
 } from './lib/schema-compatibility-probe.mjs';
+import { kubernetesReadRetryReason } from './lib/kubernetes-read-errors.mjs';
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const mode = process.argv[2] ?? 'smoke';
@@ -136,7 +138,7 @@ stringData:
 `;
 }
 
-function renderPreviousApiSchemaVerificationJob(namespace, image, schema, registry) {
+function renderPreviousApiSchemaVerificationJob(namespace, image, schema, config) {
   const jobName = 'release-gate-previous-api-schema-verify';
   return `apiVersion: batch/v1
 kind: Job
@@ -155,12 +157,11 @@ spec:
         app.kubernetes.io/part-of: rivet-managed-release-gate
     spec:
       restartPolicy: Never
-      imagePullSecrets:
-        - name: ${registry.secretName}
+      imagePullSecrets: ${JSON.stringify(config.imagePullSecrets ?? [{ name: config.registry.secretName }])}
       containers:
         - name: verify
           image: ${imageReference(image)}
-          imagePullPolicy: Always
+          imagePullPolicy: ${config.imagePullPolicy ?? 'Always'}
           command: ["/bin/sh", "-ec"]
           args:
             - >-
@@ -906,7 +907,7 @@ export class ManagedReleaseGate {
         this.config.namespace,
         previousApiImage,
         this.config.managedWorkflowSchema,
-        this.config.registry,
+        this.config,
       ),
     });
     await this.kubectl([
@@ -974,18 +975,22 @@ export class ManagedReleaseGate {
         },
         spec: {
           backoffLimit: 0,
-          activeDeadlineSeconds: 90,
+          activeDeadlineSeconds: SCHEMA_PROBE_TIMING.jobSeconds,
           template: {
             spec: {
               restartPolicy: 'Never',
               automountServiceAccountToken: false,
-              imagePullSecrets: [{ name: this.config.registry.secretName }],
+              imagePullSecrets: this.config.imagePullSecrets ?? [{ name: this.config.registry.secretName }],
               containers: [
                 {
                   name: 'probe',
                   image: imageReference(image),
-                  imagePullPolicy: 'Always',
+                  imagePullPolicy: this.config.imagePullPolicy ?? 'Always',
                   command: ['node', '/probe/worker.mjs'],
+                  resources: {
+                    requests: { cpu: '500m', memory: '512Mi' },
+                    limits: { memory: '512Mi' },
+                  },
                   env: [
                     { name: 'RIVET_SCHEMA_COMPATIBILITY_FIXTURE', value: 'isolated' },
                     { name: 'RIVET_SCHEMA_PROBE_ID', value: runId },
@@ -1011,10 +1016,25 @@ export class ManagedReleaseGate {
     await this.kubectl(['create', '-f', '-'], {
       input: JSON.stringify({ apiVersion: 'v1', kind: 'List', items: [...objects, ...jobs] }),
     });
-    const read = async (kind, name) =>
-      JSON.parse(
-        (await this.kubectl(['get', kind, name, '-n', this.config.namespace, '-o', 'json'], { capture: true })).stdout,
-      );
+    const deadline = Date.now() + (SCHEMA_PROBE_TIMING.jobSeconds + 10) * 1000;
+    const read = async (kind, name) => {
+      for (let attempt = 0; ; attempt++) {
+        assert.ok(Date.now() < deadline, 'Schema observation exceeded its Job deadline');
+        try {
+          return JSON.parse(
+            (
+              await this.kubectl(
+                ['get', kind, name, '-n', this.config.namespace, '--request-timeout=10s', '-o', 'json'],
+                { capture: true },
+              )
+            ).stdout,
+          );
+        } catch (error) {
+          if (attempt === 2 || !kubernetesReadRetryReason(error)) throw error;
+          await sleep(500);
+        }
+      }
+    };
     const code = await read('configmap', configName);
     assert.ok(
       code.metadata?.uid && !code.metadata.deletionTimestamp && code.immutable === true,
@@ -1025,17 +1045,16 @@ export class ManagedReleaseGate {
       jobs.map(async (job, index) => {
         const original = await read('job', job.metadata.name);
         assert.ok(original.metadata?.uid && !original.metadata.deletionTimestamp, 'Schema Job identity is unavailable');
-        await this.kubectl([
-          'wait',
-          '--for=condition=complete',
-          `job/${job.metadata.name}`,
-          '-n',
-          this.config.namespace,
-          '--timeout=100s',
-        ]);
-        const completed = await read('job', job.metadata.name);
-        assert.equal(completed.metadata.uid, original.metadata.uid, 'Schema Job was replaced');
-        assert.ok(!completed.metadata.deletionTimestamp, 'Schema Job is deleting');
+        for (;;) {
+          assert.ok(Date.now() < deadline, `Schema worker ${job.metadata.name} exceeded its Job deadline`);
+          const current = await read('job', job.metadata.name);
+          assert.equal(current.metadata.uid, original.metadata.uid, 'Schema Job was replaced');
+          assert.ok(!current.metadata.deletionTimestamp, 'Schema Job is deleting');
+          const failed = current.status?.conditions?.find((c) => c.type === 'Failed' && c.status === 'True');
+          assert.ok(!failed, `Schema worker ${job.metadata.name} failed (${failed?.reason ?? 'Failed'})`);
+          if (current.status?.conditions?.some((c) => c.type === 'Complete' && c.status === 'True')) break;
+          await sleep(500);
+        }
         const pods = JSON.parse(
           (
             await this.kubectl(

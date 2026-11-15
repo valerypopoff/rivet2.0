@@ -1,6 +1,13 @@
 import assert from 'node:assert/strict';
 import { setTimeout as delay } from 'node:timers/promises';
 
+export const SCHEMA_PROBE_TIMING = Object.freeze({
+  startupMs: 60_000,
+  roundMs: 20_000,
+  // Covers image startup, two rounds, final peer acknowledgement and SQL reads.
+  jobSeconds: 180,
+});
+
 /** Only explicitly reviewed expands have behavioral probes.
  * A future schema change must extend this matrix, not inherit a generic green flag. */
 export function assertProbedSchemaTransition(from, to) {
@@ -86,12 +93,12 @@ export async function probeSchemaLockContention(pool, schema, migration) {
       assert.ok(Date.now() < deadline, 'DDL never entered the expected lock queue');
       await delay(10);
     }
-    const started = Date.now();
     await reader.query("BEGIN; SET LOCAL statement_timeout='2500ms'");
+    const started = Date.now();
     // The reader may lose its connection before the DDL timeout is observed.
     // Attach both handlers now; still settle the DDL before releasing leases.
     const ordinaryRead = reader.query(`SELECT * FROM ${schema}.${table} WHERE ${id}='preserved'`).then(
-      (result) => ({ result }),
+      (result) => ({ result, elapsedMs: Date.now() - started }),
       (error) => ({ error }),
     );
     assert.equal((await settled)?.code, '55P03', 'Contended rolling DDL must time out, not commit');
@@ -100,7 +107,10 @@ export async function probeSchemaLockContention(pool, schema, migration) {
     if ('error' in observedRead) throw observedRead.error;
     assert.deepEqual(observedRead.result.rows, [{ [id]: 'preserved' }]);
     await reader.query('COMMIT');
-    assert.ok(Date.now() - started < 2500, 'Queued application read exceeded its bound');
+    assert.ok(
+      observedRead.elapsedMs < 2500,
+      `Queued application read exceeded its 2500ms bound (${observedRead.elapsedMs}ms)`,
+    );
     await blocker.query('COMMIT');
     await ddl.query('BEGIN');
     await ddl.query(
@@ -134,17 +144,19 @@ export async function probeSchemaRepositories({
   runId,
   version,
   targetVersion = 18,
-  timeoutMs = 20000,
+  timeoutMs = SCHEMA_PROBE_TIMING.roundMs,
+  startupTimeoutMs = SCHEMA_PROBE_TIMING.startupMs,
 }) {
   assert.ok(['previous', 'candidate'].includes(role));
   assert.match(runId, /^[a-f0-9]{32}$/);
+  for (const budget of [timeoutMs, startupTimeoutMs]) assert.ok(Number.isFinite(budget) && budget > 0);
   const schema = `rivet_schema_probe_${runId}`,
     workflowId = `schema-probe-${runId}`;
   const peer = role === 'previous' ? 'candidate' : 'previous';
-  const wait = async (check) => {
-    const deadline = Date.now() + timeoutMs;
+  const startupDeadline = Date.now() + startupTimeoutMs;
+  const wait = async (check, { deadline = Date.now() + timeoutMs, step = 'round' } = {}) => {
     while (!(await check())) {
-      assert.ok(Date.now() < deadline, 'Mixed-schema peer did not complete its bounded barrier');
+      assert.ok(Date.now() < deadline, `Mixed-schema peer did not complete its bounded ${step} barrier`);
       await delay(25);
     }
   };
@@ -167,6 +179,7 @@ export async function probeSchemaRepositories({
   } else
     await wait(
       async () => (await pool.query('SELECT to_regclass($1) AS name', [`${schema}.participants`])).rows[0].name,
+      { deadline: startupDeadline, step: 'startup' },
     );
   const factory = modules.factory.createManagedWorkflowRevisionFactory({
     blobStore: {},
@@ -191,6 +204,13 @@ export async function probeSchemaRepositories({
     await wait(
       async () => (await pool.query('SELECT 1 FROM workflows WHERE workflow_id=$1', [workflowId])).rowCount === 1,
     );
+  // Image pulling/scheduling can stagger workers. Start the short round budget
+  // only after both processes have joined; this does not retry a graph or write.
+  await pool.query(`INSERT INTO ${schema}.participants VALUES($1,0)`, [role]);
+  await wait(
+    async () => (await pool.query(`SELECT 1 FROM ${schema}.participants WHERE role=$1`, [peer])).rowCount === 1,
+    { deadline: startupDeadline, step: 'startup' },
+  );
   for (let round = 1; round <= 2; round++) {
     if (targetVersion === 19) {
       const revisionId = `${workflowId}-${role}-${round}`;

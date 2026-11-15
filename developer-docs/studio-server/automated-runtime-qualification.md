@@ -1378,6 +1378,25 @@ Keep recovery journals and retained serving infrastructure intact.
 
 ## Provider driver contract
 
+Each mixed-schema worker has one 60-second startup budget before its
+20-second write/read rounds begin. They first register both participants, so a
+cached candidate cannot exhaust a round while the predecessor is still pulling
+its image. Jobs have a three-minute hard limit covering startup and all rounds,
+with zero retries. The controller observes terminal failures immediately and
+joins both worker observations; it does not wait for a success-only timeout after
+a Job has already failed. Only transient API reads are retried within that same
+deadline. Job/code identity changes and authorization errors stop observation.
+Schema probes use the installation's image-pull policy and only its configured
+registry Secrets; public-image staging does not invent a Secret reference.
+Each checker requests 500m CPU / 512Mi memory with a matching memory limit,
+avoiding Autopilot's larger default reservation for an unspecified Job.
+The native managed-schema gate exercises both delayed-start orders with separate
+PostgreSQL pools and checks that a missing peer still expires. Startup readiness
+never substitutes for the two mixed write/read rounds or their exact-image receipts.
+The contention check times the application SELECT itself; waiting for the peer's
+DDL rollback or committing the read transaction is not charged to that SELECT.
+Its 2.5-second statement timeout and read-latency bound remain enforced.
+
 `driver.json`: `protocol:1`, `suite:"compact-seven-v1"` or the explicitly opted-in
 `"compact-seven-overlap-v1"`, `provider:"gke"`,
 `scope:"isolated-provider"`, a relative `.mjs` `entrypoint`, and `files` mapping
