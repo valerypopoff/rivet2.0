@@ -100,7 +100,18 @@ export function prepareExecutionPoolResources({
   if (!recovering) assert.ok(!peer || peer.spec.replicas === 0, 'Inactive execution pool is not empty');
   const image = prior.spec.template.spec.containers.find((container) => container.name === 'api').image;
   const oldImage = previous.spec.template.spec.containers.find((container) => container.name === 'api').image;
-  const previousReplicas = saved?.previous.replicas ?? previous.spec.replicas;
+  // A serial rollout also retains a surge owner after interruption. Its live
+  // count is capacity, not the original target bound into the recovery digest.
+  const previousReplicas =
+    saved?.previous.replicas ??
+    (recovering
+      ? journal.workloads?.find(
+          (workload) =>
+            workload.name === previous.metadata.name &&
+            workload.uid === previous.metadata.uid &&
+            workload.role === 'execution',
+        )?.replicas
+      : previous.spec.replicas);
   assert.ok(Number.isSafeInteger(previousReplicas) && previousReplicas >= 2);
   const eligible =
     allowTransition &&

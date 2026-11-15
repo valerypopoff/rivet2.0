@@ -46,6 +46,12 @@ report explicit zero active work; missing metrics or failed execs never count as
 zero. Settlement keeps its original deadline and does not replay execution.
 Resolve the retained release from its verified rollout journal; connection
 settings do not carry a Helm release name for Pod selectors.
+Serial paired-pool recovery uses the journal's original execution replica count,
+including its exact StatefulSet UID, when reconstructing the target configuration.
+A retained surge Pod or cooperative scale-up must not change that configuration
+digest. Live capacity remains independently observed and fenced; missing or
+foreign original workload records block recovery instead of being guessed from
+the current replica count. Parallel recovery retains its recorded pool plan.
 Hosted setup and qualification still validate their actual settings and data.
 Restoring the previous qualified channel during cleanup can require a reviewed
 same-application metadata handoff before another dispatch. It does not require a
