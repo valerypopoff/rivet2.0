@@ -49,6 +49,30 @@ async function fixture(run) {
 }
 const success = [process.execPath, '-e', 'process.exit(0)'];
 
+test('UI preparation preserves large inode identities and still rejects aliased source roots', async (t) => {
+  await fixture(async (env) => {
+    const statSync = fileSystem.statSync;
+    const control = env.RIVET_LOCAL_METADATA_UI_ROOT;
+    const source = env.RIVET_WORKFLOWS_ROOT;
+    const inode = 2n ** 54n;
+    let aliased = false;
+    t.mock.method(fileSystem, 'statSync', (directory, options) => {
+      const stat = statSync(directory, options);
+      if (directory === control || directory === source) {
+        const exact = directory === control || aliased ? inode : inode + 1n;
+        Object.assign(stat, {
+          dev: options?.bigint ? 1n : 1,
+          ino: options?.bigint ? exact : Number(exact),
+        });
+      }
+      return stat;
+    });
+    await prepareUiUpgrade(env, success);
+    aliased = true;
+    await assert.rejects(prepareUiUpgrade(env, success), /outside all retained source roots/);
+  });
+});
+
 test(
   'cancelled offline setup stops its writer, retains identity and never publishes ready',
   { timeout: 20_000 },

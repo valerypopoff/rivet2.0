@@ -840,9 +840,7 @@ test('content-heavy merge dialogs grow on tall screens and retain margins on sma
   await modal.getByRole('button', { name: 'Cancel', exact: true }).click();
 });
 
-test('bundle menus separate creation actions and finish bundle operations with conversion', async ({
-  page,
-}, testInfo) => {
+test('bundle menus separate creation actions and group bundle operations', async ({ page }, testInfo) => {
   await page.route('**/api/workflows/bundles/' + sourceId + '/merge/preview*', (route) =>
     route.fulfill({ json: preview(route.request().postDataJSON()) }),
   );
@@ -870,11 +868,19 @@ test('bundle menus separate creation actions and finish bundle operations with c
       'separator',
       'Delete bundle',
     ]);
-    await expect(page.getByRole('menu', { name: 'Bundle actions', exact: true }).getByRole('menuitem')).toHaveText([
+    const submenu = page.getByRole('menu', { name: 'Bundle actions', exact: true });
+    expect(
+      await submenu
+        .locator(':scope > *')
+        .evaluateAll((items) =>
+          items.map((item) => (item.getAttribute('role') === 'separator' ? 'separator' : item.textContent?.trim())),
+        ),
+    ).toEqual([
       'Download bundle',
       'Duplicate bundle',
-      'Merge into another bundle…',
       'Convert to ordinary folder',
+      'separator',
+      'Merge into another bundle…',
     ]);
     await expect(
       menu.getByRole('menuitem', { name: 'Merge into another bundle…', exact: true }).locator('svg'),

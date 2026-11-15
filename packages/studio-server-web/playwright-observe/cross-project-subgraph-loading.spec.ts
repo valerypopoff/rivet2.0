@@ -276,6 +276,9 @@ test('Go to subgraph selects the external graph over remembered navigation on re
   page,
 }) => {
   const { project, target } = fixture('latest');
+  // Match the saved filenames; this navigation fixture must not simulate remote renames.
+  project.metadata.title = 'caller';
+  target.metadata.title = 'target';
   const previousNode = registry.createDynamic('text');
   previousNode.id = 'caller-before-node' as typeof previousNode.id;
   project.graphs['caller-before'] = {
@@ -418,8 +421,11 @@ test('Go to subgraph selects the external graph over remembered navigation on re
   // replacing unsaved changes. Ordinary tab selection retains its graph.
   await frame.locator('.graph-list').getByText('Target main', { exact: true }).click();
   await expect(main).toBeVisible();
+  await expect(page.locator('.Toastify__toast').filter({ hasText: /was renamed to/ })).toHaveCount(0);
   const initialPosition = await main.evaluate((node) => (node as HTMLElement).style.transform);
-  const title = (await main.locator('.node-title').boundingBox())!;
+  const nodeTitle = main.locator('.node-title');
+  await nodeTitle.hover();
+  const title = (await nodeTitle.boundingBox())!;
   await page.mouse.move(title.x + title.width / 2, title.y + title.height / 2);
   await page.mouse.down();
   await page.mouse.move(title.x + title.width / 2 + 80, title.y + title.height / 2 + 40, { steps: 10 });
@@ -491,6 +497,9 @@ test('Go to subgraph selects the external graph over remembered navigation on re
 
 test('new external graph input survives connection, tab switches and saved-file reopen', async ({ page }) => {
   const { project, target } = fixture('latest');
+  // Match the saved filenames; this navigation fixture must not simulate remote renames.
+  project.metadata.title = 'caller';
+  target.metadata.title = 'target';
   const call = project.graphs.main!.nodes.find((node) => node.id === 'external-call')! as SubGraphNode;
   call.data.targetBoundary = getGraphBoundary(target, 'child' as GraphId);
   const secondSource = registry.createDynamic('text');

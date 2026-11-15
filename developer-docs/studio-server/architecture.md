@@ -230,8 +230,13 @@ scratch and configured-consumer readiness URLs. Job-only environment rendering
 cannot enable the feature or provide distributed writer fencing.
 
 Deletion uses a closed table registry, rejects external foreign keys/custom
-triggers/RLS/inheritance, takes table locks and truncates with RESTRICT. Workflow-object
-deletion captures exact references whose resource identities match their owning
+triggers/RLS/inheritance, takes table locks and truncates with RESTRICT. The registry
+includes the recording-evidence journal. Only exact source-owned topology and
+recording-deletion triggers are recognized, including their definitions, function
+bodies and execution settings; a matching trigger name alone is insufficient.
+Schema changes must keep this registry aligned and pass the managed restore
+integration, including evidence-row clearing and unrelated-data preservation.
+Workflow-object deletion captures exact references whose resource identities match their owning
 rows, constrains them to the effective workflow namespace and binds their
 ETag/current version. Unversioned deletion is conditional; unrelated objects,
 unreferenced objects and unproven historical versions are not swept.

@@ -25,6 +25,45 @@ selected shard must report a nonzero passing count, zero failures and exit zero,
 without invoking the intentionally broken global Yarn shim. A reporter-prefix
 difference alone must not fail this check.
 
+## Schema and browser fixture contracts
+
+The release-manifest schema reader is tested against isolated source files with
+different current/rollback versions, including invalid contracts. Do not pin that
+parser test to the repository's current schema number. The reference-index
+integration keeps its historical schema-18 starting point and verifies every
+registered pending migration, including reference indexing at schema 19. Expected
+upgrades derive from that baseline rather than a fixed single-element list.
+After a schema change, run `studio-server:verify:production-cutover` and the API's
+`test:references-managed` and `test:migration-managed`, alongside the schema-specific
+unit tests. New application tables and DML triggers must also update the closed
+legacy-restore inventory. Schema 20's recording-evidence table and exact deletion
+trigger are included; altered/custom triggers and external dependencies still
+fail before deletion. The real restore fixture verifies evidence-row clearing
+and preservation of unrelated SQL/S3 data.
+
+Negative migration scenarios restore their deliberately corrupt source state
+immediately, before any later valid-copy scenario. In particular, the legacy
+`active-release` marker used to prove frozen-source rejection must be removed
+before the SQLite runtime archive is created. Production's ambiguous-layout
+rejection stays strict; a later scenario must not inherit test-only corruption.
+Supervised restore checks resolve each role's verified runtime-library snapshot
+and load the fixture package. They must not assume a mutable `current/` directory
+or set an obsolete require-root override after immutable releases are adopted.
+
+Bundle submenu ordering has consumers in both `bundle-merge.spec.ts` and
+`bundle-comparison.spec.ts`; keep both assertions aligned with the shared menu.
+Cross-project navigation fixtures use coherent saved titles, tree names and
+filenames. Contradictory metadata repeatedly simulated remote renames, stacking
+notifications over the editor and intercepting the drag's mouse-down. The
+navigation test verifies no unexpected rename notices and waits for title
+actionability before its real mouse gesture. Movement, unsaved-state and history
+assertions remain required; hiding toasts or forcing the gesture is not a repair.
+
+Local-upgrade containment guards compare exact bigint device/inode identities.
+The guard regression supplies distinct large inode IDs that collide as Numbers,
+then a true source/control alias. This keeps Windows verification meaningful
+without relaxing the source-root exclusion used by the container runtime.
+
 ## Browser shard budget and hosted variability
 
 [Verify Studio Server 43434671248, editor shard 3](https://github.com/valerypopoff/rivet2.0/actions/runs/43434671248/job/131919256700)

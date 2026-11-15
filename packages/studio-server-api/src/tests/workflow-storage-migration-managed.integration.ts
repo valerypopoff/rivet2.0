@@ -43,8 +43,8 @@ import {
   captureRestoreObjects,
   clearRestoreObjects,
   clearRestoreTables,
+  LEGACY_RESTORE_GUARDS,
 } from '../legacy-restore/scope.js';
-import { MANAGED_BUNDLE_RESTORE_GUARDS } from '../routes/workflows/managed/bundle-schema.js';
 import { LegacyRestoreControl, acquireRestoreServingLease } from '../legacy-restore/control.js';
 import { resetWorkflowRecordingDatabaseForTests } from '../routes/workflows/recordings-db.js';
 import { S3Client, PutObjectCommand, GetObjectCommand, PutBucketVersioningCommand } from '@aws-sdk/client-s3';
@@ -833,16 +833,17 @@ fixture: try {
       };
       const prepared = await prepareLegacyRestoreSource(roots, target);
       const restoreTables = await existingRestoreTables(pool!);
+      assert.ok(restoreTables.includes('workflow_run_evidence'));
       const definitions = await pool!.query<{ name: string; definition: string }>(
         `SELECT t.tgname AS name, pg_get_triggerdef(t.oid, true) AS definition
          FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid
          JOIN pg_namespace n ON n.oid=c.relnamespace
          WHERE n.nspname='public' AND t.tgname=ANY($1::text[]) ORDER BY t.tgname`,
-        [MANAGED_BUNDLE_RESTORE_GUARDS.map((guard) => guard.name)],
+        [LEGACY_RESTORE_GUARDS.map((guard) => guard.name)],
       );
       assert.deepEqual(
         definitions.rows,
-        MANAGED_BUNDLE_RESTORE_GUARDS.map(({ name, definition }) => ({ name, definition })).sort((a, b) =>
+        LEGACY_RESTORE_GUARDS.map(({ name, definition }) => ({ name, definition })).sort((a, b) =>
           a.name.localeCompare(b.name),
         ),
       );
@@ -856,6 +857,8 @@ fixture: try {
           'ALTER TABLE workflows DISABLE TRIGGER workflow_project_topology_lock',
           'CREATE TRIGGER custom_restore_trigger BEFORE INSERT ON workflows FOR EACH STATEMENT EXECUTE FUNCTION lock_workflow_bundle_topology()',
           'CREATE TABLE unrelated_restore_dependency(workflow_id TEXT REFERENCES workflows(workflow_id))',
+          'ALTER FUNCTION rivet_recording_evidence_deleted() SECURITY DEFINER',
+          'ALTER TABLE workflow_recordings DISABLE TRIGGER workflow_recording_evidence_deleted',
           `DROP TRIGGER workflow_project_move_topology_lock ON workflows;
            CREATE TRIGGER workflow_project_move_topology_lock BEFORE UPDATE ON workflows
            FOR EACH ROW EXECUTE FUNCTION lock_workflow_bundle_topology()`,
@@ -872,6 +875,24 @@ fixture: try {
         scopeClient.release();
       }
       await assertRestoreTableBoundary(pool!, restoreTables);
+      await pool!.query(
+        `INSERT INTO workflow_run_evidence
+          (run_id,workflow_id,token,created_at,lease_until,upload_until,state,availability,input_json,outcome_json)
+         VALUES($1,$2,$3,NOW(),NOW(),NOW(),'succeeded','unavailable',$4::jsonb,$5::jsonb)`,
+        [
+          randomUUID(),
+          projectId,
+          randomUUID(),
+          JSON.stringify({
+            projectId,
+            sourceProjectName: 'Previous run',
+            sourceProjectRelativePath: 'previous.rivet-project',
+            endpointName: '',
+            runKind: 'published',
+          }),
+          JSON.stringify({ state: 'succeeded', durationMs: 1 }),
+        ],
+      );
       const objects = await captureRestoreObjects(pool!, target);
       assert.equal(
         objects.some((object) => object.key === sentinel),
@@ -879,6 +900,10 @@ fixture: try {
       );
       await clearRestoreObjects(target, objects);
       await clearRestoreTables(pool!);
+      assert.equal(
+        (await pool!.query('SELECT COUNT(*)::INTEGER AS count FROM workflow_run_evidence')).rows[0]?.count,
+        0,
+      );
       const options = {
         roots,
         target,
@@ -1134,7 +1159,11 @@ fixture: try {
   await fs.rmdir(path.join(recordingBundle, 'replay.rivet-project'));
   await fs.writeFile(path.join(recordingBundle, 'replay.rivet-project'), projectContents);
   await fs.writeFile(path.join(runtimeRoot, 'active-release'), 'legacy-release');
-  assert.throws(() => run('verify'), /Frozen VM source changed/);
+  try {
+    assert.throws(() => run('verify'), /Frozen VM source changed/);
+  } finally {
+    await fs.unlink(path.join(runtimeRoot, 'active-release'));
+  }
   const targetIdentity = migrationTargetIdentity(readWorkflowMigrationTargetConfig(env));
   const sourceIdentity = migrationSourceIdentity([workflowsRoot, appDataRoot, recordingsRoot, runtimeRoot]);
   const originalRoots = Object.fromEntries(
@@ -1493,8 +1522,6 @@ fixture: try {
   {
     const target = readWorkflowMigrationTargetConfig(env);
     // Real HTTP upload + durable journal + child importer, with restart ownership simulated (no deployed services touched).
-    // The earlier negative fixture deliberately left a corrupt legacy marker; it is not a valid portable backup.
-    await fs.unlink(path.join(runtimeRoot, 'active-release'));
     const versions = new S3Client(createManagedWorkflowS3ClientConfig(target));
     await versions.send(
       new PutBucketVersioningCommand({

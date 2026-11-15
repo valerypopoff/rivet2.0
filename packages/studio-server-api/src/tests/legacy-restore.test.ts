@@ -1081,7 +1081,9 @@ test('restore table clearing uses a closed list, keeps schema/control data and n
     query: async (sql: string) => {
       queries.push(sql);
       return {
-        rows: sql.includes('pg_tables') ? [{ tablename: 'workflows' }, { tablename: 'workflow_revisions' }] : [],
+        rows: sql.includes('pg_tables')
+          ? [{ tablename: 'workflows' }, { tablename: 'workflow_revisions' }, { tablename: 'workflow_run_evidence' }]
+          : [],
         rowCount: 0,
       };
     },
@@ -1091,7 +1093,11 @@ test('restore table clearing uses a closed list, keeps schema/control data and n
   };
   await clearRestoreTables({ connect: async () => client } as unknown as Pool);
   assert.equal(
-    queries.some((sql) => sql === 'TRUNCATE TABLE public."workflow_revisions", public."workflows" RESTRICT'),
+    queries.some(
+      (sql) =>
+        sql ===
+        'TRUNCATE TABLE public."workflow_revisions", public."workflow_run_evidence", public."workflows" RESTRICT',
+    ),
     true,
   );
   assert.equal(

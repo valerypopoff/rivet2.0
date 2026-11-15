@@ -38,3 +38,17 @@ $$;
 CREATE TRIGGER workflow_recording_evidence_deleted AFTER DELETE ON workflow_recordings
 FOR EACH ROW EXECUTE FUNCTION rivet_recording_evidence_deleted();
 `;
+
+/** Exact source-owned trigger; a restore must still reject modified or custom triggers. */
+export const RECORDING_EVIDENCE_RESTORE_GUARDS = [
+  {
+    name: 'workflow_recording_evidence_deleted',
+    table_name: 'workflow_recordings',
+    function_name: 'rivet_recording_evidence_deleted',
+    definition:
+      'CREATE TRIGGER workflow_recording_evidence_deleted AFTER DELETE ON workflow_recordings FOR EACH ROW EXECUTE FUNCTION rivet_recording_evidence_deleted()',
+    source: RECORDING_EVIDENCE_SCHEMA_SQL.match(
+      /CREATE FUNCTION rivet_recording_evidence_deleted\(\)[\s\S]*?AS \$\$([\s\S]*?)\$\$;/,
+    )![1]!,
+  },
+];
