@@ -50,7 +50,7 @@ export function createScalarRenderers(options: { renderValue: (props: DataValueR
   const scalarRenderers: {
     [P in ScalarDataType]: FC<ScalarRendererProps<P>>;
   } = {
-    boolean: ({ value }) => <>{value.value ? 'true' : 'false'}</>,
+    boolean: ({ value }) => <span className="boolean-value">{value.value ? 'true' : 'false'}</span>,
     number: ({ value }) => <>{value.value}</>,
     string: ({ value, renderMarkdown, truncateLength, isCompact }) => {
       const truncated = getRenderedStringText(value.value, { truncateLength, isCompact });

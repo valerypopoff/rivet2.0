@@ -180,6 +180,47 @@ test('closed-project callers warn with version semantics before cancel or delibe
   await expect.poll(() => fixture.saved.get('/workflows/target.rivet-project')?.graphs.child).toBeUndefined();
 });
 
+test('empty graph folders delete immediately while populated folders still require confirmation', async ({ page }) => {
+  const fixture = await setup(page);
+  let checks = 0;
+  await page.route('**/api/workflows/projects/references', (route) => {
+    checks++;
+    expect(route.request().postDataJSON().graphIds.sort()).toEqual(['child', 'other']);
+    return route.fulfill({ json: { projectId: 'target', complete: true, graphReferences: [] } });
+  });
+  const createFolder = async (parent: string, name: string) => {
+    await fixture.editor.locator(`[data-folderpath="${parent}"]`).first().click({ button: 'right' });
+    await fixture.editor
+      .locator('.graph-item-context-menu')
+      .getByRole('button', { name: 'New Folder', exact: true })
+      .click();
+    const input = fixture.editor.locator(`[data-folderpath="${parent}/New Folder"] input`);
+    await input.fill(name);
+    await input.press('Enter');
+    const folder = fixture.editor.locator(`[data-folderpath="${parent}/${name}"]`).first();
+    await expect(folder).toBeVisible();
+    return folder;
+  };
+  const empty = await createFolder('Group', 'Empty');
+  const nested = await createFolder('Group/Empty', 'Nested');
+  await empty.click({ button: 'right' });
+  await fixture.editor.locator('.graph-item-context-menu').getByRole('button', { name: 'Delete', exact: true }).click();
+  await expect(empty).toHaveCount(0);
+  await expect(nested).toHaveCount(0);
+  await expect(fixture.editor.getByRole('dialog')).toHaveCount(0);
+  expect(checks).toBe(0);
+  for (const id of ['main', 'child', 'other']) {
+    await expect(fixture.editor.locator(`[data-graphid="${id}"]`)).toBeVisible();
+  }
+  const dialog = await fixture.open(true);
+  await expect(dialog).toContainText('Delete Folder?');
+  await expect(dialog).toContainText('and its 2 graphs');
+  await expect(dialog.getByRole('button', { name: 'Delete', exact: true })).toBeEnabled();
+  expect(checks).toBe(1);
+  await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await expect(fixture.editor.locator('[data-folderpath="Group"]').first()).toBeVisible();
+});
+
 test('folder deletion surfaces failed and incomplete scans and requires an explicit proceed', async ({ page }) => {
   const fixture = await setup(page);
   let checks = 0;

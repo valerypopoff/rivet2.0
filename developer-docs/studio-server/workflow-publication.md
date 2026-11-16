@@ -427,8 +427,14 @@ deletion proof: users should review it just before deleting and retain a backup.
 The [fast reference-check design and operating notes](./graph-reference-check-plan.md)
 describe the managed summary writer, lookup, local validation and separately approved backfill.
 
-The editor uses `GraphDeleteConfirmModal` for individual graphs and folders. It
-asks the optional Subgraph catalog host's `graphReferences` method before
+The editor uses `GraphDeleteConfirmModal` for individual graphs and folders that
+contain graphs. Graph folders with no graphs anywhere in their subtree delete
+immediately through the existing folder action, without mounting a dialog or
+requesting a reference check. Count the full saved graph list, not the filtered
+tree, so hidden and nested graphs still require confirmation. Empty subfolders
+alone do not require confirmation.
+
+The modal asks the optional Subgraph catalog host's `graphReferences` method before
 enabling confirmation. Studio Server reuses the authenticated incoming-project
 endpoint using a JSON POST body containing `projectId` and `graphIds` (plus an
 optional `relativePath`). The JSON body avoids proxy URL limits for large folders.
