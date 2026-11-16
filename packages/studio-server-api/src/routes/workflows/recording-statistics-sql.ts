@@ -11,6 +11,7 @@ type Dialect = 'sqlite' | 'postgres';
 export type RecordingStatisticsSqlRow = {
   workflow_id: string;
   source_project_name: string;
+  source_project_relative_path?: string | null;
   created_at: string | Date;
   recording_id: string;
   run_kind: WorkflowRecordingStatisticsRow['runKind'];
@@ -31,6 +32,7 @@ export type RecordingStatisticsSqlRow = {
 /** A compact, common projection; artifact references and payloads never cross this boundary. */
 function evidenceSource(): string {
   return `SELECT e.run_id AS recording_id,e.workflow_id,e.input_json->>'sourceProjectName' AS source_project_name,
+    e.input_json->>'sourceProjectRelativePath' AS source_project_relative_path,
     e.created_at,e.input_json->>'runKind' AS run_kind,e.state AS status,
     COALESCE((e.outcome_json->>'durationMs')::double precision,-1) AS duration_ms,
     e.input_json->>'endpointName' AS endpoint_name_at_execution,
@@ -46,7 +48,7 @@ function evidenceSource(): string {
 }
 function source(dialect: Dialect, includeEvidence = false): string {
   if (dialect === 'postgres')
-    return `SELECT recording_id, workflow_id, source_project_name, created_at, run_kind,
+    return `SELECT recording_id, workflow_id, source_project_name, source_project_relative_path, created_at, run_kind,
       status, duration_ms, endpoint_name_at_execution, execution_surface,
       ui_graph_id_at_execution, component_id_at_execution, ui_graph_name_at_execution,
       component_type_at_execution, component_label_at_execution, cost_json, 1 AS metadata_valid
@@ -58,7 +60,8 @@ function source(dialect: Dialect, includeEvidence = false): string {
       }`;
   const field = (name: string) => `json_extract(data, '$.${name}')`;
   return `SELECT recording_id, workflow_id,
-    ${field('sourceProjectName')} AS source_project_name, ${field('createdAt')} AS created_at,
+    ${field('sourceProjectName')} AS source_project_name,
+    ${field('sourceProjectRelativePath')} AS source_project_relative_path, ${field('createdAt')} AS created_at,
     ${field('runKind')} AS run_kind, ${field('status')} AS status,
     ${field('durationMs')} AS duration_ms, ${field('endpointName')} AS endpoint_name_at_execution,
     ${field('executionIdentity.surface')} AS execution_surface,
@@ -185,7 +188,7 @@ export function recordingStatisticsCatalogSql(
           )
           .join(', ')}
       FROM targets WHERE target_surface = ? OR metadata_valid <> 1
-    ) SELECT recording_id, workflow_id, source_project_name, created_at, run_kind, status, duration_ms,
+    ) SELECT recording_id, workflow_id, source_project_name, source_project_relative_path, created_at, run_kind, status, duration_ms,
       endpoint_name_at_execution,
       CASE WHEN target_surface = 'web_app' THEN 'web_app_action' ELSE 'workflow_endpoint' END AS execution_surface,
       target_ui AS ui_graph_id_at_execution, target_component AS component_id_at_execution,
@@ -208,6 +211,7 @@ export function statisticsSqlRow(
   return {
     workflowId: row.workflow_id,
     sourceProjectName: row.source_project_name,
+    sourceProjectRelativePath: row.source_project_relative_path ?? undefined,
     createdAt: new Date(row.created_at).toISOString(),
     runKind: row.run_kind,
     status: row.status,

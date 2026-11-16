@@ -670,10 +670,11 @@ that constant; the disposable folder-repair gate still starts at schema 16 and
 asserts every forward migration, including 17's repair, 18's recording metadata
 and 19's nullable reference summaries and 20's durable recording evidence.
 
-Schema 20 adds [durable recording evidence](recording-durability.md). Its writes
-are opt-in through `RIVET_RECORDING_DURABILITY_ENABLED`; keep this false until
-all serving replicas and the maintenance/GC owner understand pending artifact
-references. Disabling new admission does not disable finalization or recovery of
+Schema 20 adds [durable recording evidence](recording-durability.md). New managed
+installations enable it by default. Set `RIVET_RECORDING_DURABILITY_ENABLED=false`
+explicitly during an upgrade until all serving replicas and the maintenance/GC
+owner understand pending artifact references. Disabling new admission does not
+disable finalization or recovery of
 already accepted work. Drain those handoffs before rolling the GC owner back.
 
 Schema 19 adds nullable `workflow_revisions.reference_summary` for
@@ -1295,6 +1296,33 @@ and free space against a bounded database/object estimate and scratch-copy budge
 It must not pull images, start maintenance or perform application journeys in
 this stage. Small private scratch files for local checks/evidence are allowed.
 This remains a reviewed adapter contract, not a sandbox for arbitrary scripts.
+
+For a local WSL/Docker Desktop operator, verify the backup client's actual
+connection boundary before a production command. A successful SQL query from
+the Node process and a cached PostgreSQL image do not prove that a container
+using `--network=host` can reach a proxy bound to WSL localhost. Run a bounded
+read-only query from that exact client image through the existing proxy. Docker
+Desktop requires its host-networking option for this invocation; changing the
+option may restart local development containers and needs approval outside an
+operation that only authorizes cloud activation. Verify those containers recover
+before proceeding. Keep the adapter, image pins and source-read-only policy.
+
+Cloud SQL Proxy authentication modes must also be exclusive. Reuse the reviewed
+gcloud authentication when configured; do not additionally inject
+`CSQL_PROXY_TOKEN`. A runner correction permits a fresh read-only preflight after
+preserving its earlier receipts. It does not authorize replaying a production
+deployment, republishing a protected configuration pointer or repeating staging.
+
+Checkpoint object-reference queries must also be validated with representative
+recording counts. Avoid scanning the recordings table separately for each blob
+column or repeating SQL `DISTINCT`/sorting when the adapter already deduplicates
+and sorts in memory. A single pass that expands the blob-key columns preserves
+the complete key set, including pending/unavailable recording artifacts. Compare
+the old and new reference sets locally, retain path validation and prove the
+read-only production query fits the unchanged SQL deadline before publication.
+Successful server recordings do not prove that an observation client received a
+complete response. Keep failed client deadlines as failed evidence; use the
+server recordings to establish accepted-work settlement for owned cleanup.
 
 The receipt echoes the usual request identity, uses
 `kind=rivet-deployment-preflight`, `passed=true`, and has

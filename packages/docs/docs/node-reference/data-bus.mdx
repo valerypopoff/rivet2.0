@@ -12,7 +12,7 @@ row below the project tabs rather than as an executable node card. Multiple
 Data Buses receive separate rows stacked in graph order.
 
 Each channel has one provider and any number of consumers. Connect a provider
-to the next **Connect provider** input, then connect that channel's output to
+to the next **Connect new** input, then connect that channel's output to
 the inputs that need the same value. Receivers can appear anywhere in the
 graph.
 
@@ -45,6 +45,10 @@ it can be repaired.
   canvas space rather than covering the graph.
 - The rail is not draggable. Use its settings button to select and edit the
   Data Bus node.
+- New channels appear at the end, including when a removed channel's number is
+  reused. Drag a channel's label to reorder it within the bus. You can also focus
+  the label and press **Alt+Left** or **Alt+Right**. The order is saved with the
+  project and supports Undo/Redo; connections keep their original inputs and outputs.
 
 ## Constraints
 

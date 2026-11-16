@@ -48,16 +48,21 @@ export function resolveNodePrefabInstance(project: Project, node: ChartNode): Ch
     };
   }
 
+  const visualData = {
+    ...structuredClone(sourceNode.visualData),
+    x: node.visualData.x,
+    y: node.visualData.y,
+    width: node.visualData.width ?? sourceNode.visualData.width,
+    zIndex: node.visualData.zIndex,
+  };
+  // Channel positions belong to each instance's wiring, not the library source.
+  if (Array.isArray(node.visualData.dataBusChannelOrder))
+    visualData.dataBusChannelOrder = [...node.visualData.dataBusChannelOrder];
+  else delete visualData.dataBusChannelOrder;
   return {
     ...structuredClone(sourceNode),
     id: node.id,
-    visualData: {
-      ...structuredClone(sourceNode.visualData),
-      x: node.visualData.x,
-      y: node.visualData.y,
-      width: node.visualData.width ?? sourceNode.visualData.width,
-      zIndex: node.visualData.zIndex,
-    },
+    visualData,
   };
 }
 

@@ -63,9 +63,10 @@ ambiguous rows require a choice. **No corresponding project** is explicit.
 Duplication creates fresh project IDs while preserving graph/node IDs, so project
 ID equality cannot establish duplicate correspondence. The reviewed mapping is
 authoritative. Swapping reverses that mapping; cancelling a draft changes nothing.
-The unpaired Newer list uses the same project-name and relative-path labels as
-the counterpart choices, without storage extensions. Narrow matching tables
-show their column labels above each stacked cell. The scrollable content keeps
+The unpaired Newer list appears only when it contains projects and uses the same
+project-name and relative-path labels as the counterpart choices, without storage
+extensions. Narrow matching tables show their column labels above each stacked
+cell. The scrollable content keeps
 the footer actions reachable; Escape closes an open choice menu before the modal.
 The setup uses the standard Atlaskit dialog/body, shared dark surface and blurred
 backdrop, project-settings header/close control and bundle-dialog sizing/footer.

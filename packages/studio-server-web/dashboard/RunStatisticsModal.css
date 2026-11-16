@@ -209,6 +209,10 @@
   line-height: 1.35;
 }
 
+.run-statistics-target-option-path {
+  overflow-wrap: anywhere;
+}
+
 .run-statistics-period-label,
 .run-statistics-notes,
 .run-statistics-empty-state {
@@ -236,12 +240,18 @@
 }
 
 .run-statistics-chart-header .segmented-control {
-  margin-left: auto;
+  margin-left: 0;
   max-width: 100%;
   flex-wrap: wrap;
 }
 
-.run-statistics-chart-header .run-statistics-chart-heading {
+.run-statistics-chart-header {
+  justify-content: flex-start;
+  margin-bottom: 8px;
+}
+
+.run-statistics-chart-header .run-statistics-chart-heading,
+.run-statistics-section > .run-statistics-chart-heading {
   margin-bottom: 0;
 }
 

@@ -87,22 +87,26 @@ parallel files contribute their total case work, not their shorter wall time.
 The earlier completed run also supplies the two cases interrupted in the later
 run. These measurements are scheduling estimates, not runtime guarantees.
 
-The same 38 specs now run in four independent jobs, each retaining two browser
-workers, instead of three jobs. Conservative work estimates are 985-990 seconds
-per shard. The shard contract checks exact-once coverage, balanced weights and a
+The selected suite now has 40 specs, including Bus ordering and Passthrough
+port-label regressions, in four independent jobs with two browser workers each.
+The original 38-spec work estimates come from the hosted runs above; the two
+added specs use conservative local-work hints pending hosted timing refresh.
+Combined work estimates are 995-1,000 seconds per shard. The shard contract checks
+exact-once coverage, balanced weights and a
 75% work budget against the existing 12-minute/two-worker step limit (1,080
 seconds). This leaves room for setup, serial tails and runner variation; increasing
 the suite requires reviewing that headroom rather than merely keeping equal sums.
 The browser image, isolation, assertions, retry policy and timeouts stay unchanged.
 
 Validate `ci-performance.test.mjs` and the workflow guard, list all four selections
-to confirm the unchanged test inventory, and run the affected real browser shard.
+to confirm exact-once test coverage, and run the affected real browser journeys.
 After pushing, confirm every hosted shard's final result and elapsed time before
 calling the repair complete. Keep this budget guidance in the local checklist.
 
-Local verification passed all 17 CI-performance tests, workflow/style/import and
-documentation checks, and the unchanged 362-case inventory across all four
-selections. The two targeted headless groups passed 115 and 108 cases in 4.9 and
+For the original 38-spec repair, local verification passed all 17 CI-performance
+tests, workflow/style/import and documentation checks, and its unchanged
+362-case inventory across all four selections. The two targeted headless groups
+passed 115 and 108 cases in 4.9 and
 4.2 minutes respectively against a fresh web build. This includes the heaviest
 recordings group and the previously interrupted viewport cases; it does not
 predict hosted-runner timing or replace the next complete CI results.
@@ -580,13 +584,14 @@ promotion. It does not replace Yarn/Cargo audits or introduce a cloud rehearsal.
   run `yarn workspace @valerypopoff/rivet2-core run test:shard` to reproduce one.
   Local `yarn test:core` still runs the full suite.
 - Browser CI uses four required matrix shards, each with two browser workers.
-  `scripts/ci/editor-test-shards.mjs` assigns all 38
+  `scripts/ci/editor-test-shards.mjs` assigns all 40
   selected specs exactly once using measured file weights (plus explicit estimates
   for new specs). The cost-statistics specs are included explicitly: the fast modal
   contract and the real mixed-model bundle/HTTP/WebSocket/cancellation fixture.
   The complete Run recordings modal suite is also registered, including immediate
   opening, independent catalog/results, retained sessions, deletion and replay.
-  Bundle comparison and the expanded export suite are included explicitly.
+  Bundle comparison, the expanded export suite, Bus ordering and Passthrough
+  port labels are included explicitly.
   Refresh materially stale work estimates from complete hosted timings, retaining
   slower observations rather than replacing them with a single faster run. Adding a selected spec
   also updates the inventory count and membership assertions in

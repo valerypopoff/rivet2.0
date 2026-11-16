@@ -15,6 +15,7 @@ import {
 } from '@valerypopoff/rivet2-core';
 import { useDeleteNodesCommand } from '../commands/deleteNodeCommand';
 import { useResizeNodesCommand } from '../commands/resizeNodesCommand';
+import { useReorderDataBusChannelsCommand } from '../commands/reorderDataBusChannelsCommand.js';
 import { useCanvasHotkeys } from '../hooks/useCanvasHotkeys';
 import { useCanvasPositioning } from '../hooks/useCanvasPositioning.js';
 import { useContextMenu } from '../hooks/useContextMenu.js';
@@ -47,7 +48,7 @@ import {
   expandedOutputNodeIdsState,
   fullscreenOutputNodeState,
 } from '../state/graphBuilder';
-import { graphMetadataState } from '../state/graph.js';
+import { graphMetadataState, isReadOnlyGraphState } from '../state/graph.js';
 import {
   frozenNodeOutputsState,
   graphRunningState,
@@ -211,6 +212,7 @@ export const NodeCanvas: FC<NodeCanvasProps> = ({
   const activeResizeGroupRef = useRef<ActiveResizeGroup | null>(null);
 
   const selectedGraphMetadata = useAtomValue(graphMetadataState);
+  const graphReadOnly = useAtomValue(isReadOnlyGraphState);
   const closestPort = useAtomValue(draggingWireClosestPortState);
   const graphSearch = useAtomValue(searchingGraphState);
   const expandedOutputNodeIds = useAtomValue(expandedOutputNodeIdsState);
@@ -271,6 +273,7 @@ export const NodeCanvas: FC<NodeCanvasProps> = ({
   const { canvasClientOffset, clientToCanvasPosition, getCanvasPositionForZoomAtClientPoint } = useCanvasPositioning();
   const removeNodes = useDeleteNodesCommand();
   const resizeNodes = useResizeNodesCommand();
+  const reorderDataBusChannels = useReorderDataBusChannelsCommand();
   const cache = useNodeHeightCache();
   const nodeTypes = useNodeTypes();
   const projectNodeRegistry = useProjectNodeRegistry();
@@ -1061,9 +1064,13 @@ export const NodeCanvas: FC<NodeCanvasProps> = ({
       onWireEndDrag: disableConnections ? undefined : onWireEndDrag,
       onWireStartDrag: disableConnections ? undefined : onWireStartDrag,
       onDataBusChannelHoverChange: setHoveredDataBusChannelKeys,
+      onDataBusChannelsReorder: disableGraphCommands || graphReadOnly ? undefined : reorderDataBusChannels,
     }),
     [
       disableConnections,
+      disableGraphCommands,
+      graphReadOnly,
+      reorderDataBusChannels,
       nodeSelected,
       nodeStartEditing,
       onNodeMouseEnter,
@@ -1181,6 +1188,7 @@ export const NodeCanvas: FC<NodeCanvasProps> = ({
           />
         )}
         <DataBusRail
+          key={`${project.metadata.id}:${selectedGraphMetadata?.id}`}
           busNodes={dataBusNodes}
           canvasHandlersContextValue={canvasHandlersContextValue}
           canvasViewContextValue={canvasViewContextValue}

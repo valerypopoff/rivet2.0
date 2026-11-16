@@ -26,7 +26,11 @@ A parent may succeed even if a child fails when the Subgraph's error output hand
 
 ### Pending or unavailable recordings
 
-When the server has durable recording evidence enabled, runs with a saved
+New Rivet Server installations using managed storage enable durable recording
+evidence by default. Administrators can opt out with
+`RIVET_RECORDING_DURABILITY_ENABLED=false`.
+
+With durable recording evidence enabled, runs with a saved
 evidence entry appear in history even if their replay could not be saved.
 Production runs save this entry in the background so recording storage does not
 hold up execution. A server crash before that first save can still leave no entry.

@@ -52,6 +52,30 @@ function output(id: string): NodeOutputDefinition {
   return { id: id as PortId, title: id, dataType: 'any' } as NodeOutputDefinition;
 }
 
+test('saved channel positions order the rail without moving its Connect provider slot or port identities', () => {
+  const bus = node('bus', true);
+  bus.visualData.dataBusChannelOrder = [3, 3, 99, 2];
+  const source = node('source');
+  const presentation = buildDataBusGroupPresentation({
+    busNode: bus as any,
+    inputDefinitions: [input('input1'), input('input2'), input('input3'), input('input4')],
+    outputDefinitions: [output('output1'), output('output2'), output('output3')],
+    topology: topology(
+      { bus, source },
+      [1, 2, 3].map((index) => connection('source', 'output', 'bus', `input${index}`)),
+    ),
+  });
+  assert.deepEqual(
+    presentation.dataChannels.map((channel) => channel.channelIndex),
+    [3, 2, 1],
+  );
+  assert.deepEqual(
+    presentation.dataChannels.map((channel) => channel.outputDefinition?.id),
+    ['output3', 'output2', 'output1'],
+  );
+  assert.equal(presentation.connectProviderChannel?.inputDefinition.id, 'input4');
+});
+
 test('indexes provider and consumer connections once while exposing normal endpoint antennas', () => {
   const nodesById = { source: node('source'), bus: node('bus', true), receiver: node('receiver') };
   const provider = connection('source', 'output', 'bus', 'input2');

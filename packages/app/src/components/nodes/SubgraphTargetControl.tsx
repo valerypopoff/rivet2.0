@@ -1,5 +1,6 @@
 import { css } from '@emotion/react';
 import Select from '@atlaskit/select';
+import ChevronRightIcon from 'majesticons/line/chevron-right-line.svg?react';
 import { useAtomValue, useSetAtom, useStore } from 'jotai';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type FC } from 'react';
 import {
@@ -33,6 +34,29 @@ const controlCss = css`
     overflow-wrap: anywhere;
   }
 
+  .subgraph-target-path {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25em;
+    max-width: 100%;
+    min-width: 0;
+  }
+
+  .subgraph-target-path-segment {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .subgraph-target-path-separator {
+    flex: 0 0 auto;
+    width: 0.5625em;
+    height: 0.75em;
+    width: 0.75cap;
+    height: 1cap;
+  }
+
   .target-error {
     color: var(--error);
     font-size: var(--ui-font-size-sm);
@@ -58,6 +82,7 @@ function findProjectName(tree: Tree | null, projectId: ProjectId): string | unde
 type TargetOption = {
   value: string;
   label: string;
+  path?: readonly [project: string, graph: string];
   searchText: string;
   kind: 'section' | 'folder' | 'project' | 'graph-folder' | 'graph';
   depth: number;
@@ -398,7 +423,8 @@ const LiveSubgraphTargetControl: FC<SubgraphTargetControlProps> = ({
     node.data.targetProjectId && node.data.graphId
       ? {
           value: `graph:${node.data.targetProjectId}:${node.data.graphId}`,
-          label: `${selectedProjectName} > ${selectedGraphName}`,
+          label: `${selectedProjectName} / ${selectedGraphName}`,
+          path: [selectedProjectName ?? node.data.targetProjectId, selectedGraphName],
           searchText: '',
           kind: 'graph',
           depth: 0,
@@ -489,7 +515,16 @@ const LiveSubgraphTargetControl: FC<SubgraphTargetControlProps> = ({
           candidate.data.searchText.toLocaleLowerCase().includes(input.toLocaleLowerCase())
         }
         formatOptionLabel={(option) => (
-          <span style={{ alignItems: 'center', display: 'inline-flex', gap: 4, paddingLeft: option.depth * 12 }}>
+          <span
+            style={{
+              alignItems: 'center',
+              display: 'inline-flex',
+              gap: 4,
+              paddingLeft: option.depth * 12,
+              minWidth: 0,
+              maxWidth: '100%',
+            }}
+          >
             {option.kind === 'graph-folder' ? (
               <OpenFolderIcon width={14} height={14} aria-hidden="true" />
             ) : option.kind === 'section' ? (
@@ -501,7 +536,20 @@ const LiveSubgraphTargetControl: FC<SubgraphTargetControlProps> = ({
                 '▸'
               )
             ) : null}
-            <span>{option.label}</span>
+            {option.path ? (
+              <span className="subgraph-target-path" title={option.label}>
+                <span className="subgraph-target-path-segment">{option.path[0]}</span>{' '}
+                <ChevronRightIcon
+                  className="subgraph-target-path-separator"
+                  viewBox="8 6 9 12"
+                  aria-hidden="true"
+                  focusable="false"
+                />{' '}
+                <span className="subgraph-target-path-segment">{option.path[1]}</span>
+              </span>
+            ) : (
+              <span>{option.label}</span>
+            )}
           </span>
         )}
         onChange={(option) => {

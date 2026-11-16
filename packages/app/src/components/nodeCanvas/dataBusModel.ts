@@ -11,6 +11,7 @@ import {
   type NodeOutputDefinition,
   type PortId,
 } from '@valerypopoff/rivet2-core';
+import { getDataBusChannelOrder } from '../../domain/graphEditing/dataBusChannelOrder.js';
 
 export type DataBusChannelReference = {
   busNodeId: NodeId;
@@ -357,14 +358,19 @@ export function buildDataBusGroupPresentation(options: {
     ];
   });
   const connectProviderChannel = channels.find((channel) => channel.outputDefinition == null);
+  const dataChannels = channels.filter(
+    (channel) =>
+      channel !== connectProviderChannel && (channel.providerConnections.length > 0 || channel.consumerCount > 0),
+  );
+  const channelsByIndex = new Map(dataChannels.map((channel) => [channel.channelIndex, channel]));
 
   return {
     channels,
     connectProviderChannel,
-    dataChannels: channels.filter(
-      (channel) =>
-        channel !== connectProviderChannel && (channel.providerConnections.length > 0 || channel.consumerCount > 0),
-    ),
+    dataChannels: getDataBusChannelOrder(
+      dataChannels.map((channel) => channel.channelIndex),
+      options.busNode.visualData.dataBusChannelOrder,
+    ).map((index) => channelsByIndex.get(index)!),
   };
 }
 

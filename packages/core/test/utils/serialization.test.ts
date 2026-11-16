@@ -66,6 +66,19 @@ const baseProject: Project = {
   references: [],
 };
 
+it('Data Bus presentation order survives graph and project file round trips without changing connections', () => {
+  const graph = structuredClone(baseGraph);
+  graph.nodes[0]!.type = 'dataBus';
+  graph.nodes[0]!.visualData.dataBusChannelOrder = [3, 1, 2];
+  const project = { ...baseProject, graphs: { [graph.metadata!.id!]: graph } };
+  const fromGraph = deserializeGraph(serializeGraph(graph));
+  const [fromProject] = deserializeProject(serializeProject(project));
+  for (const restored of [fromGraph, fromProject.graphs[graph.metadata!.id!]!]) {
+    assert.deepEqual(restored.nodes[0]!.visualData.dataBusChannelOrder, [3, 1, 2]);
+    assert.deepEqual(restored.connections, graph.connections);
+  }
+});
+
 const v1Project = JSON.stringify(baseProject);
 
 const v2Project = `version: 2

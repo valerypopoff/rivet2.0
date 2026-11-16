@@ -67,6 +67,7 @@ type SerializedNode = {
   splitRunConcurrency?: number;
   isSplitSequential?: boolean;
   visualData: string;
+  dataBusChannelOrder?: number[];
   outgoingConnections: SerializedNodeConnection[] | undefined;
   data?: unknown;
   variants?: ChartNodeVariant<unknown>[];
@@ -260,6 +261,7 @@ function toSerializedNode(node: ChartNode, allNodes: ChartNode[], allConnections
   return {
     description: node.description?.trim() ? node.description : undefined,
     visualData: packVisualDataV4(node),
+    dataBusChannelOrder: node.visualData.dataBusChannelOrder,
     isSplitRun: node.isSplitRun ? true : undefined,
     splitRunMax: node.isSplitRun ? node.splitRunMax : undefined,
     splitRunConcurrency: node.isSplitRun ? node.splitRunConcurrency : undefined,
@@ -306,6 +308,9 @@ function fromSerializedNode(
         width,
         zIndex,
         color,
+        ...(Array.isArray(serializedNode.dataBusChannelOrder)
+          ? { dataBusChannelOrder: serializedNode.dataBusChannelOrder }
+          : {}),
       },
       data: serializedNode.data ?? {},
       variants: serializedNode.variants ?? [],

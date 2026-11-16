@@ -1,7 +1,11 @@
 # Recording durability
 
-Implemented locally, 2026-11-13. New admission is **disabled by default**;
-deployment and activation require the normal release qualification.
+Managed-storage installations enable new durable recording admission by default.
+`RIVET_RECORDING_DURABILITY_ENABLED=false` (or `0`) explicitly disables new
+admission; an unset/empty value uses the enabled default. Helm, Docker Compose
+and the Kubernetes `.env` launcher use the same default and preserve explicit
+opt-out. Deployment still requires the normal release qualification. Filesystem
+and SQLite modes retain their existing recording behavior.
 The [implementation plan](recording-durability-plan.md) records the original
 acceptance matrix and the completed scope.
 
@@ -180,9 +184,19 @@ diagnostics.
 
 ## Activation and rollback
 
+Once schema 20 and compatible binaries are already installed, enabling the flag
+is a configuration-only rolling change. Reuse the exact successful image
+qualification and focused flag-validation evidence while their bindings remain
+valid; enabling the flag alone does not require rebuilding images, rerunning the
+migration or repeating full staging qualification. Keep the Helm setting and
+protected CI installation configuration consistent. Verify available durable
+evidence as well as protocol capability and healthy Pods after activation.
+
 1. Keep the flag false while applying schema 20 through the maintained migration
    task and rolling all relevant binaries. Chart defaults are 20/20; the existing
    rollback-compatible reader floor remains 17, subject to exact-image evidence.
+   When upgrading older binaries, set the opt-out explicitly in Helm values or
+   the shared `.env` before the mixed-version rollout; the new default is true.
 2. Verify that **all** maintenance, reconciliation and deletion owners understand
    the new reference set. An old GC binary does not know pending manifest keys.
 3. Qualify the exact candidate images through the normal staging process, then

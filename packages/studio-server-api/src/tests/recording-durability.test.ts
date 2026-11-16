@@ -6,6 +6,7 @@ import { ExecutionSession } from '../routes/workflows/execution-session.js';
 import type { RunEvidenceRepository, RunEvidenceOutcome } from '../../../studio-server-shared/workflow-run-evidence.js';
 import {
   retryableRecordingStorageError,
+  recordingDurabilityEnabled,
   validEvidenceHandle,
   evidenceSummary,
   type EvidenceRow,
@@ -45,6 +46,27 @@ const metadata = {
   endpointName: 'p',
   runKind: 'published' as const,
 };
+
+test('durable recording defaults on and preserves explicit opt-out', async () => {
+  const key = 'RIVET_RECORDING_DURABILITY_ENABLED';
+  for (const [value, enabled] of [
+    [undefined, true],
+    ['', true],
+    ['  ', true],
+    ['true', true],
+    ['1', true],
+    ['false', false],
+    ['0', false],
+    [' false ', false],
+  ] as const) {
+    await withScopedEnv([key], { [key]: value }, () => {
+      assert.equal(recordingDurabilityEnabled(), enabled);
+    });
+  }
+  await withScopedEnv([key], { [key]: 'invalid' }, () => {
+    assert.throws(recordingDurabilityEnabled, /must be true or false/);
+  });
+});
 
 test('history distinguishes accepted execution, expired ownership and deleted replay readiness', () => {
   const row = {

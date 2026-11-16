@@ -1,7 +1,8 @@
 # Durable run evidence and recording recovery
 
 Status: implemented locally on 2026-11-13 and reviewed through 2026-11-14; cloud qualification, activation and
-deployment remain separate. New admission is disabled by default. The exact
+deployment remain separate. New managed installations enable admission by default;
+older mixed-version upgrades retain an explicit opt-out until all owners are compatible. The exact
 implementation and activation procedure are in
 [Recording durability](recording-durability.md).
 

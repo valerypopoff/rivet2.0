@@ -88,6 +88,66 @@ test('preserves a nonempty connected port title verbatim', () => {
   assert.equal(result.outputDefinitions[0]?.title, '  Raw response  ');
 });
 
+test('follows a Data Bus channel to its named provider without renumbering Passthrough slots', () => {
+  const result = apply({
+    connections: [connection('source', 'request_id', 'bus', 'input7'), connection('bus', 'output7', 'relay', 'input1')],
+    definitions: {
+      source: { outputs: [output('request_id', 'Request ID')] },
+      bus: { outputs: [output('output7', 'Output 7')] },
+    },
+    nodes: [node('source', 'code'), node('bus', 'dataBus'), node('relay', 'passthrough')],
+  });
+  assert.deepEqual(
+    result.inputDefinitions.map(({ id, title }) => [id, title]),
+    [
+      ['input1', 'Request ID'],
+      ['input2', 'Input 2'],
+    ],
+  );
+  assert.deepEqual(
+    result.outputDefinitions.map(({ id, title }) => [id, title]),
+    [['output1', 'Request ID']],
+  );
+});
+
+test('follows bus channels to downstream titles for output-only repair slots', () => {
+  const result = apply({
+    connections: [connection('relay', 'output1', 'bus', 'input3'), connection('bus', 'output3', 'target', 'prompt')],
+    definitions: {
+      bus: { inputs: [input('input3', 'Input 3')] },
+      target: { inputs: [input('prompt', 'Prompt')] },
+    },
+    nodes: [node('relay', 'passthrough'), node('bus', 'dataBus'), node('target', 'llmChatV2')],
+  });
+  assert.equal(result.inputDefinitions[0]?.title, 'Prompt');
+  assert.equal(result.outputDefinitions[0]?.title, 'Prompt');
+});
+
+test('keeps fallback labels for incomplete, conflicting, cyclic and invalid bus channels', () => {
+  for (const connections of [
+    [connection('bus', 'output1', 'relay', 'input1')],
+    [
+      connection('source', 'value', 'bus', 'input1'),
+      connection('other', 'value', 'bus', 'input1'),
+      connection('bus', 'output1', 'relay', 'input1'),
+    ],
+    [connection('relay', 'output1', 'bus', 'input1'), connection('bus', 'output1', 'relay', 'input1')],
+    [connection('source', 'value', 'bus', 'input1'), connection('bus', 'output01', 'relay', 'input1')],
+  ]) {
+    const result = apply({
+      connections,
+      definitions: {
+        source: { outputs: [output('value', 'Value')] },
+        other: { outputs: [output('value', 'Other')] },
+        bus: { outputs: [output('output1', 'Output 1'), output('output01', 'Invalid output')] },
+      },
+      nodes: [node('source', 'number'), node('other', 'number'), node('bus', 'dataBus'), node('relay', 'passthrough')],
+    });
+    assert.equal(result.inputDefinitions[0]?.title, 'Input 1');
+    assert.equal(result.outputDefinitions[0]?.title, 'Output 1');
+  }
+});
+
 test('labels each Passthrough slot from its own upstream output', () => {
   const result = apply({
     connections: [
@@ -244,14 +304,14 @@ test('keeps numbered fallbacks when a downstream fanout contains a cycle', () =>
   assert.equal(result.outputDefinitions[0]?.title, 'Output 1');
 });
 
-test('resolves a long Passthrough chain without recursive traversal', () => {
+test('resolves a long mixed Passthrough and Data Bus chain without recursive traversal', () => {
   const relayCount = 12_000;
   const nodes = [node('source', 'number')];
   const connections: NodeConnection[] = [];
   for (let index = 0; index < relayCount; index += 1) {
     const current = `relay-${index}`;
     const previous = index === 0 ? 'source' : `relay-${index - 1}`;
-    nodes.push(node(current, 'passthrough'));
+    nodes.push(node(current, index % 3 === 1 ? 'dataBus' : 'passthrough'));
     connections.push(connection(previous, index === 0 ? 'value' : 'output1', current, 'input1'));
   }
 

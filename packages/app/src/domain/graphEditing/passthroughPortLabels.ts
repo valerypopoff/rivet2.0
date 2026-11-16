@@ -1,4 +1,7 @@
 import {
+  canRenderDataBusNode,
+  getDataBusInputChannelIndex,
+  getDataBusOutputChannelIndex,
   type ChartNode,
   type NodeConnection,
   type NodeId,
@@ -37,11 +40,19 @@ function getPortTitle(title: unknown): string | undefined {
   return typeof title === 'string' && title.trim() ? title : undefined;
 }
 
+function getRelaySlotIndex(node: ChartNode, portId: PortId, input: boolean): number | undefined {
+  if (node.type === 'dataBus') {
+    if (!canRenderDataBusNode(node)) return undefined;
+    return input ? getDataBusInputChannelIndex(portId) : getDataBusOutputChannelIndex(portId);
+  }
+  return getSlotIndex(portId, input ? INPUT_PORT_PATTERN : OUTPUT_PORT_PATTERN);
+}
+
 /**
  * Resolves display-only Passthrough labels without changing its stable numbered
- * port IDs. Traversal crosses other Passthrough nodes but stops before asking
- * the I/O selector for one, which keeps relay cycles finite and avoids selector
- * recursion.
+ * port IDs. Traversal crosses Passthrough nodes and Data Bus channels without
+ * asking their I/O selectors for labels, which keeps relay cycles finite and
+ * avoids selector recursion.
  */
 export function applyPassthroughConnectionLabels(options: {
   nodeId: NodeId;
@@ -96,11 +107,11 @@ export function applyPassthroughConnectionLabels(options: {
       const provider = providers[0]!;
       const providerNode = options.nodesById[provider.outputNodeId];
       if (!providerNode) return { kind: 'invalid' };
-      if (providerNode.type !== 'passthrough') {
+      if (providerNode.type !== 'passthrough' && providerNode.type !== 'dataBus') {
         return { kind: 'origin', endpoint: { nodeId: provider.outputNodeId, portId: provider.outputId } };
       }
 
-      const providerSlotIndex = getSlotIndex(provider.outputId, OUTPUT_PORT_PATTERN);
+      const providerSlotIndex = getRelaySlotIndex(providerNode, provider.outputId, false);
       if (providerSlotIndex == null) return { kind: 'invalid' };
       currentNodeId = provider.outputNodeId;
       currentSlotIndex = providerSlotIndex;
@@ -136,12 +147,12 @@ export function applyPassthroughConnectionLabels(options: {
           complete = false;
           continue;
         }
-        if (consumerNode.type !== 'passthrough') {
+        if (consumerNode.type !== 'passthrough' && consumerNode.type !== 'dataBus') {
           endpoints.push({ nodeId: consumer.inputNodeId, portId: consumer.inputId });
           continue;
         }
 
-        const consumerSlotIndex = getSlotIndex(consumer.inputId, INPUT_PORT_PATTERN);
+        const consumerSlotIndex = getRelaySlotIndex(consumerNode, consumer.inputId, true);
         if (consumerSlotIndex == null) {
           complete = false;
           continue;

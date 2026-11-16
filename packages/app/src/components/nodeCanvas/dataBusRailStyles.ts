@@ -203,6 +203,28 @@ export const dataBusRailStyles = css`
     padding-top: calc(2px * var(--ui-font-scale, 1));
   }
 
+  .data-bus-channel.drop-before {
+    box-shadow: inset 2px 0 var(--primary);
+  }
+
+  .data-bus-channel.drop-after {
+    box-shadow: inset -2px 0 var(--primary);
+  }
+
+  .data-bus-channel-label[draggable='true'] {
+    cursor: grab;
+    user-select: none;
+  }
+
+  .data-bus-channel-label[draggable='true']:active {
+    cursor: grabbing;
+  }
+
+  .data-bus-channel-label:focus-visible {
+    outline: 1px solid var(--primary);
+    outline-offset: -1px;
+  }
+
   .data-bus-connect-provider {
     grid-template-columns: minmax(0, 1fr);
     flex: 0 0 auto;

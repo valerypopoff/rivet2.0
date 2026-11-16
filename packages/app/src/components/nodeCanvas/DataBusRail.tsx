@@ -9,7 +9,16 @@ import {
   type ProjectComparisonChangeKind,
 } from '@valerypopoff/rivet2-core';
 import clsx from 'clsx';
-import { type CSSProperties, type FC, type MouseEvent, useMemo, type WheelEvent } from 'react';
+import {
+  type CSSProperties,
+  type DragEvent,
+  type FC,
+  type MouseEvent,
+  useMemo,
+  useRef,
+  useState,
+  type WheelEvent,
+} from 'react';
 import SettingsCogIcon from 'majesticons/line/settings-cog-line.svg?react';
 import { useCanvasNodeIO } from '../../hooks/useGetNodeIO.js';
 import { useStableCallback } from '../../hooks/useStableCallback.js';
@@ -33,6 +42,9 @@ import {
 } from './dataBusModel.js';
 import { dataBusRailStyles } from './dataBusRailStyles.js';
 import { useDataBusRailLayout } from './useDataBusRailLayout.js';
+import { moveDataBusChannel } from '../../domain/graphEditing/dataBusChannelOrder.js';
+
+const DATA_BUS_CHANNEL_DRAG_TYPE = 'application/x-rivet-data-bus-channel';
 
 function handleDataBusRailWheel(event: WheelEvent<HTMLDivElement>): void {
   event.stopPropagation();
@@ -122,7 +134,10 @@ const DataBusGroup: FC<{
   nodesById: Readonly<Record<NodeId, ChartNode | undefined>>;
 }> = ({ compareChangeKind, dataBusTopology, editorNode, effectiveNode, isSearchMatch, isSelected, nodesById }) => {
   const { inputDefinitions, outputDefinitions } = useCanvasNodeIO(effectiveNode.id);
-  const { onDataBusChannelHoverChange, onNodeSelected, onNodeStartEditing } = useCanvasHandlersContext();
+  const { onDataBusChannelHoverChange, onDataBusChannelsReorder, onNodeSelected, onNodeStartEditing } =
+    useCanvasHandlersContext();
+  const draggedChannel = useRef<number>();
+  const [dropTarget, setDropTarget] = useState<{ index: number; side: 'before' | 'after' }>();
   const { hoveredDataBusChannelKeys } = useCanvasViewContext();
   const hoveredChannelKeySet = new Set(hoveredDataBusChannelKeys);
   const nodeHeaderColor = getNodeHeaderColor(effectiveNode.visualData.color);
@@ -145,6 +160,20 @@ const DataBusGroup: FC<{
     onNodeStartEditing?.(editorNode);
   };
 
+  const clearDrag = () => {
+    draggedChannel.current = undefined;
+    setDropTarget(undefined);
+  };
+  const reorder = (channelIndex: number, targetChannelIndex: number, side: 'before' | 'after') => {
+    const params = { nodeId: editorNode.id, channelIndex, targetChannelIndex, side };
+    const order = dataChannels.map((channel) => channel.channelIndex);
+    if (moveDataBusChannel(order, params)) onDataBusChannelsReorder?.(params);
+  };
+  const dropSide = (event: DragEvent<HTMLDivElement>) => {
+    const rect = event.currentTarget.getBoundingClientRect();
+    return event.clientX < rect.left + rect.width / 2 ? 'before' : 'after';
+  };
+
   const renderChannel = (
     {
       channelKey,
@@ -158,6 +187,7 @@ const DataBusGroup: FC<{
     connectProvider: boolean,
   ) => {
     const isEmpty = providerConnections.length === 0 && !outputDefinition;
+    const canReorder = !connectProvider && !!onDataBusChannelsReorder && dataChannels.length > 1;
 
     return (
       <div
@@ -166,8 +196,49 @@ const DataBusGroup: FC<{
           highlighted: !connectProvider && hoveredChannelKeySet.has(channelKey),
           'missing-provider': providerConnections.length === 0 && !!outputDefinition,
           'multiple-providers': providerConnections.length > 1,
+          'drop-before': dropTarget?.index === channelIndex && dropTarget.side === 'before',
+          'drop-after': dropTarget?.index === channelIndex && dropTarget.side === 'after',
         })}
         key={channelKey}
+        data-channel-index={channelIndex}
+        onDragOver={
+          canReorder
+            ? (event) => {
+                if (draggedChannel.current == null || !event.dataTransfer.types.includes(DATA_BUS_CHANNEL_DRAG_TYPE))
+                  return;
+                event.preventDefault();
+                event.stopPropagation();
+                event.dataTransfer.dropEffect = 'move';
+                setDropTarget({ index: channelIndex, side: dropSide(event) });
+                const scroller = event.currentTarget.parentElement!;
+                const rect = scroller.getBoundingClientRect();
+                if (event.clientX < rect.left + 24) scroller.scrollLeft -= 16;
+                else if (event.clientX > rect.right - 24) scroller.scrollLeft += 16;
+              }
+            : undefined
+        }
+        onDragLeave={(event) => {
+          const nextTarget = event.relatedTarget;
+          if (!(nextTarget instanceof Node) || !event.currentTarget.contains(nextTarget)) setDropTarget(undefined);
+        }}
+        onDrop={
+          canReorder
+            ? (event) => {
+                if (draggedChannel.current == null) return;
+                if (
+                  event.dataTransfer.getData(DATA_BUS_CHANNEL_DRAG_TYPE) !==
+                  `${editorNode.id}/${draggedChannel.current}`
+                ) {
+                  clearDrag();
+                  return;
+                }
+                event.preventDefault();
+                event.stopPropagation();
+                reorder(draggedChannel.current, channelIndex, dropSide(event));
+                clearDrag();
+              }
+            : undefined
+        }
         onMouseEnter={
           connectProvider ? undefined : () => onDataBusChannelHoverChange?.([channelKey, ...relatedChannelKeys])
         }
@@ -179,9 +250,48 @@ const DataBusGroup: FC<{
           connected={providerConnections.length > 0}
           nodeId={effectiveNode.id}
         />
-        <span className="data-bus-channel-label">
+        <span
+          className="data-bus-channel-label"
+          draggable={canReorder}
+          role={canReorder ? 'button' : undefined}
+          tabIndex={canReorder ? 0 : undefined}
+          aria-label={canReorder ? `Reorder channel ${channelIndex}` : undefined}
+          title={canReorder ? 'Drag to reorder, or use Alt+Left / Alt+Right' : undefined}
+          onMouseDown={
+            canReorder
+              ? (event) => {
+                  if (!event.shiftKey) event.stopPropagation();
+                }
+              : undefined
+          }
+          onDragStart={
+            canReorder
+              ? (event) => {
+                  event.stopPropagation();
+                  event.dataTransfer.effectAllowed = 'move';
+                  event.dataTransfer.setData(DATA_BUS_CHANNEL_DRAG_TYPE, `${editorNode.id}/${channelIndex}`);
+                  draggedChannel.current = channelIndex;
+                  onDataBusChannelHoverChange?.([]);
+                }
+              : undefined
+          }
+          onDragEnd={clearDrag}
+          onKeyDown={
+            canReorder
+              ? (event) => {
+                  if (!event.altKey || !['ArrowLeft', 'ArrowRight'].includes(event.key)) return;
+                  event.preventDefault();
+                  event.stopPropagation();
+                  const index = dataChannels.findIndex((channel) => channel.channelIndex === channelIndex);
+                  const target = dataChannels[index + (event.key === 'ArrowLeft' ? -1 : 1)];
+                  if (target)
+                    reorder(channelIndex, target.channelIndex, event.key === 'ArrowLeft' ? 'before' : 'after');
+                }
+              : undefined
+          }
+        >
           {connectProvider ? (
-            'Connect provider'
+            'Connect new'
           ) : providerConnections.length > 1 ? (
             <span title="Disconnect providers until only one remains.">
               Multiple providers ({providerConnections.length})
@@ -191,7 +301,7 @@ const DataBusGroup: FC<{
           ) : outputDefinition ? (
             `Missing provider / Input ${channelIndex}`
           ) : (
-            'Connect provider'
+            'Connect new'
           )}
         </span>
         {outputDefinition && (
@@ -208,6 +318,7 @@ const DataBusGroup: FC<{
 
   return (
     <section
+      data-nodeid={editorNode.id}
       className={clsx('data-bus-group', {
         selected: isSelected,
         'search-match': isSearchMatch,

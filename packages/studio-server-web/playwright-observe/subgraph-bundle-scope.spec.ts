@@ -136,15 +136,37 @@ test('Subgraph source separates same-bundle members from ordinary projects and e
     'aria-pressed',
     'true',
   );
+  const paths = frame.locator('.subgraph-target-path');
+  await expect(paths).toHaveCount(2);
+  for (const path of await paths.all()) {
+    await expect(path).toContainText('Sibling project');
+    await expect(path).toContainText('Child');
+    await expect(path).not.toContainText('>');
+    const icon = path.locator('svg.subgraph-target-path-separator');
+    await expect(icon).toBeVisible();
+    await expect(icon).toHaveAttribute('aria-hidden', 'true');
+    const size = await path.evaluate((element) => {
+      const probe = document.createElement('span');
+      probe.style.cssText = 'position:absolute;height:1cap;width:1px;pointer-events:none;';
+      element.appendChild(probe);
+      const capHeight = probe.getBoundingClientRect().height;
+      probe.remove();
+      const icon = element.querySelector('svg')!.getBoundingClientRect();
+      return { capHeight, iconHeight: icon.height, iconWidth: icon.width };
+    });
+    expect(Math.abs(size.iconHeight - size.capHeight)).toBeLessThan(0.5);
+    expect(size.iconWidth).toBeGreaterThan(3);
+  }
   const picker = frame.getByRole('combobox', { name: 'Subgraph graph', exact: true }).last();
   await picker.click();
   const options = frame.locator('.subgraph-node-body-select').last();
+  const menuOptions = options.locator('[id*="-option-"]');
   await expect(options).not.toContainText('Foreign project');
   await expect(options).not.toContainText('Ordinary project');
-  await expect(options.getByText('Feature', { exact: true })).toHaveCount(0);
-  await expect(options.getByText('Peer project', { exact: true })).toBeVisible();
-  await options.getByText('Nested', { exact: true }).click();
-  await expect(options.getByText('Sibling project', { exact: true })).toBeVisible();
+  await expect(menuOptions.getByText('Feature', { exact: true })).toHaveCount(0);
+  await expect(menuOptions.getByText('Peer project', { exact: true })).toBeVisible();
+  await menuOptions.getByText('Nested', { exact: true }).click();
+  await expect(menuOptions.getByText('Sibling project', { exact: true })).toBeVisible();
   await picker.press('Escape');
   holdPreview = true;
   try {
@@ -158,7 +180,7 @@ test('Subgraph source separates same-bundle members from ordinary projects and e
     await cachedGraph.click({ force: true });
     // A successful request for a different project must not rehabilitate the
     // failed preview, or a shared cache could authorize the wrong choice.
-    await options.getByText('Peer project', { exact: true }).click();
+    await menuOptions.getByText('Peer project', { exact: true }).click();
     const peerGraph = options.locator('[id*="-option-"]').filter({ hasText: /^Peer graph$/ });
     await expect(peerGraph).toHaveAttribute('aria-disabled', 'false');
     await expect(cachedGraph).toHaveAttribute('aria-disabled', 'true');
@@ -176,8 +198,8 @@ test('Subgraph source separates same-bundle members from ordinary projects and e
   await picker.press('Escape');
   await source.getByRole('button', { name: 'Same bundle', exact: true }).click();
   await picker.click();
-  const childOption = options.getByText('Child', { exact: true });
-  if (!(await childOption.isVisible())) await options.getByText('Sibling project', { exact: true }).click();
+  const childOption = menuOptions.getByText('Child', { exact: true });
+  if (!(await childOption.isVisible())) await menuOptions.getByText('Sibling project', { exact: true }).click();
   await childOption.click();
   await page.locator('.active-project-save-button').click();
   await expect.poll(() => saved.length).toBe(1);

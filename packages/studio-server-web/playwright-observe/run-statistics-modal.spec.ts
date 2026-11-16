@@ -1,4 +1,4 @@
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Locator, type Page } from '@playwright/test';
 
 import { authenticateIfNeeded, mockHostedEditorBootstrap, waitForDashboardReady } from './helpers/hostedEditorObserve';
 
@@ -77,7 +77,12 @@ function getStatisticsResponse(request: StatisticsRequest, costMode: CostMode = 
   };
 }
 
-async function installRunStatisticsRoutes(page: Page, costMode: CostMode = 'none', incompleteRuns=0) {
+async function installRunStatisticsRoutes(
+  page: Page,
+  costMode: CostMode = 'none',
+  incompleteRuns = 0,
+  beforeQuery?: (request: StatisticsRequest) => Promise<void>,
+) {
   const catalogRequests: URL[] = [];
   const statisticsRequests: StatisticsRequest[] = [];
   let releaseWebAppCatalog = () => {};
@@ -99,6 +104,7 @@ async function installRunStatisticsRoutes(page: Page, costMode: CostMode = 'none
         ? [{
           target: { surface: 'web_app', workflowId: 'workflow-a', uiGraphId: 'ui-report', componentId: 'generate' },
           projectName: 'Report project',
+          projectRelativePath: 'Reports/Report project.rivet-project',
           uiGraphName: 'Summary app',
           componentType: 'button',
           componentLabel: 'Generate summary',
@@ -109,12 +115,14 @@ async function installRunStatisticsRoutes(page: Page, costMode: CostMode = 'none
           {
             target: { surface: 'endpoint', workflowId: 'workflow-a' },
             projectName: 'Report project',
+            projectRelativePath: 'Reports/Report project.rivet-project',
             latestRunAt: '2026-08-04T12:00:00.000Z',
             totalRuns: 3,
           },
           {
             target: { surface: 'endpoint', workflowId: 'workflow-b' },
             projectName: 'Archive project',
+            projectRelativePath: 'Archive/Archive project.rivet-project',
             latestRunAt: '2026-08-04T11:00:00.000Z',
             totalRuns: 2,
           },
@@ -135,6 +143,7 @@ async function installRunStatisticsRoutes(page: Page, costMode: CostMode = 'none
       const body = request.postDataJSON() as StatisticsRequest;
       statisticsRequests.push(body);
       if (body.target.workflowId === 'workflow-b') await archiveStatisticsReady;
+      await beforeQuery?.(body);
       await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({...getStatisticsResponse(body, costMode), incompleteRuns}) });
       return;
     }
@@ -155,10 +164,212 @@ test.describe('Run statistics modal', () => {
     await mockHostedEditorBootstrap(page);
   });
 
+  test('custom period edits preserve both dates without retaining React events', async ({ page }) => {
+    const errors: string[] = [];
+    page.on('pageerror', (error) => errors.push(error.message));
+    let holdNextQuery = false;
+    let releaseQuery = () => {};
+    const { statisticsRequests } = await installRunStatisticsRoutes(page, 'none', 0, async () => {
+      if (holdNextQuery) {
+        holdNextQuery = false;
+        await new Promise<void>((resolve) => { releaseQuery = resolve; });
+      }
+    });
+    await page.goto('/', { waitUntil: 'domcontentloaded' });
+    await authenticateIfNeeded(page);
+    await waitForDashboardReady(page);
+    await page.getByRole('button', { name: 'Run statistics', exact: true }).click();
+    const modal = page.getByTestId('run-statistics-modal');
+    await expect(modal.locator('.run-statistics-metric-card').first()).toContainText('1.25 s');
+    await modal.getByRole('button', { name: 'Custom', exact: true }).click();
+    let expectedPeriod = { ...statisticsRequests.at(-1)!.period };
+
+    for (const [label, key, value] of [
+      ['From', 'from', '2026-08-01T09:15'],
+      ['To', 'to', '2026-08-15T18:00'],
+      ['From', 'from', '2026-07-01T09:15'],
+      ['To', 'to', '2026-09-15T18:00'],
+    ] as const) {
+      const input = modal.getByLabel(label, { exact: true });
+      await input.fill(value);
+      await expect(input).toHaveValue(value);
+      const timestamp = await input.evaluate((element: HTMLInputElement) => new Date(element.value).toISOString());
+      expectedPeriod = { ...expectedPeriod, [key]: timestamp };
+      await expect.poll(() => statisticsRequests.at(-1)?.period).toEqual(expectedPeriod);
+      await expect(modal.locator('.run-statistics-metric-card').first()).toContainText('1.25 s');
+    }
+
+    for (const [label, value] of [
+      ['From', '2026-07-01T09:15'],
+      ['To', '2026-09-15T18:00'],
+    ] as const) {
+      const input = modal.getByLabel(label, { exact: true });
+      const requestsBeforeClear = statisticsRequests.length;
+      await input.fill('');
+      await expect(modal.getByText('The period end must be after its start.')).toBeVisible();
+      await expect(modal.locator('.run-statistics-details')).toHaveAttribute('aria-busy', 'false');
+      expect(statisticsRequests).toHaveLength(requestsBeforeClear);
+      await input.fill(value);
+      await expect(modal.getByText('The period end must be after its start.')).toHaveCount(0);
+      await expect(modal.locator('.run-statistics-metric-card').first()).toContainText('1.25 s');
+    }
+
+    const from = modal.getByLabel('From', { exact: true });
+    const to = modal.getByLabel('To', { exact: true });
+    const requestsBeforeInvalid = statisticsRequests.length;
+    await from.fill('2026-10-01T09:15');
+    await expect(modal.getByText('The period end must be after its start.')).toBeVisible();
+    expect(statisticsRequests).toHaveLength(requestsBeforeInvalid);
+    await from.fill('2026-07-01T09:15');
+    await expect(modal.locator('.run-statistics-metric-card').first()).toContainText('1.25 s');
+
+    holdNextQuery = true;
+    try {
+      await from.fill('2026-07-02T09:15');
+      expectedPeriod.from = await from.evaluate((input: HTMLInputElement) => new Date(input.value).toISOString());
+      await expect.poll(() => statisticsRequests.at(-1)?.period).toEqual(expectedPeriod);
+      const pendingPeriod = { ...expectedPeriod };
+      const cancelled = page.waitForEvent('requestfailed', {
+        timeout: 10_000,
+        predicate: (request) => request.url().endsWith('/run-statistics/query')
+          && request.postDataJSON().period.from === pendingPeriod.from
+          && request.postDataJSON().period.to === pendingPeriod.to,
+      });
+      await to.fill('2026-09-16T18:00');
+      expectedPeriod.to = await to.evaluate((input: HTMLInputElement) => new Date(input.value).toISOString());
+      await expect.poll(() => statisticsRequests.at(-1)?.period).toEqual(expectedPeriod);
+      await expect(modal.locator('.run-statistics-metric-card').first()).toContainText('1.25 s');
+      releaseQuery();
+      await cancelled;
+      await expect(modal.locator('.run-statistics-details')).toHaveAttribute('aria-busy', 'false');
+      await expect(from).toHaveValue('2026-07-02T09:15');
+      await expect(to).toHaveValue('2026-09-16T18:00');
+    } finally {
+      releaseQuery();
+    }
+    expect(errors).toEqual([]);
+  });
+
+  test('rounds duration minutes correctly and keeps single-bucket points visible', async ({ page }) => {
+    await installRunStatisticsRoutes(page, 'available');
+    await page.route('**/api/workflows/run-statistics/query', (route) => {
+      const response = getStatisticsResponse(route.request().postDataJSON() as StatisticsRequest, 'available');
+      const durations = {
+        medianDurationMs: 119_999,
+        p95DurationMs: 299_999,
+        averageDurationMs: 179_999,
+        minDurationMs: 60_000,
+        maxDurationMs: 600_001,
+      };
+      return route.fulfill({ json: {
+        ...response,
+        current: { ...response.current, ...durations },
+        buckets: response.buckets.map((bucket) => ({ ...bucket, ...durations })),
+      } });
+    });
+    await page.goto('/', { waitUntil: 'domcontentloaded' });
+    await authenticateIfNeeded(page);
+    await waitForDashboardReady(page);
+    await page.getByRole('button', { name: 'Run statistics', exact: true }).click();
+    const modal = page.getByTestId('run-statistics-modal');
+    const timing = modal.getByRole('region', { name: 'Timing statistics' });
+    await expect(timing.locator('.run-statistics-metric-value')).toHaveText([
+      '2 m 0 s', '5 m 0 s', '3 m 0 s', '1 m 0 s', '10 m 0 s',
+    ]);
+    await timing.getByRole('group', { name: 'Duration chart grouping' })
+      .getByRole('button', { name: 'By week' }).click();
+    await expect(timing.locator('.recharts-line-dot')).toHaveCount(2);
+    await expect(timing.locator('.recharts-line-dot').first()).toBeVisible();
+    await expect(timing.locator('.recharts-line-dot').nth(1)).toBeVisible();
+    await timing.screenshot({ path: test.info().outputPath('single-bucket-duration.png') });
+  });
+
+  test('regroups in place, recovers failed reads, and hides results when filters change', async ({ page }) => {
+    let holdQueries = false;
+    let releaseQuery = () => {};
+    await installRunStatisticsRoutes(page, 'available', 0, async (request) => {
+      if (holdQueries && request.runKind === 'published') {
+        await new Promise<void>((resolve) => { releaseQuery = resolve; });
+      }
+    });
+    await page.goto('/', { waitUntil: 'domcontentloaded' });
+    await authenticateIfNeeded(page);
+    await waitForDashboardReady(page);
+    await page.getByRole('button', { name: 'Run statistics', exact: true }).click();
+    const modal = page.getByTestId('run-statistics-modal');
+    const details = modal.locator('.run-statistics-details');
+    const panels = modal.locator('.run-statistics-section');
+    await expect(panels).toHaveCount(2);
+    const originalPanels = await panels.elementHandles();
+    const expectPanelsMounted = async () => {
+      expect(await Promise.all(originalPanels.map((panel) => panel.evaluate((element) => element.isConnected))))
+        .toEqual([true, true]);
+    };
+
+    try {
+      for (const [name, title] of [
+        ['Duration chart grouping', 'Duration over time'],
+        ['Cost chart grouping', 'Cost over time'],
+      ] as const) {
+        const grouping = modal.getByRole('group', { name, exact: true });
+        const header = grouping.locator('..');
+        await expect(header.getByText(title, { exact: true })).toBeVisible();
+        await expect(header).toHaveCSS('justify-content', 'flex-start');
+        await grouping.scrollIntoViewIfNeeded();
+        const scrollBefore = await details.evaluate((panel) => panel.scrollTop);
+        const week = grouping.getByRole('button', { name: 'By week', exact: true });
+        holdQueries = true;
+        await week.click();
+        await expect(details).toHaveAttribute('aria-busy', 'true');
+        await expectPanelsMounted();
+        await expect(modal.getByText('Calculating statistics...')).toHaveCount(0);
+        expect(await details.evaluate((panel) => panel.scrollTop)).toBeCloseTo(scrollBefore, 0);
+        holdQueries = false;
+        releaseQuery();
+        await expect(details).toHaveAttribute('aria-busy', 'false');
+        await expectPanelsMounted();
+        await expect(week).toBeFocused();
+        expect(await details.evaluate((panel) => panel.scrollTop)).toBeCloseTo(scrollBefore, 0);
+      }
+
+      const cost = modal.getByRole('region', { name: 'Cost statistics' });
+      const costGrouping = cost.getByRole('group', { name: 'Cost chart grouping' });
+      await page.route('**/api/workflows/run-statistics/query', (route) => route.fulfill({
+        status: 503, json: { error: 'Regrouping unavailable in fixture' },
+      }), { times: 1 });
+      await costGrouping.getByRole('button', { name: 'By day' }).click();
+      await expect(modal.getByRole('alert')).toContainText('The previous chart grouping is still shown.');
+      await expectPanelsMounted();
+      await expect(cost.locator('.recharts-xAxis .recharts-cartesian-axis-tick')).toHaveCount(1);
+      await modal.getByRole('button', { name: 'Try again', exact: true }).click();
+      await expect(modal.getByRole('alert')).toHaveCount(0);
+      await expect(cost.locator('.recharts-xAxis .recharts-cartesian-axis-tick')).toHaveCount(2);
+      await expectPanelsMounted();
+
+      holdQueries = true;
+      await costGrouping.getByRole('button', { name: 'By week' }).click();
+      await expect(details).toHaveAttribute('aria-busy', 'true');
+      const aborted = page.waitForEvent('requestfailed', {
+        timeout: 10_000,
+        predicate: (request) => request.url().endsWith('/run-statistics/query')
+          && request.postDataJSON().runKind === 'published',
+      });
+      await modal.getByRole('button', { name: 'Latest', exact: true }).click();
+      await expect(modal.getByText('No runs for this target match the selected period and version.')).toBeVisible();
+      holdQueries = false;
+      releaseQuery();
+      await aborted;
+      await expect(panels).toHaveCount(0);
+    } finally {
+      releaseQuery();
+    }
+  });
+
   for (const costMode of ['available', 'partial', 'unknown', 'none'] as const) {
     test(`shows ${costMode} cost estimates with shared outcome filters`, async ({ page }) => {
       await installRunStatisticsRoutes(page, costMode);
       await page.goto('/', { waitUntil: 'domcontentloaded' });
+      await authenticateIfNeeded(page);
       await waitForDashboardReady(page);
       await page.getByRole('button', { name: 'Run statistics', exact: true }).click();
       const modal = page.getByTestId('run-statistics-modal');
@@ -173,10 +384,27 @@ test.describe('Run statistics modal', () => {
         await expect(cost.getByRole('group', { name: 'Cost chart metric' })).toHaveCount(0);
         await expect(cost.locator('.recharts-legend-item-text')).toHaveText(['Average per complete run', 'Known subtotal']);
         await expect(cost.locator('.recharts-line')).toHaveCount(2);
+        const axes = cost.locator('.recharts-yAxis');
+        await expect(axes).toHaveCount(2);
+        const ticksForLine = async (lineIndex: number) => {
+          const line = cost.locator('.recharts-line').nth(lineIndex).locator('.recharts-line-curve');
+          const stroke = await line.getAttribute('stroke');
+          const ticks = cost.locator(`.recharts-cartesian-axis-tick-value[fill="${stroke}"]`);
+          await expect(ticks.first()).toHaveCSS('fill', await line.evaluate((path) => getComputedStyle(path).stroke));
+          return ticks;
+        };
+        const averageTicks = await ticksForLine(1);
+        const subtotalTicks = await ticksForLine(0);
+        const leftAxis = await averageTicks.first().boundingBox();
+        const rightAxis = await subtotalTicks.first().boundingBox();
+        expect(leftAxis!.x + leftAxis!.width).toBeLessThan(rightAxis!.x);
+        const maximumTick = async (ticks: Locator) => Math.max(...(await ticks.allTextContents())
+          .map((tick) => Number(tick.replace(',', '.').replace(/[^\d.]/g, ''))));
+        expect(await maximumTick(averageTicks)).toBeLessThan(await maximumTick(subtotalTicks));
       } else if (costMode === 'partial') {
         await expect(cost).toContainText('No complete cost estimates to average');
         await expect(cost.locator('.recharts-line').first().locator('.recharts-line-curve')).toHaveAttribute('d', /\S/);
-        await expect(cost.locator('.recharts-line').nth(1).locator('.recharts-line-curve')).not.toHaveAttribute('d', /\S/);
+        await expect(cost.locator('.recharts-line').nth(1).locator('.recharts-line-curve')).toHaveCount(0);
       } else if (costMode === 'unknown') {
         await expect(cost).toContainText('No known cost estimates');
         await expect(cost).not.toContainText('Cost over time');
@@ -256,13 +484,20 @@ test.describe('Run statistics modal', () => {
     const switcherBox = await runTypeSwitcher.boundingBox();
     expect(switcherBox?.y).toBeGreaterThan(headerLeadBox?.y ?? Number.POSITIVE_INFINITY);
     expect(switcherBox?.x).toBeCloseTo(headerLeadBox?.x ?? Number.NaN, 0);
-    const targetSelect = modal.getByRole('combobox', { name: 'Workflow endpoint' });
+    const targetSelect = modal.getByRole('combobox', { name: 'Project', exact: true });
     await expect(targetSelect).toBeVisible();
     await expect(modal.locator('.run-statistics-target-select__single-value')).toHaveText('Report project');
     await modal.locator('.run-statistics-target-select__control').click();
     const endpointTargetMenu = page.locator('.run-statistics-target-select__menu');
     await expect(endpointTargetMenu).toBeVisible();
     await expect(endpointTargetMenu).toContainText('Archive project');
+    const reportOption = endpointTargetMenu.locator('.run-statistics-target-option').filter({ hasText: 'Report project' });
+    await expect(reportOption.locator(':scope > div')).toHaveText([
+      'Report project',
+      '3 recorded runs',
+      'Reports/Report project.rivet-project',
+    ]);
+    await expect(endpointTargetMenu).toContainText('Archive/Archive project.rivet-project');
     await endpointTargetMenu.getByText('Report project', { exact: true }).click();
     await expect(modal.locator('.run-statistics-sidebar')).toHaveCount(0);
     const targetControlBox = await modal.locator('.run-statistics-target-control').boundingBox();
@@ -363,7 +598,7 @@ test.describe('Run statistics modal', () => {
     await expect(cost.locator('.run-statistics-metric-value').nth(1)).toContainText(/0[.,]006/);
     await expect(cost.locator('.recharts-line')).toHaveCount(2);
     const chartHeader = cost.locator('.run-statistics-chart-header');
-    const chartTitle = await chartHeader.getByText('Cost', { exact: true }).boundingBox();
+    const chartTitle = await chartHeader.getByText('Cost over time', { exact: true }).boundingBox();
     const chartControls = await chartHeader.getByRole('group', { name: 'Cost chart grouping' }).boundingBox();
     expect(chartControls!.x).toBeGreaterThan(chartTitle!.x + chartTitle!.width);
     expect(Math.abs(chartControls!.y - chartTitle!.y)).toBeLessThan(12);
@@ -396,7 +631,7 @@ test.describe('Run statistics modal', () => {
 
     await modal.getByRole('button', { name: 'Web apps' }).click();
     await expect(modal.getByText('Loading available runs...')).toBeVisible();
-    await expect(modal.getByRole('combobox', { name: 'Workflow endpoint' })).toHaveCount(0);
+    await expect(modal.getByRole('combobox', { name: 'Project', exact: true })).toHaveCount(0);
     await expect(modal.locator('.run-statistics-period-label')).toHaveCount(0);
     releaseWebAppCatalog();
     const webAppSelect = modal.getByRole('combobox', { name: 'Web app action' });
@@ -406,6 +641,11 @@ test.describe('Run statistics modal', () => {
     const webAppTargetMenu = page.locator('.run-statistics-target-select__menu');
     await expect(webAppTargetMenu).toBeVisible();
     await expect(webAppTargetMenu).toContainText('Summary app - Generate summary');
+    await expect(webAppTargetMenu.locator('.run-statistics-target-option > div')).toHaveText([
+      'Summary app - Generate summary',
+      'Report project - 3 recorded runs',
+      'Reports/Report project.rivet-project',
+    ]);
     await webAppTargetMenu.getByText('Summary app - Generate summary', { exact: true }).click();
     await expect(modal.locator('.run-statistics-target-select__single-value')).toHaveText('Summary app - Generate summary');
     await expect.poll(() => catalogRequests.at(-1)?.searchParams.get('surface')).toBe('web_app');

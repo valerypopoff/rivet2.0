@@ -303,14 +303,16 @@ Passthrough has no Data Bus presentation mode and the editor does not convert a
 Passthrough into topology. Designers add the dedicated Data Bus node explicitly.
 Passthrough port IDs remain the serialized `inputN` / `outputN` pairs, but the
 canvas I/O projection gives each connected pair a display-only semantic label.
-It prefers the first non-Passthrough upstream output title and carries that title
-through Passthrough chains. For an output-only repair slot, it uses a downstream
+It prefers the original upstream output title and follows the matching input/output
+slots through Passthrough nodes and Data Bus channels, including mixed relay chains.
+Data Bus ports use the core channel parser and renderability guard. For an
+output-only repair slot, it uses a downstream
 input title only when every resolvable destination agrees. Missing definitions,
 conflicting fan-out, multiple providers, and relay cycles keep the numbered
 fallback. The projection uses preview connections so labels update while wiring,
 classifies linked nodes from their resolved source type, indexes connections once
 per projection, and never recursively asks an I/O selector to resolve another
-Passthrough node. An input-origin rewire retains the original label for its
+Passthrough or Data Bus node. An input-origin rewire retains the original label for its
 source node until a replacement connection is committed,
 matching the existing dynamic-port stability rule. Both the raw and display
 projection atom families are cleared with deleted nodes and graph transitions.
@@ -375,12 +377,33 @@ Its tooltip retains the combined `<source node> / <source output>` form. The
 channel exposes the normal input port for rewiring, exposes the paired output
 port for adding receivers, and shows the receiver count. Those existing
 channels scroll only in the space between the fixed Data Bus header and a fixed
-**Connect provider** terminal input. That terminal input is the next Data Bus
+**Connect new** terminal input. That terminal input is the next Data Bus
 channel with no paired output yet; pinning its presentation does not change its
 connection topology.
+New channels append after the existing rail items even when the next available
+input reuses a lower channel number. Drag a populated channel's label to reorder
+it within its own bus; Alt+Left/Right on a focused label performs the same move.
+The insertion edge previews the drop, and scrolling at the rail's edges exposes
+off-screen items. Ports remain dedicated wire-drag targets. Reordering is a
+single Undo/Redo command and is disabled on read-only/command-disabled canvases.
+Drag-over admission requires this group's active drag and the Bus payload type;
+drop also verifies the exact bus/channel payload. An interrupted drag therefore
+cannot let an unrelated later text/file drop reorder a channel. Stale targets and
+unchanged moves are ignored by the shared ordering helper without a graph write.
+Drag-leave checks that the related target is a DOM Node before calling
+`contains`: descendant transitions keep the insertion indicator, while leaving
+for a Window or no target clears it without an exception.
+Channel positions are stored in `visualData.dataBusChannelOrder`, independently
+of paired port IDs and execution topology. V4 serialization preserves this
+optional field; older projects keep their existing numeric presentation until
+edited. Linked buses use their instance's order, never their library source's.
+Connection/rewire commands snapshot existing active positions before appending
+a new channel. Disconnection filters inactive entries for display without
+erasing their positions, so Undo can restore a removed channel; reusing that
+vacant ID later appends the new item instead. No render-time graph writes occur.
 Data Bus IO derivation is sparse: it emits definitions only for channel indices
 that still have a provider or receiver, plus the first unused input index for
-**Connect provider**. A pair therefore disappears as soon as both sides are
+**Connect new**. A pair therefore disappears as soon as both sides are
 disconnected, without renumbering surviving connections or recording a
 render-time graph mutation. The group-presentation model defensively filters
 fully empty non-terminal channels as well. Rail ports are absolutely positioned
@@ -405,7 +428,7 @@ Shift-click still delegates to normal node selection, preserving
 multi-node copy/delete behavior without making the viewport-fixed group
 draggable.
 The header is shrinkable and title text is ellipsized, so an unusually long
-Data Bus title cannot push the fixed **Connect provider** control out of the
+Data Bus title cannot push the fixed **Connect new** control out of the
 available row.
 `createDataBusTopology(...)` is the canvas-scoped, preview-connection
 interpretation boundary. It indexes data-bus provider and consumer endpoints,
@@ -551,6 +574,16 @@ viewport restoration. Ports are decorative and cannot create connections. Copyin
 normal graph nodes into the library creates supported reusable library nodes;
 copying linked instances back as sources is blocked.
 
+## Subgraph Graph Picker Paths
+
+Subgraph graph pickers share `SubgraphTargetControl` in the node body and settings
+panel. External selections render structured project/graph segments with the
+editor's chevron SVG between them, rather than a literal `>` character. The icon
+uses a tight viewBox and cap-height sizing (with an em fallback), stays visible
+when long segments ellipsize, and is hidden from assistive technology. Plain-text
+option labels and tooltips use `/`; search text and saved target IDs are unchanged.
+`subgraph-bundle-scope.spec.ts` checks both surfaces, icon sizing and selection.
+
 ## Tests
 
 Use pure graph-editing tests for connection recovery, drag actions, variadic reorder,
@@ -567,3 +600,14 @@ Data Bus compilation and scheduler behavior belong in
 `packages/core/test/model/DataBusTopology.test.ts`; provider/consumer
 classification and wire-suppression eligibility belong in
 `packages/app/src/components/nodeCanvas/dataBusModel.test.ts`.
+`dataBusChannelCommands.test.ts` covers append, reused IDs, provider replacement,
+linked buses and Undo/Redo without touching wire identities. Core serialization
+and prefab tests cover file round trips and instance-local positions.
+`data-bus-order.spec.ts` verifies live connections, native dragging, cross-bus
+drop rejection, unrelated drops after an interrupted drag, keyboard reorder,
+descendant/non-DOM drag-leave targets, Undo/Redo and reopening the saved project
+file in a clean browser session. Command tests also cover receiver-only channel
+repair and rewiring, preserving positions while appending newly active slots.
+Bus ordering and Passthrough label browser specs are registered in the explicit
+CI shard inventory. Isolated relay fixtures stub configuration, the evaluation
+library and the project tree, so they also work against static CI serving.
