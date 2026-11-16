@@ -18,6 +18,7 @@ import {
 import {
   autoscalerPolicy,
   autoscalerPolicyDigest,
+  autoscalerPolicyFromConfig,
   reconcileExecutionAutoscaling,
 } from './lib/execution-autoscaler.mjs';
 import {
@@ -84,6 +85,45 @@ const protectedValues = [
   'lifecycle.proxy.terminationGracePeriodSeconds=600',
 ];
 
+test('idle staging supports one protected worker without allowing a production floor change', () => {
+  const overrides = [
+    'replicaCount.execution=1',
+    'autoscaling.execution.minReplicas=1',
+    'ha.stagingSingleExecution=true',
+  ];
+  const resources = render(['--namespace', 'rivet-staging-persistent'], ...overrides);
+  const controller = resources.find(
+    (r) => r.kind === 'Deployment' && r.metadata.labels['app.kubernetes.io/component'] === 'autoscaler',
+  );
+  const config = JSON.parse(
+    controller.spec.template.spec.containers[0].env.find((e) => e.name === 'RIVET_AUTOSCALER_CONFIG').value,
+  );
+  assert.equal(autoscalerPolicyFromConfig(config).minReplicas, 1);
+  assert.equal(config.stagingSingleExecution, true);
+  assert.equal(
+    resources.find(
+      (r) => r.kind === 'PodDisruptionBudget' && r.metadata.labels['app.kubernetes.io/component'] === 'execution',
+    ).spec.minAvailable,
+    '100%',
+  );
+  assert.throws(() => render(...overrides), /rivet-staging/);
+  assert.throws(
+    () => render(['--namespace', 'rivet-staging-persistent'], ...overrides, 'ha.stagingSingleExecution=false'),
+    /minimum of two|>=2 execution/,
+  );
+  const prod = render(
+    'resources.execution.requests.cpu=2',
+    'resources.execution.requests.memory=4Gi',
+    'publishedExecutionAdmission.maxActiveRunsPerPod=32',
+  );
+  const api = prod
+    .find((r) => r.kind === 'StatefulSet' && r.metadata.labels['app.kubernetes.io/component'] === 'execution')
+    .spec.template.spec.containers.find((c) => c.name === 'api');
+  assert.equal(String(api.resources.requests.cpu), '2');
+  assert.equal(api.resources.requests.memory, '4Gi');
+  assert.equal(api.env.find((e) => e.name === 'RIVET_DEPLOYMENT_PUBLISHED_EXECUTION_MAX_ACTIVE_RUNS').value, '32');
+});
+
 test('serial paired-pool recovery preserves its original configuration with a live surge owner', () => {
   const original = render(...protectedValues, 'ha.executionPools.enabled=true');
   const inventory = original
@@ -129,6 +169,72 @@ test('serial paired-pool recovery preserves its original configuration with a li
       'Missing or foreign original capacity must not be inferred from live replicas',
     );
   }
+});
+
+test('same-image admission changes replace the pool before mixing old and new slot limits', async () => {
+  const immutableImage = 'images.api.digest=sha256:' + 'd'.repeat(64);
+  const previous = render(...protectedValues, immutableImage, 'ha.executionPools.enabled=true');
+  const target = [
+    'publishedExecutionAdmission.maxActiveRunsPerPod=32',
+    'resources.execution.requests.cpu=2',
+    'resources.execution.requests.memory=4Gi',
+  ];
+  const candidate = render(...protectedValues, immutableImage, 'ha.executionPools.enabled=true', ...target);
+  const inventory = previous
+    .filter((resource) => resource.kind === 'StatefulSet')
+    .map((resource, i) => ({
+      ...structuredClone(resource),
+      metadata: { ...resource.metadata, uid: `owner-${i}` },
+    }));
+  const selection = prepareExecutionPoolResources({
+    resources: structuredClone(candidate),
+    inventory,
+    controlPlaneMode: 'singleton',
+  });
+  assert.ok(selection.plan, 'A serial update would mix admission limits and block the headroom guard');
+  assert.throws(
+    () =>
+      prepareExecutionPoolResources({
+        resources: structuredClone(candidate),
+        inventory,
+        controlPlaneMode: 'singleton',
+        allowTransition: false,
+      }),
+    /qualified paired replacement/,
+  );
+  const sharedDisk = structuredClone(inventory);
+  sharedDisk
+    .find((item) => item.spec.replicas > 0 && item.metadata.labels['app.kubernetes.io/component'] === 'execution')
+    .spec.template.spec.volumes.push({ name: 'shared', persistentVolumeClaim: { claimName: 'old-shared-disk' } });
+  assert.throws(
+    () =>
+      prepareExecutionPoolResources({
+        resources: structuredClone(candidate),
+        inventory: sharedDisk,
+        controlPlaneMode: 'singleton',
+      }),
+    /qualified paired replacement/,
+  );
+  const result = await exerciseExecutionPoolRollout({
+    previous,
+    candidate,
+    renderFinal: async (guards) =>
+      render(
+        ...protectedValues,
+        immutableImage,
+        ...target,
+        'ha.executionPools.enabled=true',
+        'ha.executionPools.active=' + guards.ha.executionPools.active,
+        'ha.executionPools.retiringReplicas=' + guards.ha.executionPools.retiringReplicas,
+        'replicaCount.execution=' + guards.replicaCount.execution,
+      ),
+  });
+  assert.equal(result.result.phase, 'complete');
+  assert.equal(result.result.executionPool.phase, 'complete');
+  assert.equal(
+    result.mutations.some((mutation) => mutation.startsWith('recreate:') && mutation.includes('execution')),
+    false,
+  );
 });
 
 test('native Helm paired pools preserve the old selector and declare exact read/exec/scale capabilities', async () => {
@@ -201,8 +307,14 @@ test('native Helm paired pools preserve the old selector and declare exact read/
   for (const invalid of ['ha.executionPools.enabled=0', 'ha.executionPools.retiringReplicas=1.5'])
     assert.throws(() => render(...protectedValues, 'ha.executionPools.enabled=true', invalid));
   const oldResources = render(...protectedValues, 'images.api.digest=sha256:' + 'a'.repeat(64));
+  const executionProfile = [
+    'resources.execution.requests.cpu=2',
+    'resources.execution.requests.memory=4Gi',
+    'publishedExecutionAdmission.maxActiveRunsPerPod=32',
+  ];
   const newResources = render(
     ...protectedValues,
+    ...executionProfile,
     'ha.executionPools.enabled=true',
     'images.api.digest=sha256:' + 'b'.repeat(64),
   );
@@ -212,6 +324,7 @@ test('native Helm paired pools preserve the old selector and declare exact read/
     renderFinal: async (guards) =>
       render(
         ...protectedValues,
+        ...executionProfile,
         'ha.executionPools.enabled=true',
         'images.api.digest=sha256:' + 'b'.repeat(64),
         'ha.executionPools.active=' + guards.ha.executionPools.active,
@@ -240,6 +353,7 @@ test('native Helm paired pools preserve the old selector and declare exact read/
   const back = await exerciseExecutionPoolRollout({
     previous: render(
       ...protectedValues,
+      ...executionProfile,
       'ha.executionPools.enabled=true',
       'ha.executionPools.active=b',
       'replicaCount.execution=3',
@@ -263,6 +377,38 @@ test('native Helm paired pools preserve the old selector and declare exact read/
   assert.equal(back.result.phase, 'complete');
   assert.equal(back.result.executionPool.owners.length, 3);
   assert.equal(back.guards.at(-1).ha.executionPools.active, 'a');
+  const rollbackCapacity = (active) =>
+    exerciseExecutionPoolRollout({
+      previous: render(
+        ...protectedValues,
+        ...executionProfile,
+        'ha.executionPools.enabled=true',
+        'ha.executionPools.active=b',
+        'replicaCount.execution=3',
+        'images.api.digest=sha256:' + 'b'.repeat(64),
+      ),
+      candidate: render(
+        ...protectedValues,
+        'ha.executionPools.enabled=true',
+        'images.api.digest=sha256:' + 'c'.repeat(64),
+      ),
+      renderFinal: async (guards) =>
+        render(
+          ...protectedValues,
+          'ha.executionPools.enabled=true',
+          'images.api.digest=sha256:' + 'c'.repeat(64),
+          'ha.executionPools.active=' + guards.ha.executionPools.active,
+          'ha.executionPools.retiringReplicas=' + guards.ha.executionPools.retiringReplicas,
+          'replicaCount.execution=' + guards.replicaCount.execution,
+        ),
+      executionSample: (pod) => ({ active: pod.metadata.name.includes('execution-next-') ? active : 0 }),
+      timeoutMs: 2000,
+    });
+  await assert.rejects(
+    rollbackCapacity(20),
+    /headroom needs permitted scaling/,
+    'Larger old workers must not be retired when their accepted runs exceed candidate capacity',
+  );
   const expected = render(...protectedValues, 'ha.executionPools.enabled=true');
   const settled = render(...protectedValues, 'ha.executionPools.enabled=true', 'ha.executionPools.active=b');
   alignSettledExecutionPoolResources(expected, settled);
@@ -723,7 +869,7 @@ async function clusterFixture(t, policyOverrides = {}) {
   const image = 'registry.test/api@sha256:' + 'a'.repeat(64),
     workload = 'rivet-ha-execution',
     release = 'rivet',
-    namespace = 'proof';
+    namespace = policyOverrides.minReplicas === 1 ? 'rivet-staging-proof' : 'proof';
   const policy = autoscalerPolicy({
     stabilizationSeconds: 30,
     cooldownSeconds: 10,
@@ -920,14 +1066,14 @@ async function clusterFixture(t, policyOverrides = {}) {
     image,
     now: () => time,
   });
-  const tick = ({ runner = 'fixture' } = {}) =>
+  const tick = ({ runner = 'fixture', policy: activePolicy = policy } = {}) =>
     reconcileExecutionAutoscaling({
       io,
       release,
       namespace,
       manifestDigest: 'pinned',
       runner,
-      policy,
+      policy: activePolicy,
       now: () => time,
     });
   return {
@@ -957,6 +1103,49 @@ async function clusterFixture(t, policyOverrides = {}) {
     },
   };
 }
+
+test('Kubernetes retirement confirms the sole remaining staging peer before reaching one worker', async (t) => {
+  const f = await clusterFixture(t, { minReplicas: 1 });
+  for (let index = 0; index < 45; index++) {
+    for (const pod of f.pods.values()) if (pod.retirement.state === 'draining') pod.retirement.state = 'drained';
+    await f.tick();
+    if (f.replicas() === 1 && (await f.io.readJournal()).phase === 'complete') break;
+    f.advance();
+  }
+  assert.equal(f.replicas(), 1);
+  assert.equal(f.pods.size, 1);
+  assert.equal((await f.io.readJournal()).phase, 'complete');
+  assert.equal([...f.pods.values()][0].retirement.state, 'serving');
+});
+
+test('real peer confirmation retains the old floor during a mid-drain staging policy change', async (t) => {
+  const f = await clusterFixture(t, { minReplicas: 1 });
+  const testPolicy = { ...f.policy, minReplicas: 2 };
+  for (let i = 0; i < 10 && (await f.io.readJournal())?.phase !== 'draining'; i++) {
+    await f.tick({ policy: testPolicy });
+    f.advance();
+  }
+  const original = await f.io.readJournal();
+  assert.equal(original.phase, 'draining');
+  const departed = [...f.pods.values()].at(-1);
+  departed.retirement.state = 'drained';
+  const confirm = f.io.confirmPeers;
+  const minimums = [];
+  f.io.confirmPeers = async (...args) => {
+    minimums.push(args[2]);
+    return confirm(...args);
+  };
+  await f.tick();
+  assert.equal(f.replicas(), 2);
+  assert.deepEqual(minimums, [2]);
+  for (let i = 0; i < 5 && (await f.io.readJournal()).phase !== 'complete'; i++) {
+    f.advance();
+    await f.tick();
+  }
+  assert.equal((await f.io.readJournal()).policyDigest, autoscalerPolicyDigest(testPolicy));
+  await f.tick();
+  assert.equal((await f.io.readJournal()).policyDigest, autoscalerPolicyDigest(f.policy));
+});
 
 test('actual HTTP/exec-WebSocket client observes admission demand, CAS scales, withdraws, drains and shrinks without developer calls', async (t) => {
   const f = await clusterFixture(t);

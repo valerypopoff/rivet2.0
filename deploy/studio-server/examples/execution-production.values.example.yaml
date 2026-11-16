@@ -1,0 +1,15 @@
+# Installation override; combine with the normal HA/autoscaler overlays.
+# Requests only: retain the installation's existing limits and ephemeral storage.
+replicaCount:
+  execution: 2
+autoscaling:
+  execution:
+    minReplicas: 2
+publishedExecutionAdmission:
+  mode: enforce
+  maxActiveRunsPerPod: 32
+resources:
+  execution:
+    requests:
+      cpu: '2'
+      memory: 4Gi

@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict';
 import { createExecutionAutoscalerIO, PendingExecutionCpuSample } from './execution-autoscaler-kubernetes.mjs';
-import { autoscalerPolicyFromConfig, executionPoolDemand } from './execution-autoscaler.mjs';
+import {
+  autoscalerPolicyFromConfig,
+  executionPoolDemand,
+  requiredExecutionPoolReplicas,
+} from './execution-autoscaler.mjs';
 import { waitForHaHeadroom, createHeadroomRead } from './ha-rollout-headroom.mjs';
 import { runExecutionPoolTransition } from './execution-pool-transition.mjs';
 import { createLegacyExecutionHttpHandoff } from './legacy-execution-http-handoff.mjs';
@@ -124,7 +128,12 @@ export function createExecutionPoolKubernetes({
             'Execution pools exceed the approved physical/connection capacity',
           );
           assert.ok(snapshot.poolCapacity.totalPods <= plan.maxReplicas);
-          if (executionPoolDemand(snapshot, peer, policy) > ready.count)
+          if (
+            Math.max(
+              executionPoolDemand(snapshot, peer, policy, { candidateCapacity: true }),
+              requiredExecutionPoolReplicas(snapshot, peer, policy),
+            ) > ready.count
+          )
             throw new PendingExecutionCpuSample('Candidate execution headroom needs permitted scaling');
           const previous = activeOperation.record.executionPool.capacity;
           await activeOperation.checkpoint({

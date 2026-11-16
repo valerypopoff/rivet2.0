@@ -19,6 +19,7 @@ import { assertContinuityProviderFacts, compileRequestContinuityEvidence } from 
 import { releaseQualificationPlan } from './release-qualification-policy.mjs';
 import { sizingRequests, assertSizingReport } from './resource-sizing.mjs';
 import { retainedApplicationSettings } from './retained-staging-application.mjs';
+import { executionProfile } from './execution-profile.mjs';
 import { compileExecutionPoolEvidence } from './execution-pool-evidence.mjs';
 
 // The hosted workflow reserves another hour for cleanup and 30 minutes for setup.
@@ -109,6 +110,11 @@ export function qualificationOperation({
     ? retainedApplicationSettings(approval.retainedApplication)
     : undefined;
   if (retainedApplication) assert.ok(!sizing && !approval.developerOverlapProfile && !parent);
+  const stagingExecutionProfile = approval.stagingExecutionProfile
+    ? executionProfile(approval.stagingExecutionProfile, { staging: true })
+    : undefined;
+  if (stagingExecutionProfile)
+    assert.ok(retainedApplication && !sizing && !approval.developerOverlapProfile && !parent);
   if (sizing) {
     assert.ok(installed.qualificationValues, 'Sizing requires observed production reservations');
     assert.ok(
@@ -185,6 +191,7 @@ export function qualificationOperation({
     previous,
     installed,
     policy: normalized,
+    ...(stagingExecutionProfile ? { stagingExecutionProfile } : {}),
     ...(sizing ? { sizingRequests: sizing } : {}),
     ...(!sizing && approval.safetyDigest
       ? {
@@ -199,6 +206,7 @@ export function qualificationOperation({
             overlap: approval.developerOverlapProfile,
             suite: approval.qualificationSuite,
             tooling: approval.tooling,
+            stagingExecutionProfile,
           }),
         }
       : {}),

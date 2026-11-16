@@ -424,6 +424,8 @@ compatibility:
 # Durable upload/extraction scratch for the single control backend; not a new controller or Job.
 ha:
   enabled: false
+  # Explicit idle-staging exception. Never valid in a production namespace.
+  stagingSingleExecution: false
   executionPools:
     enabled: false
     active: a

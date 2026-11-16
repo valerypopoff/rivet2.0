@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { assertToolingIdentity } from './release-tooling.mjs';
+import { executionProfile } from './execution-profile.mjs';
 
 const canonical = (value) =>
   Array.isArray(value)
@@ -48,7 +49,7 @@ export async function qualificationSafetyDigest(root, sha) {
   return hash(critical);
 }
 
-export function qualificationConfigurationDigest(installed, policy, profile, overlap) {
+export function qualificationConfigurationDigest(installed, policy, profile, overlap, stagingExecutionProfile) {
   const values = structuredClone(installed.qualificationValues);
   assert.ok(values?.lifecycle && values.postgres && values.resources);
   if (profile) {
@@ -67,7 +68,14 @@ export function qualificationConfigurationDigest(installed, policy, profile, ove
     values.postgres.poolMaxPerApiPod = overlap.poolMaxPerApiPod;
     values.resources.backendOverlap = overlap.backendResources;
   }
-  return hash({ values, policy, controlPlaneMode: overlap ? 'singleton-overlap' : installed.controlPlaneMode });
+  return hash({
+    values,
+    policy,
+    controlPlaneMode: overlap ? 'singleton-overlap' : installed.controlPlaneMode,
+    ...(stagingExecutionProfile
+      ? { stagingExecutionProfile: executionProfile(stagingExecutionProfile, { staging: true }) }
+      : {}),
+  });
 }
 
 export function assertQualificationPlan(plan) {
@@ -103,10 +111,25 @@ export function assertQualificationPlan(plan) {
  * Full autoscaler stress is a separate protected configuration choice; overlap
  * and releases without the bounded continuity contract retain the full suite.
  * Neither tier reuses test results from a predecessor. */
-export function releaseQualificationPlan({ safetyDigest, installed, policy, profile, overlap, suite, tooling }) {
+export function releaseQualificationPlan({
+  safetyDigest,
+  installed,
+  policy,
+  profile,
+  overlap,
+  suite,
+  tooling,
+  stagingExecutionProfile,
+}) {
   assert.match(safetyDigest, /^[a-f0-9]{64}$/);
   assert.ok(suite === undefined || ['focused', 'full'].includes(suite), 'Unknown qualification suite');
-  const configurationDigest = qualificationConfigurationDigest(installed, policy, profile, overlap);
+  const configurationDigest = qualificationConfigurationDigest(
+    installed,
+    policy,
+    profile,
+    overlap,
+    stagingExecutionProfile,
+  );
   const focused = installed.controlPlaneMode === 'singleton' && !overlap && !!profile && suite !== 'full';
   if (suite === 'focused') assert.ok(focused, 'Focused qualification requires singleton request continuity');
   return assertQualificationPlan({

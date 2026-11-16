@@ -154,6 +154,17 @@ provider reads the authenticated current-request diagnostic and checks that the
 actual resolved client belongs to its frozen public-client allowlist. Forwarding
 peer addresses cannot stand in for that client. See [client provenance](trusted-clients.md).
 
+Retained focused staging can select a separate `staging.executionProfile` for
+execution CPU/RAM requests, enforced admission and its idle minimum. The matching
+`production.executionProfile` describes production's reviewed target without
+rewriting the observed source digests. Qualification binds both profiles; the
+production-only receipt verifier checks that same binding. Staging preparation
+temporarily restores the ordinary two-worker policy and three starting workers;
+verified successful cleanup restores the idle floor through the drain-aware
+controller. Uncertain Helm writes are read back, not replayed. A cheap staging
+rollout proves handoff behavior, not production's 32-run throughput. See
+[execution profile configuration and activation prerequisites](resource-sizing.md#separate-execution-profiles-for-production-and-staging).
+
 First-transition bridge creation dry-runs its Deployment through the actual
 Kubernetes admission chain before creating any bridge resources or changing HPA.
 Provider changes to requested shutdown or placement settings block that transition. This

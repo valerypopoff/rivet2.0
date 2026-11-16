@@ -21,6 +21,7 @@ import {
 import { deploymentFailureDetails } from './lib/deployment-diagnostics.mjs';
 import { sizingInput } from './lib/resource-sizing.mjs';
 import { executionPoolCapacityProfile } from './lib/runtime-qualification-installation.mjs';
+import { executionProfile, assertExecutionProfile } from './lib/execution-profile.mjs';
 import { autoscalerPolicy } from './lib/execution-autoscaler.mjs';
 import { assertToolingRun, toolingPublicationIdentity, applicationInputDigest } from './lib/release-tooling.mjs';
 
@@ -145,6 +146,8 @@ async function prepareHostedReleaseWork(
   };
   const p = configuration.production;
   assertClusterIdentity(p);
+  if (p.executionProfile)
+    variables.RIVET_QUALIFICATION_PRODUCTION_EXECUTION_PROFILE = JSON.stringify(executionProfile(p.executionProfile));
   if (p.proxyMinimum !== undefined) {
     assert.ok([1, 2].includes(p.proxyMinimum), 'Reviewed proxy minimum must be one or two');
     variables.RIVET_QUALIFICATION_PRODUCTION_PROXY_MINIMUM = String(p.proxyMinimum);
@@ -340,13 +343,20 @@ async function prepareHostedReleaseWork(
     const values = path.join(directory, 'values.json'),
       policy = path.join(directory, 'policy.json');
     const valuesBytes = Buffer.from(installation.valuesBase64, 'base64');
-    if (p.proxyMinimum !== undefined || p.executionPoolCapacity) {
+    if (p.proxyMinimum !== undefined || p.executionPoolCapacity || p.executionProfile) {
       assert.equal(
         `sha256:${createHash('sha256').update(valuesBytes).digest('hex')}`,
         p.valuesDigest,
         'Prepared installation values differ from the staging configuration',
       );
       const target = JSON.parse(valuesBytes);
+      if (p.executionProfile) {
+        const profile = executionProfile(p.executionProfile);
+        assertExecutionProfile(target, profile);
+        assert.equal(target.autoscaling?.execution?.minReplicas, profile.minReplicas);
+        assert.ok(target.replicaCount?.execution >= profile.minReplicas);
+        assert.notEqual(target.ha?.stagingSingleExecution, true);
+      }
       if (p.proxyMinimum !== undefined) {
         assert.equal(target.replicaCount?.proxy, p.proxyMinimum);
         assert.equal(target.autoscaling?.proxy?.minReplicas, p.proxyMinimum);

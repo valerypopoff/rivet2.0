@@ -1,8 +1,19 @@
 import assert from 'node:assert/strict';
+import { isDeepStrictEqual } from 'node:util';
 import { autoscalerPolicyFromConfig, executionPoolLimit } from './execution-autoscaler.mjs';
 
 const role = (resource) => resource.metadata.labels?.['app.kubernetes.io/component'];
 const slot = (resource) => resource.metadata.labels?.['rivet.dev/execution-pool'];
+const admission = (resource) =>
+  resource.spec.template.spec.containers
+    .find((container) => container.name === 'api')
+    .env?.filter((entry) =>
+      [
+        'RIVET_DEPLOYMENT_PUBLISHED_EXECUTION_ADMISSION_MODE',
+        'RIVET_DEPLOYMENT_PUBLISHED_EXECUTION_MAX_ACTIVE_RUNS',
+      ].includes(entry.name),
+    )
+    .sort((a, b) => a.name.localeCompare(b.name)) ?? [];
 function selectPool(resources, activeName, activeCount, retiringCount) {
   const sets = resources.filter((resource) => resource.kind === 'StatefulSet' && role(resource) === 'execution');
   const active = sets.find((set) => set.metadata.name === activeName);
@@ -100,6 +111,7 @@ export function prepareExecutionPoolResources({
   if (!recovering) assert.ok(!peer || peer.spec.replicas === 0, 'Inactive execution pool is not empty');
   const image = prior.spec.template.spec.containers.find((container) => container.name === 'api').image;
   const oldImage = previous.spec.template.spec.containers.find((container) => container.name === 'api').image;
+  const admissionChanged = !isDeepStrictEqual(admission(prior), admission(previous));
   // A serial rollout also retains a surge owner after interruption. Its live
   // count is capacity, not the original target bound into the recovery digest.
   const previousReplicas =
@@ -113,11 +125,18 @@ export function prepareExecutionPoolResources({
         )?.replicas
       : previous.spec.replicas);
   assert.ok(Number.isSafeInteger(previousReplicas) && previousReplicas >= 2);
+  if (!recovering && admissionChanged)
+    assert.ok(
+      allowTransition && !previous.spec.template.spec.volumes?.some((volume) => volume.persistentVolumeClaim),
+      'Execution admission changes require a qualified paired replacement; no templates were applied',
+    );
   const eligible =
     allowTransition &&
     !recovering &&
     !previous.spec.template.spec.volumes?.some((volume) => volume.persistentVolumeClaim) &&
-    (image !== oldImage || !slot(previous));
+    // Even with the same image, serial replacement would mix different slot
+    // limits in one pool and stop the demand/headroom guard mid-rollout.
+    (image !== oldImage || !slot(previous) || admissionChanged);
   if (eligible)
     assert.ok(
       2 * previousReplicas <= physicalLimit,

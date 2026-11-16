@@ -233,7 +233,8 @@ export async function cleanupRetainedStaging(state, gate, owner, { qualification
     assert.ok(!remaining.folders.some((item) => item.relativePath === record.fixtureFolder.relativePath));
     dataCleaned = true; // Guarded logical deletion; normal housekeeping owns blob GC.
     await gate.verifyProtectedProxyAvailability();
-    await gate.verifyRetainedInstallation(state.operation.candidate);
+    if (state.operation.stagingExecutionProfile) await gate.idleRetainedExecutionProfile();
+    else await gate.verifyRetainedInstallation(state.operation.candidate);
     await gate.readyPublic();
     healthy = true;
   }
@@ -271,6 +272,10 @@ export async function verifyRetainedStagingCleanup(state) {
     record.retainedCleanup ??
     (current?.record.lastOperationId === state.operation.operationId ? current.record.lastReceipt : null);
   assert.ok(receipt && record.closed && record.acceptedWorkSettled);
+  // lastReceipt deliberately has no phase. After a lost finish acknowledgement
+  // it may be the only available receipt; use the persisted application state.
+  if (current.record.phase === 'idle' && state.operation.stagingExecutionProfile)
+    assert.equal(record.executionProfileTransitions?.idle?.state, 'settled', 'Idle execution profile was not verified');
   assert.equal(current.object.metadata.uid, record.retainedApplication.uid);
   assert.equal(current.record.lastOperationId, state.operation.operationId);
   assert.ok(['idle', 'quarantined'].includes(current.record.phase) && !current.record.owner);

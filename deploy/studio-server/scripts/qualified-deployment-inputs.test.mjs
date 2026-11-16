@@ -104,6 +104,27 @@ test('existing qualified receipt is reused without reconstructing or refreshing 
   assert.deepEqual(f.operation, original);
 });
 
+test('production-only deployment verifies the separately qualified staging execution profile', () => {
+  const f = fixture();
+  f.operation.stagingExecutionProfile = {
+    minReplicas: 1,
+    maxActiveRunsPerPod: 4,
+    requests: { cpu: '500m', memory: '1Gi' },
+  };
+  const plan = f.manifest.evidence.runtimeControl.qualification;
+  plan.configurationDigest = qualificationConfigurationDigest(
+    f.operation.installed,
+    f.operation.installed.policy,
+    undefined,
+    undefined,
+    f.operation.stagingExecutionProfile,
+  );
+  f.declarations.control.evidence = structuredClone(f.manifest.evidence.runtimeControl);
+  assert.equal(assertQualifiedDeploymentReceipt(f.operation, f), f.operation);
+  f.operation.stagingExecutionProfile.maxActiveRunsPerPod = 32;
+  assert.throws(() => assertQualifiedDeploymentReceipt(f.operation, f), /Receipt settings/);
+});
+
 test('cleanup recovery cannot substitute a different certificate, operation or production baseline', () => {
   const mutations = [
     (f) => (f.declarations.control.cleanupVerified = false),

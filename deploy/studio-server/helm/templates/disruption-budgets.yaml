@@ -5,7 +5,7 @@
 {{- $replicas := int (index $root.Values.replicaCount $component) }}
 {{- $autoscaling := index $root.Values.autoscaling $component }}
 {{- $minimumReplicas := ternary (int $autoscaling.minReplicas) $replicas $autoscaling.enabled }}
-{{- if or (gt $minimumReplicas 1) (and (eq $component "proxy") (eq $minimumReplicas 1)) }}
+{{- if or (gt $minimumReplicas 1) (and (eq $component "proxy") (eq $minimumReplicas 1)) (and (eq $component "execution") $root.Values.autoscaling.executionController.enabled) }}
 ---
 apiVersion: policy/v1
 kind: PodDisruptionBudget

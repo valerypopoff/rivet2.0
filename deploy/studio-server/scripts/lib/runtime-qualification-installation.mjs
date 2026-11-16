@@ -4,6 +4,7 @@ import { autoscalerPolicy, autoscalerPolicyDigest } from './execution-autoscaler
 import { assertOrdinaryRuntimeLayout } from './ha-release-evidence.mjs';
 import { overlapQualificationProfile } from './qualification-overlap-profile.mjs';
 import { requestContinuityProfile } from './request-continuity.mjs';
+import { executionProfile as normalizeExecutionProfile, applyExecutionProfile } from './execution-profile.mjs';
 
 const canonical = (value) =>
   Array.isArray(value)
@@ -104,6 +105,11 @@ export function qualificationSizing(values) {
 
 export function assertQualificationInstallationMatches(current, expected) {
   assert.deepEqual(
+    current.executionProfile ?? null,
+    expected.executionProfile ?? null,
+    'Reviewed production execution profile changed since qualification',
+  );
+  assert.deepEqual(
     current.executionPoolCapacity ?? null,
     expected.executionPoolCapacity ?? null,
     'Reviewed execution capacity target changed since qualification',
@@ -129,6 +135,7 @@ export async function inspectQualificationInstallation({
   valuesDigest,
   proxyMinimum,
   executionPoolCapacity,
+  executionProfile,
   run,
   helm = 'helm',
   kubectl = 'kubectl',
@@ -140,6 +147,7 @@ export async function inspectQualificationInstallation({
   assert.match(operatorValuesDigest, /^sha256:[a-f0-9]{64}$/);
   assert.ok(proxyMinimum === undefined || [1, 2].includes(proxyMinimum), 'Reviewed proxy minimum must be one or two');
   if (executionPoolCapacity) executionPoolCapacity = executionPoolCapacityProfile(executionPoolCapacity);
+  if (executionProfile) executionProfile = normalizeExecutionProfile(executionProfile);
   const system = JSON.parse(
     (await run(kubectl, ['--context', context, 'get', 'namespace', 'kube-system', '-o', 'json'], { capture: true }))
       .stdout,
@@ -213,7 +221,9 @@ export async function inspectQualificationInstallation({
     assert.equal(current.metadata.uid, uid, 'Installation namespace changed during observation');
     assert.ok(!current.metadata.deletionTimestamp, 'Installation namespace is terminating');
   }
-  const qualificationValues = qualificationSizing(values);
+  const qualificationValues = qualificationSizing(
+    executionProfile ? applyExecutionProfile(values, executionProfile) : values,
+  );
   if (proxyMinimum !== undefined) {
     qualificationValues.replicaCount.proxy = proxyMinimum;
     qualificationValues.autoscaling.proxy.minReplicas = proxyMinimum;
@@ -252,6 +262,7 @@ export async function inspectQualificationInstallation({
     policy: targetPolicy,
     policyDigest: autoscalerPolicyDigest(targetPolicy),
     ...(executionPoolCapacity ? { executionPoolCapacity } : {}),
+    ...(executionProfile ? { executionProfile } : {}),
     controlPlaneMode,
     edgeProfile: 'compact',
     baseline: { backend: 1, web: 1, execution: 2, proxy: values.autoscaling.proxy.minReplicas, autoscaler: 1 },

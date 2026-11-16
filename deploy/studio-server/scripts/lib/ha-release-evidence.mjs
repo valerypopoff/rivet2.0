@@ -622,6 +622,7 @@ export function assertOrdinaryRuntimeLayout(proof, values, policyDigest) {
     assertOverlapQualificationValues(values, proof.developerOverlap.profile);
   if (
     !values?.ha?.enabled ||
+    values.ha.stagingSingleExecution === true ||
     !(overlap ? ['singleton', 'singleton-overlap'] : ['singleton']).includes(values.ha.controlPlane?.mode) ||
     values.availability?.gkeGatewayProfile !== 'compact' ||
     values.replicaCount?.backend !== 1 ||

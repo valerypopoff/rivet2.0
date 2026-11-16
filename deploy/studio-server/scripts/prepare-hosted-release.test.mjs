@@ -646,7 +646,7 @@ test('janitor health polling has a deadline and never retries denied reads', asy
   );
 });
 
-for (const profile of ['legacy', 'one-proxy', 'wrong-hash', 'mixed-policy'])
+for (const profile of ['legacy', 'one-proxy', 'wrong-hash', 'mixed-policy', 'execution', 'execution-mismatch'])
   test(`production preparation preserves its pinned installation and rejects target drift: ${profile}`, async (t) => {
     const f = await fixture(t),
       directory = path.dirname(f.jobEnv);
@@ -657,9 +657,14 @@ for (const profile of ['legacy', 'one-proxy', 'wrong-hash', 'mixed-policy'])
           profile === 'legacy'
             ? { fixture: true }
             : {
-                replicaCount: { proxy: 1 },
-                autoscaling: { proxy: { minReplicas: 1 } },
+                replicaCount: { proxy: 1, execution: 2 },
+                autoscaling: { proxy: { minReplicas: 1 }, execution: { minReplicas: 2 } },
                 availability: { topologySpread: { minDomains: profile === 'mixed-policy' ? 2 : 1 } },
+                resources: { execution: { requests: { cpu: '2', memory: '4Gi' } } },
+                publishedExecutionAdmission: {
+                  mode: 'enforce',
+                  maxActiveRunsPerPod: profile === 'execution-mismatch' ? 4 : 32,
+                },
               },
         ),
       ).toString('base64'),
@@ -670,6 +675,12 @@ for (const profile of ['legacy', 'one-proxy', 'wrong-hash', 'mixed-policy'])
       policy: { backup: {}, acceptance: {} },
     };
     const valuesText = Buffer.from(installation.valuesBase64, 'base64').toString();
+    if (profile.startsWith('execution'))
+      f.configuration.production.executionProfile = {
+        minReplicas: 2,
+        maxActiveRunsPerPod: 32,
+        requests: { cpu: '2', memory: '4Gi' },
+      };
     if (profile !== 'legacy') {
       f.configuration.production.proxyMinimum = 1;
       f.configuration.production.valuesDigest =
@@ -703,7 +714,7 @@ for (const profile of ['legacy', 'one-proxy', 'wrong-hash', 'mixed-policy'])
         return '';
       },
     });
-    if (['wrong-hash', 'mixed-policy'].includes(profile)) {
+    if (['wrong-hash', 'mixed-policy', 'execution-mismatch'].includes(profile)) {
       await assert.rejects(preparation);
       await assert.rejects(fs.stat(path.join(directory, 'rivet-production/values.json')), { code: 'ENOENT' });
       return;
@@ -728,6 +739,38 @@ test('hosted staging carries the reviewed proxy minimum without changing its pro
   const job = await fs.readFile(f.jobEnv, 'utf8');
   assert.match(job, /^RIVET_QUALIFICATION_PRODUCTION_PROXY_MINIMUM=1$/m);
   assert.match(job, /^RIVET_QUALIFICATION_PRODUCTION_VALUES_SHA256=sha256:b{64}$/m);
+});
+
+test('hosted preparation carries separate execution profiles in the protected input and actor package', async (t) => {
+  const f = await fixture(t);
+  f.configuration.production.executionProfile = {
+    minReplicas: 2,
+    maxActiveRunsPerPod: 32,
+    requests: { cpu: '2', memory: '4Gi' },
+  };
+  f.configuration.staging.executionProfile = {
+    minReplicas: 1,
+    maxActiveRunsPerPod: 4,
+    requests: { cpu: '500m', memory: '1Gi' },
+  };
+  f.configuration.staging.qualificationSuite = 'focused';
+  f.configuration.staging.hostname = 'persistent.qualification.example.test';
+  f.configuration.staging.retainedApplication = {
+    protocol: 2,
+    namespace: 'rivet-staging-persistent',
+    recordName: 'rivet-staging-application',
+  };
+  await f.prepare();
+  const job = await fs.readFile(f.jobEnv, 'utf8');
+  assert.match(job, /^RIVET_QUALIFICATION_PRODUCTION_EXECUTION_PROFILE=.*"maxActiveRunsPerPod":32/m);
+  const settings = JSON.parse(
+    await fs.readFile(path.join(path.dirname(f.setupFile), 'package/driver/settings.json'), 'utf8'),
+  );
+  assert.deepEqual(settings.executionProfile, f.configuration.staging.executionProfile);
+  const invalid = await fixture(t);
+  invalid.configuration.production.executionProfile = f.configuration.staging.executionProfile;
+  await assert.rejects(invalid.prepare(), (e) => /two workers/.test(setupCause(e).message));
+  assert.deepEqual(invalid.events, []);
 });
 
 test('hosted staging carries an explicit surge target and rejects a mismatched steady policy before setup', async (t) => {

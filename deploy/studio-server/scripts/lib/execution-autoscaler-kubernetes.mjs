@@ -484,7 +484,9 @@ export function createExecutionAutoscalerIO({
       );
     },
     confirmDrained,
-    async confirmPeers(target, peers) {
+    async confirmPeers(target, peers, minimum = Math.min(2, policy.minReplicas)) {
+      if (![1, 2].includes(minimum) || minimum < Math.min(2, policy.minReplicas))
+        throw new Error('Execution peer requirement cannot weaken the configured floor.');
       let confirmed = 0;
       for (const peer of peers.filter((p) => p.uid !== target.uid && p.ready && p.state === 'serving')) {
         const before = await owned({ ...peer, workloadUid: target.workloadUid });
@@ -498,9 +500,9 @@ export function createExecutionAutoscalerIO({
           after.status?.conditions?.some((c) => c.type === 'Ready' && c.status === 'True')
         )
           confirmed++;
-        if (confirmed === 2) return;
+        if (confirmed === minimum) return;
       }
-      throw new Error('Two serving execution peers are not confirmed.');
+      throw new Error('Required serving execution peers are not confirmed.');
     },
     async readJournal() {
       const value = await api.json('GET', cm);
@@ -653,6 +655,7 @@ export function createExecutionAutoscalerIO({
             active: gauge(text, 'rivet_published_execution_active_runs'),
             limit: gauge(text, 'rivet_published_execution_admission_limit', 'mode="enforce"'),
             cpuRatio: cpu / requestCpu,
+            cpuRequest: requestCpu,
             sampleFresh:
               status.protocol === 1 &&
               status.withdrawalProtocol === 1 &&

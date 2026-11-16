@@ -1,0 +1,20 @@
+# Idle retained staging only, in a rivet-staging-* namespace. Normal qualification
+# temporarily uses three workers and the ordinary two-worker scaling policy.
+# Combine with the normal HA/autoscaler overlays; never use for production.
+# Existing releases use owned retained cleanup, which preserves the live count
+# and lets the controller drain. Do not Helm-scale a busy pool directly to one.
+ha:
+  stagingSingleExecution: true
+replicaCount:
+  execution: 1
+autoscaling:
+  execution:
+    minReplicas: 1
+publishedExecutionAdmission:
+  mode: enforce
+  maxActiveRunsPerPod: 4
+resources:
+  execution:
+    requests:
+      cpu: 500m
+      memory: 1Gi

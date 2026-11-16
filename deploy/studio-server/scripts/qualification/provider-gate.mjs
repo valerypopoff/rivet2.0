@@ -33,6 +33,9 @@ import { applySizingRequests } from '../lib/resource-sizing.mjs';
 import { rootStructuralMutation } from '../lib/structural-fixture-admission.mjs';
 import { assertManagedGateActive } from '../lib/managed-gate-command.mjs';
 import { qualificationExecutionBaseline } from '../lib/ha-release-evidence.mjs';
+import { applyExecutionProfile, assertExecutionProfile } from '../lib/execution-profile.mjs';
+import { transitionRetainedExecutionProfile } from '../lib/retained-execution-profile.mjs';
+import { autoscalerPolicyFromConfig } from '../lib/execution-autoscaler.mjs';
 
 export const root =
   process.env.RIVET_QUALIFICATION_SOURCE_ROOT ?? fileURLToPath(new URL('../../../../', import.meta.url));
@@ -402,6 +405,8 @@ export class ReusableProviderGate extends RuntimeControlLocalGate {
         active: envelope.ha?.executionPools?.active ?? 'a',
         retiringReplicas: 0,
       };
+    if (this.operation.stagingExecutionProfile)
+      this.providerValues = applyExecutionProfile(this.providerValues, this.operation.stagingExecutionProfile);
     if (this.operation.sizingRequests)
       this.providerValues = applySizingRequests(this.providerValues, this.operation.sizingRequests);
     return this.providerValues;
@@ -781,13 +786,30 @@ export class ReusableProviderGate extends RuntimeControlLocalGate {
   }
   async verifyRetainedInstallation(manifest = this.currentManifest) {
     await this.assertProofContext();
-    const values = JSON.parse(
+    const release = await this.readRetainedHelmRelease();
+    assert.equal(release.name, this.config.release);
+    assert.equal(release.namespace, this.config.namespace);
+    assert.ok(Number.isSafeInteger(release.version) && release.version > 0);
+    assert.equal(release.info?.status, 'deployed', 'Retained Helm release is not successfully deployed');
+    const values = release.config;
+    assert.equal(
+      values?.release?.production?.manifestDigest,
+      getStudioServerReleaseManifestDigest(manifest),
+      'Retained Helm release differs from the expected immutable release',
+    );
+    for (const [name, image] of Object.entries(manifest.images)) {
+      assert.equal(values.images[name].repository, image.repository);
+      assert.equal(values.images[name].digest, image.digest);
+    }
+    return values;
+  }
+  async readRetainedHelmRelease() {
+    return JSON.parse(
       (
         await run(
           this.helmBin,
           [
-            'get',
-            'values',
+            'status',
             this.config.release,
             '--kube-context',
             this.config.context,
@@ -800,15 +822,152 @@ export class ReusableProviderGate extends RuntimeControlLocalGate {
         )
       ).stdout,
     );
+  }
+  async prepareRetainedExecutionProfile() {
+    return transitionRetainedExecutionProfile(this, { idle: false });
+  }
+  async idleRetainedExecutionProfile() {
+    return transitionRetainedExecutionProfile(this, { idle: true });
+  }
+  async retainedExecutionPool(values) {
+    const workloads = JSON.parse(
+      (
+        await this.kube([
+          'get',
+          'statefulsets,deployments',
+          '-l',
+          `app.kubernetes.io/instance=${this.config.release}`,
+          '-o',
+          'json',
+        ])
+      ).stdout,
+    ).items;
+    const pools = workloads.filter((item) => role(item) === 'execution' && item.spec.replicas > 0);
+    assert.equal(pools.length, 1, 'Retained profile requires one settled execution pool');
+    const pool = pools[0];
+    assert.equal(pool.metadata.labels?.['app.kubernetes.io/instance'], this.config.release);
+    assert.ok(pool.metadata.uid && !pool.metadata.deletionTimestamp);
+    assert.equal(pool.spec.updateStrategy?.type, 'OnDelete');
+    const image = values.images.api;
     assert.equal(
-      values.release?.production?.manifestDigest,
-      getStudioServerReleaseManifestDigest(manifest),
-      'Retained Helm release differs from the expected immutable release',
+      pool.spec.template.spec.containers.find((item) => item.name === 'api')?.image,
+      `${image.repository}@${image.digest}`,
     );
-    for (const [name, image] of Object.entries(manifest.images)) {
-      assert.equal(values.images[name].repository, image.repository);
-      assert.equal(values.images[name].digest, image.digest);
+    if (values.ha.executionPools?.enabled)
+      assert.equal(pool.metadata.labels?.['rivet.dev/execution-pool'], values.ha.executionPools.active);
+    assert.equal(values.ha.executionPools?.retiringReplicas ?? 0, 0);
+    const versions = {},
+      frontends = {};
+    for (const item of workloads.filter((item) => ['execution', 'proxy', 'backend', 'web'].includes(role(item)))) {
+      assert.ok(item.metadata.uid && item.metadata.resourceVersion && !item.metadata.deletionTimestamp);
+      versions[item.metadata.name] = item.metadata.resourceVersion;
+      if (role(item) !== 'execution') {
+        assert.ok(!Object.hasOwn(frontends, role(item)), 'Retained frontend owner is ambiguous');
+        frontends[role(item)] = item.spec.replicas;
+      }
     }
+    const controllers = workloads.filter((item) => role(item) === 'autoscaler');
+    assert.equal(controllers.length, 1);
+    assert.equal(controllers[0].spec.replicas, 1, 'Retained execution controller is suspended');
+    assert.equal(
+      controllers[0].spec.template.spec.containers.find((item) => item.name === 'autoscaler')?.image,
+      `${image.repository}@${image.digest}`,
+    );
+    const controller = controllers[0].metadata;
+    assert.ok(controller.uid && !controller.deletionTimestamp);
+    const config = JSON.parse(
+      controllers[0].spec.template.spec.containers
+        .find((item) => item.name === 'autoscaler')
+        .env.find((item) => item.name === 'RIVET_AUTOSCALER_CONFIG').value,
+    );
+    return {
+      uid: pool.metadata.uid,
+      name: pool.metadata.name,
+      replicas: pool.spec.replicas,
+      versions,
+      frontends,
+      controller: { name: controller.name, uid: controller.uid, policy: autoscalerPolicyFromConfig(config) },
+    };
+  }
+  async waitRetainedExecutionProfile({
+    uid,
+    name,
+    idle,
+    minimum,
+    policyDigest,
+    profile,
+    after,
+    exactMinimum = false,
+    manifest = idle ? this.operation.candidate : this.currentManifest,
+  }) {
+    await until(
+      'retained execution profile settlement',
+      async () => {
+        await this.assertProofContext();
+        const journal = await this.state.api.json(
+          'GET',
+          `/api/v1/namespaces/${this.config.namespace}/configmaps/${this.journalName}`,
+        );
+        const record = JSON.parse(journal.data.record);
+        if (
+          record.phase !== 'complete' ||
+          record.policyDigest !== policyDigest ||
+          record.lastSampleAt < after ||
+          !Number.isFinite(record.lastSampleAt)
+        )
+          return false;
+        assert.equal(record.release, this.config.release);
+        assert.equal(record.namespace, this.config.namespace);
+        assert.equal(record.manifestDigest, imageDigest(manifest));
+        const controller = JSON.parse((await this.kube(['get', 'statefulset', name, '-o', 'json'])).stdout);
+        assert.equal(controller.metadata.uid, uid, 'Retained execution controller changed during settlement');
+        assert.ok(!controller.metadata.deletionTimestamp);
+        if (
+          !Number.isSafeInteger(controller.status?.observedGeneration) ||
+          controller.status.observedGeneration < controller.metadata.generation
+        )
+          return false;
+        const pods = (await this.pods()).filter((pod) => role(pod) === 'execution');
+        // An idle minimum is a floor, not a forced scale command. A fresh healthy
+        // observation may retain spare workers during normal stabilization; do
+        // not add another stabilization wait to the release critical path.
+        if (
+          pods.length < (idle ? minimum : qualificationExecutionBaseline(this.operation)) ||
+          pods.length > this.operation.policy.maxReplicas
+        )
+          return false;
+        if (pods.length !== controller.spec.replicas) return false;
+        if (exactMinimum && pods.length !== minimum) return false;
+        for (const pod of pods) {
+          assert.ok(
+            pod.metadata.ownerReferences?.some(
+              (owner) => owner.controller && owner.kind === 'StatefulSet' && owner.uid === uid,
+            ),
+            'Retained execution Pod has an unexpected owner',
+          );
+          if (!ready(pod)) return false;
+          const container = pod.spec.containers.find((item) => item.name === 'api');
+          const image = manifest.images.api;
+          assert.equal(container.image, `${image.repository}@${image.digest}`);
+          assertExecutionProfile(
+            {
+              resources: { execution: container.resources },
+              publishedExecutionAdmission: {
+                mode: container.env.find((item) => item.name === 'RIVET_DEPLOYMENT_PUBLISHED_EXECUTION_ADMISSION_MODE')
+                  ?.value,
+                maxActiveRunsPerPod: Number(
+                  container.env.find((item) => item.name === 'RIVET_DEPLOYMENT_PUBLISHED_EXECUTION_MAX_ACTIVE_RUNS')
+                    ?.value,
+                ),
+              },
+            },
+            profile,
+          );
+        }
+        return true;
+      },
+      this.config.deploymentTimeoutSeconds * 1000,
+    );
   }
   async createPublicRoute() {
     await this.assertProofContext();

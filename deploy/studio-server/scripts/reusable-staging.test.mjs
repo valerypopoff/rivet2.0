@@ -1068,6 +1068,27 @@ test('concrete provider Helm render retains installed production timing, real ma
     folder,
   );
   const values = gate.values();
+  gate.operation.installed.qualificationValues.publishedExecutionAdmission.maxActiveRunsPerPod = 32;
+  gate.operation.stagingExecutionProfile = {
+    minReplicas: 1,
+    maxActiveRunsPerPod: 4,
+    requests: { cpu: '500m', memory: '1Gi' },
+  };
+  const stageValues = gate.values();
+  assert.equal(stageValues.publishedExecutionAdmission.maxActiveRunsPerPod, 4);
+  assert.deepEqual(stageValues.resources.execution.requests, {
+    ...envelope.resources.execution.requests,
+    cpu: '500m',
+    memory: '1Gi',
+  });
+  assert.equal(
+    stageValues.autoscaling.execution.minReplicas,
+    2,
+    'Keep the test-time rollout policy distinct from its idle floor',
+  );
+  assert.equal(gate.operation.installed.qualificationValues.publishedExecutionAdmission.maxActiveRunsPerPod, 32);
+  delete gate.operation.stagingExecutionProfile;
+  gate.operation.installed.qualificationValues.publishedExecutionAdmission.maxActiveRunsPerPod = 4;
   assert.deepEqual(
     gate.config.imagePullSecrets,
     [],

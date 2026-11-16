@@ -262,6 +262,7 @@ async function main() {
       'deploy/studio-server/scripts/reusable-staging-transport.test.mjs',
       'deploy/studio-server/scripts/runtime-qualification-publication.test.mjs',
       'deploy/studio-server/scripts/execution-autoscaler.test.mjs',
+      'deploy/studio-server/scripts/execution-profile.test.mjs',
       'deploy/studio-server/scripts/execution-autoscaler-kubernetes.test.mjs',
       'deploy/studio-server/scripts/single-machine-kubernetes.test.mjs',
       'deploy/studio-server/scripts/server-launch-mode.test.mjs',

@@ -151,6 +151,8 @@ export async function executeProviderPhase({
     if (reuse) {
       await step('retained-dependencies', () => gate.retainedSecrets());
       await step('retained-predecessor', () => gate.verifyRetainedInstallation());
+      if (operation.stagingExecutionProfile)
+        await step('retained-execution-profile', () => gate.prepareRetainedExecutionProfile());
     } else {
       await step('dependencies', () => gate.installDependencies());
       await step('routing', () => gate.createPublicRoute());
@@ -304,6 +306,7 @@ export async function assertProviderCheckout(operation, settings = {}) {
         profile: operation.requestContinuityProfile,
         overlap: operation.developerOverlapProfile,
         suite: settings.qualificationSuite,
+        stagingExecutionProfile: operation.stagingExecutionProfile,
       }),
     );
   assertReleaseManifestMatchesCurrentChart(operation.candidate, root, { requirePromoted: false });
@@ -403,6 +406,7 @@ async function main() {
     'Driver and operation continuity profiles differ',
   );
   assert.deepEqual(settings.sizingRequests, operation.sizingRequests, 'Driver and operation sizing requests differ');
+  assert.deepEqual(settings.executionProfile, operation.stagingExecutionProfile, 'Staging execution profile changed');
   assert.deepEqual(
     settings.retainedApplication,
     operation.retainedApplication,

@@ -28,7 +28,7 @@ test('publication-aware retention has an explicit compatibility marker before pr
     assert.deepEqual(retainedApplicationSettings({ protocol, ...names }), { protocol, ...names });
   assert.throws(() => retainedApplicationSettings({ protocol: 3, ...names }), /Unsupported/);
 });
-async function retained(t) {
+async function retained(t, executionProfile) {
   const f = await fixture(t);
   const configuration = reusableStagingSettings({
     ...settings(),
@@ -39,6 +39,7 @@ async function retained(t) {
       namespace: 'rivet-staging-persistent',
       recordName: 'rivet-staging-application',
     },
+    ...(executionProfile ? { executionProfile } : {}),
   });
   const make = (id, predecessor = previous, releases = {}) => {
     const { inputHash: _hash, ...original } = operation();
@@ -46,6 +47,7 @@ async function retained(t) {
       ...original,
       operationId: id,
       retainedApplication: configuration.retainedApplication,
+      ...(executionProfile ? { stagingExecutionProfile: executionProfile } : {}),
       predecessorManifestDigest: predecessor,
       candidateManifestDigest: candidate,
       ...releases,
@@ -54,6 +56,27 @@ async function retained(t) {
   };
   return { ...f, make, state: make('rivet-q-123-1') };
 }
+
+test('a lost finish receipt cannot skip execution-profile settlement verification', async (t) => {
+  const profile = { minReplicas: 1, maxActiveRunsPerPod: 4, requests: { cpu: '500m', memory: '1Gi' } };
+  const { state } = await retained(t, profile);
+  await state.arm(actor);
+  await state.namespace({ create: true });
+  await state.claimCleanup(actor);
+  await state.change((record) => {
+    record.phase = 'settled';
+    record.acceptedWorkSettled = true;
+  });
+  // Finish committed, but its per-attempt receipt was not acknowledged.
+  await state.application.finish({ healthy: true, dataCleaned: true, manifestDigest: candidate });
+  assert.equal((await state.read()).record.retainedCleanup, undefined);
+  await assert.rejects(verifyRetainedStagingCleanup(state), /Idle execution profile was not verified/);
+  await state.change((record) => {
+    record.executionProfileTransitions = { idle: { state: 'settled' } };
+  });
+  const verified = await verifyRetainedStagingCleanup(state);
+  assert.equal(verified.retainedApplication.phase, 'idle');
+});
 
 async function publishedApplication(t) {
   const f = await retained(t);

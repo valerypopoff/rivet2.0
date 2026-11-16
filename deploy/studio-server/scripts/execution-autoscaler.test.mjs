@@ -5,6 +5,7 @@ import { createBackendRetirement } from '../images/api/backend-retirement.mjs';
 import {
   autoscalerPolicy,
   autoscalerPolicyDigest,
+  autoscalerPolicyFromConfig,
   recommendExecutionReplicas,
   reconcileExecutionAutoscaling,
 } from './lib/execution-autoscaler.mjs';
@@ -151,7 +152,7 @@ function fixture(replicas = 3, policyOverrides = {}) {
 
 test('policy rejects unsafe, fractional and incompatible bounds', () => {
   for (const value of [
-    { minReplicas: 1 },
+    { minReplicas: 0 },
     { maxReplicas: 1 },
     { pollSeconds: 0 },
     { maxReplicas: 101 },
@@ -162,6 +163,110 @@ test('policy rejects unsafe, fractional and incompatible bounds', () => {
   ])
     assert.throws(() => autoscalerPolicy(value));
   assert.equal(autoscalerPolicyDigest({}), autoscalerPolicyDigest(autoscalerPolicy({})));
+});
+
+test('one worker requires an explicit staging controller and still drains its departing peer', async () => {
+  const policy = { minReplicas: 1 };
+  for (const config of [
+    { policy },
+    { policy, namespace: 'rivet' },
+    { policy, namespace: 'rivet', stagingSingleExecution: true },
+  ])
+    assert.throws(() => autoscalerPolicyFromConfig(config), /staging|two workers/);
+  assert.equal(
+    autoscalerPolicyFromConfig({ policy, namespace: 'rivet-staging-persistent', stagingSingleExecution: true })
+      .minReplicas,
+    1,
+  );
+  const f = fixture(2, policy);
+  await assert.rejects(f.tick(), /restricted to staging/);
+  const tick = () => f.tick({ namespace: 'rivet-staging-persistent' });
+  for (let index = 0; index < 10 && f.journal()?.phase !== 'draining'; index++) {
+    await tick();
+    f.advance();
+  }
+  assert.equal(f.journal().phase, 'draining');
+  const tail = f.snapshot.pods[1];
+  tail.active = 1;
+  assert.equal((await tick()).state, 'waiting-for-work');
+  assert.equal(f.snapshot.replicas, 2);
+  tail.active = 0;
+  tail.state = 'drained';
+  for (let index = 0; index < 5; index++) {
+    await tick();
+    f.advance();
+  }
+  assert.equal(f.snapshot.replicas, 1);
+  assert.equal(f.journal().phase, 'complete');
+  assert.equal((await tick()).desired, 1);
+  assert.equal(
+    f.calls.some((call) => call[0] === 'delete'),
+    false,
+  );
+});
+
+test('lowering the staging floor finishes an already-owned retirement under its original policy', async () => {
+  const f = fixture(3);
+  const namespace = 'rivet-staging-floor-change';
+  const tick = (policy = f.policy) => f.tick({ namespace, policy });
+  for (let index = 0; index < 10 && f.journal()?.phase !== 'draining'; index++) {
+    await tick();
+    f.advance();
+  }
+  assert.equal(f.journal().phase, 'draining');
+  const oldDigest = f.journal().policyDigest;
+  const oldOwner = f.snapshot.pods[2];
+  const idlePolicy = { ...f.policy, minReplicas: 1 };
+  const confirmations = [];
+  f.io.confirmPeers = async (_target, peers, minimum) => {
+    confirmations.push(minimum);
+    assert.ok(peers.filter((p) => p.ready && p.state === 'serving').length >= minimum);
+  };
+  oldOwner.active = 1;
+  assert.equal((await tick(idlePolicy)).state, 'waiting-for-work');
+  assert.equal(f.journal().policyDigest, oldDigest);
+  assert.equal(f.snapshot.replicas, 3);
+  oldOwner.active = 0;
+  oldOwner.state = 'drained';
+  for (let index = 0; index < 5 && f.journal().phase !== 'complete'; index++) {
+    await tick(idlePolicy);
+    f.advance();
+  }
+  assert.equal(f.journal().phase, 'complete');
+  assert.equal(f.snapshot.replicas, 2, 'Finish the original retirement before adopting the new floor');
+  assert.equal(f.journal().policyDigest, oldDigest);
+  assert.deepEqual(confirmations, [2]);
+  await tick(idlePolicy);
+  assert.equal(f.journal().policyDigest, autoscalerPolicyDigest(idlePolicy));
+  for (let index = 0; index < 15 && f.snapshot.replicas > 1; index++) {
+    for (const pod of f.snapshot.pods) if (pod.state === 'draining') pod.state = 'drained';
+    f.advance();
+    await tick(idlePolicy);
+  }
+  assert.equal(f.snapshot.replicas, 1);
+  assert.ok(confirmations.includes(1));
+});
+
+test('an unfinished retirement still rejects every policy change beyond the staging floor', async () => {
+  const f = fixture();
+  const namespace = 'rivet-staging-floor-fence';
+  for (let i = 0; i < 10 && f.journal()?.phase !== 'draining'; i++) {
+    await f.tick({ namespace });
+    f.advance();
+  }
+  assert.equal(f.journal().phase, 'draining');
+  const before = f.calls.length;
+  for (const change of [{ targetSlotsPercent: 50 }, { maxReplicas: 9 }, { withdrawalSeconds: 2 }])
+    await assert.rejects(
+      f.tick({ namespace, policy: { ...f.policy, minReplicas: 1, ...change } }),
+      /original image and policy/,
+    );
+  await assert.rejects(
+    f.tick({ namespace, policy: { ...f.policy, minReplicas: 1 }, manifestDigest: 'different' }),
+    /original image and policy/,
+  );
+  await assert.rejects(f.tick({ policy: { ...f.policy, minReplicas: 1 } }), /restricted to staging/);
+  assert.equal(f.calls.length, before);
 });
 
 test('an active or paused HA upgrade permits only bounded scale-up without replacing its journal', async () => {
