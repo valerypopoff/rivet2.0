@@ -1,9 +1,135 @@
 # Kubernetes resource-sizing handoff
 
 The opt-in [runtime autoscaler](runtime-autoscaling.md) has its own pod requests
-and ceiling: compact mode is six application pods plus one controller. Its
+and ceiling: the compact production baseline is five application Pods plus one controller. Its
 execution maximum must fit the real DB/node/provider budgets. Local protocol
 tests are not representative-load or GKE capacity measurements.
+
+## Separate execution profiles for production and staging
+
+**Implemented locally, November 17, 2026; not deployed or load-certified.** Keep
+these installation-specific targets in operator-owned values; the shared
+production overlay retains its conservative admission default.
+
+| Environment                | Execution minimum | Active published runs per Pod | CPU / RAM requests per execution Pod                                   |
+| -------------------------- | ----------------- | ----------------------------- | ---------------------------------------------------------------------- |
+| Production candidate       | 2                 | 32                            | 2 CPUs / 4 GiB                                                         |
+| Retained staging candidate | 1                 | 4                             | Existing reservations; this installation currently admits 500m / 1 GiB |
+
+`publishedExecutionAdmission.maxActiveRunsPerPod` owns
+`RIVET_DEPLOYMENT_PUBLISHED_EXECUTION_MAX_ACTIVE_RUNS`; keep admission in
+`enforce` mode. Two production workers provide 64 admission slots, not a proven
+64-run throughput guarantee. The controller already scales from occupied slots
+as well as CPU: at its 60% slot target, 39 active runs across two 32-slot workers
+recommend a third worker, subject to the existing observation/cooldown rules.
+CPU/RAM here are requests. Preserve existing limits and ephemeral-storage
+settings; a new 4-GiB hard limit requires separate workload evidence.
+
+The [production override](../../deploy/studio-server/examples/execution-production.values.example.yaml)
+and [idle staging override](../../deploy/studio-server/examples/execution-staging.values.example.yaml)
+change only execution requests, admission and replica floors. Merge them after
+installation values and the existing HA/autoscaler overlays. The idle staging
+override explicitly opts into `ha.stagingSingleExecution`; chart rendering and
+controller startup reject that flag outside a `rivet-staging-*` namespace.
+The examples describe steady state/new installation. For a running staging
+release, use the owned retained-cleanup transition, which preserves its live
+replica count; do not apply the example's one-replica count to a busy pool.
+Production qualification/deployment still requires at least two workers and
+rejects the staging flag. Even a sole staging worker retains the controller's
+disruption budget and accepted-work drain checks.
+
+The private hosted-release configuration supports these narrow fields (this is
+a fragment, not a complete installation configuration):
+
+```json
+{
+  "production": {
+    "executionProfile": {
+      "minReplicas": 2,
+      "maxActiveRunsPerPod": 32,
+      "requests": { "cpu": "2", "memory": "4Gi" }
+    }
+  },
+  "staging": {
+    "executionProfile": {
+      "minReplicas": 1,
+      "maxActiveRunsPerPod": 4,
+      "requests": { "cpu": "500m", "memory": "1Gi" }
+    }
+  }
+}
+```
+
+`production.executionProfile` describes the intended target; source Helm/settings
+digests remain observations of the installation before the change. The protected
+production values must match that target. `staging.executionProfile` requires the
+retained focused suite. It overrides only staging execution CPU/RAM requests and
+admission, and is bound alongside production's target in the qualification
+configuration digest and archived operation. Omitting both fields preserves the
+legacy behavior and qualification digests.
+
+Test preparation raises retained staging to three workers and restores the normal
+two-worker test policy before observation. Successful cleanup first proves accepted
+work has finished and removes its fixtures, then restores the one-worker minimum.
+Helm preserves live replica counts; the normal autoscaler withdraws and drains
+spare workers. Cleanup verifies a fresh healthy controller observation of the new
+floor, without waiting out an additional stabilization window on the release
+critical path. More than one worker may therefore remain briefly after cleanup.
+Failed tests keep the existing quarantine behavior. Both floor transitions record
+intent before writing; recovery reads back an uncertain write and never replays it.
+Preparation changes only the existing controller policy and an upward replica
+count using UID/version guards; it does not reapply a newer chart to predecessor
+workloads. If a new test starts before background scale-in has finished, its
+read-only preparation waits for the idle floor and completed journal first,
+preventing test preparation from racing an unfinished retirement. Cleanup may
+lower the floor while a test-policy retirement is already running: the controller
+finishes that exact retirement with its original policy and two-peer requirement,
+then adopts the one-worker floor on the next complete observation. A changed
+image or any other steady policy change still requires explicit recovery.
+Retained values are read together with Helm's release status; pending/failed
+revisions cannot prove a completed profile update, even if their saved values
+look correct. Cleanup verification also requires a settled idle-profile receipt
+after a lost application-finish acknowledgement.
+Retained requests/admission must already match the selected staging profile;
+changing that profile on an existing retained installation requires an explicit
+owned preparation, rather than silently adopting mismatched predecessor Pods.
+
+During a journal-owned paired handoff, demand checks validate each pool's metrics
+and uniform admission limit separately, then size candidate growth using the
+candidate's limit. This supports four-to-32-slot adoption without weakening the
+mixed-limit guard within a pool or outside an owned transition. CPU demand is
+also converted from each observed Pod's utilization and CPU request to the
+smallest admitted candidate request, so a change in CPU size does not compare
+incompatible percentages or assume extra provider capacity. The retirement check
+also verifies uncapped demand at full slot/CPU capacity; reaching the scaling
+ceiling cannot turn an overloaded replacement pool into sufficient capacity.
+CPU summation roundoff is tolerated at that boundary, but real overload is not.
+Admission changes use paired replacement even when application images stay the
+same. If pairing is unavailable or unqualified, stop before applying templates
+instead of mixing incompatible admission limits in a serially replaced pool.
+Existing placement, terminating-Pod and resource headroom checks still run before retirement. With two
+old and two new production-sized workers, execution alone reserves 8 CPUs / 16 GiB
+during future paired updates; larger live pools require their actual larger budget.
+
+Before calling 32-slot production capacity validated, run a separate approved
+representative 32-concurrent-run trial on temporary production-sized staging
+workers, then restore the cheap profile. Check latency, CPU/memory peaks,
+overload handling, OOM/restarts and complete recordings. Routine four-slot staging
+rollouts prove rollout behavior, not production throughput. This calibration is
+not required again on every release. Use `helm template` as a rendering check:
+Helm `lint` can log a template `fail` as information and still exit zero.
+
+The autoscaler implementation is bundled into the API image by
+`images/lib/prepare-autoscaler-runtime.mjs`. Supporting its one-worker policy
+therefore requires a matching API image; a tooling-only publication cannot
+update the running controller. Local preparation does not authorize publishing
+configuration, spending on a cloud test or deploying production.
+
+Local coverage includes profile validation and qualification identity, three-worker
+preparation and idle cleanup, uncertain-write recovery, staging floor transitions,
+and paired handoffs in both directions between four- and 32-slot workers. The
+maintained rollout source suite and Helm rendering checks cover these paths;
+they do not establish provider capacity or production throughput.
 
 ## Web and proxy reservation candidate
 
@@ -11,10 +137,10 @@ The November 3, 2026 DevOps review of October 27-November 3 production usage
 identifies two request-only candidates. The reported CPU peaks are one-minute
 averages and memory peaks are sampled, so neither establishes a safe hard limit.
 
-| Container | Reported current request | Candidate request | Reported CPU peak / memory peak |
-| --- | --- | --- | --- |
-| Web | 500m / 512Mi | 50m / 128Mi | 95m / 60Mi |
-| Each proxy | 500m / 512Mi | 100m / 128Mi | 95m / 14Mi |
+| Container  | Reported current request | Candidate request | Reported CPU peak / memory peak |
+| ---------- | ------------------------ | ----------------- | ------------------------------- |
+| Web        | 500m / 512Mi             | 50m / 128Mi       | 95m / 60Mi                      |
+| Each proxy | 500m / 512Mi             | 100m / 128Mi      | 95m / 14Mi                      |
 
 The [candidate values](../../deploy/studio-server/examples/gke-web-proxy-resources.values.example.yaml)
 are outside the chart and change only these four request fields. Merge them
@@ -46,7 +172,7 @@ and [Pod-based billing](https://cloud.google.com/kubernetes-engine/pricing#gener
 **Release Rivet** now accepts an optional `sizing_requests` JSON input:
 
 ```json
-{"web":{"cpu":"50m","memory":"128Mi"},"proxy":{"cpu":"100m","memory":"128Mi"}}
+{ "web": { "cpu": "50m", "memory": "128Mi" }, "proxy": { "cpu": "100m", "memory": "128Mi" } }
 ```
 
 This example expresses the proposed reservations, not an accepted GKE profile.
@@ -166,15 +292,15 @@ peaks. The built-in gate exercises only the deterministic fast, long, and
 overload parts of the `execution` row; the other trials need separate staging
 work.
 
-| Workload | Trial | Evidence needed |
-| --- | --- | --- |
-| `web` | Idle, dashboard/editor load, reconnect | Memory/CPU and local-ephemeral high-water; browser error rate |
-| `backend` | Cold startup, editor Node runs, concurrent editor sessions, settings/recording activity | Combined API **and** executor process memory under the same container; readiness and restart history |
-| `execution` | Built-in fast, long, and overload stages; representative published graphs with recordings | Per-Pod memory/CPU/storage peaks, p95/p99 latency, 429 admission behavior, queue/drops, provider concurrency |
-| `backend`, then `execution` | Install a runtime library through the backend worker, then run a graph using it on execution Pods | Backend package-manager scratch and install duration; execution cache/download and run peaks; failed writes and post-install steady state |
-| Migration Job (`resources.api`) | First install and upgrade against representative metadata volume | Peak memory, temporary storage, completion time, failure/retry behavior |
-| `evaluation` (if enabled) | Dedicated Evaluation and joint public-load trial | Worker peaks, retry/cancellation, public-route interference |
-| `proxy` (embedded only) | Public routes, WebSockets, large allowed uploads | Request-body scratch, connection count, latency, failed writes |
+| Workload                        | Trial                                                                                             | Evidence needed                                                                                                                           |
+| ------------------------------- | ------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `web`                           | Idle, dashboard/editor load, reconnect                                                            | Memory/CPU and local-ephemeral high-water; browser error rate                                                                             |
+| `backend`                       | Cold startup, editor Node runs, concurrent editor sessions, settings/recording activity           | Combined API **and** executor process memory under the same container; readiness and restart history                                      |
+| `execution`                     | Built-in fast, long, and overload stages; representative published graphs with recordings         | Per-Pod memory/CPU/storage peaks, p95/p99 latency, 429 admission behavior, queue/drops, provider concurrency                              |
+| `backend`, then `execution`     | Install a runtime library through the backend worker, then run a graph using it on execution Pods | Backend package-manager scratch and install duration; execution cache/download and run peaks; failed writes and post-install steady state |
+| Migration Job (`resources.api`) | First install and upgrade against representative metadata volume                                  | Peak memory, temporary storage, completion time, failure/retry behavior                                                                   |
+| `evaluation` (if enabled)       | Dedicated Evaluation and joint public-load trial                                                  | Worker peaks, retry/cancellation, public-route interference                                                                               |
+| `proxy` (embedded only)         | Public routes, WebSockets, large allowed uploads                                                  | Request-body scratch, connection count, latency, failed writes                                                                            |
 
 The deterministic Code-plus-Delay gate does not call an external LLM or tool,
 install a runtime library, or reproduce customer-specific memory spikes.
@@ -220,12 +346,12 @@ Copy this table into the private change review; do not fill it with example
 numbers. One row is needed per active component, including the migration Job
 and optional workloads. Attach charts rather than credentials or payloads.
 
-| Component and scenario | Image/Helm identity | Replicas, admission, HPA | Normal / valid-peak memory | Normal / peak CPU and throttling | Total local-ephemeral and `/tmp`/`/var/tmp` peaks | Restarts, OOM, evictions, failed writes | Proposed requests / limits and headroom rationale | Reviewer |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `web` | Pending | Pending | Pending | Pending | Pending | Pending | Pending | Pending |
-| `backend` | Pending | Pending | Pending | Pending | Pending | Pending | Pending | Pending |
-| `execution` | Pending | Pending | Pending | Pending | Pending | Pending | Pending | Pending |
-| Migration Job (`resources.api`) | Pending | Pending | Pending | Pending | Pending | Pending | Pending | Pending |
+| Component and scenario          | Image/Helm identity | Replicas, admission, HPA | Normal / valid-peak memory | Normal / peak CPU and throttling | Total local-ephemeral and `/tmp`/`/var/tmp` peaks | Restarts, OOM, evictions, failed writes | Proposed requests / limits and headroom rationale | Reviewer |
+| ------------------------------- | ------------------- | ------------------------ | -------------------------- | -------------------------------- | ------------------------------------------------- | --------------------------------------- | ------------------------------------------------- | -------- |
+| `web`                           | Pending             | Pending                  | Pending                    | Pending                          | Pending                                           | Pending                                 | Pending                                           | Pending  |
+| `backend`                       | Pending             | Pending                  | Pending                    | Pending                          | Pending                                           | Pending                                 | Pending                                           | Pending  |
+| `execution`                     | Pending             | Pending                  | Pending                    | Pending                          | Pending                                           | Pending                                 | Pending                                           | Pending  |
+| Migration Job (`resources.api`) | Pending             | Pending                  | Pending                    | Pending                          | Pending                                           | Pending                                 | Pending                                           | Pending  |
 
 Before approval, confirm that the monitoring time range includes startup and
 the entire run, query results are scoped to the selected candidate Pods, all

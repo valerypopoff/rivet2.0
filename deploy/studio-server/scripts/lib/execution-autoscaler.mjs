@@ -22,7 +22,7 @@ export function autoscalerPolicy(input) {
     if (!Number.isSafeInteger(value) || value < 1) throw new Error(`Invalid autoscaler policy: ${key}.`);
   }
   if (
-    policy.minReplicas < 2 ||
+    policy.minReplicas < 1 ||
     policy.maxReplicas < policy.minReplicas ||
     policy.maxReplicas > 100 ||
     (policy.maxSurgeReplicas ?? 0) > policy.maxReplicas ||
@@ -45,10 +45,15 @@ export function executionPoolLimit(policy) {
 export function autoscalerPolicyFromConfig(config) {
   if (Object.hasOwn(config.policy ?? {}, 'maxSurgeReplicas'))
     throw Error('Temporary capacity belongs in controller configuration, outside its steady scaling policy');
-  return autoscalerPolicy({
+  const policy = autoscalerPolicy({
     ...config.policy,
     maxSurgeReplicas: Object.hasOwn(config, 'maxSurgeReplicas') ? config.maxSurgeReplicas : 0,
   });
+  if (config.stagingSingleExecution === true) {
+    if (!/^rivet-staging-[a-z0-9-]+$/.test(config.namespace ?? ''))
+      throw Error('Single execution worker is restricted to an explicit staging namespace');
+  } else if (policy.minReplicas < 2) throw Error('Production execution must retain at least two workers');
+  return policy;
 }
 
 export const autoscalerPolicyDigest = (input) => {
@@ -62,6 +67,10 @@ export const autoscalerPolicyDigest = (input) => {
 /** Includes occupied slots on a withdrawing owner: accepted work is still load.
  * Missing owners/metrics never produce a low-demand recommendation. */
 export function recommendExecutionReplicas(snapshot, policy) {
+  return Math.min(policy.maxReplicas, executionReplicaDemand(snapshot, policy));
+}
+
+function executionReplicaDemand(snapshot, policy, { cpuRoundoff = false } = {}) {
   if (
     !Number.isSafeInteger(snapshot.replicas) ||
     snapshot.replicas < policy.minReplicas ||
@@ -105,29 +114,69 @@ export function recommendExecutionReplicas(snapshot, policy) {
     cpu += pod.cpuRatio;
   }
   if (limits.size !== 1) throw new Error('Execution admission limits differ; wait for the owned deployment.');
-  return Math.min(
-    policy.maxReplicas,
-    Math.max(
-      policy.minReplicas,
-      Math.ceil(slots / (([...limits][0] * policy.targetSlotsPercent) / 100)),
-      Math.ceil(cpu / (policy.targetCpuPercent / 100)),
-    ),
+  const cpuDemand = cpu / (policy.targetCpuPercent / 100);
+  return Math.max(
+    policy.minReplicas,
+    Math.ceil(slots / (([...limits][0] * policy.targetSlotsPercent) / 100)),
+    // At the hard capacity boundary, decimal metrics must not invent an extra
+    // owner from floating-point addition. Keep the normal scaling calculation.
+    Math.ceil(cpuDemand - (cpuRoundoff ? Number.EPSILON * snapshot.pods.length * Math.max(1, cpuDemand) : 0)),
   );
 }
 
 const routingObservationEpochs = new WeakMap();
 
-export function executionPoolDemand(snapshot, peer, policy) {
+function executionPoolObservation(snapshot, peer, policy, candidateCapacity) {
   const pools = peer ? [snapshot, peer] : [snapshot];
+  const pods = pools.flatMap((pool) => pool.pods);
+  // A journal-owned replacement may adopt a new per-worker slot limit. Validate
+  // each pool's metrics first; only the candidate's capacity sizes its growth.
+  // Mixed limits within one pool and unowned transitions remain invalid.
+  if (candidateCapacity) {
+    if (!snapshot.pods.length || pods.some((pod) => !Number.isFinite(pod.cpuRequest) || pod.cpuRequest <= 0))
+      throw Error('Candidate execution CPU capacity is unconfirmed');
+    for (const pool of pools)
+      if (pool.replicas !== 0 || pool.pods.length) recommendExecutionReplicas(pool, { ...policy, minReplicas: 1 });
+  }
+  const limit = candidateCapacity ? snapshot.pods[0].limit : undefined;
+  // CPU utilization is relative to each Pod's request. Convert occupied CPU
+  // to candidate-sized owners too; comparing percentages would over/under-size
+  // a handoff between differently requested pools. Provider variation uses the
+  // smallest admitted candidate request rather than assuming larger workers.
+  const cpuRequest = candidateCapacity ? Math.min(...snapshot.pods.map((pod) => pod.cpuRequest)) : undefined;
+  return {
+    replicas: pools.reduce((sum, pool) => sum + pool.replicas, 0),
+    pods: pods.map((pod, ordinal) => ({
+      ...pod,
+      ordinal,
+      ...(candidateCapacity ? { limit, cpuRatio: (pod.cpuRatio * pod.cpuRequest) / cpuRequest } : {}),
+    })),
+  };
+}
+
+export function executionPoolDemand(snapshot, peer, policy, { candidateCapacity = false } = {}) {
   return Math.min(
     policy.maxReplicas,
-    recommendExecutionReplicas(
-      {
-        replicas: pools.reduce((sum, pool) => sum + pool.replicas, 0),
-        pods: pools.flatMap((pool) => pool.pods).map((pod, ordinal) => ({ ...pod, ordinal })),
-      },
-      { ...policy, maxReplicas: executionPoolLimit(policy) },
-    ),
+    executionReplicaDemand(executionPoolObservation(snapshot, peer, policy, candidateCapacity), {
+      ...policy,
+      maxReplicas: executionPoolLimit(policy),
+    }),
+  );
+}
+
+/** Retirement needs actual capacity for all accepted work, even at the scaling
+ * ceiling. Utilization targets guide growth; they must not hide overload or
+ * require spare target headroom when a pool is safely serving at its maximum. */
+export function requiredExecutionPoolReplicas(snapshot, peer, policy) {
+  return executionReplicaDemand(
+    executionPoolObservation(snapshot, peer, policy, true),
+    {
+      ...policy,
+      maxReplicas: executionPoolLimit(policy),
+      targetSlotsPercent: 100,
+      targetCpuPercent: 100,
+    },
+    { cpuRoundoff: true },
   );
 }
 
@@ -163,7 +212,7 @@ async function scaleDuringPoolTransition({
   )
     throw Error('Execution pool scaling ownership is unconfirmed');
   const desired = Math.min(
-    executionPoolDemand(snapshot, peer, policy),
+    executionPoolDemand(snapshot, peer, policy, { candidateCapacity: true }),
     executionPoolLimit(policy) - snapshot.poolCapacity.otherReplicas,
     snapshot.replicas + Math.max(0, executionPoolLimit(policy) - snapshot.poolCapacity.totalPods),
   );
@@ -299,8 +348,10 @@ async function reconcileExecutionAutoscalingTick({
 }) {
   if (![release, namespace, manifestDigest, runner].every((value) => typeof value === 'string' && value.length > 0))
     throw new Error('Autoscaler release identity is incomplete.');
-  const policy = autoscalerPolicy(input),
+  let policy = autoscalerPolicy(input),
     policyDigest = autoscalerPolicyDigest(policy);
+  if (policy.minReplicas === 1 && !/^rivet-staging-[a-z0-9-]+$/.test(namespace))
+    throw Error('Single execution worker is restricted to staging');
   const observed = await io.readJournal();
   if (observed?.protocol === 1 && !['complete', 'preflight'].includes(observed.phase) && observed.executionPoolPlan)
     return scaleDuringPoolTransition({
@@ -330,6 +381,16 @@ async function reconcileExecutionAutoscalingTick({
     });
   const prior = journalForReleaseOperation(observed, 'autoscaling', { release, namespace }, now);
   if (prior?.leaseExpiresAt > now() && prior.runner !== runner) return { state: 'leased' };
+  // Cleanup can lower the staging floor while a two-worker-policy retirement
+  // is in flight. Finish exactly that operation with its original policy and
+  // peer requirement. All other policy/image changes remain recovery-only.
+  if (prior && prior.phase !== 'complete' && policy.minReplicas === 1 && prior.manifestDigest === manifestDigest) {
+    const original = { ...policy, minReplicas: 2 };
+    if (prior.policyDigest === autoscalerPolicyDigest(original)) {
+      policy = original;
+      policyDigest = prior.policyDigest;
+    }
+  }
   if (
     prior &&
     prior.phase !== 'complete' &&
@@ -495,7 +556,8 @@ async function reconcileExecutionAutoscalingTick({
       const peers = snapshot.pods.filter(
         (p) => p.uid !== tail?.uid && p.ready && p.state === 'serving' && !p.operationId,
       );
-      if (!tail || peers.length < 2) throw new Error('Two serving peers are required before withdrawing an owner.');
+      if (!tail || peers.length < Math.min(2, policy.minReplicas))
+        throw new Error('Required serving peers are missing before withdrawing an owner.');
       const retirementTarget = {
         name: tail.name,
         uid: tail.uid,
@@ -512,7 +574,7 @@ async function reconcileExecutionAutoscalingTick({
         fenceRepair: null,
         lowSince: null,
       });
-      await io.confirmPeers(record.target, snapshot.pods);
+      await io.confirmPeers(record.target, snapshot.pods, Math.min(2, policy.minReplicas));
       await fenced();
       await convergeFence();
       return { state: 'fencing' };
@@ -523,7 +585,7 @@ async function reconcileExecutionAutoscalingTick({
       if (!(await io.isFenced(record.target)))
         throw new Error('Startup-fence intent is unconfirmed; inspect without replaying.');
       if (!(await io.fenceObserved(record.target))) return { state: 'waiting-for-startup-fence' };
-      await io.confirmPeers(record.target, snapshot.pods);
+      await io.confirmPeers(record.target, snapshot.pods, Math.min(2, policy.minReplicas));
       await save({ phase: 'withdrawing', target: { ...record.target, withdrawnAt: now() } });
       await fenced();
       await io.retire(record.target, 'withdraw');
@@ -567,13 +629,16 @@ async function reconcileExecutionAutoscalingTick({
     // A load spike may have added higher ordinals. Never remove those to reach
     // the old tail: replace only the exact drained UID, preserving capacity.
     const replace = target.ordinal !== snapshot.replicas - 1 || desired >= snapshot.replicas;
-    if (snapshot.pods.filter((p) => p.uid !== target.uid && p.ready && p.state === 'serving').length < 2)
+    if (
+      snapshot.pods.filter((p) => p.uid !== target.uid && p.ready && p.state === 'serving').length <
+      Math.min(2, policy.minReplicas)
+    )
       throw new Error('Serving capacity changed; drained owner will not be removed.');
     await save({
       phase: 'removing',
       removal: { replace, workloadUid: snapshot.uid, replicas: snapshot.replicas - (replace ? 0 : 1) },
     });
-    await io.confirmPeers(record.target, snapshot.pods);
+    await io.confirmPeers(record.target, snapshot.pods, Math.min(2, policy.minReplicas));
     await fenced();
     if (replace) {
       // After drain, clearing the startup fence is safe only for UID-precondition

@@ -81,6 +81,8 @@ export function assertQualifiedDeploymentReceipt(operation, { manifest, declarat
       operation.installed,
       declarations.autoscaling.policy,
       control.requestContinuity?.profile,
+      undefined,
+      operation.stagingExecutionProfile,
     ),
     control.qualification.configurationDigest,
     'Receipt settings differ from the staged configuration',

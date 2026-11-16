@@ -13,6 +13,9 @@
 {{- if gt (int .Values.ha.executionPools.maxSurgeReplicas) 0 }}
 {{- $_ := set $config "maxSurgeReplicas" .Values.ha.executionPools.maxSurgeReplicas }}
 {{- end }}
+{{- if .Values.ha.stagingSingleExecution }}
+{{- $_ := set $config "stagingSingleExecution" true }}
+{{- end }}
 apiVersion: v1
 kind: ServiceAccount
 metadata:

@@ -6,6 +6,7 @@ import { overlapQualificationProfile } from './qualification-overlap-profile.mjs
 import { assertRequestContinuityProfile } from './request-continuity.mjs';
 import { observeStagingJanitor } from './staging-janitor-health.mjs';
 import { sizingRequests } from './resource-sizing.mjs';
+import { executionProfile } from './execution-profile.mjs';
 import { retainedApplicationSettings, RetainedStagingApplication } from './retained-staging-application.mjs';
 
 export const stagingOwner = 'rivet.dev/qualification-operation';
@@ -16,6 +17,13 @@ const dns = (value) => {
   return value;
 };
 export function reusableStagingSettings(value) {
+  if (value.executionProfile) {
+    value = { ...value, executionProfile: executionProfile(value.executionProfile, { staging: true }) };
+    assert.ok(
+      value.retainedApplication && !value.sizingRequests && !value.developerOverlapProfile,
+      'Separate execution profiles require the retained focused rollout',
+    );
+  }
   if (value.executionPoolsEnabled !== undefined) assert.equal(typeof value.executionPoolsEnabled, 'boolean');
   if (value.executionPoolsEnabled) {
     assert.equal(value.qualificationSuite, 'focused', 'Paired execution supports the ordinary focused suite');

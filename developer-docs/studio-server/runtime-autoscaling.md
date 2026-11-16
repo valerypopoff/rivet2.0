@@ -23,6 +23,29 @@ one independent controller. Developer workloads do not scale with customer
 traffic. The controller uses the API image but starts only a small Node program,
 with no application DB pool, app key, storage credentials, editor or workflow.
 
+An explicit idle staging exception, `ha.stagingSingleExecution`, permits a
+one-worker floor only in `rivet-staging-*` namespaces with this controller.
+Production evidence rejects that flag and still requires two workers. Staging
+scale-in keeps at least one confirmed serving peer, the startup fence, route
+withdrawal, accepted-work drain and the 100% execution disruption budget. Normal
+production scale-in still confirms two serving peers.
+The staging two-to-one floor transition can finish an already-owned retirement
+under its original two-peer policy, then adopt the lower floor after completion.
+It never changes the policy halfway through an accepted-work drain or replays a
+scale/delete command. All other unfinished-policy or image mismatches stay blocked.
+
+Paired replacement separates bounded scaling recommendations from retirement
+capacity: accepted slot and CPU demand must fit the candidate pool even at the
+configured maximum. A rollback to smaller workers therefore retains the old
+owners when the candidates cannot carry their load. The same paired path handles
+admission-limit changes without an image change; it cannot silently fall back to
+serial replacement with mixed limits inside one pool.
+
+See
+[separate execution profiles](resource-sizing.md#separate-execution-profiles-for-production-and-staging)
+for protected configuration, temporary three-worker test capacity and rollout
+capacity versus throughput validation.
+
 Apply `gke-runtime-autoscaling.yaml` after `gke-ha.yaml`, `gke-runtime-ha.yaml`
 and `gke-compact-edge.yaml` in a qualified installation. This policy enables
 proxy HPA (1 to 4), with a five-minute downscale window and at most one removal per

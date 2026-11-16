@@ -30,6 +30,8 @@ export async function exerciseExecutionPoolRollout({
   renderFinal,
   allowExecutionPoolTransition,
   bufferedResponseSafe = true,
+  executionSample = () => ({}),
+  timeoutMs = 10000,
 }) {
   const objects = new Map(),
     participants = new Map(),
@@ -224,11 +226,16 @@ export async function exerciseExecutionPoolRollout({
             ).metadata.name
           }.default.svc.cluster.local:80; }`,
         };
-      if (!args.includes('/opt/rivet/retire-backend.mjs'))
+      if (!args.includes('/opt/rivet/retire-backend.mjs')) {
+        const sample = executionSample(pod);
         return {
-          stdout:
-            'rivet_published_execution_active_runs 0\nrivet_published_execution_admission_limit{mode="enforce"} 4\n',
+          stdout: `rivet_published_execution_active_runs ${sample.active ?? 0}\nrivet_published_execution_admission_limit{mode="enforce"} ${
+            pod.spec.containers
+              .find((container) => container.name === 'api')
+              .env.find((entry) => entry.name === 'RIVET_DEPLOYMENT_PUBLISHED_EXECUTION_MAX_ACTIVE_RUNS').value
+          }\n`,
         };
+      }
       const offset = args.indexOf('/opt/rivet/retire-backend.mjs');
       if (args.length > offset + 1) {
         const [operationId, incarnation, mode] = args.slice(offset + 1);
@@ -301,7 +308,7 @@ export async function exerciseExecutionPoolRollout({
     resources: candidate,
     allowExecutionPoolTransition,
     kube,
-    timeoutMs: 10000,
+    timeoutMs,
     safety: fixtureDeploymentSafety('rolling', identity),
     artifact: async () => {},
     settle: async () => {},

@@ -8,6 +8,7 @@ import {
   autoscalerPolicyFromConfig,
   executionPoolLimit,
   executionPoolDemand,
+  requiredExecutionPoolReplicas,
   recommendExecutionReplicas,
   reconcileExecutionAutoscaling,
 } from './lib/execution-autoscaler.mjs';
@@ -280,6 +281,124 @@ test('temporary surge separates physical overlap from steady demand and binds it
   assert.throws(() => executionPoolDemand(snapshot, peer, old), /outside approved bounds/);
 });
 
+test('an owned paired handoff sizes the candidate using its new admission capacity', async () => {
+  const f = fixture(2);
+  const { snapshot, peer } = await f.io('execution-next').poolSnapshot();
+  for (const pod of snapshot.pods) {
+    pod.limit = 32;
+    pod.active = 0;
+    pod.cpuRatio = 0;
+  }
+  for (const pod of peer.pods) {
+    pod.limit = 4;
+    pod.active = 4;
+    pod.cpuRatio = 0;
+  }
+  assert.throws(() => executionPoolDemand(snapshot, peer, f.policy), /limits differ/);
+  assert.equal(executionPoolDemand(snapshot, peer, f.policy, { candidateCapacity: true }), 2);
+  for (const pod of snapshot.pods) pod.active = 16;
+  assert.equal(executionPoolDemand(snapshot, peer, f.policy, { candidateCapacity: true }), 3);
+  snapshot.pods[0].limit = 4;
+  assert.throws(() => executionPoolDemand(snapshot, peer, f.policy, { candidateCapacity: true }), /limits differ/);
+  snapshot.pods[0].limit = 32;
+  peer.pods[0].sampleFresh = false;
+  assert.throws(() => executionPoolDemand(snapshot, peer, f.policy, { candidateCapacity: true }), /unconfirmed/);
+  peer.pods[0].sampleFresh = true;
+  assert.equal(executionPoolDemand(snapshot, { replicas: 0, pods: [] }, f.policy, { candidateCapacity: true }), 2);
+});
+
+test('paired CPU demand converts old utilization to the admitted candidate worker size', async () => {
+  const f = fixture(2);
+  const { snapshot, peer } = await f.io('execution-next').poolSnapshot();
+  for (const pod of snapshot.pods) {
+    pod.cpuRequest = 2;
+    pod.cpuRatio = 0;
+    pod.active = 0;
+  }
+  for (const pod of peer.pods) {
+    pod.cpuRequest = 0.5;
+    pod.cpuRatio = 3.2;
+    pod.active = 0;
+  }
+  assert.equal(
+    executionPoolDemand(snapshot, peer, f.policy, { candidateCapacity: true }),
+    3,
+    '3.2 occupied cores need three candidate workers at a 75% target, not seven',
+  );
+  for (const pod of snapshot.pods) pod.cpuRequest = 0.5;
+  for (const pod of peer.pods) {
+    pod.cpuRequest = 2;
+    pod.cpuRatio = 0.5;
+  }
+  assert.equal(
+    executionPoolDemand(snapshot, peer, f.policy, { candidateCapacity: true }),
+    6,
+    'A smaller candidate must retain enough physical CPU for the previous load',
+  );
+  delete peer.pods[0].cpuRequest;
+  assert.throws(
+    () => executionPoolDemand(snapshot, peer, f.policy, { candidateCapacity: true }),
+    /CPU capacity is unconfirmed/,
+  );
+});
+
+test('paired handoff cannot hide overload behind the autoscaling ceiling', async () => {
+  const f = fixture(2);
+  const { snapshot, peer } = await f.io('execution-next').poolSnapshot();
+  for (const pod of snapshot.pods) {
+    pod.limit = 4;
+    pod.active = 0;
+    pod.cpuRatio = 0;
+  }
+  for (const pod of peer.pods) {
+    pod.limit = 32;
+    pod.active = 20;
+    pod.cpuRatio = 0;
+  }
+  const candidate = {
+    ...snapshot,
+    replicas: 7,
+    pods: Array.from({ length: 7 }, (_, ordinal) => ({
+      ...snapshot.pods[0],
+      name: `candidate-${ordinal}`,
+      uid: `candidate-${ordinal}`,
+      ordinal,
+    })),
+  };
+  const policy = { ...f.policy, maxSurgeReplicas: 7 };
+  assert.equal(executionPoolDemand(candidate, peer, policy, { candidateCapacity: true }), 7);
+  assert.ok(
+    requiredExecutionPoolReplicas(candidate, peer, policy) > candidate.replicas,
+    '40 accepted runs cannot fit into seven four-slot candidate workers',
+  );
+  for (const pod of peer.pods) pod.active = 14;
+  assert.equal(requiredExecutionPoolReplicas(candidate, peer, policy), 7, 'Full capacity is allowed at the ceiling');
+  for (const pod of peer.pods) {
+    pod.active = 0;
+    pod.cpuRequest = 2;
+    pod.cpuRatio = 2;
+  }
+  for (const pod of candidate.pods) pod.cpuRequest = 0.5;
+  assert.equal(
+    requiredExecutionPoolReplicas(candidate, peer, policy),
+    16,
+    'CPU overload cannot be clamped away either',
+  );
+});
+
+test('paired capacity tolerates CPU summation roundoff but not real overload', async () => {
+  const f = fixture(2);
+  const { snapshot, peer } = await f.io('execution-next').poolSnapshot();
+  for (const pod of [...snapshot.pods, ...peer.pods]) {
+    pod.cpuRequest = 2;
+    pod.active = 0;
+    pod.cpuRatio = 0.5 + Number.EPSILON;
+  }
+  assert.equal(requiredExecutionPoolReplicas(snapshot, peer, f.policy), 2);
+  peer.pods[0].cpuRatio += 0.000001;
+  assert.equal(requiredExecutionPoolReplicas(snapshot, peer, f.policy), 3);
+});
+
 test('pool inventory partitions exact controller UIDs, counts physical peers and fences inactive writes', async () => {
   const f = fixture(),
     io = f.io('execution-next');
@@ -294,67 +413,73 @@ test('pool inventory partitions exact controller UIDs, counts physical peers and
   await assert.rejects(io.snapshot(), /foreign controller/);
 });
 
-for (const totalPods of [4, 7])
-  test(`cooperative growth respects both logical and physical capacity (${totalPods} Pods)`, async () => {
-    const policy = autoscalerPolicy({ maxReplicas: 7 });
-    const pod = (name, index) => ({
-      name: name + '-' + index,
-      uid: name + '-uid-' + index,
-      ordinal: index,
-      incarnation: name + index,
-      ready: true,
-      sampleFresh: true,
-      state: 'serving',
-      active: 4,
-      limit: 4,
-      cpuRatio: 0.1,
-    });
-    const snapshot = {
-      uid: 'candidate',
-      resourceVersion: '3',
-      replicas: 2,
-      pods: [pod('new', 0), pod('new', 1)],
-      poolCapacity: { totalPods, otherReplicas: 2, otherUid: 'previous' },
-    };
-    const peer = { uid: 'previous', replicas: 2, pods: [pod('old', 0), pod('old', 1)] };
-    const record = {
-      protocol: 1,
-      release: 'rivet',
-      namespace: 'fixture',
-      resourceVersion: '2',
-      phase: 'owners',
-      token: 'token',
-      runner: 'deployer',
-      manifestDigest: 'manifest',
-      leaseExpiresAt: Date.now() + 100000,
-      executionPoolPlan: {
+for (const limit of [4, 32])
+  for (const totalPods of [4, 7])
+    test(`cooperative growth respects both logical and physical capacity (${totalPods} Pods, ${limit} candidate slots)`, async () => {
+      const policy = autoscalerPolicy({ maxReplicas: 7 });
+      const pod = (name, index) => ({
+        name: name + '-' + index,
+        uid: name + '-uid-' + index,
+        ordinal: index,
+        incarnation: name + index,
+        ready: true,
+        sampleFresh: true,
+        state: 'serving',
+        active: 4,
+        limit: 4,
+        cpuRatio: 0.1,
+        cpuRequest: 0.5,
+      });
+      const snapshot = {
+        uid: 'candidate',
+        resourceVersion: '3',
+        replicas: 2,
+        pods: [pod('new', 0), pod('new', 1)],
+        poolCapacity: { totalPods, otherReplicas: 2, otherUid: 'previous' },
+      };
+      const peer = { uid: 'previous', replicas: 2, pods: [pod('old', 0), pod('old', 1)] };
+      for (const pod of snapshot.pods) {
+        pod.limit = limit;
+        pod.active = limit;
+      }
+      const record = {
         protocol: 1,
-        maxReplicas: 7,
-        image,
-        previous: { name: 'execution', uid: 'previous' },
-        candidate: { name: 'execution-next' },
-      },
-      executionPool: { candidateUid: 'candidate' },
-    };
-    const scales = [];
-    const result = await reconcileExecutionAutoscaling({
-      release: 'rivet',
-      namespace: 'fixture',
-      workload: 'execution-next',
-      image,
-      manifestDigest: 'manifest',
-      runner: 'controller',
-      policy,
-      io: {
-        readJournal: async () => record,
-        snapshot: async () => snapshot,
-        peerSnapshot: async () => peer,
-        scale: async (...args) => {
-          scales.push(args);
+        release: 'rivet',
+        namespace: 'fixture',
+        resourceVersion: '2',
+        phase: 'owners',
+        token: 'token',
+        runner: 'deployer',
+        manifestDigest: 'manifest',
+        leaseExpiresAt: Date.now() + 100000,
+        executionPoolPlan: {
+          protocol: 1,
+          maxReplicas: 7,
+          image,
+          previous: { name: 'execution', uid: 'previous' },
+          candidate: { name: 'execution-next' },
         },
-      },
+        executionPool: { candidateUid: 'candidate' },
+      };
+      const scales = [];
+      const result = await reconcileExecutionAutoscaling({
+        release: 'rivet',
+        namespace: 'fixture',
+        workload: 'execution-next',
+        image,
+        manifestDigest: 'manifest',
+        runner: 'controller',
+        policy,
+        io: {
+          readJournal: async () => record,
+          snapshot: async () => snapshot,
+          peerSnapshot: async () => peer,
+          scale: async (...args) => {
+            scales.push(args);
+          },
+        },
+      });
+      assert.equal(result.state, totalPods === 4 ? 'candidate-pool-scaled-up' : 'candidate-pool-observing');
+      assert.equal(scales.length, totalPods === 4 ? 1 : 0);
+      if (scales.length) assert.equal(scales[0][2], limit === 32 ? 4 : 5);
     });
-    assert.equal(result.state, totalPods === 4 ? 'candidate-pool-scaled-up' : 'candidate-pool-observing');
-    assert.equal(scales.length, totalPods === 4 ? 1 : 0);
-    if (scales.length) assert.equal(scales[0][2], 5);
-  });

@@ -100,6 +100,39 @@ test('reviewed execution surge qualifies a target budget while preserving the ob
       },
     });
   const baseline = await observe();
+  values.resources = {
+    execution: {
+      requests: { cpu: '500m', memory: '1Gi', 'ephemeral-storage': '1Gi' },
+      limits: { 'ephemeral-storage': '1Gi' },
+    },
+  };
+  values.publishedExecutionAdmission = { mode: 'enforce', maxActiveRunsPerPod: 4, retryAfterSeconds: 1 };
+  const source = await observe();
+  const executionProfile = { minReplicas: 2, maxActiveRunsPerPod: 32, requests: { cpu: '2', memory: '4Gi' } };
+  const sized = await observe({ executionProfile });
+  assert.deepEqual(sized.executionProfile, executionProfile);
+  assert.equal(
+    sized.settingsDigest,
+    source.settingsDigest,
+    'Target reservations do not rewrite the live-source identity',
+  );
+  assert.equal(sized.qualificationValues.resources.execution.requests.cpu, '2');
+  assert.equal(sized.qualificationValues.resources.execution.requests.memory, '4Gi');
+  assert.deepEqual(
+    sized.qualificationValues.resources.execution.limits,
+    source.qualificationValues.resources.execution.limits,
+  );
+  assert.equal(sized.qualificationValues.publishedExecutionAdmission.maxActiveRunsPerPod, 32);
+  assert.throws(
+    () => assertQualificationInstallationMatches({ ...sized, executionProfile: undefined }, sized),
+    /execution profile/,
+  );
+  assert.throws(
+    () => assertQualificationInstallationMatches({ ...sized, settingsDigest: 'changed' }, sized),
+    /settingsDigest/,
+  );
+  delete values.resources;
+  delete values.publishedExecutionAdmission;
   const target = await observe({ executionPoolCapacity: { maxSurgeReplicas: 7, maxConnections: 305 } });
   assert.equal(target.policy.maxReplicas, 7);
   assert.equal(target.policy.maxSurgeReplicas, 7);

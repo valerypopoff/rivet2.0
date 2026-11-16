@@ -68,6 +68,9 @@ const inspect = async () =>
     ...(process.env.RIVET_QUALIFICATION_PRODUCTION_EXECUTION_POOL_CAPACITY
       ? { executionPoolCapacity: JSON.parse(process.env.RIVET_QUALIFICATION_PRODUCTION_EXECUTION_POOL_CAPACITY) }
       : {}),
+    ...(process.env.RIVET_QUALIFICATION_PRODUCTION_EXECUTION_PROFILE
+      ? { executionProfile: JSON.parse(process.env.RIVET_QUALIFICATION_PRODUCTION_EXECUTION_PROFILE) }
+      : {}),
     helm: resolveHelmBinOrThrow(root),
     kubectl: process.env.RIVET_K8S_KUBECTL_BIN || 'kubectl',
     run: (bin, args, options) =>
@@ -371,6 +374,7 @@ async function main(mode) {
       qualificationSuite: settings.qualificationSuite,
       sizingRequests: settings.sizingRequests,
       retainedApplication: settings.retainedApplication,
+      stagingExecutionProfile: settings.executionProfile,
       executionPoolsEnabled: settings.executionPoolsEnabled,
       enabled: process.env.RIVET_AUTOMATED_QUALIFICATION_ENABLED === 'true',
       projectId: process.env.RIVET_QUALIFICATION_PROJECT_ID,

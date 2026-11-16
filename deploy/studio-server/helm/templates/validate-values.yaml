@@ -1,4 +1,7 @@
 {{- $kubernetesQuantityPattern := "^[+]?([0-9]+([.][0-9]*)?|[.][0-9]+)([eE][+-]?[0-9]+|[numkMGTPE]|[KMGTPE]i)?$" -}}
+{{- if not (kindIs "bool" .Values.ha.stagingSingleExecution) -}}
+{{- fail "ha.stagingSingleExecution must be a boolean" -}}
+{{- end -}}
 {{- if or (not (kindIs "bool" .Values.autoscaling.executionController.enabled)) (not (kindIs "bool" .Values.autoscaling.executionController.suspended)) -}}
 {{- fail "executionController.enabled and suspended must be booleans" -}}
 {{- end -}}
@@ -542,6 +545,9 @@
 {{- if and (eq .Values.ha.controlPlane.mode "singleton-overlap") (not .Values.ha.enabled) -}}
 {{- fail "singleton-overlap requires ha.enabled=true" -}}
 {{- end -}}
+{{- if and .Values.ha.stagingSingleExecution (or (not .Values.ha.enabled) (not .Values.autoscaling.executionController.enabled) (not (regexMatch "^rivet-staging-[a-z0-9-]+$" .Release.Namespace))) -}}
+{{- fail "ha.stagingSingleExecution requires HA with the execution controller in a rivet-staging-* namespace" -}}
+{{- end -}}
 {{- if .Values.ha.enabled -}}
 {{- if gt (len (include "rivet.fullname" .)) 40 -}}
 {{- fail "HA fullname must be at most 40 characters so every owner pod has a valid DNS identity" -}}
@@ -907,11 +913,12 @@
 {{- if not (has .Values.ha.controlPlane.mode (list "replicated" "singleton" "singleton-overlap")) -}}
 {{- fail "ha.controlPlane.mode must be replicated, singleton or singleton-overlap" -}}
 {{- end -}}
+{{- $executionFloor := ternary 1 2 .Values.ha.stagingSingleExecution -}}
 {{- $backendFloor := ternary 1 2 (has .Values.ha.controlPlane.mode (list "singleton" "singleton-overlap")) -}}
 {{- if has .Values.ha.controlPlane.mode (list "singleton" "singleton-overlap") -}}
 {{- $webReplicas := ternary 0 1 .Values.workflowSchema.maintenanceValidation -}}
 {{- $overlapSurge := and (eq .Values.ha.controlPlane.mode "singleton-overlap") (eq (int .Values.replicaCount.backend) 2) (hasKey .Values.ha.rolloutResourceVersions (include "rivet.backendName" .)) -}}
-{{- if or (and (ne (int .Values.replicaCount.backend) 1) (not $overlapSurge)) (ne (int .Values.replicaCount.web) $webReplicas) (lt (int .Values.replicaCount.execution) 2) (not .Values.availability.gkeGateway) (ne .Values.publishedExecutionAdmission.mode "enforce") (lt (int .Values.publishedExecutionAdmission.maxActiveRunsPerPod) 2) .Values.autoscaling.web.enabled .Values.autoscaling.backend.enabled -}}
+{{- if or (and (ne (int .Values.replicaCount.backend) 1) (not $overlapSurge)) (ne (int .Values.replicaCount.web) $webReplicas) (lt (int .Values.replicaCount.execution) $executionFloor) (not .Values.availability.gkeGateway) (ne .Values.publishedExecutionAdmission.mode "enforce") (lt (int .Values.publishedExecutionAdmission.maxActiveRunsPerPod) 2) .Values.autoscaling.web.enabled .Values.autoscaling.backend.enabled -}}
 {{- fail "singleton control requires one backend, one web (zero during maintenance validation), GKE Gateway HA, >=2 execution pods, enforced admission >=2 and no web autoscaler" -}}
 {{- end -}}
 {{- if and (eq .Values.ha.controlPlane.mode "singleton-overlap") (or (ne .Values.workflowStorage.backend "managed") (ne .Values.runtimeLibraries.backend "managed") .Values.runtimeLibraries.cache.enabled) -}}
@@ -922,10 +929,10 @@
 {{- end -}}
 {{- end -}}
 {{- if not .Values.workflowSchema.maintenanceValidation -}}
-{{- if lt (int .Values.replicaCount.execution) 2 -}}
+{{- if lt (int .Values.replicaCount.execution) $executionFloor -}}
 {{- fail "HA requires a minimum of two execution pods" -}}
 {{- end -}}
-{{- if and (or .Values.autoscaling.execution.enabled .Values.autoscaling.executionController.enabled) (or (lt (int .Values.autoscaling.execution.minReplicas) 2) (lt (int .Values.autoscaling.execution.maxReplicas) (int .Values.autoscaling.execution.minReplicas)) (lt (int .Values.autoscaling.execution.maxReplicas) (int .Values.replicaCount.execution))) -}}
+{{- if and (or .Values.autoscaling.execution.enabled .Values.autoscaling.executionController.enabled) (or (lt (int .Values.autoscaling.execution.minReplicas) $executionFloor) (lt (int .Values.autoscaling.execution.maxReplicas) (int .Values.autoscaling.execution.minReplicas)) (lt (int .Values.autoscaling.execution.maxReplicas) (int .Values.replicaCount.execution))) -}}
 {{- fail "HA execution autoscaling must retain a minimum of two and a maximum covering both minimum and initial runtime capacity" -}}
 {{- end -}}
 
