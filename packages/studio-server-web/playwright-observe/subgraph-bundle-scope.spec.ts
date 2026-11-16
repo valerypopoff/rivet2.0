@@ -16,6 +16,14 @@ test('Subgraph source separates same-bundle members from ordinary projects and e
     child = fixture.child.project;
   root.metadata.title = 'Bundle caller';
   child.metadata.title = 'Sibling project';
+  for (let index = 0; index < 40; index++) {
+    const id = `menu-graph-${index}` as keyof typeof root.graphs;
+    root.graphs[id] = {
+      metadata: { id, name: index === 39 ? 'Group/Nested/Deep/Deeply nested graph' : `Menu graph ${index}` },
+      nodes: [],
+      connections: [],
+    };
+  }
   const ordinary = structuredClone(root);
   ordinary.metadata = { ...ordinary.metadata, id: 'ordinary' as ProjectId, title: 'Ordinary project' };
   const foreign = structuredClone(child);
@@ -23,6 +31,11 @@ test('Subgraph source separates same-bundle members from ordinary projects and e
   const peer = structuredClone(child);
   peer.metadata = { ...peer.metadata, id: 'peer' as ProjectId, title: 'Peer project' };
   Object.values(peer.graphs)[0]!.metadata!.name = 'Peer graph';
+  const menuProjects = Array.from({ length: 40 }, (_, index) => {
+    const project = structuredClone(child);
+    project.metadata = { ...project.metadata, id: `menu-project-${index}` as ProjectId, title: `Menu project ${index}` };
+    return project;
+  });
   const call = Object.values(root.graphs)[0]!.nodes.find((n) => n.type === 'subGraph')!;
   call.visualData = { x: 200, y: 180, width: 260 };
   const item = (project: Project, folder: string, bundleId: string | null) => ({
@@ -58,13 +71,13 @@ test('Subgraph source separates same-bundle members from ordinary projects and e
   const tree = {
     root: '/workflows',
     capabilities: { explicitBundles: true },
-    projects: [items[2]],
+    projects: [items[2], ...menuProjects.map((project) => item(project, '', null))],
     folders: [
       folder('Feature', one, [items[0]!, items[4]!], [folder('Nested', null, [items[1]!])]),
       folder('Other feature', two, [items[3]!]),
     ],
   };
-  const projects = [root, child, ordinary, foreign, peer];
+  const projects = [root, child, ordinary, foreign, peer, ...menuProjects];
   const saved: Project[] = [];
   let treeUnavailable = false;
   let holdPreview = false;
@@ -257,4 +270,71 @@ test('Subgraph source separates same-bundle members from ordinary projects and e
   await ordinaryNode.hover();
   await ordinaryNode.locator('.edit-button').click();
   await expect(source.getByRole('button', { name: 'Same bundle', exact: true })).toHaveCount(0);
+
+  // Both picker implementations grow before scrolling, then fit a smaller viewport.
+  for (const scope of ['This project', 'Other projects']) {
+    await source.getByRole('button', { name: scope, exact: true }).click();
+    let tallHeight = 0;
+    const list = options.locator('[id$="-listbox"]');
+    for (const height of [1400, 650]) {
+      await page.setViewportSize({ width: 1600, height });
+      if (height === 650) await expect(list).toHaveCount(0);
+      await picker.click();
+      await expect(list.locator('[id*="-option-"]')).not.toHaveCount(0);
+      const readBounds = () => list.evaluate((element) => {
+        const rect = element.getBoundingClientRect();
+        return {
+          top: rect.top,
+          bottom: rect.bottom,
+          height: rect.height,
+          viewportHeight: window.innerHeight,
+          scrollable: [element, ...element.querySelectorAll('*')].some(
+            (candidate) => candidate.clientHeight > 0 && candidate.scrollHeight > candidate.clientHeight
+              && /^(auto|scroll)$/.test(getComputedStyle(candidate).overflowY),
+          ),
+        };
+      });
+      await expect.poll(async () => {
+        const bounds = await readBounds();
+        return bounds.top >= 0 && bounds.bottom <= bounds.viewportHeight;
+      }).toBe(true);
+      const bounds = await readBounds();
+      expect(bounds.scrollable).toBe(true);
+      if (height === 1400) {
+        expect(bounds.height).toBeGreaterThan(300);
+        tallHeight = bounds.height;
+      } else expect(bounds.height).toBeLessThan(tallHeight);
+      const lastOption = list.locator('[id*="-option-"]').last();
+      await lastOption.scrollIntoViewIfNeeded();
+      await expect(lastOption).toBeInViewport();
+      if (height === 650) await picker.press('Escape');
+    }
+    if (scope === 'This project') {
+      await picker.click();
+      await picker.fill('Group/Nested/Deep');
+      const nested = options.locator('[id*="-option-"]').filter({ hasText: /^Deeply nested graph$/ });
+      await expect(options.locator('[id*="-option-"]').filter({ hasText: /^Menu graph 0$/ })).toHaveCount(0);
+      const indent = await nested.locator('span[style]').evaluate((element) => getComputedStyle(element).paddingLeft);
+      expect(Number.parseFloat(indent)).toBeGreaterThan(0);
+      await picker.press('End');
+      await picker.press('Enter');
+      const values = frame.locator('.subgraph-node-body-select [class*="-singleValue"]');
+      await expect(values).toHaveText(['Deeply nested graph', 'Deeply nested graph']);
+      await picker.click();
+      await picker.fill('Group/Nested');
+      await page.setViewportSize({ width: 1600, height: 900 });
+      await expect(list).toHaveCount(0);
+      await expect(picker).toHaveValue('');
+      await expect(values).toHaveText(['Deeply nested graph', 'Deeply nested graph']);
+      for (const value of await values.all()) {
+        const inset = await value.evaluate((element) => {
+          const text = document.createTreeWalker(element, NodeFilter.SHOW_TEXT).nextNode()!;
+          const range = document.createRange();
+          range.selectNodeContents(text);
+          return range.getBoundingClientRect().left - element.getBoundingClientRect().left;
+        });
+        expect(Math.abs(inset)).toBeLessThan(1);
+      }
+    }
+  }
 });

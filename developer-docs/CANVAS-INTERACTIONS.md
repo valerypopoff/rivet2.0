@@ -594,6 +594,24 @@ when long segments ellipsize, and is hidden from assistive technology. Plain-tex
 option labels and tooltips use `/`; search text and saved target IDs are unchanged.
 `subgraph-bundle-scope.spec.ts` checks both surfaces, icon sizing and selection.
 
+For same-project graphs, the closed selector displays only the graph name,
+without hierarchy indentation. Folder icons and depth padding belong to the
+dropdown rows, in both the node body and settings panel.
+
+Subgraph graph menus allow up to 800 pixels instead of the Select default of
+300. Automatic placement constrains the list to available space before adding
+scrolling. This applies to local hierarchical graphs and cross-project targets;
+other graph selectors retain their existing default. Browser coverage includes
+long lists in the settings panel on tall and short viewports.
+
+Open tall menus dismiss on viewport resize through the select's normal blur
+handler, preserving the selected graph and clearing stale search/placement state.
+Only open menus subscribe to resize events; closing or unmounting removes the
+listener. Browser coverage shrinks the viewport while each menu is open, then
+reopens it and verifies that the last option remains reachable. It also checks
+full-path search and keyboard selection, retaining menu indentation while both
+closed controls display the selected graph name without indentation.
+
 ## Tests
 
 Use pure graph-editing tests for connection recovery, drag actions, variadic reorder,

@@ -25,6 +25,9 @@ import { graphState } from '../../state/graph';
 import { useNodeEditorSessionContext } from '../nodeEditor/NodeEditorSessionContext';
 import { filterSubgraphProjectTree, subgraphSourceScope } from '../../utils/subgraphBundleScope.js';
 import { isRecordingProjectState } from '../../state/execution.js';
+import { useSelectResizeDismissal } from '../../hooks/useSelectResizeDismissal.js';
+
+const SUBGRAPH_MENU_MAX_HEIGHT = 800;
 
 const controlCss = css`
   min-width: 0;
@@ -250,6 +253,7 @@ const LiveSubgraphTargetControl: FC<SubgraphTargetControlProps> = ({
   const [expandedFolders, setExpandedFolders] = useState<ReadonlySet<string>>(new Set());
   const [expandedProjects, setExpandedProjects] = useState<ReadonlySet<ProjectId>>(new Set());
   const [menuOpen, setMenuOpen] = useState(false);
+  const selectRef = useSelectResizeDismissal(menuOpen);
   const [search, setSearch] = useState('');
   const [loadingTree, setLoadingTree] = useState(false);
   const [previewStatus, setPreviewStatus] = useState<Record<string, PreviewStatus>>({});
@@ -377,6 +381,7 @@ const LiveSubgraphTargetControl: FC<SubgraphTargetControlProps> = ({
         isReadonly={isReadonly}
         includeMissingSelectedGraph
         hierarchical
+        maxMenuHeight={SUBGRAPH_MENU_MAX_HEIGHT}
         ariaLabel="Subgraph graph"
         className="subgraph-node-body-select"
         onChange={(graphId) =>
@@ -491,10 +496,13 @@ const LiveSubgraphTargetControl: FC<SubgraphTargetControlProps> = ({
   return (
     <div css={controlCss}>
       <Select
+        ref={selectRef}
         aria-label="Subgraph graph"
         className="subgraph-node-body-select"
         isDisabled={isReadonly}
         isSearchable
+        maxMenuHeight={SUBGRAPH_MENU_MAX_HEIGHT}
+        menuPlacement="auto"
         isLoading={loadingTree || Object.values(previewStatus).includes('loading')}
         closeMenuOnSelect={false}
         menuIsOpen={menuOpen}
