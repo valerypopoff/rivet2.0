@@ -48,7 +48,10 @@ export function RecordingInputPathField({
         id={inputId}
         type="text"
         value={value}
-        onChange={(event) => onChange(event.target.value)}
+        onChange={(event) => {
+          setOpen(false);
+          onChange(event.target.value);
+        }}
         onFocus={showHistory}
         onClick={showHistory}
         onKeyDown={(event) => {

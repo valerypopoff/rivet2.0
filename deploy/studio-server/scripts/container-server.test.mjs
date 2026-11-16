@@ -186,6 +186,7 @@ test('the shared dotenv example declares the complete current launcher input con
     'RIVET_APP_SETTINGS_ENCRYPTION_KEY_PREVIOUS',
     'RIVET_PORT',
     'RIVET_SERVER_UI_AUTH_MODE',
+    'RIVET_RECORDING_DURABILITY_ENABLED',
     'RIVET_LOCAL_POSTGRES_PASSWORD',
     'RIVET_LOCAL_S3_ACCESS_KEY_ID',
     'RIVET_LOCAL_S3_SECRET_ACCESS_KEY',
@@ -421,6 +422,37 @@ test('all six commands share one managed application model without Kubernetes ma
       } else assert.ok(!commands.includes('CreateBucketCommand'));
     }
 });
+
+test('all six container commands enable durable recording by default and honor an explicit opt-out', () => {
+  for (const stage of ['dev', 'staging', 'prod']) {
+    for (const storage of ['local-storage', 'external-storage']) {
+      const env = environment(stage);
+      const identity = containerStorageIdentity(containerServerConfig(env, stage, storage));
+      for (const [setting, enabled] of [
+        [undefined, true],
+        ['', true],
+        ['true', true],
+        ['1', true],
+        ['false', false],
+        ['0', false],
+        [' false ', false],
+      ]) {
+        const config = containerServerConfig({ ...env, RIVET_RECORDING_DURABILITY_ENABLED: setting }, stage, storage);
+        assert.equal(config.recordingDurabilityEnabled, enabled);
+        const model = createManagedCompose(config, images);
+        for (const role of ['backend', 'execution']) {
+          assert.equal(model.services[role].environment.RIVET_RECORDING_DURABILITY_ENABLED, String(enabled));
+        }
+        assert.equal(containerStorageIdentity(config), identity);
+      }
+      assert.throws(
+        () => containerServerConfig({ ...env, RIVET_RECORDING_DURABILITY_ENABLED: 'invalid' }, stage, storage),
+        /RIVET_RECORDING_DURABILITY_ENABLED must be true or false/,
+      );
+    }
+  }
+});
+
 test('migration jobs use an exact schema version without narrowing serving compatibility across all six commands', () => {
   for (const stage of ['dev', 'staging', 'prod']) {
     for (const storage of ['local-storage', 'external-storage']) {

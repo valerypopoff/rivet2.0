@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type FC } from 'reac
 import { getWorkflowProjectStatusLabel } from './projectSettingsForm';
 import { RecordingRunsTable } from './RecordingRunsTable';
 import { RecordingWorkflowSelect, type RecordingWorkflowOption } from './RecordingWorkflowSelect';
+import { SegmentedControl, SegmentedControlButton } from './SegmentedControl';
 import type { RecordingOpenResult, WorkflowProjectItem, WorkflowRecordingWorkflowSummary } from './types';
 import './RunRecordingsModal.css';
 import { useRunRecordingsController } from './useRunRecordingsController';
@@ -19,6 +20,8 @@ interface RunRecordingsModalProps {
   onOpenRecording: (recordingId: string) => Promise<RecordingOpenResult>;
   onFoundCountChange: (count: number | null) => void;
 }
+
+const runsPerPageOptions = [10, 20, 50, 100] as const;
 
 const timestampFormatter = new Intl.DateTimeFormat(undefined, {
   year: 'numeric',
@@ -244,9 +247,17 @@ export const RunRecordingsModal: FC<RunRecordingsModalProps> = ({
                     <RefreshIcon label="" size="small" />
                   </button>
                 </div>
-                <div className="run-recordings-help">
-                  Choose Any or a project, filter its run history, and open any recording in the editor.
-                </div>
+                <RecordingWorkflowSelect
+                  workflowOptions={workflowOptions}
+                  selectedWorkflowId={selectedWorkflowId}
+                  isLoading={workflowsLoading}
+                  error={catalogError}
+                  onRetry={retryCatalog}
+                  onSelectWorkflow={(workflowId) => {
+                    setSelectedWorkflowId(workflowId);
+                    setPage(1);
+                  }}
+                />
               </div>
               <button
                 type="button"
@@ -271,72 +282,93 @@ export const RunRecordingsModal: FC<RunRecordingsModalProps> = ({
               ))}
 
               <div className="run-recordings-layout">
-                <RecordingWorkflowSelect
-                  workflowOptions={workflowOptions}
-                  selectedWorkflowId={selectedWorkflowId}
-                  isLoading={workflowsLoading}
-                  error={catalogError}
-                  onRetry={retryCatalog}
-                  onSelectWorkflow={(workflowId) => {
-                    setSelectedWorkflowId(workflowId);
-                    setPage(1);
-                  }}
-                />
-
                 {selectedWorkflow || !selectedWorkflowId ? (
-                  <>
-                    {unsearchableRuns > 0 && (
-                      <div className="run-recordings-warning" role="status">
-                        {unsearchableRuns} run attempts could not be searched because their recording payload is
-                        unavailable.
-                      </div>
-                    )}
-                    <RecordingRunsTable
-                      expandedFamilyKeys={expandedFamilyKeys}
-                      onToggleFamily={handleToggleFamily}
-                      childLoadStates={childLoadStates}
-                      selectedWorkflow={selectedWorkflow}
-                      selectedWorkflowEndpoint={selectedWorkflowEndpoint}
-                      selectedWorkflowStatusLabel={selectedWorkflowStatusLabel}
-                      overallRunsCount={overallRunsCount}
-                      badRunsCount={badRunsCount}
-                      filteredRunsCount={filteredRunsCount}
-                      totalPages={totalPages}
-                      inputSearchStatus={inputSearchStatus}
-                      inputSearchProgress={inputSearchProgress}
-                      page={page}
-                      runsPerPage={runsPerPage}
-                      statusFilter={statusFilter}
-                      inputFilterVisible={inputFilterVisible}
-                      inputFilterPath={inputFilterPath}
-                      inputFilterOperator={inputFilterOperator}
-                      inputFilterValue={inputFilterValue}
-                      appliedInputFilter={appliedInputFilter}
-                      inputFilterError={inputFilterError}
-                      runsLoading={runsLoading}
-                      visibleRuns={visibleRuns}
-                      deletingRecordingId={deletingRecordingId}
-                      openingRecordingId={openingRecordingId}
-                      onSetStatusFilter={setStatusFilter}
-                      onSetInputFilterVisible={setInputFilterVisible}
-                      onSetInputFilterPath={setInputFilterPath}
-                      onSetInputFilterOperator={setInputFilterOperator}
-                      onSetInputFilterValue={setInputFilterValue}
-                      onApplyInputFilter={handleApplyInputFilter}
-                      onClearInputFilter={handleClearInputFilter}
-                      onStopInputSearch={handleStopInputSearch}
-                      onSetRunsPerPage={setRunsPerPage}
-                      onSetPage={setPage}
-                      onDeleteRecording={(recordingId) => {
-                        void handleDeleteRecording(recordingId);
-                      }}
-                      onOpenRecording={(recordingId) => {
-                        void handleOpenRecording(recordingId);
-                      }}
-                    />
-                  </>
+                  <RecordingRunsTable
+                    expandedFamilyKeys={expandedFamilyKeys}
+                    onToggleFamily={handleToggleFamily}
+                    childLoadStates={childLoadStates}
+                    selectedWorkflow={selectedWorkflow}
+                    selectedWorkflowEndpoint={selectedWorkflowEndpoint}
+                    selectedWorkflowStatusLabel={selectedWorkflowStatusLabel}
+                    overallRunsCount={overallRunsCount}
+                    badRunsCount={badRunsCount}
+                    filteredRunsCount={filteredRunsCount}
+                    unsearchableRuns={unsearchableRuns}
+                    inputSearchStatus={inputSearchStatus}
+                    inputSearchProgress={inputSearchProgress}
+                    page={page}
+                    runsPerPage={runsPerPage}
+                    statusFilter={statusFilter}
+                    inputFilterVisible={inputFilterVisible}
+                    inputFilterPath={inputFilterPath}
+                    inputFilterOperator={inputFilterOperator}
+                    inputFilterValue={inputFilterValue}
+                    appliedInputFilter={appliedInputFilter}
+                    inputFilterError={inputFilterError}
+                    runsLoading={runsLoading}
+                    visibleRuns={visibleRuns}
+                    deletingRecordingId={deletingRecordingId}
+                    openingRecordingId={openingRecordingId}
+                    onSetStatusFilter={setStatusFilter}
+                    onSetInputFilterVisible={setInputFilterVisible}
+                    onSetInputFilterPath={setInputFilterPath}
+                    onSetInputFilterOperator={setInputFilterOperator}
+                    onSetInputFilterValue={setInputFilterValue}
+                    onApplyInputFilter={handleApplyInputFilter}
+                    onClearInputFilter={handleClearInputFilter}
+                    onStopInputSearch={handleStopInputSearch}
+                    onSetPage={setPage}
+                    onDeleteRecording={(recordingId) => {
+                      void handleDeleteRecording(recordingId);
+                    }}
+                    onOpenRecording={(recordingId) => {
+                      void handleOpenRecording(recordingId);
+                    }}
+                  />
                 ) : null}
               </div>
+            </div>
+            <div className="run-recordings-footer">
+              <div className="run-recordings-page-size">
+                <span className="run-recordings-field-label">Per page</span>
+                <SegmentedControl label="Runs per page">
+                  {runsPerPageOptions.map((option) => (
+                    <SegmentedControlButton
+                      key={option}
+                      selected={runsPerPage === option}
+                      onClick={() => {
+                        setRunsPerPage(option);
+                        setPage(1);
+                      }}
+                    >
+                      {option}
+                    </SegmentedControlButton>
+                  ))}
+                </SegmentedControl>
+              </div>
+              {!appliedInputFilter && filteredRunsCount !== null && filteredRunsCount > 0 && totalPages > 1 ? (
+                <nav className="run-recordings-pagination-footer" aria-label="Recording pages">
+                  <button
+                    type="button"
+                    className="run-recordings-page-button"
+                    onClick={() => setPage((current) => Math.max(1, current - 1))}
+                    disabled={page <= 1 || runsLoading}
+                  >
+                    Previous
+                  </button>
+                  <div className="run-recordings-page-status">
+                    Page {page} of {totalPages}
+                  </div>
+                  <button
+                    type="button"
+                    className="run-recordings-page-button"
+                    onClick={() => setPage((current) => Math.min(totalPages, current + 1))}
+                    disabled={page >= totalPages || runsLoading}
+                  >
+                    Next
+                  </button>
+                </nav>
+              ) : null}
             </div>
           </div>
         </ModalBody>

@@ -59,7 +59,8 @@ export const WorkflowLibraryModals: FC<{
     closeRunRecordingsModal,
     handleRunRecordingsFoundCountChange,
     runStatisticsOpen,
-    setRunStatisticsOpen,
+    runStatisticsInitialProject,
+    closeRunStatisticsModal,
     publishedItemsOpen,
     setPublishedItemsOpen,
     openPublishedItemProject,
@@ -179,7 +180,12 @@ export const WorkflowLibraryModals: FC<{
       />
       {runStatisticsOpen ? (
         <Suspense fallback={null}>
-          <RunStatisticsModal isOpen={runStatisticsOpen} onClose={() => setRunStatisticsOpen(false)} />
+          <RunStatisticsModal
+            key={runStatisticsInitialProject?.id ?? 'all'}
+            isOpen={runStatisticsOpen}
+            initialProject={runStatisticsInitialProject}
+            onClose={closeRunStatisticsModal}
+          />
         </Suspense>
       ) : null}
       <PublishedItemsModal

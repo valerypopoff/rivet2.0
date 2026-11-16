@@ -13,8 +13,35 @@ type StatisticsRequest = {
 };
 type CostMode = 'available' | 'partial' | 'unknown' | 'none';
 
+async function expectTimeChartLayout(chart: Locator) {
+  await expect.poll(() => chart.evaluate((card) => {
+    const header = card.querySelector('.run-statistics-chart-header')!;
+    const control = header.querySelector('[role="group"]')!;
+    const legend = card.querySelector('.recharts-legend-wrapper')!.getBoundingClientRect();
+    const labels = [...card.querySelectorAll<SVGTextElement>('.recharts-xAxis-tick-labels text[aria-label]')];
+    const marks = [...card.querySelectorAll('.recharts-xAxis-tick-lines .recharts-cartesian-axis-tick-line')];
+    return {
+      rightAligned: Math.abs(header.getBoundingClientRect().right - control.getBoundingClientRect().right) < 1,
+      twoLines: labels.length > 0 && labels.every((label) => {
+        const lines = [...label.querySelectorAll('tspan')];
+        return lines.length === 2 && lines.every((line) => Boolean(line.textContent?.trim()))
+          && lines[1]!.getBoundingClientRect().top > lines[0]!.getBoundingClientRect().bottom;
+      }),
+      marked: labels.length > 0 && marks.length === labels.length && marks.every((mark) => {
+        return mark.getBoundingClientRect().height >= 5
+          && !['none', 'transparent'].includes(getComputedStyle(mark).stroke);
+      }),
+      labelsFit: labels.every((text) => {
+        const svg = text.ownerSVGElement!.getBoundingClientRect();
+        const label = text.getBoundingClientRect();
+        return label.left >= svg.left - 1 && label.right <= svg.right + 1 && label.bottom <= legend.top;
+      }),
+    };
+  })).toEqual({ rightAligned: true, twoLines: true, marked: true, labelsFit: true });
+}
+
 function getStatisticsResponse(request: StatisticsRequest, costMode: CostMode = 'none') {
-  const hasMatchingRuns = request.runKind !== 'latest';
+  const hasMatchingRuns = request.runKind !== 'latest' && request.target.workflowId !== 'workflow-empty';
   const secondBucketFrom = new Date(Date.parse(request.period.from) + 60 * 60 * 1000).toISOString();
   const includedRunCount = hasMatchingRuns
     ? 3 + Number(request.includeFailed) + Number(request.includeWarnings)
@@ -163,6 +190,84 @@ test.describe('Run statistics modal', () => {
     });
     await mockHostedEditorBootstrap(page);
   });
+
+  for (const empty of [false, true]) {
+    test(`Inspect run statistics selects the tree project${empty ? ' without recordings' : ''} and the picker accepts typing`, async ({ page }) => {
+      const { statisticsRequests, releaseArchiveStatistics } = await installRunStatisticsRoutes(page, 'available');
+      releaseArchiveStatistics();
+      const name = empty ? 'Empty project' : 'Archive project';
+      const id = empty ? 'workflow-empty' : 'workflow-b';
+      await page.route('**/api/workflows/tree', (route) => route.fulfill({ json: {
+        root: '/workflows', folders: [], projects: [{
+          id, projectMetadataId: id, name, fileName: `${name}.rivet-project`,
+          relativePath: `${name}.rivet-project`, absolutePath: `/workflows/${name}.rivet-project`,
+          updatedAt: '', settings: { status: 'unpublished', endpointName: '', publishedWebApps: [] },
+        }],
+      } }));
+      let releaseCatalog!: () => void;
+      const catalogReady = new Promise<void>((resolve) => { releaseCatalog = resolve; });
+      await page.route((url) => url.pathname === '/api/workflows/run-statistics/targets', async (route) => {
+        await catalogReady;
+        await route.fallback();
+      });
+      await page.goto('/', { waitUntil: 'domcontentloaded' });
+      await authenticateIfNeeded(page);
+      await waitForDashboardReady(page);
+      await page.locator('.project-row').filter({ hasText: name }).click({ button: 'right' });
+      const menu = page.getByRole('menu', { name: `Actions for ${name}` });
+      await expect(menu.locator(':scope > *')).toHaveCount(9);
+      expect(await menu.locator(':scope > *').evaluateAll((items) => items.map((item) =>
+        item.getAttribute('role') === 'separator' ? '---' : item.textContent?.trim(),
+      ))).toEqual([
+        'Rename project', '---', 'Download project', 'Duplicate', '---',
+        'Inspect recordings', 'Inspect run statistics', '---', 'Delete project',
+      ]);
+      const inspect = menu.getByRole('menuitem', { name: 'Inspect run statistics', exact: true });
+      await expect(inspect.locator('svg')).toHaveCount(1);
+      const modal = page.getByTestId('run-statistics-modal');
+      try {
+        if (empty) {
+          await inspect.focus();
+          await page.keyboard.press('Enter');
+        } else await inspect.click();
+        await expect(menu).toBeHidden();
+        await expect(modal).toBeVisible();
+        await expect(modal.getByText('Loading available runs...')).toBeVisible();
+        expect(statisticsRequests).toEqual([]);
+      } finally {
+        releaseCatalog();
+      }
+      await expect(modal.locator('.run-statistics-target-select__single-value')).toHaveText(name);
+      await expect(modal.locator('.run-statistics-selected-project-path')).toHaveText(
+        empty ? 'Empty project.rivet-project' : 'Archive/Archive project.rivet-project',
+      );
+      expect(await modal.locator('.run-statistics-target-control').evaluate((control) => {
+        const picker = control.querySelector('.run-statistics-target-select__control')!.getBoundingClientRect();
+        const path = control.querySelector('.run-statistics-selected-project-path')!.getBoundingClientRect();
+        return path.top >= picker.bottom;
+      })).toBe(true);
+      await expect.poll(() => statisticsRequests.map((request) => request.target.workflowId)).toEqual([id]);
+      if (empty) {
+        await expect(modal.getByText('No runs for this target match the selected period and version.')).toBeVisible();
+      } else await expect(modal.getByRole('region', { name: 'Timing statistics' })).toBeVisible();
+
+      await modal.getByRole('button', { name: 'Close run statistics' }).click();
+      await page.getByRole('button', { name: 'Run statistics', exact: true }).click();
+      await expect(modal.locator('.run-statistics-target-select__single-value')).toHaveText('Report project');
+      await expect(modal.locator('.run-statistics-selected-project-path')).toHaveText('Reports/Report project.rivet-project');
+      await modal.locator('label[for="run-statistics-target-select"]').click();
+      const picker = modal.getByRole('combobox', { name: 'Project', exact: true });
+      await expect(picker).toBeFocused();
+      await picker.fill('aRCHive');
+      const options = page.locator('.run-statistics-target-select__menu');
+      await expect(options.locator('.run-statistics-target-option-label')).toHaveText(['Archive project']);
+      await picker.press('ArrowDown');
+      await picker.press('Enter');
+      await expect(modal.locator('.run-statistics-target-select__single-value')).toHaveText('Archive project');
+      await expect(modal.locator('.run-statistics-selected-project-path')).toHaveText('Archive/Archive project.rivet-project');
+      await expect.poll(() => statisticsRequests.at(-1)?.target.workflowId).toBe('workflow-b');
+    });
+  }
 
   test('custom period edits preserve both dates without retaining React events', async ({ page }) => {
     const errors: string[] = [];
@@ -314,7 +419,6 @@ test.describe('Run statistics modal', () => {
         const grouping = modal.getByRole('group', { name, exact: true });
         const header = grouping.locator('..');
         await expect(header.getByText(title, { exact: true })).toBeVisible();
-        await expect(header).toHaveCSS('justify-content', 'flex-start');
         await grouping.scrollIntoViewIfNeeded();
         const scrollBefore = await details.evaluate((panel) => panel.scrollTop);
         const week = grouping.getByRole('button', { name: 'By week', exact: true });
@@ -401,6 +505,9 @@ test.describe('Run statistics modal', () => {
         const maximumTick = async (ticks: Locator) => Math.max(...(await ticks.allTextContents())
           .map((tick) => Number(tick.replace(',', '.').replace(/[^\d.]/g, ''))));
         expect(await maximumTick(averageTicks)).toBeLessThan(await maximumTick(subtotalTicks));
+        for (const region of ['Timing statistics', 'Cost statistics']) {
+          await expectTimeChartLayout(modal.getByRole('region', { name: region }).locator('.run-statistics-chart-card'));
+        }
       } else if (costMode === 'partial') {
         await expect(cost).toContainText('No complete cost estimates to average');
         await expect(cost.locator('.recharts-line').first().locator('.recharts-line-curve')).toHaveAttribute('d', /\S/);
@@ -443,6 +550,9 @@ test.describe('Run statistics modal', () => {
           await modal.locator('.run-statistics-details').evaluate((panel) => { panel.scrollTop = panel.scrollHeight; });
           for (const label of ['Known subtotal', 'Average per complete run']) {
             await expect(cost.locator('.recharts-legend-item-text').filter({ hasText: label })).toBeInViewport();
+          }
+          for (const region of ['Timing statistics', 'Cost statistics']) {
+            await expectTimeChartLayout(modal.getByRole('region', { name: region }).locator('.run-statistics-chart-card'));
           }
           await modal.screenshot({ path: test.info().outputPath(`run-statistics-${width}.png`) });
         }
@@ -637,6 +747,7 @@ test.describe('Run statistics modal', () => {
     const webAppSelect = modal.getByRole('combobox', { name: 'Web app action' });
     await expect(webAppSelect).toBeVisible();
     await expect(modal.locator('.run-statistics-target-select__single-value')).toHaveText('Summary app - Generate summary');
+    await expect(modal.locator('.run-statistics-selected-project-path')).toHaveCount(0);
     await modal.locator('.run-statistics-target-select__control').click();
     const webAppTargetMenu = page.locator('.run-statistics-target-select__menu');
     await expect(webAppTargetMenu).toBeVisible();

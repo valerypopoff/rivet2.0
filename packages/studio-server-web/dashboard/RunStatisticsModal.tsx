@@ -9,11 +9,13 @@ import {
   ResponsiveContainer,
   Tooltip,
   XAxis,
+  type XAxisTickContentProps,
   YAxis,
 } from 'recharts';
 import { useEffect, useMemo, useState, type FC } from 'react';
 
 import type {
+  WorkflowProjectItem,
   WorkflowRunStatisticsStatusCounts,
   WorkflowRunStatisticsCatalogResponse,
   WorkflowRunStatisticsAggregation,
@@ -33,6 +35,7 @@ type ChartGrouping = Exclude<WorkflowRunStatisticsAggregation, 'auto'>;
 
 type RunStatisticsModalProps = {
   isOpen: boolean;
+  initialProject?: WorkflowProjectItem | null;
   onClose: () => void;
 };
 
@@ -49,6 +52,35 @@ const timestampFormatter = new Intl.DateTimeFormat(undefined, {
   hour: '2-digit',
   minute: '2-digit',
 });
+const chartDateFormatter = new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' });
+const chartTimeFormatter = new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit' });
+
+function formatChartTimestamp(value: unknown): string {
+  if (typeof value !== 'string' && typeof value !== 'number') return '';
+  return timestampFormatter.format(new Date(value));
+}
+
+function renderChartTimestampTick({ x, y, textAnchor, payload }: XAxisTickContentProps) {
+  const date = new Date(payload.value);
+  return (
+    <text x={x} y={y} textAnchor={textAnchor} fontSize={11} fill="var(--grey-light)" aria-label={timestampFormatter.format(date)}>
+      <tspan x={x} dy="0.71em">{chartDateFormatter.format(date)}</tspan>
+      <tspan x={x} dy="1.3em">{chartTimeFormatter.format(date)}</tspan>
+    </text>
+  );
+}
+
+const timeAxisProps = {
+  dataKey: 'from',
+  height: 48,
+  fontSize: 11,
+  minTickGap: 36,
+  tickMargin: 6,
+  tick: renderChartTimestampTick,
+  tickFormatter: formatChartTimestamp,
+  tickLine: { stroke: 'var(--grey-light)' },
+  axisLine: { stroke: 'rgba(255, 255, 255, 0.16)' },
+};
 
 // Green, yellow, and red are reserved for run outcomes in this modal.
 const CHART_MEDIAN_COLOR = '#5aa9ff';
@@ -253,7 +285,7 @@ function StatisticsTargetSelect({
           ) : null}
         </div>
       )}
-      isSearchable={options.length > 8}
+      isSearchable
       menuPlacement="auto"
       menuPortalTarget={typeof document === 'undefined' ? undefined : document.body}
       menuPosition="fixed"
@@ -262,7 +294,7 @@ function StatisticsTargetSelect({
   );
 }
 
-export const RunStatisticsModal: FC<RunStatisticsModalProps> = ({ isOpen, onClose }) => {
+export const RunStatisticsModal: FC<RunStatisticsModalProps> = ({ isOpen, initialProject = null, onClose }) => {
   const [surface, setSurface] = useState<WorkflowRunStatisticsSurface>('endpoint');
   const [periodPreset, setPeriodPreset] = useState<PeriodPreset>('7d');
   const [period, setPeriod] = useState<WorkflowRunStatisticsPeriod>(() => getPeriod('7d'));
@@ -275,7 +307,9 @@ export const RunStatisticsModal: FC<RunStatisticsModalProps> = ({ isOpen, onClos
   const [catalogLoading, setCatalogLoading] = useState(false);
   const [catalogError, setCatalogError] = useState<string | null>(null);
   const [catalogResultKey, setCatalogResultKey] = useState<string | null>(null);
-  const [selectedTargetKey, setSelectedTargetKey] = useState('');
+  const [selectedTargetKey, setSelectedTargetKey] = useState(() => initialProject
+    ? getWorkflowRunStatisticsTargetKey({ surface: 'endpoint', workflowId: initialProject.id })
+    : '');
   const [statisticsResult, setStatisticsResult] = useState<{
     data: WorkflowRunStatisticsResponse;
     populationKey: string;
@@ -318,12 +352,23 @@ export const RunStatisticsModal: FC<RunStatisticsModalProps> = ({ isOpen, onClos
     void fetchWorkflowRunStatisticsCatalog(surface, { signal: controller.signal })
       .then((nextCatalog) => {
         if (controller.signal.aborted) return;
-        setCatalog(nextCatalog);
+        const project = surface === 'endpoint' ? initialProject : null;
+        const targets: WorkflowRunStatisticsTargetSummary[] = project
+          && !nextCatalog.targets.some((target) => target.target.workflowId === project.id)
+          ? [{
+              target: { surface: 'endpoint', workflowId: project.id },
+              projectName: project.name,
+              projectRelativePath: project.relativePath,
+              totalRuns: 0,
+            }, ...nextCatalog.targets]
+          : nextCatalog.targets;
+        setCatalog({ ...nextCatalog, targets });
         setCatalogResultKey(requestKey);
+        const defaultTarget = (project && targets.find((target) => target.target.workflowId === project.id)) || targets[0];
         setSelectedTargetKey((current) => (
-          nextCatalog.targets.some((target) => getWorkflowRunStatisticsTargetKey(target.target) === current)
+          targets.some((target) => getWorkflowRunStatisticsTargetKey(target.target) === current)
             ? current
-            : (nextCatalog.targets[0] ? getWorkflowRunStatisticsTargetKey(nextCatalog.targets[0].target) : '')
+            : (defaultTarget ? getWorkflowRunStatisticsTargetKey(defaultTarget.target) : '')
         ));
       })
       .catch((error: unknown) => {
@@ -337,7 +382,7 @@ export const RunStatisticsModal: FC<RunStatisticsModalProps> = ({ isOpen, onClos
         if (!controller.signal.aborted) setCatalogLoading(false);
       });
     return () => controller.abort();
-  }, [catalogQueryKey, isOpen, surface]);
+  }, [catalogQueryKey, initialProject, isOpen, surface]);
 
   useEffect(() => {
     if (!isOpen || !selectedTarget || !validPeriod || !statisticsPopulationKey || !statisticsQueryKey) {
@@ -410,11 +455,14 @@ export const RunStatisticsModal: FC<RunStatisticsModalProps> = ({ isOpen, onClos
 
             <div className="project-settings-modal-content run-statistics-content">
               <div className="run-statistics-target-control">
-                <div className="run-recordings-field-label">{surface === 'endpoint' ? 'Project' : 'Web app action'}</div>
+                <label className="run-recordings-field-label" htmlFor="run-statistics-target-select">{surface === 'endpoint' ? 'Project' : 'Web app action'}</label>
                 {catalogLoading ? <div className="run-statistics-empty-state">Loading available runs...</div> : null}
                 {catalogReady && catalog?.targets.length === 0 ? <div className="run-statistics-empty-state">No retained recorded runs.</div> : null}
                 {catalogReady && catalog ? (
                   <StatisticsTargetSelect surface={surface} targets={catalog.targets} selectedTargetKey={selectedTargetKey} onSelect={setSelectedTargetKey} />
+                ) : null}
+                {surface === 'endpoint' && selectedTarget?.projectRelativePath ? (
+                  <div className="run-statistics-selected-project-path">{selectedTarget.projectRelativePath}</div>
                 ) : null}
                 {catalogError && catalogResultKey === catalogQueryKey ? <div className="project-settings-error">{catalogError}</div> : null}
               </div>
@@ -443,7 +491,7 @@ export const RunStatisticsModal: FC<RunStatisticsModalProps> = ({ isOpen, onClos
                   <SegmentedControl label="Version">
                     {(['published', 'latest', 'both'] as RunKind[]).map((value) => (
                       <SegmentedControlButton key={value} selected={runKind === value} onClick={() => setRunKind(value)}>
-                        {value === 'both' ? 'Both' : value[0].toUpperCase() + value.slice(1)}
+                        {value === 'both' ? 'Both' : value.charAt(0).toUpperCase() + value.slice(1)}
                       </SegmentedControlButton>
                     ))}
                   </SegmentedControl>
@@ -500,7 +548,7 @@ export const RunStatisticsModal: FC<RunStatisticsModalProps> = ({ isOpen, onClos
                   <>
                     <div className="run-statistics-period-label">{statisticsReady ? `${includedStatusTotal.toLocaleString()} ${includedStatusTotal === 1 ? 'run' : 'runs'}, ` : ''}{selectedPeriodLabel}</div>
                     {statisticsLoading && !statisticsReady ? <div className="run-statistics-empty-state">Calculating statistics...</div> : null}
-                    {statisticsReady && currentStatusTotal > 0 ? (
+                    {statisticsReady && statistics && currentStatusTotal > 0 ? (
                       <>
                           {includeFailed || includeWarnings ? <div className="run-statistics-outcomes" role="region" aria-label="Run outcomes">
                             <div className="run-statistics-outcome-cards">
@@ -531,11 +579,11 @@ export const RunStatisticsModal: FC<RunStatisticsModalProps> = ({ isOpen, onClos
                                 </div>
                                 <div className="run-statistics-chart">
                                   <ResponsiveContainer width="100%" height="100%">
-                                    <LineChart data={statistics.buckets.map((bucket) => ({ ...bucket, label: timestampFormatter.format(new Date(bucket.from)) }))} margin={{ top: 8, right: 12, left: 0, bottom: 0 }}>
+                                    <LineChart data={statistics.buckets} margin={{ top: 8, right: 12, left: 0, bottom: 0 }}>
                                       <CartesianGrid stroke="rgba(255, 255, 255, 0.08)" vertical={false} />
-                                      <XAxis dataKey="label" minTickGap={36} tick={{ fill: 'var(--grey-light)', fontSize: 11 }} tickLine={false} axisLine={false} />
+                                      <XAxis {...timeAxisProps} />
                                       <YAxis tickFormatter={formatAxisDuration} tick={{ fill: 'var(--grey-light)', fontSize: 11 }} tickLine={false} axisLine={false} width={52} />
-                                      <Tooltip formatter={(value: number | undefined) => formatDuration(value ?? null)} contentStyle={{ background: '#1f2228', border: '1px solid rgba(255,255,255,0.12)', borderRadius: 6 }} labelStyle={{ color: '#dfe1e6' }} />
+                                      <Tooltip labelFormatter={formatChartTimestamp} formatter={(value) => formatDuration(typeof value === 'number' ? value : null)} contentStyle={{ background: '#1f2228', border: '1px solid rgba(255,255,255,0.12)', borderRadius: 6 }} labelStyle={{ color: '#dfe1e6' }} />
                                       <Legend wrapperStyle={{ fontSize: 12 }} />
                                       <Line type="monotone" dataKey="medianDurationMs" name="Median" stroke={CHART_MEDIAN_COLOR} strokeWidth={2} dot={false} connectNulls />
                                       <Line type="monotone" dataKey="p95DurationMs" name="P95" stroke={CHART_P95_COLOR} strokeWidth={2} dot={false} connectNulls />
@@ -566,9 +614,9 @@ export const RunStatisticsModal: FC<RunStatisticsModalProps> = ({ isOpen, onClos
                                     ) : null}
                                     <div className="run-statistics-chart">
                                       <ResponsiveContainer width="100%" height="100%">
-                                        <LineChart data={statistics.costBuckets.map((bucket) => ({ ...bucket, label: timestampFormatter.format(new Date(bucket.from)) }))} margin={{ top: 8, right: 12, left: 0, bottom: 0 }}>
+                                        <LineChart data={statistics.costBuckets} margin={{ top: 8, right: 12, left: 0, bottom: 0 }}>
                                           <CartesianGrid stroke="rgba(255, 255, 255, 0.08)" vertical={false} />
-                                          <XAxis dataKey="label" minTickGap={36} tick={{ fill: 'var(--grey-light)', fontSize: 11 }} tickLine={false} axisLine={false} />
+                                          <XAxis {...timeAxisProps} />
                                           <YAxis
                                             yAxisId="average"
                                             orientation="left"
@@ -587,7 +635,7 @@ export const RunStatisticsModal: FC<RunStatisticsModalProps> = ({ isOpen, onClos
                                             axisLine={false}
                                             width={76}
                                           />
-                                          <Tooltip formatter={(value: number | undefined) => formatCost(value)} contentStyle={{ background: '#1f2228', border: '1px solid rgba(255,255,255,0.12)', borderRadius: 6 }} labelStyle={{ color: '#dfe1e6' }} />
+                                          <Tooltip labelFormatter={formatChartTimestamp} formatter={(value) => formatCost(typeof value === 'number' ? value : null)} contentStyle={{ background: '#1f2228', border: '1px solid rgba(255,255,255,0.12)', borderRadius: 6 }} labelStyle={{ color: '#dfe1e6' }} />
                                           <Legend wrapperStyle={{ fontSize: 12 }} />
                                           <Line yAxisId="subtotal" type="linear" dataKey="knownCostUsd" name="Known subtotal" stroke={CHART_MEDIAN_COLOR} strokeWidth={2} connectNulls={false} />
                                           <Line yAxisId="average" type="linear" dataKey="averageCompleteCostUsd" name="Average per complete run" stroke={CHART_P95_COLOR} strokeWidth={2} connectNulls={false} />

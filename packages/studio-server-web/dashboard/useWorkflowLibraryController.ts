@@ -119,7 +119,12 @@ export function useWorkflowLibraryController(options: {
   const runRecordings = useRunRecordingsModalState();
   const [settingsModalProject, setSettingsModalProject] = useState<WorkflowProjectItem | null>(null);
   const [settingsModalInitialTab, setSettingsModalInitialTab] = useState<'workflow' | 'danger'>('workflow');
-  const [runStatisticsOpen, setRunStatisticsOpen] = useState(false);
+  const [runStatisticsRequest, setRunStatisticsRequest] = useState<{ project: WorkflowProjectItem | null } | null>(null);
+  const runStatisticsOpen = runStatisticsRequest !== null;
+  const openRunStatisticsModal = useCallback((project: WorkflowProjectItem | null = null) => {
+    setRunStatisticsRequest({ project });
+  }, []);
+  const closeRunStatisticsModal = useCallback(() => setRunStatisticsRequest(null), []);
   const [publishedItemsOpen, setPublishedItemsOpen] = useState(false);
   const [appSettingsOpen, setAppSettingsOpen] = useState(false);
   const [folderContextMenuState, setFolderContextMenuState] = useState<WorkflowFolderContextMenuState | null>(null);
@@ -641,6 +646,13 @@ export function useWorkflowLibraryController(options: {
     runRecordings.showForProject(project);
   }, [closeProjectContextMenu, projectContextMenuState, runRecordings.showForProject]);
 
+  const handleInspectProjectStatisticsFromContextMenu = useCallback(() => {
+    const project = projectContextMenuState?.project;
+    if (!project) return;
+    closeProjectContextMenu();
+    openRunStatisticsModal(project);
+  }, [closeProjectContextMenu, openRunStatisticsModal, projectContextMenuState]);
+
   const closeSettingsModal = useCallback(() => {
     setSettingsModalProject(null);
   }, []);
@@ -762,6 +774,7 @@ export function useWorkflowLibraryController(options: {
     runRecordingsResetToken: runRecordings.resetToken,
     runRecordingsInitialProject: runRecordings.initialProject,
     runStatisticsOpen,
+    runStatisticsInitialProject: runStatisticsRequest?.project ?? null,
     publishedItemsOpen,
     appSettingsOpen,
     folderContextMenuState,
@@ -800,6 +813,7 @@ export function useWorkflowLibraryController(options: {
     handleDeleteFolderFromContextMenu,
     handleRenameProjectFromContextMenu,
     handleInspectProjectRecordingsFromContextMenu,
+    handleInspectProjectStatisticsFromContextMenu,
     handleSubmitProjectRename,
     handleCancelProjectRename,
     handleDownloadProject,
@@ -811,7 +825,8 @@ export function useWorkflowLibraryController(options: {
     handleDeleteProjectFromContextMenu,
     handleProjectModalSelectPublished,
     handleProjectModalSelectUnpublishedChanges,
-    setRunStatisticsOpen,
+    openRunStatisticsModal,
+    closeRunStatisticsModal,
     setPublishedItemsOpen,
     openPublishedItemProject,
     openRunRecordingsModal: runRecordings.show,

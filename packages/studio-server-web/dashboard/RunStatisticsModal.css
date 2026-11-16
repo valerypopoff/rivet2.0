@@ -202,14 +202,16 @@
   white-space: nowrap;
 }
 
-.run-statistics-target-option-description {
+.run-statistics-target-option-description,
+.run-statistics-selected-project-path {
   margin-top: 2px;
   color: var(--grey-light);
   font-size: 12px;
   line-height: 1.35;
 }
 
-.run-statistics-target-option-path {
+.run-statistics-target-option-path,
+.run-statistics-selected-project-path {
   overflow-wrap: anywhere;
 }
 
@@ -240,13 +242,12 @@
 }
 
 .run-statistics-chart-header .segmented-control {
-  margin-left: 0;
+  margin-left: auto;
   max-width: 100%;
   flex-wrap: wrap;
 }
 
 .run-statistics-chart-header {
-  justify-content: flex-start;
   margin-bottom: 8px;
 }
 

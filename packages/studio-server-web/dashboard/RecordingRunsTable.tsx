@@ -27,7 +27,6 @@ import {
   type RecordingRunFamily,
 } from './recording-run-hierarchy';
 
-const runsPerPageOptions = [10, 20, 50, 100] as const;
 const INPUT_FILTER_OPERATOR_LABELS: Partial<Record<WorkflowRecordingInputFilterOperator, string>> = {
   not_exists: 'not exists',
 };
@@ -452,7 +451,7 @@ type RecordingRunsTableProps = {
   overallRunsCount: number | null;
   badRunsCount: number | null;
   filteredRunsCount: number | null;
-  totalPages: number;
+  unsearchableRuns: number;
   inputSearchStatus: 'idle' | 'searching' | 'complete' | 'stopped';
   inputSearchProgress: { analyzedRuns: number; availableRuns: number | null } | null;
   page: number;
@@ -476,7 +475,6 @@ type RecordingRunsTableProps = {
   onApplyInputFilter: () => boolean;
   onClearInputFilter: () => void;
   onStopInputSearch: () => void;
-  onSetRunsPerPage: (pageSize: number) => void;
   onSetPage: (page: number | ((current: number) => number)) => void;
   onDeleteRecording: (recordingId: string) => void;
   onOpenRecording: (recordingId: string) => void;
@@ -492,7 +490,7 @@ export const RecordingRunsTable: FC<RecordingRunsTableProps> = ({
   overallRunsCount,
   badRunsCount,
   filteredRunsCount,
-  totalPages,
+  unsearchableRuns,
   inputSearchStatus,
   inputSearchProgress,
   page,
@@ -516,12 +514,12 @@ export const RecordingRunsTable: FC<RecordingRunsTableProps> = ({
   onApplyInputFilter,
   onClearInputFilter,
   onStopInputSearch,
-  onSetRunsPerPage,
   onSetPage,
   onDeleteRecording,
   onOpenRecording,
 }) => {
   const [inputPathHistory, setInputPathHistory] = useState(() => readInputPathHistory());
+  const inputFilterToggleRef = useRef<HTMLButtonElement>(null);
   const allRunsLabel = overallRunsCount !== null && overallRunsCount > 0 ? `All (${overallRunsCount})` : 'All';
   const badRunsLabel = badRunsCount !== null && badRunsCount > 0 ? `Bad only (${badRunsCount})` : 'Bad only';
   const canApplyInputFilter = !deletingRecordingId && !openingRecordingId && !(runsLoading && appliedInputFilter);
@@ -556,93 +554,69 @@ export const RecordingRunsTable: FC<RecordingRunsTableProps> = ({
     : null;
 
   return (
-    <section className={`run-recordings-details${selectedWorkflow ? '' : ' run-recordings-details-any'}`}>
-      {selectedWorkflow ? (
-        <div className="run-recordings-workflow-summary">
-          <div className="run-recordings-workflow-heading-row">
-            <span className={`project-status-badge ${selectedWorkflow.project.settings.status}`}>
-              {selectedWorkflowStatusLabel}
-            </span>
-            <div className="run-recordings-workflow-name">{selectedWorkflow.project.name}</div>
-          </div>
+    <section className="run-recordings-details">
+      <aside className="run-recordings-sidebar" aria-label="Recording filters">
+        {selectedWorkflow ? (
+          <div className="run-recordings-workflow-summary">
+            <div className="run-recordings-workflow-heading-row">
+              <span className={`project-status-badge ${selectedWorkflow.project.settings.status}`}>
+                {selectedWorkflowStatusLabel}
+              </span>
+              <div className="run-recordings-workflow-name">{selectedWorkflow.project.name}</div>
+            </div>
 
-          <div className="run-recordings-workflow-fields">
-            <div className="run-recordings-workflow-field run-recordings-workflow-field-wide">
-              <div className="run-recordings-field-label">Endpoint</div>
-              <div className="run-recordings-field-value run-recordings-field-code">
-                {selectedWorkflowEndpoint ? `/workflows/${selectedWorkflowEndpoint}` : 'No endpoint configured'}
+            <div className="run-recordings-workflow-fields">
+              <div className="run-recordings-workflow-field run-recordings-workflow-field-wide">
+                <div className="run-recordings-field-label">Endpoint</div>
+                <div className="run-recordings-field-value run-recordings-field-code">
+                  {selectedWorkflowEndpoint ? `/workflows/${selectedWorkflowEndpoint}` : 'No endpoint configured'}
+                </div>
+              </div>
+              <div className="run-recordings-workflow-field">
+                <div className="run-recordings-field-label">Project path</div>
+                <div className="run-recordings-field-value run-recordings-field-code">
+                  {selectedWorkflow.project.relativePath}
+                </div>
               </div>
             </div>
-            <div className="run-recordings-workflow-field">
-              <div className="run-recordings-field-label">Project path</div>
-              <div className="run-recordings-field-value run-recordings-field-code">
-                {selectedWorkflow.project.relativePath}
-              </div>
-            </div>
           </div>
-        </div>
-      ) : null}
+        ) : null}
 
-      <div className="run-recordings-runs-panel">
+        {unsearchableRuns > 0 ? (
+          <div className="run-recordings-warning" role="status">
+            {unsearchableRuns} run attempts could not be searched because their recording payload is unavailable.
+          </div>
+        ) : null}
         <div className="run-recordings-runs-header">
-          <div className="run-recordings-runs-heading-group">
-            <div className="run-recordings-runs-title">
-              {overallRunsCount === null ? 'Runs' : `${overallRunsCount} ${overallRunsCount === 1 ? 'Run' : 'Runs'}`}
-            </div>
-            <SegmentedControl label="Filter runs">
-              <SegmentedControlButton
-                selected={statusFilter === 'all'}
-                onClick={() => {
-                  onSetStatusFilter('all');
-                  onSetPage(1);
-                }}
-              >
-                {allRunsLabel}
-              </SegmentedControlButton>
-              <SegmentedControlButton
-                selected={statusFilter === 'failed'}
-                onClick={() => {
-                  onSetStatusFilter('failed');
-                  onSetPage(1);
-                }}
-              >
-                {badRunsLabel}
-              </SegmentedControlButton>
-            </SegmentedControl>
-            <button
-              type="button"
-              className={`run-recordings-filter-link${inputFilterVisible ? ' active' : ''}`}
-              onClick={() => onSetInputFilterVisible(!inputFilterVisible)}
-              aria-pressed={inputFilterVisible}
+          <div className="run-recordings-runs-title">
+            {overallRunsCount === null ? 'Runs' : `${overallRunsCount} ${overallRunsCount === 1 ? 'Run' : 'Runs'}`}
+          </div>
+          <SegmentedControl label="Filter runs">
+            <SegmentedControlButton
+              selected={statusFilter === 'all'}
+              onClick={() => {
+                onSetStatusFilter('all');
+                onSetPage(1);
+              }}
             >
-              Filter by input
-            </button>
-          </div>
-
-          <div className="run-recordings-runs-controls">
-            <div className="run-recordings-inline-control">
-              <span className="run-recordings-field-label">Per page</span>
-              <SegmentedControl label="Runs per page">
-                {runsPerPageOptions.map((option) => (
-                  <SegmentedControlButton
-                    key={option}
-                    selected={runsPerPage === option}
-                    onClick={() => {
-                      onSetRunsPerPage(option);
-                      onSetPage(1);
-                    }}
-                  >
-                    {option}
-                  </SegmentedControlButton>
-                ))}
-              </SegmentedControl>
-            </div>
-          </div>
+              {allRunsLabel}
+            </SegmentedControlButton>
+            <SegmentedControlButton
+              selected={statusFilter === 'failed'}
+              onClick={() => {
+                onSetStatusFilter('failed');
+                onSetPage(1);
+              }}
+            >
+              {badRunsLabel}
+            </SegmentedControlButton>
+          </SegmentedControl>
         </div>
 
         {inputFilterVisible ? (
           <form
             className="run-recordings-input-filter"
+            aria-label="Filter by input"
             onSubmit={(event) => {
               event.preventDefault();
               if (!canApplyInputFilter) return;
@@ -651,6 +625,21 @@ export const RecordingRunsTable: FC<RecordingRunsTableProps> = ({
               }
             }}
           >
+            <div className="run-recordings-input-filter-header">
+              <h3>Filter by input</h3>
+              <button
+                type="button"
+                className="run-recordings-input-filter-close"
+                aria-label="Close input filter"
+                autoFocus
+                onClick={() => {
+                  onSetInputFilterVisible(false);
+                  requestAnimationFrame(() => inputFilterToggleRef.current?.focus());
+                }}
+              >
+                &times;
+              </button>
+            </div>
             <RecordingInputPathField
               value={inputFilterPath}
               paths={inputPathHistory}
@@ -744,8 +733,20 @@ export const RecordingRunsTable: FC<RecordingRunsTableProps> = ({
               </div>
             ) : null}
           </form>
-        ) : null}
+        ) : (
+          <button
+            ref={inputFilterToggleRef}
+            type="button"
+            className="run-recordings-page-button run-recordings-filter-toggle"
+            onClick={() => onSetInputFilterVisible(true)}
+            aria-expanded={false}
+          >
+            Filter by input
+          </button>
+        )}
+      </aside>
 
+      <div className="run-recordings-runs-panel">
         <div className="run-recordings-runs-body">
           {runsLoading && visibleRuns.length === 0 ? (
             <div className="run-recordings-empty-group">
@@ -785,30 +786,6 @@ export const RecordingRunsTable: FC<RecordingRunsTableProps> = ({
             />
           )}
         </div>
-
-        {!appliedInputFilter && filteredRunsCount !== null && filteredRunsCount > 0 && totalPages > 1 ? (
-          <div className="run-recordings-pagination-footer">
-            <button
-              type="button"
-              className="run-recordings-page-button"
-              onClick={() => onSetPage((current) => Math.max(1, current - 1))}
-              disabled={page <= 1 || runsLoading}
-            >
-              Previous
-            </button>
-            <div className="run-recordings-page-status">
-              Page {page} of {totalPages}
-            </div>
-            <button
-              type="button"
-              className="run-recordings-page-button"
-              onClick={() => onSetPage((current) => Math.min(totalPages, current + 1))}
-              disabled={page >= totalPages || runsLoading}
-            >
-              Next
-            </button>
-          </div>
-        ) : null}
       </div>
     </section>
   );

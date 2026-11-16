@@ -27,6 +27,16 @@ difference alone must not fail this check.
 
 ## Schema and browser fixture contracts
 
+The shared Docker launcher dotenv contract keeps a closed inventory of documented
+inputs. Adding an option must update that inventory and verify the normalized
+value reaches both API roles in the generated Compose model, including defaults,
+explicit overrides and invalid values across all six launch modes. The durable
+recording switch is covered by `container-server.test.mjs`; its explicit false
+value must survive projection without changing storage identity. Kubernetes
+defaults and opt-out behavior remain covered by `server-launch-mode.test.mjs`.
+Run both files when changing shared launcher options rather than accepting a
+documentation-only declaration or loosening the inventory assertion.
+
 The release-manifest schema reader is tested against isolated source files with
 different current/rollback versions, including invalid contracts. Do not pin that
 parser test to the repository's current schema number. The reference-index

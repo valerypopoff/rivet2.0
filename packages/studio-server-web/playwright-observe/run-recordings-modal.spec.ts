@@ -1335,7 +1335,7 @@ test.describe('Run recordings modal', () => {
       await page.locator('.project-row', { hasText: project.name }).click({ button: 'right' });
       const menu = page.getByRole('menu', { name: `Actions for ${project.name}` });
       await expect(menu.getByRole('menuitem').nth(0)).toHaveText('Rename project');
-      const inspect = menu.getByRole('menuitem').nth(1);
+      const inspect = menu.getByRole('menuitem', { name: 'Inspect recordings', exact: true });
       await expect(inspect).toHaveText('Inspect recordings');
       await expect(inspect.locator('svg')).toHaveCount(1);
       const loaded = page.waitForRequest((request) => {
@@ -1596,6 +1596,103 @@ test.describe('Run recordings modal', () => {
     await expect(modal).toContainText('13 of 13');
   });
 
+  test('keeps the Project picker in the header and filters in a responsive left panel', async ({ page }) => {
+    await installRunRecordingRoutes(page);
+    await page.goto('/', { waitUntil: 'domcontentloaded' });
+    await authenticateIfNeeded(page);
+    await waitForDashboardReady(page);
+    await page.getByRole('button', { name: 'Run recordings', exact: true }).click();
+    const modal = page.getByTestId('run-recordings-modal');
+    const header = modal.locator('.run-recordings-header-row');
+    const sidebar = modal.getByRole('complementary', { name: 'Recording filters' });
+    const footer = modal.locator('.run-recordings-footer');
+    await expect(header.getByRole('combobox', { name: 'Project', exact: true })).toBeVisible();
+    await expect(modal.getByText('Choose Any or a project, filter its run history, and open any recording in the editor.')).toHaveCount(0);
+    await expect(sidebar.getByRole('group', { name: 'Filter runs', exact: true })).toBeVisible();
+    await expect(footer.getByRole('group', { name: 'Runs per page', exact: true })).toBeInViewport({ ratio: 1 });
+    await expect(sidebar.getByRole('group', { name: 'Runs per page', exact: true })).toHaveCount(0);
+    await choosePageSizeTen(modal);
+    await expect(footer.getByRole('navigation', { name: 'Recording pages' })).toBeInViewport({ ratio: 1 });
+    await modal.screenshot({ path: test.info().outputPath('run-recordings-sidebar-closed.png') });
+    await sidebar.getByRole('button', { name: 'Filter by input', exact: true }).click();
+    await expect(sidebar.getByRole('button', { name: 'Filter by input', exact: true })).toHaveCount(0);
+    const filter = sidebar.getByRole('form', { name: 'Filter by input' });
+    await expect(filter.getByRole('heading', { name: 'Filter by input' })).toBeVisible();
+    await expect(filter.getByRole('button', { name: 'Close input filter' })).toBeVisible();
+    await expect(sidebar.getByLabel('Input JSON path')).toBeVisible();
+    await expect(sidebar.getByRole('button', { name: 'Apply', exact: true })).toBeVisible();
+    const layout = () => modal.evaluate((element) => {
+      const label = element.querySelector('label[for="run-recordings-workflow-select"]')!.getBoundingClientRect();
+      const control = element.querySelector('.run-recordings-selector-section .run-recordings-select__control')!.getBoundingClientRect();
+      const title = element.querySelector('.run-recordings-title')!.getBoundingClientRect();
+      const header = element.querySelector('.run-recordings-header-row')!.getBoundingClientRect();
+      const filters = element.querySelector('.run-recordings-sidebar')!;
+      const filtersRect = filters.getBoundingClientRect();
+      const results = element.querySelector('.run-recordings-runs-panel')!.getBoundingClientRect();
+      const footerElement = element.querySelector('.run-recordings-footer')!;
+      const footer = footerElement.getBoundingClientRect();
+      const footerStyle = getComputedStyle(footerElement);
+      const pagination = footerElement.querySelector('.run-recordings-pagination-footer')!.getBoundingClientRect();
+      const pageSize = footerElement.querySelector('.run-recordings-page-size')!.getBoundingClientRect();
+      return {
+        inlinePicker: label.right < control.left && Math.abs(label.top + label.height / 2 - control.top - control.height / 2) < 1,
+        belowTitle: control.top >= title.bottom + 8,
+        aboveDivider: control.bottom <= header.bottom - 10,
+        besideResults: filtersRect.right + 8 <= results.left,
+        aboveResults: filtersRect.bottom <= results.top,
+        filtersFit: filters.scrollWidth <= filters.clientWidth,
+        footerAtBottom: Math.abs(footer.bottom - element.getBoundingClientRect().bottom) < 2,
+        footerControlsAligned: Math.abs(pageSize.left - footer.left - parseFloat(footerStyle.paddingLeft)) < 1 &&
+          Math.abs(pagination.right - footer.right + parseFloat(footerStyle.paddingRight)) < 1,
+        footerFits: footerElement.scrollWidth <= footerElement.clientWidth,
+      };
+    });
+    await expect.poll(layout).toMatchObject({ inlinePicker: true, belowTitle: true, aboveDivider: true, besideResults: true, filtersFit: true, footerAtBottom: true, footerControlsAligned: true, footerFits: true });
+    await modal.screenshot({ path: test.info().outputPath('run-recordings-sidebar.png') });
+    await header.getByRole('combobox', { name: 'Project', exact: true }).fill('Latest Flow');
+    await page.locator('.run-recordings-select__option').filter({ hasText: 'Latest Flow' }).click();
+    await expect(sidebar.locator('.run-recordings-workflow-summary')).toBeVisible();
+    await expect(modal.locator('.run-recordings-run').first()).toBeVisible();
+    await page.setViewportSize({ width: 390, height: 800 });
+    await expect.poll(layout).toMatchObject({ inlinePicker: true, belowTitle: true, aboveDivider: true, aboveResults: true, filtersFit: true, footerAtBottom: true, footerControlsAligned: true, footerFits: true });
+    await expect(footer.getByRole('group', { name: 'Runs per page', exact: true })).toBeInViewport({ ratio: 1 });
+    await header.scrollIntoViewIfNeeded();
+    await modal.screenshot({ path: test.info().outputPath('run-recordings-sidebar-narrow.png') });
+  });
+
+  test('closing the input filter cancels its search and restores the unfiltered list', async ({ page }) => {
+    const continuation = responseGate();
+    await installRunRecordingRoutes(page, {
+      latestFlowRunCount: 30,
+      beforeRuns: async (url) => {
+        if (url.searchParams.has('inputAfter')) await continuation.promise;
+      },
+    });
+    const modal = await openLatestFlowRecordings(page, 30);
+    await choosePageSizeTen(modal, 3);
+    const openFilter = modal.getByRole('button', { name: 'Filter by input', exact: true });
+    await openFilter.focus();
+    await openFilter.press('Enter');
+    await expect(modal.getByRole('button', { name: 'Close input filter' })).toBeFocused();
+    await modal.getByLabel('Input JSON path').fill('$.foo');
+    await modal.getByLabel('Value', { exact: true }).fill('bar');
+    try {
+      await modal.getByRole('button', { name: 'Apply', exact: true }).click();
+      await expect(modal.getByRole('button', { name: 'Stop search' })).toBeVisible();
+      await modal.getByRole('button', { name: 'Close input filter' }).press('Enter');
+      await expect(modal.getByRole('form', { name: 'Filter by input' })).toHaveCount(0);
+      await expect(openFilter).toBeFocused();
+      await expect(modal.locator('.run-recordings-page-status')).toHaveText('Page 1 of 3');
+      await expect(modal.locator('[data-recording-id="recording-b-1"]')).toBeVisible();
+    } finally {
+      continuation.release();
+    }
+    await openFilter.click();
+    await expect(modal.getByLabel('Input JSON path')).toHaveValue('$.foo');
+    await expect(modal.getByLabel('Value', { exact: true })).toHaveValue('bar');
+    await expect(modal.locator('.run-recordings-input-search-status')).toHaveCount(0);
+  });
+
   test('workflow details and recording controls remain reachable on a narrow screen', async ({ page }) => {
     await page.setViewportSize({ width: 700, height: 800 });
     await installRunRecordingRoutes(page);
@@ -1605,13 +1702,16 @@ test.describe('Run recordings modal', () => {
     await page.getByRole('button', { name: 'Run recordings' }).click();
     const modal = page.getByTestId('run-recordings-modal');
     const scrollModal = async (delta: number) => {
-      await modal.hover({ position: { x: 10, y: 100 } });
+      await modal.locator('.run-recordings-content').hover({ position: { x: 10, y: 10 } });
       await page.mouse.wheel(0, delta);
     };
+    const pageSize = modal.getByRole('group', { name: 'Runs per page' });
+    await expect(pageSize).toBeInViewport({ ratio: 1 });
     await expect(modal.locator('.run-recordings-workflow-summary')).toHaveCount(0);
     await choosePageSizeTen(modal);
     await scrollModal(2000);
     await expect(modal.locator('.run-recordings-pagination-footer')).toBeInViewport({ ratio: 1 });
+    await expect(pageSize).toBeInViewport({ ratio: 1 });
     await scrollModal(-2000);
     await modal.locator('.run-recordings-selector-section .run-recordings-select__control').click();
     await page.locator('.run-recordings-select__option', { hasText: 'Latest Flow' }).click();
@@ -2911,6 +3011,7 @@ test.describe('Run recordings modal', () => {
     await expect(modal.locator('.run-recordings-page-status')).toHaveText('Page 1 of 2');
 
     await modal.getByLabel('Input JSON path').fill('$.missing');
+    await expect(modal.getByRole('dialog', { name: 'Saved input JSON paths' })).toHaveCount(0);
     await operatorControl.click();
     await page.locator('.run-recordings-select__option').filter({ hasText: /^!=$/ }).click();
     await modal.getByLabel('Value').fill('bar');
