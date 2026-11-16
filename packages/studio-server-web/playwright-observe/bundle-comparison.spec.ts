@@ -5,7 +5,12 @@ import type {
   BundleComparisonManifest,
   BundleComparisonPairRequest,
 } from '../../studio-server-shared/workflow-bundle-comparison-types';
-import { openBundleActions, mockHostedEditorBootstrap, waitForDashboardReady } from './helpers/hostedEditorObserve';
+import {
+  authenticateIfNeeded,
+  openBundleActions,
+  mockHostedEditorBootstrap,
+  waitForDashboardReady,
+} from './helpers/hostedEditorObserve';
 import { expectStudioModalSizing } from './helpers/modalSizing';
 
 const olderId = '5c07c7c1-62b1-4140-911b-03c714e580b1';
@@ -198,6 +203,7 @@ async function fixture(page: Page, bundleCompare = true, paths?: { older: string
   );
   await mockHostedEditorBootstrap(page);
   await page.goto('/');
+  await authenticateIfNeeded(page);
   await waitForDashboardReady(page);
   return {
     older,
@@ -810,6 +816,13 @@ test('manual correspondence survives modal Swap and cancelling its draft leaves 
 }) => {
   const f = await fixture(page);
   const modal = await begin(page);
+  const newerOnly = modal.getByText('Only in Newer (Working)', { exact: true });
+  await expect(newerOnly).toBeVisible();
+  await select(page, 'Counterpart for Removed member', 'Added member — Added');
+  await expect(newerOnly).toHaveCount(0);
+  await select(page, 'Counterpart for Removed member', 'No corresponding project (Suggested)');
+  await expect(newerOnly).toBeVisible();
+  await expect(modal.getByRole('list')).toContainText('Added member — Added');
   await select(page, 'Counterpart for Dependency', 'No corresponding project');
   await select(page, 'Counterpart for Main project', 'Dependency — Nested/Dependency');
   await select(page, 'Counterpart for Dependency', 'Main project — Main');
@@ -1076,7 +1089,9 @@ test('empty bundles show two empty roots without opening an arbitrary project', 
   });
   f.older.projects = [];
   f.newer.projects = [];
-  await (await begin(page)).getByRole('button', { name: 'Compare bundles', exact: true }).click();
+  const modal = await begin(page);
+  await expect(modal.getByText('Only in Newer (Working)', { exact: true })).toHaveCount(0);
+  await modal.getByRole('button', { name: 'Compare bundles', exact: true }).click();
   const tree = page.getByLabel('Compared bundles', { exact: true });
   await expect(tree.locator(':scope > details')).toHaveCount(2);
   await expect(tree.getByText('No projects', { exact: true })).toHaveCount(2);

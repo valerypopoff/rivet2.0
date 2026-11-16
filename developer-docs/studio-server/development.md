@@ -1901,13 +1901,13 @@ committing or pushing the source never applies that recovery to a live cluster.
 
 The five private `@valerypopoff/rivet-studio-server-*` workspaces form one
 Studio Server product and use one lockstep package version. Their current
-version is `1.39.0`. `yarn studio-server:verify:repo-structure` rejects version
+version is `1.40.0`. `yarn studio-server:verify:repo-structure` rejects version
 drift between the API, web, executor, shared, and bootstrap manifests.
-This minor release covers changes since the Studio Server bump in `d02b3c656`
-through `e120aa379` and the pending comparison/settings fixes: asynchronous
-recoverable recording evidence, immutable runtime-library snapshots, bundle
-change statuses and navigation/menu refinements. All five workspaces have local
-implementation changes; the route/storage/controller refactors preserve behavior.
+This minor release covers changes since `4a43b4745` through `80d0f48c2`:
+project paths and expanded Run statistics charts/controls, the asynchronous
+durable-recording default for new managed installations, restore compatibility,
+comparison fixes and shared-editor improvements. API, shared and web have local
+changes; bootstrap and executor follow product lockstep as release companions.
 Local execution-isolation tooling remains a prototype, not a production runtime
 switch. Schema 20 belongs to the recording-evidence implementation, not this
 metadata update; versioning adds no migration or reference-index backfill.
@@ -1917,7 +1917,7 @@ GKE qualification; see the [performance implementation status](rolling-update-pe
 Bump all five manifests together even when only one workspace has runtime
 changes; run the repository-structure check before
 building a release candidate. See the prepared release matrix in
-[Build and CI](../BUILD-AND-CI.md#prepared-release-versions-2026-11-15) for the
+[Build and CI](../BUILD-AND-CI.md#prepared-release-versions-2026-11-16) for the
 separate desktop, sidecar, documentation and public runtime version decisions.
 
 These private package versions are release metadata, not npm publication or

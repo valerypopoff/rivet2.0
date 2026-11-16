@@ -37,6 +37,7 @@ export const RecordingWorkflowSelect: FC<RecordingWorkflowSelectProps> = ({
     </label>
     <Select
       inputId="run-recordings-workflow-select"
+      className="run-recordings-project-select"
       options={workflowOptions}
       isLoading={isLoading}
       value={workflowOptions.find((option) => option.value === selectedWorkflowId) ?? null}

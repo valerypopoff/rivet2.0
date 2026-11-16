@@ -66,6 +66,9 @@ export function containerServerConfig(env, stage, storage, root = process.cwd())
   if (!/^[1-9][0-9]*$/.test(port) || Number(port) > 65535) throw new Error('RIVET_PORT must be between 1 and 65535.');
   const uiAuthMode = value(env, 'RIVET_SERVER_UI_AUTH_MODE', 'key').toLowerCase();
   if (!['key', 'oauth'].includes(uiAuthMode)) throw new Error('RIVET_SERVER_UI_AUTH_MODE must be key or oauth.');
+  const recordingDurability = value(env, 'RIVET_RECORDING_DURABILITY_ENABLED') || 'true';
+  if (!['true', 'false', '1', '0'].includes(recordingDurability))
+    throw new Error('RIVET_RECORDING_DURABILITY_ENABLED must be true or false.');
   const external = (name, fallback) =>
     requireValue(env, prefix + name, stage === 'prod' ? value(env, `RIVET_K8S_${name}`, fallback) : fallback);
   const localCredentials = Object.fromEntries(containerCredentialDefaults(stage, storage, env));
@@ -176,6 +179,7 @@ export function containerServerConfig(env, stage, storage, root = process.cwd())
     previousSettingsKey,
     port: Number(port),
     uiAuthMode,
+    recordingDurabilityEnabled: recordingDurability === 'true' || recordingDurability === '1',
     password,
     database,
     sslMode,
@@ -237,6 +241,7 @@ export function createManagedCompose(
     RIVET_APP_SETTINGS_ENCRYPTION_KEY: config.settingsKey,
     RIVET_APP_SETTINGS_ENCRYPTION_KEY_PREVIOUS: config.previousSettingsKey,
     RIVET_SERVER_UI_AUTH_MODE: config.uiAuthMode,
+    RIVET_RECORDING_DURABILITY_ENABLED: String(config.recordingDurabilityEnabled ?? true),
     RIVET_REQUIRE_UI_GATE_KEY: 'true',
     RIVET_MANAGED_WORKFLOW_SCHEMA_MODE: 'verify',
     RIVET_MANAGED_WORKFLOW_SCHEMA_MIN_VERSION: String(schema.minimumRollbackCompatibleVersion),

@@ -41,6 +41,9 @@ export interface NodeBase {
 
     width?: number;
 
+    /** Presentation order of Data Bus channels; port identities and execution are unchanged. */
+    dataBusChannelOrder?: number[];
+
     /** The accent color of the node in the UI. */
     color?: {
       border: string;

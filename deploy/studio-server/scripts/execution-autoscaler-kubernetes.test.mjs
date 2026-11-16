@@ -26,7 +26,11 @@ import {
   fenceRepairDigest,
 } from './lib/execution-fence-recovery.mjs';
 import { releaseOperationJournalName } from './lib/release-operation-journal.mjs';
-import { haFrozenAutoscalingValues, haRolloutAutoscalingValues } from './lib/ha-kubernetes-rollout.mjs';
+import {
+  getHaConfigurationDigest,
+  haFrozenAutoscalingValues,
+  haRolloutAutoscalingValues,
+} from './lib/ha-kubernetes-rollout.mjs';
 import { childEnvironments } from '../images/api/backend-supervisor.mjs';
 import { mergeRuntimeControlGuards } from './kubernetes-runtime-control-local.mjs';
 
@@ -79,6 +83,53 @@ const protectedValues = [
   'lifecycle.proxy.preStopDelaySeconds=420',
   'lifecycle.proxy.terminationGracePeriodSeconds=600',
 ];
+
+test('serial paired-pool recovery preserves its original configuration with a live surge owner', () => {
+  const original = render(...protectedValues, 'ha.executionPools.enabled=true');
+  const inventory = original
+    .filter((resource) => resource.kind === 'StatefulSet')
+    .map((resource, index) => ({
+      ...structuredClone(resource),
+      metadata: { ...resource.metadata, uid: `controller-${index}` },
+    }));
+  const initial = structuredClone(original);
+  const selected = prepareExecutionPoolResources({
+    resources: initial,
+    inventory,
+    journal: null,
+    controlPlaneMode: 'singleton',
+  });
+  assert.equal(selected.plan, null);
+  assert.equal(selected.strategyReason, 'candidate-image-unchanged');
+  const active = inventory.find((resource) => resource.metadata.name === selected.active.metadata.name);
+  const journal = {
+    phase: 'owners',
+    workloads: [
+      { name: active.metadata.name, uid: active.metadata.uid, role: 'execution', replicas: active.spec.replicas },
+    ],
+  };
+  active.spec.replicas++;
+  const recovered = structuredClone(original);
+  prepareExecutionPoolResources({ resources: recovered, inventory, journal, controlPlaneMode: 'singleton' });
+  assert.equal(getHaConfigurationDigest(recovered), getHaConfigurationDigest(initial));
+  assert.equal(
+    active.spec.replicas,
+    journal.workloads[0].replicas + 1,
+    'Surge capacity is observed without mutating it',
+  );
+  for (const workloads of [[], [{ ...journal.workloads[0], uid: 'foreign-controller' }]]) {
+    assert.throws(
+      () =>
+        prepareExecutionPoolResources({
+          resources: structuredClone(original),
+          inventory,
+          journal: { ...journal, workloads },
+          controlPlaneMode: 'singleton',
+        }),
+      'Missing or foreign original capacity must not be inferred from live replicas',
+    );
+  }
+});
 
 test('native Helm paired pools preserve the old selector and declare exact read/exec/scale capabilities', async () => {
   const previous = render(...protectedValues).filter((resource) => resource.kind === 'StatefulSet');

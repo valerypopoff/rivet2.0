@@ -62,6 +62,12 @@ they do not redirect to a Kubernetes deployment or migrate data.
 
 ## Production Docker
 
+Durable recording is enabled by default for managed PostgreSQL/object storage.
+Set `RIVET_RECORDING_DURABILITY_ENABLED=false` in the shared `.env` to opt out.
+For an upgrade from older recording/garbage-collection binaries, keep it false
+until schema 20 is installed and all serving and maintenance owners are updated.
+The equivalent Helm value is `env.RIVET_RECORDING_DURABILITY_ENABLED`.
+
 Staging requires immutable candidate/promoted image evidence. Both production
 storage choices require promoted release evidence, matching clean source,
 installation confirmation and predecessor lineage:

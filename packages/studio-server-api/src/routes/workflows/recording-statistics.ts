@@ -25,6 +25,7 @@ import type {
 export type WorkflowRecordingStatisticsRow = {
   workflowId: string;
   sourceProjectName: string;
+  sourceProjectRelativePath?: string;
   createdAt: string;
   runKind: WorkflowRecordingRunKind;
   status: WorkflowRecordingStatus;
@@ -58,6 +59,7 @@ export function buildWorkflowRunStatisticsCatalog(
     targets.set(key, {
       target,
       projectName: isLatestRow ? row.sourceProjectName : existing.projectName,
+      projectRelativePath: isLatestRow ? row.sourceProjectRelativePath : existing.projectRelativePath,
       latestRunAt: isLatestRow ? row.createdAt : existing.latestRunAt,
       totalRuns: (existing?.totalRuns ?? 0) + (row.totalRuns ?? 1),
       uiGraphName: isLatestRow ? row.executionIdentity?.uiGraphName ?? existing?.uiGraphName : existing?.uiGraphName,

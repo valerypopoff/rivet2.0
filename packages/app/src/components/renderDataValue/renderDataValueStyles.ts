@@ -1,6 +1,13 @@
 import { css } from '@emotion/react';
 
 export const renderDataValueStyles = css`
+  .boolean-value {
+    background: color-mix(in srgb, var(--foreground) 9%, transparent);
+    border-radius: 3px;
+    font-family: var(--font-family-monospace);
+    padding: 0.1em 0.35em;
+  }
+
   .chat-message.user header em {
     color: var(--text-color-accent-3);
   }

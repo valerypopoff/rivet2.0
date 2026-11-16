@@ -10,6 +10,16 @@ generate recordings, see the [recording API documentation](../api-reference/reco
 
 ### Finding recordings in Rivet Server
 
+The **Project** picker has its own row below the **Run recordings** title, with
+the label and selector inline and the divider beneath them. The left panel
+shows run counts and the **All / Bad only** controls without a surrounding card.
+**Filter by input** opens a bordered filter panel with a close button. Closing
+it cancels the search and restores the unfiltered list, keeping the entered
+values for the next time you open it. The fixed footer holds **Per page**
+on the left and **Previous / Next** on the right. Recordings appear on the right;
+on narrow windows the panels stack and scroll above the footer, whose controls
+wrap when needed.
+
 Open **Run recordings** and leave the **Project** picker on **Any** to browse all projects, or choose an individual project. **Any** is always the first option and the default for a newly opened recordings session. The project details card appears only when an individual project is selected. The picker counts runs, including pending or unavailable recordings when durable evidence is enabled. **Bad only**, pagination and **Filter by input** work in either mode. Input filters search captured request input with a JSON path such as `$.requestId`. Matching runs appear progressively, newest first. **Stop search** keeps the results already found; changing the filter starts a new search.
 
 Click the refresh icon beside **Run recordings** to reload the workflow list and
@@ -26,7 +36,11 @@ A parent may succeed even if a child fails when the Subgraph's error output hand
 
 ### Pending or unavailable recordings
 
-When the server has durable recording evidence enabled, runs with a saved
+New Rivet Server installations using managed storage enable durable recording
+evidence by default. Administrators can opt out with
+`RIVET_RECORDING_DURABILITY_ENABLED=false`.
+
+With durable recording evidence enabled, runs with a saved
 evidence entry appear in history even if their replay could not be saved.
 Production runs save this entry in the background so recording storage does not
 hold up execution. A server crash before that first save can still leave no entry.
@@ -51,10 +65,15 @@ Existing recordings remain readable without a backfill.
 ### Estimated cost statistics
 
 Open **Run statistics**, choose an endpoint or web-app action and a time period,
-then see separate **Duration** and **Cost** panels. **Workflow endpoint** selects
-a workflow's retained endpoint history, not a separate URL: renaming its endpoint
-does not split that workflow's history. Web-app action and editor runs are not
-mixed into its endpoint statistics.
+then see separate **Duration** and **Cost** panels. Type in the **Project** picker
+to find a project; its path appears below the selector when available. It selects
+that project's retained endpoint history, not a separate URL: renaming its endpoint
+does not split the history. Web-app action
+and editor runs are not mixed into its endpoint statistics.
+
+You can also right-click a project in the tree and choose **Inspect run statistics**
+to open statistics with that project selected, including projects with no recorded
+runs. It appears after **Inspect recordings** in the action group before **Delete project**.
 
 The **Include failed runs** and **Include runs with warnings** checkboxes beside
 Period/Version control both panels. The summary shows **N runs, Date 1 to Date 2**

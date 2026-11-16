@@ -24,6 +24,10 @@ const weightedSpecs = [
   ['port-connection-warnings.spec.ts', 25],
   ['cross-project-subgraph-loading.spec.ts', 200],
   ['subgraph-bundle-scope.spec.ts', 20],
+  // Conservative local-work estimates for Bus drag/save/restore and relay-label journeys;
+  // refresh these hints from successful hosted runs, without omitting their cases.
+  ['data-bus-order.spec.ts', 15],
+  ['passthrough-port-labels.spec.ts', 20],
   ['bundle-local-execution-history.spec.ts', 15],
   ['hosted-subgraph-auth.spec.ts', 280],
   ['remote-bundle-observation.spec.ts', 230],

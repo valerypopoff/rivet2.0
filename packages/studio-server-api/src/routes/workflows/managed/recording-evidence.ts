@@ -48,8 +48,8 @@ export function retryableRecordingStorageError(error: unknown): boolean {
 
 export function recordingDurabilityEnabled(): boolean {
   const value = process.env.RIVET_RECORDING_DURABILITY_ENABLED?.trim();
-  if (!value || value === 'false' || value === '0') return false;
-  if (value === 'true' || value === '1') return true;
+  if (!value || value === 'true' || value === '1') return true;
+  if (value === 'false' || value === '0') return false;
   throw new Error('RIVET_RECORDING_DURABILITY_ENABLED must be true or false.');
 }
 

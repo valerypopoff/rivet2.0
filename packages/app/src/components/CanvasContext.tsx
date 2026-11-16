@@ -5,6 +5,7 @@ import type { MouseEvent } from 'react';
 import type { HeightCache } from '../hooks/useNodeBodyHeight';
 import type { DraggingWireDef } from '../state/graphBuilder';
 import type { NodeResizeBounds } from '../utils/nodeResize.js';
+import type { ReorderDataBusChannelsParams } from '../domain/graphEditing/dataBusChannelOrder.js';
 
 export type CanvasViewContextValue = {
   canvasZoom: number;
@@ -47,6 +48,7 @@ export type CanvasHandlersContextValue = {
     isInput: boolean,
   ) => void;
   onDataBusChannelHoverChange?: (channelKeys: readonly string[]) => void;
+  onDataBusChannelsReorder?: (params: ReorderDataBusChannelsParams) => void;
 };
 
 export const CanvasViewContext = createContext<CanvasViewContextValue | null>(null);

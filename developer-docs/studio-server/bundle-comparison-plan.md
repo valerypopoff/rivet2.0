@@ -102,7 +102,7 @@ Published-version selectors are outside this initial feature.
 5. Each row selects a Newer project or **No corresponding project**. Prefill
    clear suggestions and retain Suggested in their dropdowns. Show unclaimed
    Newer members in an **Only in Newer (<bundle name>)** list so every member is
-   accounted for.
+   accounted for; hide the section when no Newer members remain unclaimed.
 6. Enforce one-to-one matching. Ambiguous choices remain unresolved until the
    user chooses a counterpart or No corresponding project. Disable Compare
    bundles for unresolved/invalid choices or loading metadata. Empty bundles

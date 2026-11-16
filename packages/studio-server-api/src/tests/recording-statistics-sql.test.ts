@@ -29,6 +29,7 @@ export const statisticsFixture = Array.from({ length: 240 }, (_, index) => {
     recordingId: `recording-${String(index).padStart(3, '0')}`,
     workflowId: index % 3 ? 'workflow-a' : 'workflow-b',
     sourceProjectName: `Project ${index}`,
+    sourceProjectRelativePath: `Folder ${Math.floor(index / 120)}/Project ${index}.rivet-project`,
     createdAt: new Date(Date.UTC(2026, 7, 4, Math.floor(index / 12))).toISOString(),
     runKind: index % 31 === 0 ? 'editor' : index % 2 ? 'latest' : 'published',
     status: (['succeeded', 'failed', 'suspicious'] as const)[index % 3]!,

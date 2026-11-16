@@ -420,6 +420,7 @@ test('statistics catalog uses the newest labels and keeps colon-containing targe
     row({
       workflowId: 'workflow:a',
       sourceProjectName: 'Older project name',
+      sourceProjectRelativePath: 'Old folder/Project.rivet-project',
       createdAt: '2026-08-04T01:00:00.000Z',
       endpointNameAtExecution: '/apps/old-name',
       executionIdentity: {
@@ -433,6 +434,7 @@ test('statistics catalog uses the newest labels and keeps colon-containing targe
     row({
       workflowId: 'workflow:a',
       sourceProjectName: 'Newest project name',
+      sourceProjectRelativePath: 'New folder/Project.rivet-project',
       createdAt: '2026-08-04T02:00:00.000Z',
       endpointNameAtExecution: '/apps/new-name',
       executionIdentity: {
@@ -459,6 +461,7 @@ test('statistics catalog uses the newest labels and keeps colon-containing targe
   assert.equal(catalog.targets.length, 2);
   const renamedTarget = catalog.targets.find((entry) => entry.target.workflowId === 'workflow:a');
   assert.equal(renamedTarget?.projectName, 'Newest project name');
+  assert.equal(renamedTarget?.projectRelativePath, 'New folder/Project.rivet-project');
   assert.equal(renamedTarget?.uiGraphName, 'Newest web app name');
   assert.equal(renamedTarget?.componentLabel, 'Newest button label');
   assert.equal(renamedTarget?.endpointNameAtExecution, '/apps/new-name');

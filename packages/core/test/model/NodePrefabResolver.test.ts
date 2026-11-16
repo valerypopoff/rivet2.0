@@ -84,6 +84,20 @@ function makeProject(instanceNode: ChartNode = makePrefabInstance()): Project {
 }
 
 describe('NodePrefabResolver', () => {
+  it('keeps Data Bus ordering local to the instance and preserves it when detached', () => {
+    const instance = makePrefabInstance({ visualData: { x: 100, y: 200, dataBusChannelOrder: [2, 1] } });
+    const project = makeProject(instance);
+    project.nodePrefabs![prefabId]!.sourceNode = {
+      ...makeTextSourceNode(),
+      type: 'dataBus',
+      data: {},
+      visualData: { x: 0, y: 0, dataBusChannelOrder: [1, 2] },
+    };
+    assert.deepEqual(resolveNodePrefabInstance(project, instance).visualData.dataBusChannelOrder, [2, 1]);
+    assert.deepEqual(detachNodePrefabInstance(project, instance)!.visualData.dataBusChannelOrder, [2, 1]);
+    delete instance.visualData.dataBusChannelOrder;
+    assert.equal(resolveNodePrefabInstance(project, instance).visualData.dataBusChannelOrder, undefined);
+  });
   it('blocks graph-boundary and graph-reference nodes as source prefabs', () => {
     assert.equal(canUseNodeAsPrefabSource({ type: 'text' } as ChartNode), true);
     assert.equal(canUseNodeAsPrefabSource({ type: 'comment' } as ChartNode), false);

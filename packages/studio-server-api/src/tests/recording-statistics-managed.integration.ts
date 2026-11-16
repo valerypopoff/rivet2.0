@@ -344,6 +344,7 @@ try {
   }
   await pool.query(`CREATE TABLE workflow_recordings (
     recording_id text PRIMARY KEY, workflow_id text NOT NULL, source_project_name text NOT NULL,
+    source_project_relative_path text,
     created_at timestamptz NOT NULL, run_kind text NOT NULL, status text NOT NULL,
     duration_ms double precision NOT NULL, endpoint_name_at_execution text NOT NULL,
     execution_surface text, ui_graph_id_at_execution text, component_id_at_execution text,
@@ -351,23 +352,27 @@ try {
   )`);
   for (const row of statisticsFixture) {
     const identity = row.executionIdentity;
-    await pool.query('INSERT INTO workflow_recordings VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)', [
-      row.recordingId,
-      row.workflowId,
-      row.sourceProjectName,
-      row.createdAt,
-      row.runKind,
-      row.status,
-      row.durationMs,
-      row.endpointNameAtExecution,
-      identity?.surface ?? null,
-      identity?.uiGraphId ?? null,
-      identity?.componentId ?? null,
-      identity?.uiGraphName ?? null,
-      identity?.componentType ?? null,
-      identity?.componentLabel ?? null,
-      row.cost ? JSON.stringify(row.cost) : null,
-    ]);
+    await pool.query(
+      'INSERT INTO workflow_recordings VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)',
+      [
+        row.recordingId,
+        row.workflowId,
+        row.sourceProjectName,
+        row.sourceProjectRelativePath,
+        row.createdAt,
+        row.runKind,
+        row.status,
+        row.durationMs,
+        row.endpointNameAtExecution,
+        identity?.surface ?? null,
+        identity?.uiGraphId ?? null,
+        identity?.componentId ?? null,
+        identity?.uiGraphName ?? null,
+        identity?.componentType ?? null,
+        identity?.componentLabel ?? null,
+        row.cost ? JSON.stringify(row.cost) : null,
+      ],
+    );
   }
   const database = pool;
   await checkStatisticsQueries(

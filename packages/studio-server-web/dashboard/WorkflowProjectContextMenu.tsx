@@ -11,6 +11,7 @@ import CopyIcon from '@atlaskit/icon/glyph/copy';
 import ArrowDownIcon from 'majesticons/line/arrow-down-line.svg?react';
 import DeleteBinIcon from 'majesticons/line/delete-bin-line.svg?react';
 import RecordingIcon from 'majesticons/line/video-line.svg?react';
+import StatisticsIcon from 'majesticons/line/analytics-line.svg?react';
 import { useLayoutEffect, type FC } from 'react';
 import type { WorkflowProjectItem } from './types';
 import { useHostedSurfaceDismiss } from './useHostedSurfaceDismiss';
@@ -23,6 +24,7 @@ type WorkflowProjectContextMenuProps = {
   onClose: () => void;
   onRename: () => void;
   onInspectRecordings: () => void;
+  onInspectStatistics: () => void;
   onDownload: () => void;
   onDuplicate: () => void;
   canCompare: boolean;
@@ -57,6 +59,7 @@ export const WorkflowProjectContextMenu: FC<WorkflowProjectContextMenuProps> = (
   onClose,
   onRename,
   onInspectRecordings,
+  onInspectStatistics,
   onDownload,
   onDuplicate,
   canCompare,
@@ -106,15 +109,6 @@ export const WorkflowProjectContextMenu: FC<WorkflowProjectContextMenuProps> = (
       <button type="button" className="workflow-project-context-menu-item" role="menuitem" onClick={onRename}>
         <span>Rename project</span>
       </button>
-      <button
-        type="button"
-        className="workflow-project-context-menu-item"
-        role="menuitem"
-        onClick={onInspectRecordings}
-      >
-        <RecordingIcon className="workflow-project-context-menu-item-icon" aria-hidden="true" />
-        <span>Inspect recordings</span>
-      </button>
       {canCompare ? (
         <button type="button" className="workflow-project-context-menu-item" role="menuitem" onClick={onCompare}>
           <span>Compare opened project with this one</span>
@@ -140,6 +134,15 @@ export const WorkflowProjectContextMenu: FC<WorkflowProjectContextMenuProps> = (
           <CopyIcon label="" size="small" />
         </span>
         <span>Duplicate</span>
+      </button>
+      <div className="workflow-project-context-menu-separator" role="separator" aria-hidden="true" />
+      <button type="button" className="workflow-project-context-menu-item" role="menuitem" onClick={onInspectRecordings}>
+        <RecordingIcon className="workflow-project-context-menu-item-icon" aria-hidden="true" />
+        <span>Inspect recordings</span>
+      </button>
+      <button type="button" className="workflow-project-context-menu-item" role="menuitem" onClick={onInspectStatistics}>
+        <StatisticsIcon className="workflow-project-context-menu-item-icon" aria-hidden="true" />
+        <span>Inspect run statistics</span>
       </button>
       <div className="workflow-project-context-menu-separator" role="separator" aria-hidden="true" />
       <button

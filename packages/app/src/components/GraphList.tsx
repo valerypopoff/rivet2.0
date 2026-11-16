@@ -1039,14 +1039,20 @@ export const GraphList: FC = memo(() => {
       case 'paste-graphs-in-folder':
         pasteGraphs(target.folderPath);
         break;
-      case 'delete-folder':
-        setGraphPendingDelete({
-          projectId: project.metadata.id,
-          folderPath: target.folderPath,
-          name: target.folderPath,
-          graphIds: getFolderDeletionGraphIds(savedGraphs, target.folderPath),
-        });
+      case 'delete-folder': {
+        const graphIds = getFolderDeletionGraphIds(savedGraphs, target.folderPath);
+        if (graphIds.length === 0) {
+          handleDeleteFolder(target.folderPath);
+        } else {
+          setGraphPendingDelete({
+            projectId: project.metadata.id,
+            folderPath: target.folderPath,
+            name: target.folderPath,
+            graphIds,
+          });
+        }
         break;
+      }
       default:
         break;
     }

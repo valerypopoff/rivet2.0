@@ -96,6 +96,9 @@ export function WorkflowBundleCompareModal({
   const olderBundle = options.find((p) => p.value === olderId);
   const newerBundle = options.find((p) => p.value === newerId);
   const suggestions = useMemo(() => (manifest ? suggestBundleComparison(manifest) : {}), [manifest]);
+  const matchedNewerProjectIds = new Set(Object.values(choices));
+  const newerOnlyProjects =
+    manifest?.newer.projects.filter((project) => !matchedNewerProjectIds.has(project.projectId)) ?? [];
   let pairs: BundleComparisonPair[] = [];
   let validation = '';
   if (manifest) {
@@ -297,19 +300,16 @@ export function WorkflowBundleCompareModal({
                   </tbody>
                 </table>
                 {!manifest.older.projects.length ? <p>No projects in the Older bundle.</p> : null}
-                <div>
-                  <strong>Only in Newer ({manifest.newer.name})</strong>
-                  <ul>
-                    {manifest.newer.projects
-                      .filter((p) => !Object.values(choices).includes(p.projectId))
-                      .map((p) => (
-                        <li key={p.projectId}>{projectLabel(p)}</li>
+                {newerOnlyProjects.length > 0 ? (
+                  <div>
+                    <strong>Only in Newer ({manifest.newer.name})</strong>
+                    <ul>
+                      {newerOnlyProjects.map((project) => (
+                        <li key={project.projectId}>{projectLabel(project)}</li>
                       ))}
-                  </ul>
-                  {manifest.newer.projects.every((p) => Object.values(choices).includes(p.projectId)) ? (
-                    <p>None</p>
-                  ) : null}
-                </div>
+                    </ul>
+                  </div>
+                ) : null}
                 {validation ? <p className="project-settings-help">{validation}</p> : null}
               </section>
             ) : null}

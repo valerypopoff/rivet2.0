@@ -56,6 +56,7 @@ test('production uses external connections, scoped Secrets and refuses incompati
   assert.equal(config.replicas.execution, 2);
   assert.equal(config.routeConfig.serverUiAuthMode, 'key');
   assert.equal(config.secrets.authName, 'test-auth');
+  assert.equal(config.recordingDurabilityEnabled, true);
   for (const change of [
     { RIVET_K8S_CONTEXT: 'other' },
     { RIVET_KEY: 'short' },
@@ -63,12 +64,59 @@ test('production uses external connections, scoped Secrets and refuses incompati
     { RIVET_K8S_EXECUTION_REPLICAS: '2.5' },
     { RIVET_K8S_AUTH_SECRET_NAME: 'invalid/name' },
     { RIVET_ENABLE_DEVELOPMENT_AUTH: 'true' },
+    { RIVET_RECORDING_DURABILITY_ENABLED: 'invalid' },
     { RIVET_K8S_AUTH_SECRET_NAME: 'same', RIVET_K8S_POSTGRES_SECRET_NAME: 'same' },
   ])
     assert.throws(() => productionEnvironment({ ...external, ...change }, selection));
   const values = renderKubernetesLauncherValuesYaml(config);
   assert.ok(!values.includes(external.RIVET_K8S_STORAGE_ACCESS_KEY));
   assert.ok(!values.includes(external.RIVET_K8S_DATABASE_CONNECTION_STRING));
+  assert.equal(yaml.parse(values).env.RIVET_RECORDING_DURABILITY_ENABLED, 'true');
+  for (const disabled of ['false', '0']) {
+    const optedOut = productionEnvironment({ ...external, RIVET_RECORDING_DURABILITY_ENABLED: disabled }, selection);
+    assert.equal(
+      yaml.parse(renderKubernetesLauncherValuesYaml(optedOut)).env.RIVET_RECORDING_DURABILITY_ENABLED,
+      'false',
+    );
+  }
+});
+
+test('Helm defaults enable durable recording on API roles and retain explicit false', () => {
+  const helm = resolveHelmBinOrThrow(process.cwd(), { env: process.env });
+  for (const enabled of [true, false]) {
+    const rendered = spawnSync(
+      helm,
+      [
+        'template',
+        'test',
+        'deploy/studio-server/helm',
+        '-f',
+        'deploy/studio-server/helm/overlays/local-kubernetes.yaml',
+        '-f',
+        'deploy/studio-server/scripts/fixtures/kubernetes-environment.values.yaml',
+        ...(!enabled ? ['--set-string', 'env.RIVET_RECORDING_DURABILITY_ENABLED=false'] : []),
+      ],
+      { encoding: 'utf8', windowsHide: true },
+    );
+    assert.equal(rendered.status, 0, rendered.stderr);
+    const workloads = yaml
+      .parseAllDocuments(rendered.stdout)
+      .map((doc) => doc.toJS())
+      .filter(
+        (doc) =>
+          ['Deployment', 'StatefulSet'].includes(doc?.kind) &&
+          ['backend', 'execution'].includes(doc.metadata.labels['app.kubernetes.io/component']),
+      );
+    assert.ok(workloads.some((doc) => doc.metadata.labels['app.kubernetes.io/component'] === 'backend'));
+    assert.ok(workloads.some((doc) => doc.metadata.labels['app.kubernetes.io/component'] === 'execution'));
+    for (const workload of workloads) {
+      const container = workload.spec.template.spec.containers[0];
+      assert.equal(
+        container.env.find((item) => item.name === 'RIVET_RECORDING_DURABILITY_ENABLED')?.value,
+        String(enabled),
+      );
+    }
+  }
 });
 
 test('one shared file isolates VM provisioning from production settings and survives the child dotenv reload', () => {

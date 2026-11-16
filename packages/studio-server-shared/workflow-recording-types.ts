@@ -258,6 +258,8 @@ export function getWorkflowRunStatisticsTargetKey(target: WorkflowRunStatisticsT
 export type WorkflowRunStatisticsTargetSummary = {
   target: WorkflowRunStatisticsTarget;
   projectName: string;
+  /** Project location from the most recent retained run; absent on older servers. */
+  projectRelativePath?: string;
   latestRunAt?: string;
   totalRuns: number;
   uiGraphName?: string;

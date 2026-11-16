@@ -202,11 +202,17 @@
   white-space: nowrap;
 }
 
-.run-statistics-target-option-description {
+.run-statistics-target-option-description,
+.run-statistics-selected-project-path {
   margin-top: 2px;
   color: var(--grey-light);
   font-size: 12px;
   line-height: 1.35;
+}
+
+.run-statistics-target-option-path,
+.run-statistics-selected-project-path {
+  overflow-wrap: anywhere;
 }
 
 .run-statistics-period-label,
@@ -241,7 +247,12 @@
   flex-wrap: wrap;
 }
 
-.run-statistics-chart-header .run-statistics-chart-heading {
+.run-statistics-chart-header {
+  margin-bottom: 8px;
+}
+
+.run-statistics-chart-header .run-statistics-chart-heading,
+.run-statistics-section > .run-statistics-chart-heading {
   margin-bottom: 0;
 }
 

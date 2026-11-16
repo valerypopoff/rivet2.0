@@ -24,6 +24,13 @@ Helm are not required. No command installs or starts Kubernetes.
 Local storage automatically starts private PostgreSQL/MinIO containers and
 persistent project-scoped volumes. External storage provisions neither: the
 operator supplies a dedicated PostgreSQL database and S3 bucket/prefix.
+
+All six commands enable durable recording evidence by default. The shared
+`RIVET_RECORDING_DURABILITY_ENABLED` setting accepts `true`/`1` or `false`/`0`;
+an omitted or blank value uses the enabled default. The launcher validates it
+before startup and projects the normalized value into both API roles. Changing
+this switch does not change the installation's storage identity or credentials.
+
 Only the proxy is published, on loopback by default. Ports default to dev 8080,
 staging 8082, production 8083. Configure an authenticated TLS gateway before
 public exposure. PostgreSQL, MinIO/console and internal API/executor ports are

@@ -4,7 +4,7 @@ import {
   type GraphId,
   type NodeGraph,
 } from '@valerypopoff/rivet2-core';
-import { type FC } from 'react';
+import { useState, type FC } from 'react';
 import { type SharedEditorProps } from './SharedEditorProps';
 import { Field, HelperMessage } from '@atlaskit/form';
 import Select from '@atlaskit/select';
@@ -14,6 +14,7 @@ import { getHelperMessage } from './editorUtils';
 import { getProjectGraphSelectorOptions } from '../../utils/graphSelectorOptions';
 import { createFoldersFromGraphs, type NodeGraphFolderItem } from '../graphList/graphFolders';
 import { OpenFolderIcon } from '../graphList/OpenFolderIcon';
+import { useSelectResizeDismissal } from '../../hooks/useSelectResizeDismissal.js';
 
 export type HierarchicalGraphOption = {
   value: string;
@@ -117,6 +118,7 @@ export const GraphSelectorSelect: FC<{
   className?: string;
   includeMissingSelectedGraph?: boolean;
   hierarchical?: boolean;
+  maxMenuHeight?: number;
 }> = ({
   value,
   isReadonly,
@@ -125,8 +127,11 @@ export const GraphSelectorSelect: FC<{
   className,
   includeMissingSelectedGraph = false,
   hierarchical = false,
+  maxMenuHeight,
 }) => {
   const project = useAtomValue(projectState);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const selectRef = useSelectResizeDismissal(menuOpen && maxMenuHeight !== undefined);
   if (hierarchical) {
     const options = getHierarchicalGraphOptions(project.graphs);
     if (includeMissingSelectedGraph && value && !options.some((option) => option.graphId === value)) {
@@ -142,10 +147,15 @@ export const GraphSelectorSelect: FC<{
     }
     return (
       <Select
+        ref={selectRef}
         aria-label={ariaLabel}
         className={className}
         isDisabled={isReadonly}
         isSearchable
+        maxMenuHeight={maxMenuHeight}
+        menuPlacement={maxMenuHeight === undefined ? undefined : 'auto'}
+        onMenuOpen={() => setMenuOpen(true)}
+        onMenuClose={() => setMenuOpen(false)}
         options={options}
         value={options.find((option) => option.graphId === value) ?? null}
         onChange={(selected) => {
@@ -154,12 +164,15 @@ export const GraphSelectorSelect: FC<{
         filterOption={(candidate, input) =>
           candidate.data.searchText.toLocaleLowerCase().includes(input.toLocaleLowerCase())
         }
-        formatOptionLabel={(option) => (
-          <span style={{ alignItems: 'center', display: 'inline-flex', gap: 4, paddingLeft: option.depth * 12 }}>
-            {option.kind === 'folder' && <OpenFolderIcon width={14} height={14} aria-hidden="true" />}
-            <span>{option.label}</span>
-          </span>
-        )}
+        formatOptionLabel={(option, { context }) => {
+          if (context === 'value') return option.label;
+          return (
+            <span style={{ alignItems: 'center', display: 'inline-flex', gap: 4, paddingLeft: option.depth * 12 }}>
+              {option.kind === 'folder' && <OpenFolderIcon width={14} height={14} aria-hidden="true" />}
+              <span>{option.label}</span>
+            </span>
+          );
+        }}
         placeholder="Select Graph..."
       />
     );
@@ -173,10 +186,15 @@ export const GraphSelectorSelect: FC<{
 
   return (
     <Select
+      ref={selectRef}
       aria-label={ariaLabel}
       className={className}
       isDisabled={isReadonly}
       isSearchable
+      maxMenuHeight={maxMenuHeight}
+      menuPlacement={maxMenuHeight === undefined ? undefined : 'auto'}
+      onMenuOpen={() => setMenuOpen(true)}
+      onMenuClose={() => setMenuOpen(false)}
       options={graphOptions}
       value={selectedOption ?? null}
       onChange={(selected) => {

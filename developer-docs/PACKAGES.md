@@ -2,6 +2,25 @@
 
 > Detailed package-by-package reference for the current monorepo.
 
+## Version update: 2026-11-16 — Data Bus ordering and recording statistics
+
+The last actual version-changing commit for every package is `4a43b4745`.
+This review covers subsequent changes through `80d0f48c2`.
+
+| Packages | Version | Changes since the last bump |
+| --- | --- | --- |
+| App | `2.37.0` → `2.38.0` | Adds saved Data Bus channel ordering with drag/keyboard controls; fixes Passthrough labels, Boolean output styling and empty-folder deletion; improves Subgraph picker sizing and selected labels. |
+| Core, Node, CLI, Evaluations | `2.31.0` → `2.32.0` | Core adds optional channel-order metadata, serialization and instance-local preservation. Node, CLI and Evaluations follow public-family lockstep without package-local implementation changes. |
+| App Executor | `2.23.0` → `2.24.0` | Source-bundled companion for the updated Core model and serialization; no package-local implementation or sidecar protocol changes. |
+| All five Studio Server packages | `1.39.0` → `1.40.0` | Adds project paths and richer Run statistics charts/controls; enables asynchronous durable recording evidence by default for new managed installations; includes restore, comparison and shared-editor fixes. API, shared and web change locally; bootstrap and executor are lockstep companions. |
+| Docs | `2.29.0` → `2.30.0` | Documents Data Bus ordering, adopted Passthrough names and the managed recording-durability default. |
+
+These are compatible minor releases. Desktop Tauri/Cargo metadata follows App,
+and the CLI Docker fallback follows the public family. Existing dependency
+ranges, database schema and Helm chart metadata remain unchanged. Versioning
+does not deploy or change an installation's recording configuration. See the
+[release preparation](BUILD-AND-CI.md#prepared-release-versions-2026-11-16).
+
 ## Version update: 2026-11-15 — recording evidence, runtime snapshots and bundle tools
 
 Each package's last actual version bump is `d02b3c656`. This review includes

@@ -1,4 +1,4 @@
-import { expect, test, type FrameLocator, type Page } from '@playwright/test';
+import { expect, test, type FrameLocator, type Locator, type Page } from '@playwright/test';
 import { authenticateIfNeeded, mockHostedEditorBootstrap } from './helpers/hostedEditorObserve';
 import { seedHostedEditorProject } from './helpers/hostedEditorStorage';
 import { serializeProject } from '@valerypopoff/rivet2-core';
@@ -213,6 +213,108 @@ test('fullscreen output resizes independently from both edges and retains bounds
   await expect(activity).toBeHidden();
   await expect(modal).toBeVisible();
   await expect(modal).toContainText('Resize this output');
+});
+
+test('boolean outputs use inline code styling while true/false strings stay plain in both output views', async ({
+  page,
+}) => {
+  const values = [
+    { id: 'boolean-true', type: 'boolean', text: 'true', data: { value: true } },
+    { id: 'boolean-false', type: 'boolean', text: 'false', data: { value: false } },
+    { id: 'string-true', type: 'text', text: 'true', data: { text: 'true' } },
+    { id: 'string-false', type: 'text', text: 'false', data: { text: 'false' } },
+  ] as const;
+  await seedHostedEditorProject(page, {
+    graphId: 'boolean-output-style-graph',
+    projectId: 'boolean-output-style-project',
+    projectPath: '/workflows/Boolean output style.rivet-project',
+    title: 'Boolean output style',
+    loaded: true,
+    graph: {
+      nodes: [
+        ...values.map((value, index) => ({
+          id: value.id,
+          title: value.id,
+          type: value.type,
+          data: value.data,
+          visualData: { x: 120 + (index % 2) * 340, y: index < 2 ? 160 : 420, width: 220 },
+        })),
+        {
+          id: 'match-case-reference',
+          title: 'Match case',
+          type: 'matchCase',
+          data: { cases: ['true'], returnValue: 'true' },
+          visualData: { x: 800, y: 160, width: 250 },
+        },
+      ],
+      connections: [
+        {
+          outputNodeId: 'string-true',
+          outputId: 'output',
+          inputNodeId: 'match-case-reference',
+          inputId: 'input',
+        },
+      ],
+    },
+  });
+  await page.addInitScript(() =>
+    localStorage.setItem('recoil-persist', JSON.stringify({ defaultExecutor: 'browser', recordExecutions: false })),
+  );
+  await mockHostedEditorBootstrap(page);
+  await page.route('**/api/**', (route) =>
+    ['GET', 'HEAD', 'OPTIONS'].includes(route.request().method()) ? route.fallback() : route.abort(),
+  );
+  await page.goto('/?editor', { waitUntil: 'domcontentloaded' });
+  await authenticateIfNeeded(page);
+  await openSeededProject(page);
+  const editor = await getEditorRoot(page);
+  await expect(editor.locator('.node[data-nodeid="boolean-true"]')).toBeVisible();
+  const matchCaseBadge = editor.locator('.node[data-nodeid="match-case-reference"] .llm-node-body-code-value');
+  await expect(matchCaseBadge).toHaveText('true');
+  const referenceColors = await matchCaseBadge.evaluate((element) => ({
+    background: getComputedStyle(element).backgroundColor,
+    color: getComputedStyle(element).color,
+  }));
+  expect(referenceColors.background).not.toBe('rgba(0, 0, 0, 0)');
+  await editor.locator('.run-button button').first().click();
+  const modal = editor.getByTestId('fullscreen-output-modal');
+  for (const value of values) {
+    const node = editor.locator(`.node[data-nodeid="${value.id}"]`);
+    await expect(node).toHaveClass(/success/);
+    const inline = node.locator('.node-output');
+    const checkValue = async (output: Locator) => {
+      const boolean = output.locator('span.boolean-value');
+      if (value.type === 'boolean') {
+        await expect(boolean).toHaveText(value.text);
+        const style = await boolean.evaluate((element) => {
+          const actual = getComputedStyle(element);
+          return {
+            background: actual.backgroundColor,
+            color: actual.color,
+            padding: Number.parseFloat(actual.paddingInlineStart),
+            font: actual.fontFamily,
+            expectedFont: getComputedStyle(document.documentElement)
+              .getPropertyValue('--font-family-monospace')
+              .trim(),
+          };
+        });
+        expect(style.background).toBe(referenceColors.background);
+        expect(style.color).toBe(referenceColors.color);
+        expect(style.padding).toBeGreaterThan(0);
+        expect(style.font.replaceAll('"', '')).toBe(style.expectedFont.replaceAll('"', ''));
+      } else {
+        await expect(boolean).toHaveCount(0);
+        await expect(output.locator('pre.pre-wrap')).toHaveText(value.text);
+      }
+    };
+    await checkValue(inline);
+    await inline.hover();
+    await inline.locator('.expand-button').click();
+    await expect(modal).toBeVisible();
+    await checkValue(modal);
+    await page.keyboard.press('Escape');
+    await expect(modal).toBeHidden();
+  }
 });
 
 test('fullscreen search keeps the match highlighted after opening a paged JSON chunk', async ({ page }) => {

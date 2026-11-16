@@ -258,6 +258,10 @@ export function buildKubernetesLauncherConfig(env, { singleMachine = false } = {
     }
   }
 
+  const recordingDurability = readEnv(env, 'RIVET_RECORDING_DURABILITY_ENABLED') ?? 'true';
+  if (!['true', 'false', '1', '0'].includes(recordingDurability))
+    throw new Error('RIVET_RECORDING_DURABILITY_ENABLED must be true or false.');
+
   const config = {
     singleMachine,
     deploymentProfile,
@@ -294,6 +298,7 @@ export function buildKubernetesLauncherConfig(env, { singleMachine = false } = {
       objectStorageName: readEnv(env, 'RIVET_K8S_OBJECT_STORAGE_SECRET_NAME') ?? 'rivet-object-storage',
     },
     sharedKey: requireEnv(env, 'RIVET_KEY', launcherName),
+    recordingDurabilityEnabled: recordingDurability === 'true' || recordingDurability === '1',
     databaseConnectionString:
       localConnectionString ?? requireEnv(env, 'RIVET_K8S_DATABASE_CONNECTION_STRING', launcherName),
     databaseSslMode: readEnv(env, 'RIVET_K8S_DATABASE_SSL_MODE') ?? (localManaged ? 'disable' : 'require'),
@@ -413,6 +418,7 @@ export function renderKubernetesLauncherValuesYaml(config) {
     `  secretKeySecretName: ${yamlString(config.secrets.objectStorageName)}`,
     `  forcePathStyle: ${yamlBoolean(config.objectStorage.forcePathStyle)}`,
     'env:',
+    `  RIVET_RECORDING_DURABILITY_ENABLED: ${yamlString(String(config.recordingDurabilityEnabled ?? true))}`,
     `  RIVET_PUBLISHED_WORKFLOWS_BASE_PATH: ${yamlString(config.routeConfig.publishedBasePath)}`,
     `  RIVET_LATEST_WORKFLOWS_BASE_PATH: ${yamlString(config.routeConfig.latestBasePath)}`,
     `  RIVET_PUBLISHED_APPS_BASE_PATH: ${yamlString(config.routeConfig.webAppsBasePath)}`,

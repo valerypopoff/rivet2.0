@@ -1,5 +1,6 @@
 import { css } from '@emotion/react';
 import Select from '@atlaskit/select';
+import ChevronRightIcon from 'majesticons/line/chevron-right-line.svg?react';
 import { useAtomValue, useSetAtom, useStore } from 'jotai';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type FC } from 'react';
 import {
@@ -24,6 +25,9 @@ import { graphState } from '../../state/graph';
 import { useNodeEditorSessionContext } from '../nodeEditor/NodeEditorSessionContext';
 import { filterSubgraphProjectTree, subgraphSourceScope } from '../../utils/subgraphBundleScope.js';
 import { isRecordingProjectState } from '../../state/execution.js';
+import { useSelectResizeDismissal } from '../../hooks/useSelectResizeDismissal.js';
+
+const SUBGRAPH_MENU_MAX_HEIGHT = 800;
 
 const controlCss = css`
   min-width: 0;
@@ -31,6 +35,29 @@ const controlCss = css`
 
   .target-label {
     overflow-wrap: anywhere;
+  }
+
+  .subgraph-target-path {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25em;
+    max-width: 100%;
+    min-width: 0;
+  }
+
+  .subgraph-target-path-segment {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .subgraph-target-path-separator {
+    flex: 0 0 auto;
+    width: 0.5625em;
+    height: 0.75em;
+    width: 0.75cap;
+    height: 1cap;
   }
 
   .target-error {
@@ -58,6 +85,7 @@ function findProjectName(tree: Tree | null, projectId: ProjectId): string | unde
 type TargetOption = {
   value: string;
   label: string;
+  path?: readonly [project: string, graph: string];
   searchText: string;
   kind: 'section' | 'folder' | 'project' | 'graph-folder' | 'graph';
   depth: number;
@@ -225,6 +253,7 @@ const LiveSubgraphTargetControl: FC<SubgraphTargetControlProps> = ({
   const [expandedFolders, setExpandedFolders] = useState<ReadonlySet<string>>(new Set());
   const [expandedProjects, setExpandedProjects] = useState<ReadonlySet<ProjectId>>(new Set());
   const [menuOpen, setMenuOpen] = useState(false);
+  const selectRef = useSelectResizeDismissal(menuOpen);
   const [search, setSearch] = useState('');
   const [loadingTree, setLoadingTree] = useState(false);
   const [previewStatus, setPreviewStatus] = useState<Record<string, PreviewStatus>>({});
@@ -352,6 +381,7 @@ const LiveSubgraphTargetControl: FC<SubgraphTargetControlProps> = ({
         isReadonly={isReadonly}
         includeMissingSelectedGraph
         hierarchical
+        maxMenuHeight={SUBGRAPH_MENU_MAX_HEIGHT}
         ariaLabel="Subgraph graph"
         className="subgraph-node-body-select"
         onChange={(graphId) =>
@@ -398,7 +428,8 @@ const LiveSubgraphTargetControl: FC<SubgraphTargetControlProps> = ({
     node.data.targetProjectId && node.data.graphId
       ? {
           value: `graph:${node.data.targetProjectId}:${node.data.graphId}`,
-          label: `${selectedProjectName} > ${selectedGraphName}`,
+          label: `${selectedProjectName} / ${selectedGraphName}`,
+          path: [selectedProjectName ?? node.data.targetProjectId, selectedGraphName],
           searchText: '',
           kind: 'graph',
           depth: 0,
@@ -465,10 +496,13 @@ const LiveSubgraphTargetControl: FC<SubgraphTargetControlProps> = ({
   return (
     <div css={controlCss}>
       <Select
+        ref={selectRef}
         aria-label="Subgraph graph"
         className="subgraph-node-body-select"
         isDisabled={isReadonly}
         isSearchable
+        maxMenuHeight={SUBGRAPH_MENU_MAX_HEIGHT}
+        menuPlacement="auto"
         isLoading={loadingTree || Object.values(previewStatus).includes('loading')}
         closeMenuOnSelect={false}
         menuIsOpen={menuOpen}
@@ -489,7 +523,16 @@ const LiveSubgraphTargetControl: FC<SubgraphTargetControlProps> = ({
           candidate.data.searchText.toLocaleLowerCase().includes(input.toLocaleLowerCase())
         }
         formatOptionLabel={(option) => (
-          <span style={{ alignItems: 'center', display: 'inline-flex', gap: 4, paddingLeft: option.depth * 12 }}>
+          <span
+            style={{
+              alignItems: 'center',
+              display: 'inline-flex',
+              gap: 4,
+              paddingLeft: option.depth * 12,
+              minWidth: 0,
+              maxWidth: '100%',
+            }}
+          >
             {option.kind === 'graph-folder' ? (
               <OpenFolderIcon width={14} height={14} aria-hidden="true" />
             ) : option.kind === 'section' ? (
@@ -501,7 +544,20 @@ const LiveSubgraphTargetControl: FC<SubgraphTargetControlProps> = ({
                 '▸'
               )
             ) : null}
-            <span>{option.label}</span>
+            {option.path ? (
+              <span className="subgraph-target-path" title={option.label}>
+                <span className="subgraph-target-path-segment">{option.path[0]}</span>{' '}
+                <ChevronRightIcon
+                  className="subgraph-target-path-separator"
+                  viewBox="8 6 9 12"
+                  aria-hidden="true"
+                  focusable="false"
+                />{' '}
+                <span className="subgraph-target-path-segment">{option.path[1]}</span>
+              </span>
+            ) : (
+              <span>{option.label}</span>
+            )}
           </span>
         )}
         onChange={(option) => {
