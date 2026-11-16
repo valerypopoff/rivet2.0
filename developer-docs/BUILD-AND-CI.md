@@ -2134,6 +2134,23 @@ version. It checks npm before publishing each package and skips package versions
 that are already present in the registry, so re-running the same main-branch
 workflow does not turn an already-published package into a hard failure.
 
+### Prepared release versions (2026-11-16)
+
+Review from the last version-changing commit `4a43b4745` through `80d0f48c2`
+prepares App `2.38.0`, the public Core/Node/CLI/Evaluations family `2.32.0`,
+App Executor `2.24.0`, all five Studio Server packages `1.40.0`, and Docs
+`2.30.0`. The [package matrix](PACKAGES.md#version-update-2026-11-16--data-bus-ordering-and-recording-statistics)
+distinguishes local changes from release companions. Saved channel ordering,
+its additive Core metadata and the expanded Run statistics UI warrant minor
+releases; fixes are included without breaking existing interfaces.
+
+Synchronize Tauri/Cargo metadata with `yarn sync:desktop-version` and the CLI
+Docker fallback with the public family. Use a fresh immutable Yarn install,
+then `yarn verify:desktop-version`, `yarn check:npm-publish-versions`,
+`yarn check:pnp:fresh`, `yarn studio-server:verify:repo-structure` and the
+documentation-link check. This metadata update changes no dependency ranges,
+database schema or Helm chart metadata and performs no deployment.
+
 ### Prepared release versions (2026-11-15)
 
 Review since the actual version bump `d02b3c656`, through `e120aa379` and the
