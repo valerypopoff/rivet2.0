@@ -5,6 +5,11 @@ execution concurrency control. It separates these controls from
 `Settings` -> `Runtime libraries`, which is solely for adding, removing, and inspecting
 Code-node packages.
 
+The page also includes [built-in CPU/RAM monitoring](resource-monitoring.md).
+Supported Compose and Helm installations collect it automatically, whether or
+not this page is open. Resource reports and runtime-library synchronization are
+separate: neither reporting count is an authoritative Kubernetes Pod count.
+
 ## What the page tells an operator
 
 ### Single-host deployment
@@ -93,6 +98,7 @@ The authenticated control-plane route is:
 
 ```text
 GET  /api/deployment-status
+GET  /api/deployment-status/resources?period=1h  # also 24h and 7d
 POST /api/deployment-status/replicas/cleanup
 GET  /api/app-settings/published-execution
 PATCH /api/app-settings/published-execution  # If-Match required; PUT also supported

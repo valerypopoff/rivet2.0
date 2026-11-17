@@ -2,14 +2,158 @@ import { expect, test } from '@playwright/test';
 import { getUiFontScale, getUiFontSizeCssVariables } from '../../app/src/utils/uiFontSize';
 import {
   createBuiltInRegistry,
+  coreCreateProcessor,
   serializeProject,
   ExecutionRecorder,
   type GraphId,
   type ProjectId,
+  type NodeId,
+  type Project,
 } from '@valerypopoff/rivet2-core';
 import { createChildPlaybackFixture } from '../../app/src/hooks/fixtures/childPlaybackRecording.js';
 import { mockHostedEditorBootstrap, waitForDashboardReady } from './helpers/hostedEditorObserve';
 import type { WorkflowRecordingRunSummary } from '../../studio-server-shared/workflow-recording-types';
+
+test('full output stays with its recording tab across playback, switching and close/reopen', async ({ page }) => {
+  const recordings = await Promise.all(
+    ['A', 'B'].map(async (id) => {
+      const text = createBuiltInRegistry().createDynamic('text');
+      text.id = 'shared-recorded-node' as NodeId;
+      text.title = 'Recorded text';
+      text.visualData = { x: 100, y: 100, width: 260 };
+      text.data = { text: `Output belonging to recording ${id}` };
+      const project: Project = {
+        metadata: {
+          id: 'original-project' as ProjectId,
+          title: `Replay ${id}`,
+          description: '',
+          mainGraphId: 'shared-graph' as GraphId,
+        },
+        graphs: {
+          ['shared-graph' as GraphId]: {
+            metadata: { id: 'shared-graph' as GraphId, name: 'Recorded graph' },
+            nodes: [text],
+            connections: [],
+          },
+        },
+        plugins: [],
+      };
+      const recorder = new ExecutionRecorder();
+      const runner = coreCreateProcessor(project, {});
+      recorder.record(runner.processor);
+      try {
+        await runner.run();
+      } finally {
+        runner.dispose();
+      }
+      return {
+        project: serializeProject({ ...project, metadata: { ...project.metadata, id: `replay-${id}` as ProjectId } }),
+        recording: recorder.serialize(),
+      };
+    }),
+  );
+  const runs: WorkflowRecordingRunSummary[] = ['A', 'B'].map((id) => ({
+    id: `recording-${id}`,
+    workflowId: 'original-workflow',
+    createdAt: '2026-11-17T10:00:00Z',
+    persistedAt: '2026-11-17T10:00:00Z',
+    runKind: 'latest',
+    status: 'succeeded',
+    durationMs: 1,
+    endpointNameAtExecution: `recording ${id}`,
+    hasReplayDataset: false,
+    recordingCompressedBytes: 10,
+    recordingUncompressedBytes: 20,
+    projectCompressedBytes: 10,
+    projectUncompressedBytes: 20,
+    datasetCompressedBytes: 0,
+    datasetUncompressedBytes: 0,
+  }));
+  await page.addInitScript(() =>
+    localStorage.setItem(
+      'recoil-persist',
+      JSON.stringify({
+        defaultExecutor: 'browser',
+        recordExecutions: false,
+        settings: { recordingPlaybackLatency: 0 },
+      }),
+    ),
+  );
+  await page.route(
+    (url) => url.pathname.startsWith('/api/'),
+    (route) => route.fulfill({ status: 503, json: { error: 'No ambient API in playback fixture' } }),
+  );
+  await mockHostedEditorBootstrap(page);
+  await page.route('**/api/workflows/tree', (route) =>
+    route.fulfill({ json: { root: '/workflows', projects: [], folders: [], sync: { epoch: 'modal', revision: 0 } } }),
+  );
+  await page.route(/\/api\/workflows\/recordings\/workflows(?:\?.*)?$/, (route) =>
+    route.fulfill({ json: { workflows: [], totals: { totalRuns: 2, failedRuns: 0, suspiciousRuns: 0 } } }),
+  );
+  await page.route('**/api/workflows/recordings/**', (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (path.endsWith('/runs'))
+      return route.fulfill({
+        json: { workflowId: '', page: 1, pageSize: 20, totalRuns: 2, totalRunsExact: true, statusFilter: 'all', runs },
+      });
+    const index = runs.findIndex((run) => path.startsWith(`/api/workflows/recordings/${run.id}/`));
+    if (index === -1) return route.fallback();
+    if (path.endsWith('/summary')) return route.fulfill({ json: runs[index] });
+    if (path.endsWith('/recording'))
+      return route.fulfill({ contentType: 'text/plain', body: recordings[index]!.recording });
+    if (path.endsWith('/replay-project'))
+      return route.fulfill({ contentType: 'text/plain', body: recordings[index]!.project });
+    if (path.endsWith('/replay-dataset')) return route.fulfill({ status: 404, json: { error: 'No replay dataset' } });
+    return route.fallback();
+  });
+  const errors: string[] = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  await waitForDashboardReady(page);
+  const editor = page.frameLocator('iframe.dashboard-editor-frame');
+  const modal = editor.getByTestId('fullscreen-output-modal');
+  const openRecording = async (id: 'A' | 'B') => {
+    await page.getByRole('button', { name: 'Run recordings', exact: true }).click();
+    const browser = page.getByTestId('run-recordings-modal');
+    await browser.locator(`[data-recording-id="recording-${id}"]`).locator('.run-recordings-run-open-button').click();
+    await expect(browser).toBeHidden();
+    await expect(editor.locator('.projects .project.active')).toContainText(`Replay ${id}`);
+  };
+  const playAndExpand = async (id: string) => {
+    await editor.getByRole('button', { name: 'Play Recording', exact: true }).click();
+    const output = editor.locator('.node[data-nodeid="shared-recorded-node"] .node-output');
+    await expect(output).toContainText(`Output belonging to recording ${id}`);
+    await output.hover();
+    await output.locator('.expand-button').click();
+    await expect(modal).toContainText(`Output belonging to recording ${id}`);
+  };
+  await openRecording('A');
+  await playAndExpand('A');
+  await modal.locator('.search-input').fill('belonging');
+  await openRecording('B');
+  await expect(modal).toHaveCount(0);
+  await playAndExpand('B');
+  await expect(modal.locator('.search-input')).toHaveValue('');
+  await openRecording('A');
+  await expect(modal).toContainText('Output belonging to recording A');
+  await expect(modal).not.toContainText('Output belonging to recording B');
+  await openRecording('B');
+  await expect(modal).toContainText('Output belonging to recording B');
+  await modal.press('Escape');
+  await expect(modal).toHaveCount(0);
+  await openRecording('A');
+  await expect(modal).toContainText('Output belonging to recording A');
+  await openRecording('B');
+  await expect(modal).toHaveCount(0);
+  const inactiveA = editor.locator('.projects .project').filter({ hasText: 'Replay A' });
+  await inactiveA.hover();
+  await expect(inactiveA.locator('.close-project')).toBeVisible();
+  await inactiveA.locator('.close-project').click();
+  await expect(inactiveA).toHaveCount(0);
+  await openRecording('A');
+  await expect(modal).toHaveCount(0);
+  expect(errors).toEqual([]);
+});
 
 for (const kind of ['child', 'nested child', 'legacy child', 'root', 'prompt child'] as const) {
   test(`Run recordings: repeated ${kind} playback replaces display history without changing the artifact`, async ({

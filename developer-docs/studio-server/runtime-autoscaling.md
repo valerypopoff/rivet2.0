@@ -80,6 +80,11 @@ before its separate same-image control ownership transition.
 
 ## Policy and demand
 
+[Built-in resource monitoring](resource-monitoring.md) is an observation-only
+path. The autoscaler does not consume its sampled history, reporting counts or
+approximate percentiles; its existing live admission and Kubernetes metrics
+remain authoritative for scaling decisions.
+
 Paired HA can explicitly reserve temporary overlap through
 `ha.executionPools.maxSurgeReplicas` (default `0`). Its physical ceiling is the
 normal maximum plus these temporary slots; normal demand and each serving pool
@@ -129,10 +134,13 @@ The [live concurrency control](deployment-status.md#live-published-execution-con
 changes a saved override, not Helm's bootstrap value. A capable worker exposes
 its applied revision, installation, deployment default, active count and limit
 through the private retirement socket's read-only `/admission` route. The API
-side retains loopback/capability authentication; the Unix socket remains mode
-0600. The bounded exec sample carries one coherent report alongside the existing
+side retains loopback/capability authentication; the Unix socket remains mode 0600. The bounded exec sample carries one coherent report alongside the existing
 metrics, checks the process incarnation and verifies the default against the
 Pod's protected environment. No revision labels are added to metric series.
+Installation identity is the existing restore/deployment identifier, preserved
+verbatim (including case and punctuation), not a newly normalized Kubernetes
+name. Settings and telemetry compare the complete identity exactly; a similarly
+spelled installation never inherits another installation's override.
 
 While valid revisions converge within a pool, growth uses the smallest observed
 limit. New shrinkage is paused and idle stabilization resets. An already-owned

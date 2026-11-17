@@ -88,6 +88,15 @@ if (!resume) {
     connect(trigger, 'output1', tail, 'url'),
     connect(tail, 'res_body', result, 'value'),
   ];
+  if (process.env.RIVET_ASYNC_TEST_HTTP_ECHO_URL) {
+    tail.data.useUrlInput = false;
+    tail.data.url = process.env.RIVET_ASYNC_TEST_HTTP_ECHO_URL;
+    tail.data.method = 'POST';
+    tail.data.useBodyInput = true;
+    tail.data.headers = JSON.stringify({ 'content-type': 'application/json' });
+    graph.nodes = [input, tail, output];
+    graph.connections = [connect(input, 'data', tail, 'req_body'), connect(tail, 'res_body', output, 'value')];
+  }
   if (process.env.RIVET_ASYNC_TEST_FAILURE === 'foreground') {
     const failure = rivet.codeNode.impl.create();
     failure.data.code = "throw new Error('foreground fixture failure');";
@@ -133,6 +142,17 @@ let hostedSubgraphFixture:
   | undefined;
 process.on('message', async (message: { id: number; command: string }) => {
   try {
+    if (message.command === 'monitoring-on' || message.command === 'monitoring-off') {
+      const monitoring = await import('../../resource-monitoring/runtime.js');
+      if (message.command === 'monitoring-on') await monitoring.startResourceMonitoring('combined');
+      else monitoring.stopResourceMonitoring();
+      process.send?.({ id: message.id, result: true });
+      return;
+    }
+    if (message.command === 'process-usage') {
+      process.send?.({ id: message.id, result: { cpu: process.cpuUsage(), rss: process.memoryUsage.rss() } });
+      return;
+    }
     if (message.command === 'execution-admission') {
       const { getPublishedExecutionAdmission } = await import('../../published-execution-admission.js');
       process.send?.({ id: message.id, result: getPublishedExecutionAdmission().getSnapshot() });

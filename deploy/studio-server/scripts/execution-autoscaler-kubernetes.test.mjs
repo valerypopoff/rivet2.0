@@ -85,6 +85,72 @@ const protectedValues = [
   'lifecycle.proxy.terminationGracePeriodSeconds=600',
 ];
 
+test('monitoring receives admitted reservations without inventing omitted limits or requiring cluster credentials', () => {
+  const resources = render();
+  const api = resources.find((r) => r.kind === 'Service' && r.metadata.name.endsWith('-api'));
+  const roles = new Set();
+  for (const r of resources.filter((r) => ['Deployment', 'StatefulSet'].includes(r.kind))) {
+    for (const container of r.spec.template.spec.containers) {
+      const env = container.env ?? [];
+      const raw = env.find((e) => e.name === 'RIVET_DEPLOYMENT_RESOURCE_MONITORING');
+      const role = env.find((e) => e.name === 'RIVET_API_PROFILE')?.value;
+      if (!['control', 'execution'].includes(role)) {
+        assert.equal(raw, undefined);
+        continue;
+      }
+      assert.ok(raw, `${role} must collect resources automatically`);
+      roles.add(role);
+      const config = JSON.parse(raw.value);
+      assert.equal(config.enabled, true);
+      assert.equal(config.containerized, true);
+      assert.equal(
+        config.reportUrl,
+        `http://${api.metadata.name}.default.svc.cluster.local:${api.spec.ports[0].port}/internal/resource-monitoring`,
+      );
+      for (const field of ['CPU', 'MEMORY']) {
+        const reference = env.find((e) => e.name === `RIVET_RESOURCE_${field}_REQUEST`);
+        assert.equal(reference.valueFrom.resourceFieldRef.containerName, container.name);
+      }
+      assert.equal(config.allocation.cpuLimitMillicores, null);
+      assert.equal(config.allocation.memoryLimitBytes, null);
+      assert.ok(!env.some((e) => e.name === 'GOOGLE_APPLICATION_CREDENTIALS'));
+    }
+  }
+  assert.deepEqual([...roles].sort(), ['control', 'execution']);
+});
+
+test('automatic monitoring preserves separate staging and production execution profiles', () => {
+  for (const [profile, namespace, cpu, memory, runs] of [
+    ['production', 'rivet', '2', '4Gi', 32],
+    ['staging', 'rivet-staging-persistent', '500m', '1Gi', 4],
+  ]) {
+    const resources = render([
+      '-f',
+      `deploy/studio-server/examples/execution-${profile}.values.example.yaml`,
+      '--namespace',
+      namespace,
+    ]);
+    const execution = resources
+      .filter((r) => ['Deployment', 'StatefulSet'].includes(r.kind))
+      .flatMap((r) => r.spec.template.spec.containers)
+      .filter((c) => c.env?.some((e) => e.name === 'RIVET_API_PROFILE' && e.value === 'execution'));
+    assert.ok(execution.length > 0);
+    for (const container of execution) {
+      const env = new Map(container.env.map((e) => [e.name, e]));
+      const config = JSON.parse(env.get('RIVET_DEPLOYMENT_RESOURCE_MONITORING').value);
+      assert.equal(config.enabled, true);
+      assert.equal(String(container.resources.requests.cpu), cpu);
+      assert.equal(container.resources.requests.memory, memory);
+      assert.equal(env.get('RIVET_RESOURCE_CPU_REQUEST').valueFrom.resourceFieldRef.containerName, container.name);
+      assert.equal(env.get('RIVET_RESOURCE_MEMORY_REQUEST').valueFrom.resourceFieldRef.containerName, container.name);
+      assert.equal(
+        JSON.parse(env.get('RIVET_DEPLOYMENT_PUBLISHED_EXECUTION_DEFAULTS').value).maxActiveRunsPerPod,
+        runs,
+      );
+    }
+  }
+});
+
 test('idle staging supports one protected worker without allowing a production floor change', () => {
   const overrides = [
     'replicaCount.execution=1',

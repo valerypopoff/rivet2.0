@@ -197,7 +197,7 @@ try {
       blocker.release();
     }
     const forward = await migrateManagedWorkflowSchema(rollingPool, { migrationPolicy: 'rolling' });
-    assert.deepEqual(forward.appliedVersions, [19, 20]);
+    assert.deepEqual(forward.appliedVersions, [19, 20, 21]);
     await verifyManagedWorkflowSchema(rollingPool);
     assert.deepEqual(
       (
@@ -216,7 +216,7 @@ try {
       ).rows,
       [{ project_blob_key: 'preserved/project', reference_summary: null }],
     );
-    await verifySchemaImagePair(docker, containerId, process.env, { from: 19, to: 20 });
+    await verifySchemaImagePair(docker, containerId, process.env, { from: 20, to: 21 });
     const repositoryModules = Object.fromEntries(
       await Promise.all(
         ['revision-factory', 'recordings', 'db', 'mappers'].map(async (name) => [
@@ -280,10 +280,15 @@ try {
         schema,
         MANAGED_WORKFLOW_SCHEMA_MIGRATIONS.find((m) => m.version === 20),
       );
+      await probeSchemaLockContention(
+        rollingPool,
+        schema,
+        MANAGED_WORKFLOW_SCHEMA_MIGRATIONS.find((m) => m.version === 21),
+      );
     } finally {
       await rollingPool.query(`DROP SCHEMA ${schema} CASCADE`);
     }
-    console.log('Rolling schema: real 18 -> 20, bounded trigger-install contention and preserved rows passed.');
+    console.log('Rolling schema: 18 -> 21, bounded trigger/telemetry index contention and preserved rows passed.');
   } finally {
     await rollingPool.end();
   }

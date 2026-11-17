@@ -14,6 +14,23 @@ test.beforeEach(async ({ page }) => {
       if (name === '/api/app-settings/server-ui-session') return route.fulfill({ json: { mode: 'none', email: null } });
       if (name === '/api/app-settings/local-upgrade/status') return route.fulfill({ json: { available: false } });
       if (name === '/api/app-settings/local-upgrade/setup') return route.fulfill({ json: { eligible: false } });
+      if (name === '/api/deployment-status/resources')
+        return route.fulfill({
+          json: {
+            available: true,
+            error: null,
+            period: '1h',
+            from: Date.now() - 3600000,
+            to: Date.now(),
+            generatedAt: Date.now(),
+            sampleIntervalMs: 5000,
+            staleAfterMs: 90000,
+            percentile: 'approximate-duration-weighted',
+            instances: [],
+            pools: [],
+            omittedInstances: 0,
+          },
+        });
       if (name === '/api/workflows/scheduled-runs/summary') return route.fulfill({ json: { enabledCount: 0 } });
       if (name === '/api/app-settings/runtime-limits')
         return route.fulfill({
@@ -42,6 +59,143 @@ test.beforeEach(async ({ page }) => {
     },
   );
   await mockHostedEditorBootstrap(page);
+});
+
+test('resource monitoring distinguishes container and process data, unknown allocations and stale samples', async ({
+  page,
+}) => {
+  const now = Date.now(),
+    periods: string[] = [];
+  let hang = false;
+  const releaseRequests: Array<() => void> = [];
+  const stat = { average: 1250, p95: 1800, peak: 2000, coverageMs: 3500000 };
+  const point = {
+    at: now,
+    cpuMillicores: 1250,
+    memoryBytes: 512 * 1024 ** 2,
+    workingSetBytes: 400 * 1024 ** 2,
+    activeRuns: 7,
+    runLimit: 32,
+    reporters: 1,
+    complete: true,
+  };
+  const identity = {
+    installation: 'fixture/rivet',
+    incarnation: 'container-one',
+    name: 'execution-one',
+    role: 'execution',
+    source: 'cgroup-v2',
+  };
+  const instance = {
+    identity,
+    allocation: {
+      cpuRequestMillicores: 2000,
+      memoryRequestBytes: 4 * 1024 ** 3,
+      cpuLimitMillicores: null,
+      memoryLimitBytes: null,
+    },
+    firstSampleAt: now - 3600000,
+    lastSampleAt: now,
+    latest: { ...point, durationMs: 5000, lifetimeMemoryPeakBytes: 1024 ** 3 },
+    droppedSamples: 0,
+    cpu: stat,
+    memory: { ...stat, average: 512 * 1024 ** 2, peak: 800 * 1024 ** 2, p95: 600 * 1024 ** 2 },
+    workingSet: stat,
+    points: [point],
+  };
+  await page.route('**/api/deployment-status', (route) =>
+    route.fulfill({ json: { topology: 'replicated', apiProfile: 'control', replicaReadiness: null } }),
+  );
+  await page.route('**/api/deployment-status/resources?*', async (route) => {
+    const period = new URL(route.request().url()).searchParams.get('period')!;
+    periods.push(period);
+    if (hang) {
+      await new Promise<void>((resolve) => releaseRequests.push(resolve));
+      await route.abort().catch(() => {});
+      return;
+    }
+    return route.fulfill({
+      json: {
+        available: true,
+        error: null,
+        period,
+        from: now - 3600000,
+        to: now,
+        generatedAt: now,
+        sampleIntervalMs: 5000,
+        staleAfterMs: 90000,
+        percentile: 'approximate-duration-weighted',
+        omittedInstances: period === '24h' ? 2 : 0,
+        instances: [
+          instance,
+          {
+            ...instance,
+            identity: {
+              ...identity,
+              incarnation: 'fallback-two',
+              name: 'control-two',
+              role: 'control',
+              source: 'node-process',
+            },
+            lastSampleAt: now - 120000,
+            latest: { ...instance.latest, at: now - 120000, workingSetBytes: null, lifetimeMemoryPeakBytes: null },
+            allocation: {
+              cpuRequestMillicores: null,
+              memoryRequestBytes: null,
+              cpuLimitMillicores: null,
+              memoryLimitBytes: null,
+            },
+          },
+        ],
+        pools: [
+          {
+            scope: 'container',
+            role: 'execution',
+            cpu: stat,
+            memory: instance.memory,
+            latest: point,
+            points: [point],
+          },
+        ],
+      },
+    });
+  });
+  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  await authenticateIfNeeded(page);
+  await waitForDashboardReady(page);
+  await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  const modal = page.locator('[data-testid="app-settings-modal"]');
+  await modal.getByRole('tab', { name: 'Deployment', exact: true }).click();
+  const panel = modal.getByRole('region', { name: 'Resource monitoring' });
+  await expect(panel).toContainText('1 currently reporting instances');
+  await expect(panel).toContainText('7 / 32');
+  await expect(panel.locator('.resource-instance').filter({ hasText: 'control-two' })).toContainText(
+    'Stale / unavailable',
+  );
+  await expect(panel.locator('.resource-instance').filter({ hasText: 'control-two' })).toContainText('Not configured');
+  await panel.getByRole('combobox', { name: 'Resource history instance' }).selectOption('fallback-two');
+  await expect(panel.getByRole('heading', { name: 'Node process RSS', exact: true })).toBeVisible();
+  await panel.getByRole('button', { name: '24 hours', exact: true }).click();
+  await expect.poll(() => periods.includes('24h')).toBe(true);
+  await expect(panel).toContainText('At least 2 additional instance histories');
+  await expect(panel.locator('option').filter({ hasText: 'Execution pool' })).toHaveText(/1 in latest observation/);
+  await expect(modal.getByRole('spinbutton', { name: 'Concurrent runs per execution Pod' })).toHaveValue('32');
+  // A lost network response must not freeze the last values in a fresh state.
+  await page.clock.install();
+  hang = true;
+  try {
+    await panel.getByRole('button', { name: '7 days', exact: true }).click();
+    await expect.poll(() => periods.includes('7d')).toBe(true);
+    await page.clock.fastForward(10100);
+    await expect(panel).toContainText('Monitoring request timed out.');
+    await page.clock.fastForward(120000);
+    await expect(panel.locator('.resource-instance').filter({ hasText: 'execution-one' })).toContainText(
+      'Stale / unavailable',
+    );
+    await expect(modal.getByRole('spinbutton', { name: 'Concurrent runs per execution Pod' })).toHaveValue('32');
+  } finally {
+    releaseRequests.forEach((release) => release());
+  }
 });
 
 test('live execution limits preserve edits on refresh and reconcile saves without replaying writes', async ({

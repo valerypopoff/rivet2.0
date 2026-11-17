@@ -5,6 +5,13 @@ and ceiling: the compact production baseline is five application Pods plus one c
 execution maximum must fit the real DB/node/provider budgets. Local protocol
 tests are not representative-load or GKE capacity measurements.
 
+Settings → Deployment now provides [built-in CPU/RAM history](resource-monitoring.md)
+for reporting execution and control containers. Use its duration-weighted
+averages, approximate p95 and observed peaks alongside workload-specific
+acceptance tests. Five-second samples can miss shorter spikes; process-only
+fallback excludes child executors. Monitoring neither proves the 32-run
+configuration safe nor changes resource requests, limits or autoscaling.
+
 ## Separate execution profiles for production and staging
 
 These are installation-specific deployment profiles, not load certifications.
@@ -14,10 +21,10 @@ remains failed; quarantine and its recovery lock are not authority to retry or d
 Keep these installation-specific targets in operator-owned values; the shared
 production overlay retains its conservative admission default.
 
-| Environment                | Execution minimum | Active published runs per Pod | CPU / RAM requests per execution Pod                                   |
-| -------------------------- | ----------------- | ----------------------------- | ---------------------------------------------------------------------- |
-| Production default         | 2                 | 32                            | 2 CPUs / 4 GiB                                                         |
-| Retained staging default   | 1                 | 4                             | 500m / 1 GiB                                                           |
+| Environment              | Execution minimum | Active published runs per Pod | CPU / RAM requests per execution Pod |
+| ------------------------ | ----------------- | ----------------------------- | ------------------------------------ |
+| Production default       | 2                 | 32                            | 2 CPUs / 4 GiB                       |
+| Retained staging default | 1                 | 4                             | 500m / 1 GiB                         |
 
 `publishedExecutionAdmission.maxActiveRunsPerPod` owns
 `RIVET_DEPLOYMENT_PUBLISHED_EXECUTION_MAX_ACTIVE_RUNS`; keep admission in

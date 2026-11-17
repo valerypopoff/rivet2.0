@@ -230,8 +230,8 @@ workflowSchema:
   # schema. The managed release command widens maximumVersion only for a
   # documented expand-only rollback; the migration Job always stays exact.
   compatibility:
-    minimumVersion: 20
-    maximumVersion: 20
+    minimumVersion: 21
+    maximumVersion: 21
   # Internal staged validation gate, owned by the release helper.
   maintenanceValidation: false
   migrationJob:

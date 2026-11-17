@@ -12,7 +12,10 @@ export const SCHEMA_PROBE_TIMING = Object.freeze({
  * A future schema change must extend this matrix, not inherit a generic green flag. */
 export function assertProbedSchemaTransition(from, to) {
   assert.ok(
-    (from === 17 && to === 18) || (from === 18 && to === 19) || (from === 19 && to === 20),
+    (from === 17 && to === 18) ||
+      (from === 18 && to === 19) ||
+      (from === 19 && to === 20) ||
+      (from === 20 && to === 21),
     'Schema transition has no reviewed mixed-writer probe',
   );
 }
@@ -56,6 +59,7 @@ export function readSchemaRepositoryReceipt(output, { role, version, runId }) {
  * The actual migration SQL and actual rolling budgets come from the candidate. */
 export async function probeSchemaLockContention(pool, schema, migration) {
   assert.match(schema, /^rivet_schema_probe_[a-f0-9]{32}$/);
+  if (migration.version === 21) return probeResourceSchemaLockContention(pool, schema, migration);
   assert.ok([18, 19, 20].includes(migration.version));
   const table = migration.version === 19 ? 'workflow_revisions' : 'workflow_recordings';
   const id = migration.version === 19 ? 'revision_id' : 'recording_id';
@@ -132,6 +136,51 @@ export async function probeSchemaLockContention(pool, schema, migration) {
     clients.forEach((client, index) =>
       client.release(outcomes[index].status === 'rejected' ? outcomes[index].reason : undefined),
     );
+  }
+}
+
+async function probeResourceSchemaLockContention(pool, schema, migration) {
+  const clients = [];
+  try {
+    for (let i = 0; i < 3; i++) clients.push(await pool.connect());
+    const [blocker, ddl, reader] = clients;
+    for (const client of clients) await client.query(`SET search_path TO ${schema}`);
+    // An interrupted/replayed installation may already have a telemetry table.
+    // Its index lock must stay bounded without obstructing ordinary run writes.
+    const firstTable = migration.sql.slice(0, migration.sql.indexOf('CREATE INDEX'));
+    assert.ok(firstTable.includes('resource_monitoring_instances'));
+    await blocker.query(firstTable);
+    await blocker.query(
+      `INSERT INTO resource_monitoring_instances VALUES ('probe','retained','execution','fixture','node-process','{}',1,1,'{}',0)`,
+    );
+    await reader.query('CREATE TABLE legacy_execution_probe(id TEXT PRIMARY KEY)');
+    await blocker.query("BEGIN; UPDATE resource_monitoring_instances SET last_at=2 WHERE incarnation='retained'");
+    await ddl.query("BEGIN; SET LOCAL lock_timeout='1000ms'; SET LOCAL statement_timeout='5000ms'");
+    const attempted = ddl.query(migration.sql).then(
+      () => null,
+      (error) => error,
+    );
+    const deadline = Date.now() + 3000;
+    while (!(await reader.query('SELECT 1 FROM pg_locks WHERE pid=$1 AND NOT granted', [ddl.processID])).rowCount) {
+      assert.ok(Date.now() < deadline, 'Telemetry DDL did not enter the expected lock queue');
+      await delay(10);
+    }
+    await reader.query("SET statement_timeout='1500ms'");
+    await reader.query("INSERT INTO legacy_execution_probe VALUES ('ordinary-work')");
+    assert.equal((await attempted)?.code, '55P03');
+    await ddl.query('ROLLBACK');
+    await blocker.query('COMMIT');
+    await ddl.query("BEGIN; SET LOCAL lock_timeout='1000ms'; SET LOCAL statement_timeout='5000ms'");
+    await ddl.query(migration.sql);
+    await ddl.query('COMMIT');
+    assert.equal((await reader.query('SELECT count(*)::int AS n FROM resource_monitoring_instances')).rows[0].n, 1);
+    assert.equal((await reader.query('SELECT count(*)::int AS n FROM legacy_execution_probe')).rows[0].n, 1);
+  } finally {
+    await Promise.allSettled(clients.map((client) => client.query('ROLLBACK')));
+    for (const client of clients) {
+      await client.query('RESET search_path; RESET statement_timeout').catch(() => {});
+      client.release();
+    }
   }
 }
 

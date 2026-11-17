@@ -8,9 +8,10 @@ import { MANAGED_FOLDER_PARENT_MIGRATION_SQL } from './folder-parent-schema.js';
 import { MANAGED_NAMESPACE_SCHEMA_SQL } from './namespace-schema.js';
 import { RECORDING_EVIDENCE_SCHEMA_SQL } from './recording-evidence-schema.js';
 import { SCHEDULE_SCHEMA_SQL } from '../../../scheduled-runs/schema.js';
+import { RESOURCE_MONITORING_SCHEMA_SQL } from './resource-monitoring-schema.js';
 
 export const MANAGED_WORKFLOW_SCHEMA_MIGRATIONS_TABLE = 'managed_workflow_schema_migrations';
-export const CURRENT_MANAGED_WORKFLOW_SCHEMA_VERSION = 20;
+export const CURRENT_MANAGED_WORKFLOW_SCHEMA_VERSION = 21;
 // Minimum predecessor schema whose reader can safely serve data produced by
 // this release. Deployment consumes this explicit rollback floor; additive DDL
 // alone does not establish compatibility when stored representations change.
@@ -467,6 +468,13 @@ export const MANAGED_WORKFLOW_SCHEMA_MIGRATIONS: readonly ManagedWorkflowSchemaM
     sql: RECORDING_EVIDENCE_SCHEMA_SQL,
     checksum: '0ba938f3ef2218f9d810315fdb36a127694214736f0725beb9599f5b347f60e7',
   },
+  {
+    version: 21,
+    rollingSafe: true,
+    name: 'resource-monitoring-history',
+    sql: RESOURCE_MONITORING_SCHEMA_SQL,
+    checksum: 'bd11857d89fa0bb76ed5970556f7bc81c5d815e9497943100a0b31fe9a442db4',
+  },
 ];
 
 function assertMigrationDefinitions(): void {
@@ -496,6 +504,8 @@ function assertMigrationDefinitions(): void {
 assertMigrationDefinitions();
 
 export const MANAGED_WORKFLOW_SCHEMA_REQUIRED_TABLES = [
+  'resource_monitoring_instances',
+  'resource_monitoring_minutes',
   'rivet_schedules',
   'rivet_schedule_runs',
   'rivet_schedule_installation',
@@ -529,6 +539,22 @@ export const MANAGED_WORKFLOW_SCHEMA_REQUIRED_TABLES = [
 ] as const;
 
 export const MANAGED_WORKFLOW_SCHEMA_REQUIRED_COLUMNS = [
+  ['resource_monitoring_instances', 'installation', 'text', 'NO'],
+  ['resource_monitoring_instances', 'incarnation', 'text', 'NO'],
+  ['resource_monitoring_instances', 'role', 'text', 'NO'],
+  ['resource_monitoring_instances', 'name', 'text', 'NO'],
+  ['resource_monitoring_instances', 'source', 'text', 'NO'],
+  ['resource_monitoring_instances', 'allocation', 'jsonb', 'NO'],
+  ['resource_monitoring_instances', 'first_at', 'int8', 'NO'],
+  ['resource_monitoring_instances', 'last_at', 'int8', 'NO'],
+  ['resource_monitoring_instances', 'latest', 'jsonb', 'NO'],
+  ['resource_monitoring_instances', 'dropped_samples', 'int8', 'NO'],
+  ['resource_monitoring_minutes', 'installation', 'text', 'NO'],
+  ['resource_monitoring_minutes', 'incarnation', 'text', 'NO'],
+  ['resource_monitoring_minutes', 'bucket_at', 'int8', 'NO'],
+  ['resource_monitoring_minutes', 'revision', 'int8', 'NO'],
+  ['resource_monitoring_minutes', 'samples', 'jsonb', 'NO'],
+  ['resource_monitoring_minutes', 'summary', 'jsonb', 'NO'],
   ['workflow_run_evidence', 'run_id', 'text', 'NO'],
   ['workflow_run_evidence', 'workflow_id', 'text', 'NO'],
   ['workflow_run_evidence', 'token', 'text', 'NO'],
@@ -854,6 +880,14 @@ export const MANAGED_WORKFLOW_SCHEMA_REQUIRED_COLUMN_DEFAULTS = [
 
 export const MANAGED_WORKFLOW_SCHEMA_REQUIRED_INDEXES = [
   [
+    'resource_monitoring_instances',
+    'resource_monitoring_instances_recent_idx',
+    ['installation', 'last_at'],
+    null,
+    [0, 3],
+  ],
+  ['resource_monitoring_minutes', 'resource_monitoring_minutes_time_idx', ['installation', 'bucket_at'], null, [0, 0]],
+  [
     'workflow_run_evidence',
     'workflow_run_evidence_history_idx',
     ['workflow_id', 'created_at', 'run_id'],
@@ -1017,6 +1051,8 @@ export const MANAGED_WORKFLOW_SCHEMA_REQUIRED_INDEXES = [
 ] as const;
 
 export const MANAGED_WORKFLOW_SCHEMA_REQUIRED_CONSTRAINTS = [
+  ['resource_monitoring_instances', 'p', 'PRIMARY KEY (installation, incarnation)'],
+  ['resource_monitoring_minutes', 'p', 'PRIMARY KEY (installation, incarnation, bucket_at)'],
   ['workflow_run_evidence', 'p', 'PRIMARY KEY (run_id)'],
   ['workflow_folders', 'u', 'UNIQUE (namespace_id)'],
   ['workflow_namespace_receipts', 'p', 'PRIMARY KEY (operation_id)'],

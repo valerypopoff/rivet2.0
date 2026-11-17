@@ -296,6 +296,12 @@ export function createManagedCompose(
       ...common,
       PORT: '8080',
       RIVET_API_PROFILE: role,
+      RIVET_DEPLOYMENT_RESOURCE_MONITORING: JSON.stringify({
+        enabled: true,
+        containerized: true,
+        name: role,
+        reportUrl: 'http://backend:8080/internal/resource-monitoring',
+      }),
       RIVET_RUNTIME_LIBRARIES_REPLICA_TIER: role === 'control' ? 'none' : 'endpoint',
       RIVET_RUNTIME_LIBRARIES_JOB_WORKER_ENABLED: role === 'control' ? 'true' : 'false',
     },

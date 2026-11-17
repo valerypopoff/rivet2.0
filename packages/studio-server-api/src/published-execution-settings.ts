@@ -12,6 +12,7 @@ import {
   type PublishedExecutionAdmissionMode,
 } from './published-execution-admission.js';
 import { badRequest, createHttpError } from './utils/httpError.js';
+import { isInstallationIdentity } from './installation-identity.js';
 
 export const PUBLISHED_EXECUTION_SETTINGS_KEY = 'published execution';
 export const PUBLISHED_EXECUTION_DEFAULTS_ENV = 'RIVET_DEPLOYMENT_PUBLISHED_EXECUTION_DEFAULTS';
@@ -30,9 +31,9 @@ function limit(value: unknown): number {
 }
 
 function installation(env: NodeJS.ProcessEnv): string | null {
-  const value = env.RIVET_LEGACY_RESTORE_INSTALLATION?.trim();
-  if (!value) return null;
-  if (!/^[a-z0-9][a-z0-9./_-]{0,255}$/.test(value)) throw new Error('Invalid execution policy installation identity.');
+  const value = env.RIVET_LEGACY_RESTORE_INSTALLATION;
+  if (!value?.trim()) return null;
+  if (!isInstallationIdentity(value)) throw new Error('Invalid execution policy installation identity.');
   return value;
 }
 
@@ -59,7 +60,7 @@ export function publishedExecutionDefaults(env: NodeJS.ProcessEnv = process.env)
 
 function parsePolicy(value: Record<string, unknown>): StoredPolicy {
   const scope = value.installation;
-  if (scope !== null && (typeof scope !== 'string' || !/^[a-z0-9][a-z0-9./_-]{0,255}$/.test(scope))) {
+  if (scope !== null && !isInstallationIdentity(scope)) {
     throw new TypeError('Invalid saved execution policy installation.');
   }
   const max = value.maxActiveRunsPerPod === null ? null : limit(value.maxActiveRunsPerPod);

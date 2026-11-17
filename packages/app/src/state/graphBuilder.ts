@@ -29,7 +29,7 @@ export const editingNodeState = atom<NodeId | null>(null);
 export const nodeEditorSessionRevisionState = atom(0);
 export const nodeEditorContentRevisionState = atom<Record<string, number>>({});
 
-export const fullscreenOutputNodeState = atom<NodeId | null>(null);
+export { fullscreenOutputNodeState } from './fullscreenOutput.js';
 
 export type CanvasPosition = { x: number; y: number; zoom: number; fromSaved?: boolean };
 

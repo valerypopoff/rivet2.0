@@ -6,7 +6,11 @@ import {
   selectedProcessPageNodesState,
 } from '../../state/dataFlow.js';
 import { graphState } from '../../state/graph.js';
-import { fullscreenOutputNodeState } from '../../state/graphBuilder.js';
+import { fullscreenOutputNodeState, nodeEditorSessionRevisionState } from '../../state/graphBuilder.js';
+import {
+  clearInvalidFullscreenOutputSelectionState,
+  fullscreenOutputSelectionState,
+} from '../../state/fullscreenOutput.js';
 import { projectBindingRegistryState } from '../../state/projectBindings.js';
 import { projectState, projectsState } from '../../state/savedGraphs.js';
 import { hasStoredPortMapValues, hasStoredSplitOutputValues } from '../../utils/executionDataReaders.js';
@@ -29,8 +33,14 @@ export function createRunActivityOutputNavigation(
 ) {
   let pending: number | undefined;
   let revision = 0;
+  let stopSelectionWatch: (() => void) | undefined;
+  const stopWatching = () => {
+    stopSelectionWatch?.();
+    stopSelectionWatch = undefined;
+  };
   const cancel = () => {
     revision++;
+    stopWatching();
     if (pending != null) frames.cancel(pending);
     pending = undefined;
   };
@@ -39,19 +49,32 @@ export function createRunActivityOutputNavigation(
     schedule(target: RunActivityInvocationIdentity | RunActivityToolResultTarget) {
       cancel();
       store.get(projectsState); // Reconcile the existing binding registry.
+      // Retire an obsolete modal before watching for a genuinely newer choice.
+      const selection = store.get(fullscreenOutputSelectionState);
+      if (selection) store.set(clearInvalidFullscreenOutputSelectionState, selection);
       const project = store.get(projectState);
       const bindings = store.get(projectBindingRegistryState);
       const token = bindings.get(project.metadata.id)?.token;
       const workspace = bindings.getWorkspaceToken();
       const viewKey = store.get(currentGraphViewState)?.key;
+      const editorSessionRevision = store.get(nodeEditorSessionRevisionState);
       const intent = revision;
+      // Observe only while pending: a newer inline open/close owns the UI,
+      // including an open -> close round trip before this frame can execute.
+      stopSelectionWatch = store.sub(fullscreenOutputSelectionState, cancel);
+      if (intent !== revision) {
+        stopWatching();
+        return;
+      }
       pending = frames.request(() => {
         if (intent !== revision) return;
         pending = undefined;
+        stopWatching();
         store.get(projectsState);
         const current = store.get(projectState);
         if (
           current.metadata.id !== project.metadata.id ||
+          store.get(nodeEditorSessionRevisionState) !== editorSessionRevision ||
           bindings.getWorkspaceToken() !== workspace ||
           (token == null
             ? bindings.get(current.metadata.id) != null || current !== project

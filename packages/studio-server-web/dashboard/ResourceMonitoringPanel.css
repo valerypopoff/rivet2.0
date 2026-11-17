@@ -1,0 +1,72 @@
+.resource-monitoring .resource-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.resource-monitoring .resource-periods {
+  display: flex;
+  gap: 4px;
+}
+.resource-monitoring .resource-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+  margin: 12px 0;
+}
+.resource-monitoring .resource-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  border: 1px solid var(--border-color, #444);
+  border-radius: 8px;
+  padding: 12px;
+}
+.resource-monitoring .resource-chart {
+  min-width: 0;
+  margin: 16px 0;
+}
+.resource-monitoring .resource-chart h4 {
+  margin: 0 0 8px;
+}
+.resource-monitoring select {
+  width: 100%;
+  padding: 8px;
+  background: var(--background-color, #24282f);
+  color: inherit;
+  border: 1px solid var(--border-color, #555);
+  border-radius: 6px;
+}
+.resource-monitoring .resource-instances {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.resource-monitoring .resource-instance {
+  padding: 12px;
+  border: 1px solid var(--border-color, #444);
+  border-radius: 8px;
+}
+.resource-monitoring .resource-instance small {
+  overflow-wrap: anywhere;
+}
+.resource-monitoring .resource-values {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px;
+  margin: 12px 0;
+}
+.resource-monitoring .resource-values dt {
+  opacity: 0.8;
+  font-size: 12px;
+}
+.resource-monitoring .resource-values dd {
+  margin: 3px 0 0;
+}
+.resource-monitoring .resource-stale {
+  color: #e9ad58;
+}
+.resource-monitoring .resource-fresh {
+  color: #83cd9a;
+}

@@ -42,6 +42,7 @@ import { getHostedEvaluationsCoordinatorConfig } from './hosted-evaluations-conf
 import { disposeWorkflowRecordingInputExtractor } from './routes/workflows/recording-input-extractor.js';
 import { getPublishedExecutionAdmission } from './published-execution-admission.js';
 import { bindPublishedExecutionSettings } from './published-execution-settings.js';
+import { startResourceMonitoring, stopResourceMonitoring } from './resource-monitoring/runtime.js';
 import {
   abortActiveHttpExecutions,
   beginActiveHttpExecutionDrain,
@@ -242,6 +243,7 @@ async function waitForActiveHttpExecutions(deadline: number): Promise<boolean> {
 }
 
 const resources = new ServerResourceLifecycle([
+  { name: 'resource-monitoring', beginDrain: stopResourceMonitoring, dispose: stopResourceMonitoring },
   {
     name: 'scheduled-runs',
     beginDrain: beginScheduledRunsDrain,
@@ -661,6 +663,7 @@ async function startServer(): Promise<void> {
       }
       assertStartupActive();
     });
+    void startResourceMonitoring(apiRuntimeProfile);
     await configureRestoreService();
     if (isLegacyRestorePaused() && legacyRestoreService) {
       const urls = [

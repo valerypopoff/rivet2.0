@@ -6,6 +6,7 @@ import Button from '@atlaskit/button';
 import TextField from '@atlaskit/textfield';
 import type { usePublishedExecutionForm } from '../usePublishedExecutionForm';
 import { SettingsActions } from '../SettingsControls';
+import { ResourceMonitoringPanel } from '../../ResourceMonitoringPanel';
 
 function currentServerRole(profile: DeploymentStatus['apiProfile']): string {
   return profile === 'combined'
@@ -115,6 +116,7 @@ export function DeploymentStatusSettingsTab({
             </section>
           ) : null}
 
+          <ResourceMonitoringPanel />
           {status.topology === 'replicated' ? (
             status.replicaReadiness ? (
               <DeploymentReplicaReadinessPanel

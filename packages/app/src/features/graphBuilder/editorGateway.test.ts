@@ -20,6 +20,7 @@ import { frozenNodeOutputsState, graphRunningState } from '../../state/dataFlow.
 import { projectNodeRegistryState } from '../../state/plugins.js';
 import { recoverableNodeConnectionsStatePerGraph } from '../../state/recoverableNodeConnections.js';
 import { projectState } from '../../state/savedGraphs.js';
+import { fullscreenOutputNodeState } from '../../state/fullscreenOutput.js';
 import {
   captureGraphBuilderEditorContext,
   type GraphBuilderHistorySnapshot,
@@ -310,6 +311,44 @@ test('captured sessions must retain exact ownership of the current project', () 
 
   store.set(activeGraphBuilderSessionOwnerState, undefined);
   assert.equal(captureGraphBuilderEditorContext(store, 'owner').eligibility.eligible, false);
+});
+
+test('deleting a node and Undo/Redo restore only the owning tab full-output selection', () => {
+  const store = createReadyStore();
+  const original = node('shared-node');
+  const beforeGraph = { ...store.get(graphState), nodes: [original] };
+  const a = { ...store.get(projectState), graphs: { ...store.get(projectState).graphs, [graphId]: beforeGraph } };
+  const b = { ...a, metadata: { ...a.metadata, id: 'neighbor-project' as ProjectId } };
+  store.set(graphState, beforeGraph);
+  store.set(projectState, b);
+  store.set(fullscreenOutputNodeState, original.id);
+  store.set(projectState, a);
+  store.set(fullscreenOutputNodeState, original.id);
+  const context = captureGraphBuilderEditorContext(store);
+  const draft = structuredClone(context.snapshot.authoringProject);
+  draft.graphs[graphId]!.nodes = [];
+  const prepared = prepareGraphBuilderCommit({
+    base: context.base,
+    commitId: 'remove-full-output-node',
+    draft,
+    draftRevision: 1,
+    summary: 'Remove the selected node.',
+  });
+  const outcome = store.set(tryCommitGraphBuilderDraftState, {
+    prepared,
+    publishHistorySnapshot: (activeGraphId, snapshot) =>
+      store.set(publishGraphBuilderHistorySnapshotState, { activeGraphId, snapshot }),
+  });
+  assert.equal(outcome.status, 'committed');
+  assert.equal(store.get(fullscreenOutputNodeState), null);
+  const entry = store.get(commandHistoryStackStatePerGraph)[graphId]![0]!;
+  entry.command.undo(entry.data, entry.appliedData, {} as never);
+  assert.equal(store.get(fullscreenOutputNodeState), original.id);
+  entry.command.apply(entry.data, entry.appliedData, {} as never);
+  assert.equal(store.get(fullscreenOutputNodeState), null);
+  store.set(projectState, b);
+  store.set(graphState, beforeGraph);
+  assert.equal(store.get(fullscreenOutputNodeState), original.id, 'neighbor selection survives commit, undo and redo');
 });
 
 test('history inverse and forward snapshots preserve an unrelated sibling graph', () => {

@@ -44,6 +44,7 @@ import { uiAuthRouter } from './routes/ui-auth.js';
 import { webAppOAuthRouter } from './web-app-oauth.js';
 import { runtimeLibrariesRouter } from './routes/runtime-libraries.js';
 import { createDeploymentStatusRouter } from './routes/deployment-status.js';
+import { createResourceHistoryRouter, createResourceReportRouter } from './resource-monitoring/routes.js';
 import { getDeploymentTopology } from './deployment-status.js';
 import {
   getLatestWebAppsBasePath,
@@ -320,6 +321,7 @@ function dispatchDynamicBasePath(getBasePath: () => string, router: ExpressRoute
 }
 
 function mountControlPlaneRoutes(app: Express, profile: ApiRuntimeProfile, health: RuntimeHealthReader): void {
+  app.use('/internal/resource-monitoring', createResourceReportRouter());
   app.get('/internal/executor-runtime-config', (req, res) => {
     const address = req.socket.remoteAddress;
     if (
@@ -379,6 +381,7 @@ function mountControlPlaneRoutes(app: Express, profile: ApiRuntimeProfile, healt
   app.use('/api/projects', projectsRouter);
   app.use('/api/workflows', workflowsRouter);
   app.use('/api/runtime-libraries', runtimeLibrariesRouter);
+  app.use('/api/deployment-status/resources', createResourceHistoryRouter());
   app.use(
     '/api/deployment-status',
     createDeploymentStatusRouter(profile, () => {

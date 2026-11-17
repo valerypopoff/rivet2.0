@@ -1,7 +1,7 @@
 import { css } from '@emotion/react';
 import { type ChartNode, type LLMChatV2Node, type ProcessId } from '@valerypopoff/rivet2-core';
 import { useAtom, useAtomValue, useSetAtom } from 'jotai';
-import { type FC, type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
+import { type FC, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useToggle } from 'ahooks';
 import { useNodeIO } from '../../hooks/useGetNodeIO.js';
 import { useStableCallback } from '../../hooks/useStableCallback.js';
@@ -22,7 +22,12 @@ import {
   filterProcessDataForSelection,
   getSelectedProcessPageIndex,
 } from '../../state/selectors/executionSelectors.js';
-import { fullscreenOutputNodeState, hoveringNodeState } from '../../state/graphBuilder.js';
+import { hoveringNodeState } from '../../state/graphBuilder.js';
+import {
+  clearInvalidFullscreenOutputSelectionState,
+  closeFullscreenOutputSelectionState,
+  fullscreenOutputSelectionState,
+} from '../../state/fullscreenOutput.js';
 import { fullscreenOutputModalBoundsState, overlayOpenState } from '../../state/ui.js';
 import { useDataRefs } from '../../providers/ProvidersContext.js';
 import { FullScreenModal } from '../FullScreenModal.js';
@@ -65,48 +70,36 @@ import { getStreamingOutputWatchBranchNodeIds } from '../nodeCanvas/streamingOut
 export const FullscreenNodeOutputModalRenderer: FC = () => {
   useDependsOnPlugins();
 
-  const fullscreenOutputNodeId = useAtomValue(fullscreenOutputNodeState);
-  const setFullscreenOutputNodeId = useSetAtom(fullscreenOutputNodeState);
+  const selection = useAtomValue(fullscreenOutputSelectionState);
+  const clearInvalidSelection = useSetAtom(clearInvalidFullscreenOutputSelectionState);
+  const closeSelection = useSetAtom(closeFullscreenOutputSelectionState);
   const setHoveringNode = useSetAtom(hoveringNodeState);
   const nodesById = useAtomValue(nodesByIdState);
   const graphId = useAtomValue(graphMetadataState)?.id;
-  const previousGraphIdRef = useRef(graphId);
-  const node = fullscreenOutputNodeId ? nodesById[fullscreenOutputNodeId] : undefined;
+  const node = selection && selection.graphId === graphId ? nodesById[selection.nodeId] : undefined;
 
-  const handleCloseFullscreenModal = useStableCallback(() => {
-    setHoveringNode((hoveringNodeId) =>
-      fullscreenOutputNodeId && hoveringNodeId === fullscreenOutputNodeId ? undefined : hoveringNodeId,
-    );
-    setFullscreenOutputNodeId(null);
-  });
+  // Capture this owner, rather than redirecting a late close to the latest tab.
+  const handleCloseFullscreenModal = useCallback(() => {
+    if (!selection || !closeSelection(selection)) return;
+    setHoveringNode((hoveringNodeId) => (hoveringNodeId === selection.nodeId ? undefined : hoveringNodeId));
+  }, [closeSelection, selection, setHoveringNode]);
 
   useEffect(() => {
-    if (fullscreenOutputNodeId && !node) {
-      setFullscreenOutputNodeId(null);
+    if (selection && !node) {
+      clearInvalidSelection(selection);
     }
-  }, [fullscreenOutputNodeId, node, setFullscreenOutputNodeId]);
+  }, [clearInvalidSelection, node, selection]);
 
-  useEffect(() => {
-    if (previousGraphIdRef.current === graphId) {
-      return;
-    }
-
-    previousGraphIdRef.current = graphId;
-    setFullscreenOutputNodeId(null);
-  }, [graphId, setFullscreenOutputNodeId]);
-
-  useEffect(() => {
-    return () => {
-      setFullscreenOutputNodeId(null);
-    };
-  }, [setFullscreenOutputNodeId]);
-
-  if (previousGraphIdRef.current !== graphId || !fullscreenOutputNodeId || !node) {
+  if (!selection || !node) {
     return null;
   }
 
   return (
-    <ResizableNodeFullscreenOutputModal key={fullscreenOutputNodeId} node={node} onClose={handleCloseFullscreenModal} />
+    <ResizableNodeFullscreenOutputModal
+      key={JSON.stringify([selection.projectId, selection.bindingToken, selection.graphId, selection.nodeId])}
+      node={node}
+      onClose={handleCloseFullscreenModal}
+    />
   );
 };
 

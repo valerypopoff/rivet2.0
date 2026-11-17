@@ -26,6 +26,7 @@ import { useStableCallback } from '../useStableCallback.js';
 import { removeProjectWorkspaceTargetState } from '../../state/workspaceTarget.js';
 import { clearUiGraphPreviewSessions } from '../../components/rivetWebApps/uiGraphPreviewSession.js';
 import { isComparisonInspectionProject } from '../../utils/projectComparisonDocument.js';
+import { clearProjectFullscreenOutputState } from '../../state/fullscreenOutput.js';
 
 function clearCodeEditorModelCacheForClosedProject(projectId: ProjectId, isStillClosed: () => boolean): void {
   window.setTimeout(() => {
@@ -60,6 +61,7 @@ export function useWorkspaceHostProjectCleanup() {
 
   return useStableCallback(
     (projectId: ProjectId, options: { currentExecutionSnapshot?: ProjectExecutionSnapshot } = {}) => {
+      store.set(clearProjectFullscreenOutputState, projectId);
       clearUiGraphPreviewSessions(projectId);
       removeProjectExecutionSnapshot(projectId, {
         currentSnapshot: options.currentExecutionSnapshot,

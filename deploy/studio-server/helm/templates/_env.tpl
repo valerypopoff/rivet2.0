@@ -1,3 +1,52 @@
+{{- define "rivet.env.resourceMonitoring" -}}
+{{- $root := .root -}}
+{{- if has .profile (list "control" "execution") -}}
+{{- $container := ternary "execution" "api" (eq $root.Values.deploymentProfile "single-machine") -}}
+{{- $resources := $root.Values.resources.execution -}}
+{{- if eq .profile "control" -}}
+{{- $container = ternary "api" "backend" $root.Values.compatibility.legacyStartupSettingsFiles -}}
+{{- $resources = ternary $root.Values.resources.api (ternary $root.Values.resources.backendOverlap $root.Values.resources.backend (eq $root.Values.ha.controlPlane.mode "singleton-overlap")) $root.Values.compatibility.legacyStartupSettingsFiles -}}
+{{- end -}}
+{{- $allocation := dict "cpuRequestMillicores" "$(RIVET_RESOURCE_CPU_REQUEST)" "memoryRequestBytes" "$(RIVET_RESOURCE_MEMORY_REQUEST)" "cpuLimitMillicores" nil "memoryLimitBytes" nil -}}
+{{- if and $resources.limits $resources.limits.cpu -}}{{- $_ := set $allocation "cpuLimitMillicores" "$(RIVET_RESOURCE_CPU_LIMIT)" -}}{{- end -}}
+{{- if and $resources.limits $resources.limits.memory -}}{{- $_ := set $allocation "memoryLimitBytes" "$(RIVET_RESOURCE_MEMORY_LIMIT)" -}}{{- end -}}
+- name: RIVET_RESOURCE_POD_NAME
+  valueFrom:
+    fieldRef:
+      fieldPath: metadata.name
+- name: RIVET_RESOURCE_CPU_REQUEST
+  valueFrom:
+    resourceFieldRef:
+      containerName: {{ $container }}
+      resource: requests.cpu
+      divisor: 1m
+- name: RIVET_RESOURCE_MEMORY_REQUEST
+  valueFrom:
+    resourceFieldRef:
+      containerName: {{ $container }}
+      resource: requests.memory
+      divisor: "1"
+{{- if and $resources.limits $resources.limits.cpu }}
+- name: RIVET_RESOURCE_CPU_LIMIT
+  valueFrom:
+    resourceFieldRef:
+      containerName: {{ $container }}
+      resource: limits.cpu
+      divisor: 1m
+{{- end }}
+{{- if and $resources.limits $resources.limits.memory }}
+- name: RIVET_RESOURCE_MEMORY_LIMIT
+  valueFrom:
+    resourceFieldRef:
+      containerName: {{ $container }}
+      resource: limits.memory
+      divisor: "1"
+{{- end }}
+- name: RIVET_DEPLOYMENT_RESOURCE_MONITORING
+  value: {{ dict "enabled" true "containerized" true "name" "$(RIVET_RESOURCE_POD_NAME)" "allocation" $allocation "reportUrl" (printf "http://%s:%v/internal/resource-monitoring" (include "rivet.serviceFqdn" (dict "root" $root "serviceName" (include "rivet.apiServiceName" $root))) $root.Values.service.api.port) | toJson | quote }}
+{{- end -}}
+{{- end -}}
+
 {{- define "rivet.env.vaultDotenv" -}}
 - name: RIVET_VAULT_DOTENV_FILE_NAME
   value: {{ .Values.vault.dotenvFileName | quote }}
@@ -177,6 +226,7 @@
 
 {{- define "rivet.env.apiWorkload" -}}
 {{- $root := .root -}}
+{{ include "rivet.env.resourceMonitoring" . }}
 - name: PORT
   value: {{ .port | quote }}
 - name: RIVET_API_PROFILE
