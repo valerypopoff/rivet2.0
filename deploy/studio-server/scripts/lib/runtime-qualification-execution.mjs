@@ -239,6 +239,26 @@ export function qualificationOperation({
   return freeze(structuredClone({ ...input, inputHash: qualificationHash(input) }));
 }
 
+/** Public continuation receipt: excludes raw provider configuration and logs. */
+export function publicQualificationOperation(operation) {
+  return {
+    protocol: 1,
+    operationId: operation.operationId,
+    inputHash: operation.inputHash,
+    predecessorManifestDigest: operation.predecessorManifestDigest,
+    installed: operation.installed,
+    driverBundleSha256: operation.driverBundleSha256,
+    ...(operation.qualification?.tooling ? { tooling: operation.qualification.tooling } : {}),
+    ...(operation.sizingRequests ? { sizingRequests: operation.sizingRequests } : {}),
+    ...(operation.stagingExecutionProfile ? { stagingExecutionProfile: operation.stagingExecutionProfile } : {}),
+    candidate: {
+      sourceSha: operation.candidate.source.sha,
+      images: operation.candidate.images,
+      chartDigest: operation.candidate.chart.contentDigest,
+    },
+  };
+}
+
 function bound(report, operation) {
   assert.equal(report.protocol, 1);
   for (const key of ['operationId', 'inputHash', 'projectId', 'projectNumber'])

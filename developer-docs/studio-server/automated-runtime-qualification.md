@@ -1008,11 +1008,19 @@ data; the independent janitor never deletes it. Busy/quarantined state or stagin
 ahead of production requires explicit recovery/reseed. A failed acquisition can
 close its empty operation without changing another application's owner.
 
-Retained bootstrap/reuse, fixture-folder preparation, cleanup and verification
+Retained bootstrap/reuse (with and without separate execution profiles),
+fixture-folder preparation, cleanup and verification
 use the same source-owned progress descriptions as the provider worker. Regression
 tests dispatch these branches through `providerProgressStep`, so an unregistered
 progress name fails locally rather than blocking a paid test or its cleanup.
 Quarantine verification closes cleanup only; it never qualifies a failed release.
+The failed operation also retains its shared evidence lock for explicit recovery.
+Closed workers and `cleanupVerified` alone do not make staging reusable.
+
+`publicQualificationOperation` owns the public receipt projection used by the
+hosted workflow. The production-input regression serializes that projection before
+verifying its configuration digest, including `stagingExecutionProfile`; constructing
+an idealized receipt directly would miss a field lost during export.
 
 Retained accepted-work settlement reads the published-execution gauge on every
 execution worker and any combined backend. An explicitly configured `control`
