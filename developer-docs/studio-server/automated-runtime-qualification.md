@@ -1017,6 +1017,12 @@ Quarantine verification closes cleanup only; it never qualifies a failed release
 The failed operation also retains its shared evidence lock for explicit recovery.
 Closed workers and `cleanupVerified` alone do not make staging reusable.
 
+The tooling/application compatibility check excludes the exact desktop-only
+`security/rust-audit-exceptions.json` review file. Updating its dated metadata does
+not require rebuilding hosted application images. This does not exclude other
+security policy files, Cargo lockfiles or the desktop audit configuration, and
+does not waive any CI audit: an expired or out-of-scope exception still fails CI.
+
 `publicQualificationOperation` owns the public receipt projection used by the
 hosted workflow. The production-input regression serializes that projection before
 verifying its configuration digest, including `stagingExecutionProfile`; constructing
