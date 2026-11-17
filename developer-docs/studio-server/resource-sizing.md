@@ -7,8 +7,13 @@ tests are not representative-load or GKE capacity measurements.
 
 ## Separate execution profiles for production and staging
 
-**Implemented locally, November 17, 2026; not deployed or load-certified.** Keep
-these installation-specific targets in operator-owned values; the shared
+**Configuration published November 17, 2026; profiles not deployed or load-certified.**
+The first activation stopped in retained preparation before workload changes
+because its new progress step was missing from the provider's source-owned list.
+The local repair covers profiled bootstrap/reuse through the real progress wrapper
+and the exported receipt through the production verifier. A failed attempt remains
+failed; quarantine and its recovery lock are not authority to retry or deploy.
+Keep these installation-specific targets in operator-owned values; the shared
 production overlay retains its conservative admission default.
 
 | Environment                | Execution minimum | Active published runs per Pod | CPU / RAM requests per execution Pod                                   |
@@ -67,6 +72,8 @@ retained focused suite. It overrides only staging execution CPU/RAM requests and
 admission, and is bound alongside production's target in the qualification
 configuration digest and archived operation. Omitting both fields preserves the
 legacy behavior and qualification digests.
+The public continuation receipt also preserves `stagingExecutionProfile`; otherwise
+production-only verification cannot reproduce the qualified configuration digest.
 
 Test preparation raises retained staging to three workers and restores the normal
 two-worker test policy before observation. Successful cleanup first proves accepted

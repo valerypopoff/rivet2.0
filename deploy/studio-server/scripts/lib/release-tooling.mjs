@@ -27,6 +27,8 @@ export function isToolingOnlyPath(file) {
       '.github/workflows/studio-server-verify.yml',
       'scripts/checks/check-ci-workflows.mjs',
       'scripts/checks/check-rollout-entrypoints.mjs',
+      // Desktop audit metadata cannot change the hosted application binaries.
+      'security/rust-audit-exceptions.json',
       'scripts/build-and-publish-qualification-images.mjs',
       'scripts/qualification-image-publication.mjs',
     ].includes(file)

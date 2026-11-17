@@ -390,9 +390,17 @@ test('retained cleanup and verification run through the actual provider progress
   );
 });
 
-for (const bootstrap of [true, false]) {
-  test(`retained ${bootstrap ? 'bootstrap' : 'reuse'} reaches fixture preparation through real progress reporting`, async (t) => {
-    const { state } = await retained(t);
+for (const [bootstrap, profiled] of [
+  [true, false],
+  [true, true],
+  [false, false],
+  [false, true],
+]) {
+  test(`retained ${bootstrap ? 'bootstrap' : 'reuse'}${profiled ? ' with execution profile' : ''} reaches fixture preparation through real progress reporting`, async (t) => {
+    const profile = profiled
+      ? { minReplicas: 1, maxActiveRunsPerPod: 4, requests: { cpu: '500m', memory: '1Gi' } }
+      : undefined;
+    const { state } = await retained(t, profile);
     await state.arm(actor);
     await state.namespace({ create: true });
     await state.change((record) => {
@@ -416,6 +424,7 @@ for (const bootstrap of [true, false]) {
       'apply',
       'retainedSecrets',
       'verifyRetainedInstallation',
+      'prepareRetainedExecutionProfile',
       'readyPublic',
     ])
       gate[method] = async () => {
@@ -435,6 +444,7 @@ for (const bootstrap of [true, false]) {
     );
     assert.equal(calls.includes('installDependencies'), bootstrap);
     assert.equal(calls.includes('verifyRetainedInstallation'), !bootstrap);
+    assert.equal(calls.includes('prepareRetainedExecutionProfile'), !bootstrap && profiled);
     assert.equal((await state.read()).record.workers[0].progress.step, 'owned-fixture-folder');
   });
 }

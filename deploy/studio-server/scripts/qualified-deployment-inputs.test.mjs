@@ -13,6 +13,7 @@ import {
   recoveredOperationReference,
 } from './lib/qualified-deployment-inputs.mjs';
 import { qualificationConfigurationDigest } from './lib/release-qualification-policy.mjs';
+import { publicQualificationOperation } from './lib/runtime-qualification-execution.mjs';
 import { prepareQualifiedDeployment } from './prepare-qualified-deployment.mjs';
 
 const sha = 'a'.repeat(40),
@@ -120,6 +121,18 @@ test('production-only deployment verifies the separately qualified staging execu
     f.operation.stagingExecutionProfile,
   );
   f.declarations.control.evidence = structuredClone(f.manifest.evidence.runtimeControl);
+  f.operation = JSON.parse(
+    JSON.stringify(
+      publicQualificationOperation({
+        ...f.operation,
+        candidate: {
+          source: f.manifest.source,
+          images: f.manifest.images,
+          chart: f.manifest.chart,
+        },
+      }),
+    ),
+  );
   assert.equal(assertQualifiedDeploymentReceipt(f.operation, f), f.operation);
   f.operation.stagingExecutionProfile.maxActiveRunsPerPod = 32;
   assert.throws(() => assertQualifiedDeploymentReceipt(f.operation, f), /Receipt settings/);

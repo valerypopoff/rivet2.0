@@ -12,6 +12,7 @@ export const providerSteps = Object.freeze({
   installation: 'exact predecessor installation',
   'retained-dependencies': 'retained application authentication material',
   'retained-predecessor': 'exact retained predecessor verification',
+  'retained-execution-profile': 'retained staging execution profile and test worker floor',
   owners: 'ready exact-image application owners within approved capacity',
   frontend: 'public load-balancer health and authenticated routing',
   'owned-fixture-folder': 'isolated retained-application fixture folder',

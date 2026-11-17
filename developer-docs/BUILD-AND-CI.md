@@ -1397,9 +1397,15 @@ The November 2, 2026 ZIP re-review is deliberately limited to registry `zip 0.6.
 with registry `tauri 1.8.3` as its sole consumer. The exception checker pins both
 crate checksums, rejects extra consumers/versions in the generated Cargo lockfile,
 and requires the unfiltered audit's ZIP version to match. These are temporary
-reachability exceptions until **2026-11-16**, not patched dependencies or blanket
+reachability exceptions until **2026-11-30**, not patched dependencies or blanket
 permission to extract untrusted archives. Do not disable the audit, broaden the
 version pins or remove the updater merely to make CI green.
+
+The November 17 re-review refreshed the unfiltered audit and verified the exact
+crate archives against Cargo.lock, then matched the reviewed source files against
+those archives. Findings, dependency versions, consumers and updater call paths
+remain unchanged; the four ZIP exceptions were renewed with explicit approval.
+The original expiry is never silently ignored by CI.
 
 The refreshed unfiltered audit reports the existing h2 finding and four ZIP
 findings, including newly reported

@@ -42,6 +42,10 @@ test('application reuse rejects runtime/container/chart/dependency changes inclu
     'deploy/studio-server/images/proxy/nginx.conf',
     'deploy/studio-server/images/api/retire-backend.mjs',
     'deploy/studio-server/images/lib/prepare-autoscaler-runtime.mjs',
+    'security/dependency-audit-exceptions.json',
+    'security/other-policy.json',
+    'packages/app/src-tauri/Cargo.lock',
+    'packages/app/src-tauri/.cargo/audit.toml',
     ...[
       'execution-autoscaler-entry',
       'execution-autoscaler-kubernetes',
@@ -57,6 +61,7 @@ test('application reuse rejects runtime/container/chart/dependency changes inclu
     'deploy/studio-server/scripts/qualification/provider-entry.mjs',
     'scripts/ci/verify-rollout-source.mjs',
     'scripts/checks/check-rollout-entrypoints.mjs',
+    'security/rust-audit-exceptions.json',
     'developer-docs/studio-server/production-update-continuity.md',
     'packages/studio-server-api/src/tests/ha-background-admission.test.ts',
   ])
@@ -81,6 +86,8 @@ test('real committed-tree comparison permits tooling-only changes and rejects re
   await fs.writeFile(path.join(dir, 'deploy/studio-server/scripts/probe.mjs'), 'export const probe=1');
   await fs.mkdir(path.join(dir, 'scripts/checks'), { recursive: true });
   await fs.writeFile(path.join(dir, 'scripts/checks/check-rollout-entrypoints.mjs'), 'export const validate=1');
+  await fs.mkdir(path.join(dir, 'security'));
+  await fs.writeFile(path.join(dir, 'security/rust-audit-exceptions.json'), '{"version":1,"exceptions":[]}');
   git('add', '.');
   git('commit', '-m', 'tooling');
   const tools = git('rev-parse', 'HEAD');

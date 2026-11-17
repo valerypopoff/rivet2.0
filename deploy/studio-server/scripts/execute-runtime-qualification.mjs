@@ -11,6 +11,7 @@ import {
   executeRuntimeQualification,
   assertQualificationPreflight,
   assertActionsQualificationWindow,
+  publicQualificationOperation,
 } from './lib/runtime-qualification-execution.mjs';
 import {
   assertRuntimeQualificationBuild,
@@ -476,21 +477,7 @@ async function main(mode) {
       actor = undefined;
       await write(path.join(packet, 'qualification-result.json'), result);
       // No project data, credentials, raw Helm settings, provider logs or prompts.
-      await write(path.join(packet, 'operation-public.json'), {
-        protocol: 1,
-        operationId: operation.operationId,
-        inputHash: operation.inputHash,
-        predecessorManifestDigest: operation.predecessorManifestDigest,
-        installed: operation.installed,
-        driverBundleSha256: bundleDigest,
-        ...(operation.qualification?.tooling ? { tooling: operation.qualification.tooling } : {}),
-        ...(operation.sizingRequests ? { sizingRequests: operation.sizingRequests } : {}),
-        candidate: {
-          sourceSha: candidate.source.sha,
-          images: candidate.images,
-          chartDigest: candidate.chart.contentDigest,
-        },
-      });
+      await write(path.join(packet, 'operation-public.json'), publicQualificationOperation(operation));
       if (!operation.sizingRequests) {
         await emit('control', result.control);
         await emit('autoscaling', result.autoscaling);
