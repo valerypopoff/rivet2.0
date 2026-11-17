@@ -396,6 +396,10 @@ test('all six commands share one managed application model without Kubernetes ma
         assert.equal(m.services[name].environment.RIVET_API_PROFILE, role);
         assert.equal(m.services[name].environment.RIVET_MANAGED_WORKFLOW_SCHEMA_MODE, 'verify');
         assert.equal(m.services[name].environment.RIVET_APP_SETTINGS_BACKEND, 'postgres');
+        assert.deepEqual(JSON.parse(m.services[name].environment.RIVET_DEPLOYMENT_PUBLISHED_EXECUTION_DEFAULTS), {
+          mode: 'enforce',
+          maxActiveRunsPerPod: 4,
+        });
         assert.equal(m.services[name].environment.KUBERNETES_SERVICE_HOST, undefined);
         assert.equal(m.services[name].environment.RIVET_DEPLOYMENT_DATABASE_CONNECTION_STRING, c.database);
         assert.equal(m.services[name].environment.RIVET_DEPLOYMENT_DATABASE_SSL_MODE, c.sslMode);

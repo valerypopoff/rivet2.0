@@ -36,6 +36,7 @@ export function SettingsActions({
   pending,
   saved,
   savedMessage,
+  saveDisabled = false,
 }: {
   changed: boolean;
   disabled: boolean;
@@ -46,6 +47,7 @@ export function SettingsActions({
   pending?: string;
   saved?: boolean;
   savedMessage?: string;
+  saveDisabled?: boolean;
 }) {
   return (
     <div className="app-settings-actions-row">
@@ -53,7 +55,7 @@ export function SettingsActions({
         appearance="primary"
         className="app-settings-action-button button-size-l"
         isLoading={loading}
-        isDisabled={disabled || !changed}
+        isDisabled={disabled || !changed || saveDisabled}
         onClick={onSave}
       >
         Save

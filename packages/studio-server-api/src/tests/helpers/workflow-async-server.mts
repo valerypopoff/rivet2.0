@@ -133,6 +133,11 @@ let hostedSubgraphFixture:
   | undefined;
 process.on('message', async (message: { id: number; command: string }) => {
   try {
+    if (message.command === 'execution-admission') {
+      const { getPublishedExecutionAdmission } = await import('../../published-execution-admission.js');
+      process.send?.({ id: message.id, result: getPublishedExecutionAdmission().getSnapshot() });
+      return;
+    }
     if (message.command === 'release-recording-work') {
       releaseRecordingWork?.();
       process.send?.({ id: message.id, result: true });

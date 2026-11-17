@@ -17,6 +17,7 @@ test('the actual autoscaler bundle boots without source files or rollout impleme
   const inputs = await prepareAutoscalerRuntime(directory);
   assert.ok(inputs.some((input) => input.endsWith('/release-operation-state.mjs')));
   assert.ok(inputs.some((input) => input.endsWith('/kubernetes-response-error.mjs')));
+  assert.ok(inputs.some((input) => input.endsWith('/execution-autoscaler-admission.mjs')));
   const apiRequire = createRequire(new URL('../../../../packages/studio-server-api/package.json', import.meta.url));
   // Supply the API image's real third-party dependency, detached from Yarn/PnP.
   await build({

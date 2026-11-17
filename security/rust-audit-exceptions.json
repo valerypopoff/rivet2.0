@@ -40,6 +40,22 @@
       "reason": "The patched zip >=9 line is incompatible with Tauri 1's zip ^0.6 constraint. The advisory's ZipArchive::extract symlink-target allocation from the declared file size is absent from the checksum-pinned zip 0.6.6 source. Tauri's signature-verified Windows updater uses its own regular-file copy loop, not ZipArchive::extract; macOS/Linux updates use tar. Rivet exposes no native ZIP extraction command. Re-reviewed 2026-11-17 against the refreshed unfiltered audit, checksum-verified crate archives and unchanged updater call paths. This does not permit untrusted archive extraction or extend the existing ZIP review expiry.",
       "owner": "Rivet maintainers",
       "expires": "2026-11-30"
+    },
+    {
+      "advisoryId": "RUSTSEC-2026-0545",
+      "packages": ["zip"],
+      "scope": "Only zip 0.6.6 consumed by Tauri 1.8.3's signed Windows updater; AES encryption support is disabled.",
+      "reason": "The advisory requires reading password-protected AES entries with aes-crypto enabled. The checksum-verified Tauri 1.8.3 manifest disables zip default features; the Windows Cargo feature graph contains no enabled zip features or AES dependencies. Tauri uses ordinary ZipArchive reads without a password. The patched zip >=9 line is incompatible with Tauri 1's zip ^0.6 constraint. Preserve signature verification and the exact dependency/sole-consumer guard; re-review any feature or consumer change. Reviewed 2026-11-17 against the fresh unfiltered audit and checksum-verified crate sources. This does not extend the existing ZIP review expiry.",
+      "owner": "Rivet maintainers",
+      "expires": "2026-11-30"
+    },
+    {
+      "advisoryId": "RUSTSEC-2026-0548",
+      "packages": ["zip"],
+      "scope": "Only zip 0.6.6 consumed by Tauri 1.8.3's signed Windows updater; no mixed central-directory and streaming extraction.",
+      "reason": "The advisory requires checking central-directory names and then extracting using local-header names through a streaming reader. The checksum-verified Tauri 1.8.3 updater verifies the archive signature before extraction and uses ZipArchive::by_index with that entry's name_raw for its own copy loop; it never switches to ZipStreamReader or read_zipfile_from_stream. Rivet exposes no native ZIP extraction command. The patched zip >=9.0.5 line is incompatible with Tauri 1's zip ^0.6 constraint and also requires opting into header checks. Preserve the exact dependency/sole-consumer guard and re-review changed call paths. Reviewed 2026-11-17; the existing ZIP review expiry remains unchanged.",
+      "owner": "Rivet maintainers",
+      "expires": "2026-11-30"
     }
   ]
 }

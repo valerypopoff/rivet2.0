@@ -121,9 +121,35 @@ incarnations, occupied slots and CPU samples. It takes the larger aggregate slot
 and CPU recommendation, bounded by the approved range. Slots count accepted runs
 waiting on external providers and scheduled published work, not only CPU-heavy
 execution. Targets default to 60% occupied slots and 75% CPU requests.
-Pending/unready/replaced pods, inconsistent limits, stale/missing metrics,
+Pending/unready/replaced pods, unexplained inconsistent limits, stale/missing metrics,
 failed exec, a foreign HPA or unknown ownership block mutations instead of
 becoming zero demand.
+
+The [live concurrency control](deployment-status.md#live-published-execution-concurrency)
+changes a saved override, not Helm's bootstrap value. A capable worker exposes
+its applied revision, installation, deployment default, active count and limit
+through the private retirement socket's read-only `/admission` route. The API
+side retains loopback/capability authentication; the Unix socket remains mode
+0600. The bounded exec sample carries one coherent report alongside the existing
+metrics, checks the process incarnation and verifies the default against the
+Pod's protected environment. No revision labels are added to metric series.
+
+While valid revisions converge within a pool, growth uses the smallest observed
+limit. New shrinkage is paused and idle stabilization resets. An already-owned
+retirement may finish draining accepted work but waits for convergence before
+removal. The controller confirms the observed policy again before recording a
+new retirement/removal intent; a changed policy leaves no unissued intent to
+recover. Stable updates restart stabilization without changing the immutable
+deployment-policy digest. In an owned paired replacement, both real pools are
+validated before converting demand into the candidate's smallest observed
+capacity; CPU, physical-Pod and connection-budget checks still apply.
+
+An older worker can use the prior metrics-only contract when the socket returns
+403/404 for this new route. Mixed legacy/capable workers are accepted only at
+the same deployment-default limit. A supported route returning 503, malformed
+content, foreign scope/default or conflicting values for one revision blocks
+the capacity decision. Lost settings synchronization preserves accepted work
+and its last applied limit; it does not turn an unknown sample into zero load.
 Paired observations share inventories/metrics only within one decision, bound
 combined exec concurrency to four, and refresh both controllers and the complete
 Pod/HPA inventories before authorizing growth or retirement. A restart, scale or

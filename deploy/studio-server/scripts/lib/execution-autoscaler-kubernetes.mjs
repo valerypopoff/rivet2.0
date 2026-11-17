@@ -8,6 +8,7 @@ import { releaseOperationJournalName } from './release-operation-journal.mjs';
 import { classifyStartupFence, assertFenceIntent } from './execution-autoscaler-fence.mjs';
 import { readConcurrently } from './read-concurrently.mjs';
 import { isDeepStrictEqual } from 'node:util';
+import { admissionPolicySample } from './execution-autoscaler-admission.mjs';
 
 const enc = encodeURIComponent;
 const fenceAnnotation = 'rivet.dev/execution-retirement-fence';
@@ -18,11 +19,14 @@ function parseRetirement(output) {
     throw new Error('Execution retirement response is invalid.');
   }
 }
-export const executionSampleCommand = (port) => [
+const metricsScript = (port) =>
+  `const r=await fetch('http://127.0.0.1:${port}/metrics',{signal:AbortSignal.timeout(5000)});if(!r.ok)process.exit(1);process.stdout.write(await r.text());`;
+export const executionSampleCommand = (port) => ['node', '--input-type=module', '-e', metricsScript(port)];
+export const executionPolicySampleCommand = (port) => [
   'node',
   '--input-type=module',
   '-e',
-  `const r=await fetch('http://127.0.0.1:${port}/metrics',{signal:AbortSignal.timeout(5000)});if(!r.ok)process.exit(1);process.stdout.write(await r.text());`,
+  `import{request}from'node:http';${metricsScript(port)}await new Promise((resolve,reject)=>{const q=request({socketPath:process.env.RIVET_ROLLING_RETIREMENT_SOCKET||'/tmp/rivet-retirement.sock',path:'/admission',method:'GET'},s=>{let t='';s.on('data',c=>{t+=c;if(t.length>4096)s.destroy(Error('Policy sample too large'))});s.on('error',reject);s.on('end',()=>{if(s.statusCode===200){try{JSON.parse(t);process.stdout.write('\\n# rivet-execution-policy '+t+'\\n');resolve()}catch(e){reject(e)}}else if([403,404].includes(s.statusCode))resolve();else reject(Error('Policy sample unavailable'))})});const timer=setTimeout(()=>q.destroy(Error('Policy sample timeout')),6000);q.on('close',()=>clearTimeout(timer));q.on('error',reject);q.end()});`,
 ];
 export class PendingExecutionCpuSample extends Error {}
 export class KubernetesExecOutcomeUnknown extends Error {}
@@ -293,7 +297,8 @@ export function createExecutionAutoscalerIO({
     async exec(resource, command, ...args) {
       const readOnly =
         (command.length === 2 && command[1] === '/opt/rivet/retire-backend.mjs') ||
-        JSON.stringify(command) === JSON.stringify(executionSampleCommand(port));
+        JSON.stringify(command) === JSON.stringify(executionSampleCommand(port)) ||
+        JSON.stringify(command) === JSON.stringify(executionPolicySampleCommand(port));
       if (!readOnly) await assertActive();
       return transport.exec(resource, command, ...args);
     },
@@ -484,6 +489,28 @@ export function createExecutionAutoscalerIO({
       );
     },
     confirmDrained,
+    async confirmAdmission(peers, workloadUid) {
+      if (!peers.some((p) => p.admissionPolicy)) return;
+      if ((await api.json('GET', sts)).metadata.uid !== workloadUid)
+        throw Error('Execution owner changed before admission confirmation.');
+      await readConcurrently(
+        peers
+          .filter((p) => p.admissionPolicy)
+          .map((peer) => async () => {
+            await owned({ ...peer, workloadUid });
+            const text = await api.exec(`${ns}/pods/${enc(peer.name)}/exec`, executionPolicySampleCommand(port));
+            const current = admissionPolicySample(text, peer);
+            if (
+              !current ||
+              ['revision', 'limit', 'installation', 'deploymentDefault', 'mode', 'source'].some(
+                (key) => current[key] !== peer.admissionPolicy[key],
+              )
+            )
+              throw Error('Execution admission changed before retirement; obtain a fresh observation.');
+            await owned({ ...peer, workloadUid });
+          }),
+      );
+    },
     async confirmPeers(target, peers, minimum = Math.min(2, policy.minReplicas)) {
       if (![1, 2].includes(minimum) || minimum < Math.min(2, policy.minReplicas))
         throw new Error('Execution peer requirement cannot weaken the configured floor.');
@@ -647,13 +674,26 @@ export function createExecutionAutoscalerIO({
           if (now() - Date.parse(sample.timestamp) > policy.metricsMaxAgeSeconds * 1000)
             throw new PendingExecutionCpuSample('Execution CPU sample is stale; wait for a fresh scrape.');
           const status = await retirement(entry.name);
-          const text = await api.exec(`${ns}/pods/${enc(entry.name)}/exec`, executionSampleCommand(port));
+          const text = await api.exec(`${ns}/pods/${enc(entry.name)}/exec`, executionPolicySampleCommand(port));
+          const admissionPolicy = admissionPolicySample(text, status);
+          if (admissionPolicy) {
+            const variables = pod.spec.containers.find((c) => c.name === 'api')?.env ?? [];
+            const declared = variables.find((e) => e.name === 'RIVET_DEPLOYMENT_PUBLISHED_EXECUTION_MAX_ACTIVE_RUNS');
+            if (
+              !declared ||
+              declared.valueFrom ||
+              Number(declared.value) !== admissionPolicy.deploymentDefault ||
+              admissionPolicy.installation !== `${namespace}/${release}`
+            )
+              throw Error('Runtime admission policy differs from its owned deployment default or installation.');
+          }
           const age = now() - Date.parse(sample?.timestamp);
           const observed = {
             ...entry,
             ...status,
-            active: gauge(text, 'rivet_published_execution_active_runs'),
-            limit: gauge(text, 'rivet_published_execution_admission_limit', 'mode="enforce"'),
+            active: admissionPolicy?.active ?? gauge(text, 'rivet_published_execution_active_runs'),
+            limit: admissionPolicy?.limit ?? gauge(text, 'rivet_published_execution_admission_limit', 'mode="enforce"'),
+            ...(admissionPolicy ? { admissionPolicy } : {}),
             cpuRatio: cpu / requestCpu,
             cpuRequest: requestCpu,
             sampleFresh:

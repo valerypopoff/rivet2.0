@@ -41,6 +41,7 @@ import { initializeWebAppActionWebSockets, type WebAppActionWebSocketRuntime } f
 import { getHostedEvaluationsCoordinatorConfig } from './hosted-evaluations-config.js';
 import { disposeWorkflowRecordingInputExtractor } from './routes/workflows/recording-input-extractor.js';
 import { getPublishedExecutionAdmission } from './published-execution-admission.js';
+import { bindPublishedExecutionSettings } from './published-execution-settings.js';
 import {
   abortActiveHttpExecutions,
   beginActiveHttpExecutionDrain,
@@ -90,6 +91,7 @@ const PORT = parseInt(process.env.PORT ?? '3100', 10);
 const apiRuntimeProfile = getApiRuntimeProfile();
 const metrics = configureStudioMetrics(apiRuntimeProfile);
 let webAppActionWebSockets: WebAppActionWebSocketRuntime | null = null;
+let executionPolicy: ReturnType<typeof bindPublishedExecutionSettings> | undefined;
 let disposeLocalRuntimeLibraryAuthority: (() => void) | undefined;
 let releaseRestoreLease: (() => Promise<void>) | undefined;
 let restoreLeasePool: Pool | undefined;
@@ -173,7 +175,15 @@ const app = createApiApp(apiRuntimeProfile, {
   health: runtimeHealth,
   metrics,
   requestWork,
-  ...(retirement ? { retirement: { owner: retirement, token: process.env.RIVET_ROLLING_RETIREMENT_TOKEN ?? '' } } : {}),
+  ...(retirement
+    ? {
+        retirement: {
+          owner: retirement,
+          token: process.env.RIVET_ROLLING_RETIREMENT_TOKEN ?? '',
+          readAdmission: () => executionPolicy?.snapshot(),
+        },
+      }
+    : {}),
 });
 const server = createServer((req, res) => {
   // Withdrawal keeps admission open while routing converges, but does not leave
@@ -255,6 +265,13 @@ const resources = new ServerResourceLifecycle([
     dispose() {
       disposeLocalRuntimeLibraryAuthority?.();
       disposeLocalRuntimeLibraryAuthority = undefined;
+    },
+  },
+  {
+    name: 'execution-policy',
+    dispose() {
+      executionPolicy?.dispose();
+      executionPolicy = undefined;
     },
   },
   { name: 'app-settings', dispose: disposeAppSettingsRepositories },
@@ -563,6 +580,9 @@ async function startServer(): Promise<void> {
         }
       }
       await initializeAppSettingsRepositories();
+      if (isPublishedExecutionApiProfile(apiRuntimeProfile)) {
+        executionPolicy = bindPublishedExecutionSettings(getPublishedExecutionAdmission());
+      }
       assertStartupActive();
       if (isManagedWorkflowStorageEnabled()) {
         const gatePool = new Pool(getManagedDbPoolConfig(getManagedWorkflowStorageConfig()));

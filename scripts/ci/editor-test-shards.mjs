@@ -8,6 +8,7 @@ const weightedSpecs = [
   // Complete comparison/edit/save/swap/recovery and iframe-owner journeys.
   ['bundle-comparison.spec.ts', 260],
   ['modal-sizing.spec.ts', 15],
+  ['deployment-status.spec.ts', 30],
   ['scheduled-runs.spec.ts', 105],
   ['fullscreen-output-search-paging.spec.ts', 20],
   ['hosted-modal-focus.spec.ts', 155],

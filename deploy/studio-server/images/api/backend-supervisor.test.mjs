@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import test from 'node:test';
 import { DatabaseSync } from 'node:sqlite';
 import { EventEmitter } from 'node:events';
-import { execFileSync } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { stat } from 'node:fs/promises';
@@ -16,6 +16,8 @@ import { acquireLocalMetadataOwnerLease } from './local-metadata-owner-lease.mjs
 import { devBackendSupervisorOptions } from '../../scripts/dev-backend-supervisor.mjs';
 import { requestBackendRetirement, retireBackend } from './retire-backend.mjs';
 import { unusedLoopbackPorts } from './fixtures/loopback-ports.mjs';
+import { executionPolicySampleCommand } from '../../scripts/lib/execution-autoscaler-kubernetes.mjs';
+import { admissionPolicySample } from '../../scripts/lib/execution-autoscaler-admission.mjs';
 
 // test-style: fixture-read: reads only writer PID/configuration records generated in owned temporary fixtures.
 
@@ -58,7 +60,9 @@ test(
         let operationId=null, state='serving';
         const s=createServer(async(q,r)=>{
           if(q.url==='/readyz'){r.end(JSON.stringify({ok:true}));return;}
+          if(q.url==='/metrics'){r.end('rivet_published_execution_active_runs 2\\nrivet_published_execution_admission_limit{mode="enforce"} 4\\n');return;}
           if(q.headers['x-rivet-retirement-token']!==process.env.RIVET_ROLLING_RETIREMENT_TOKEN){r.writeHead(403).end();return;}
+          if(q.url.endsWith('/admission')){r.end(JSON.stringify({incarnation:process.env.RIVET_PROCESS_INCARNATION,admission:{protocol:1,installation:'fixture/rivet',deploymentDefault:4,revision:'saved',source:'app-settings',mode:'enforce',limit:2,active:2,draining:false}}));return;}
           if(q.method==='POST'){let body='';for await(const c of q)body+=c;operationId=JSON.parse(body).operationId;state='drained';}
           r.end(JSON.stringify({protocol:1,incarnation:process.env.RIVET_PROCESS_INCARNATION,operationId,state}));
         });
@@ -81,6 +85,7 @@ test(
           ...environment(allocated),
           RIVET_ROLLING_RETIREMENT_PROTOCOL: '1',
           RIVET_ROLLING_RETIREMENT_SOCKET: socketPath,
+          RIVET_API_PROFILE: 'execution',
         },
         apiCommand: [process.execPath, apiScript],
         executorCommand: [process.execPath, executorScript],
@@ -92,6 +97,24 @@ test(
       await waitForReady(allocated.healthPort);
       assert.equal((await stat(socketPath)).mode & 0o777, 0o600);
       const before = await requestBackendRetirement(socketPath);
+      const [, ...command] = executionPolicySampleCommand(allocated.apiPort);
+      const sampled = await new Promise((resolve, reject) => {
+        // Async child execution leaves the supervisor able to answer its socket.
+        execFile(
+          process.execPath,
+          command,
+          {
+            env: { ...process.env, RIVET_ROLLING_RETIREMENT_SOCKET: socketPath },
+            timeout: 10000,
+          },
+          (error, stdout) => (error ? reject(error) : resolve(stdout)),
+        );
+      });
+      const policy = admissionPolicySample(sampled, before);
+      assert.equal(policy.limit, 2);
+      assert.equal(policy.active, 2);
+      assert.equal(policy.deploymentDefault, 4);
+      assert.equal((await requestBackendRetirement(socketPath)).state, 'serving');
       await assert.rejects(
         requestBackendRetirement(socketPath, 'POST', {
           protocol: 1,

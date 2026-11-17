@@ -977,3 +977,27 @@ relative links must remain usable, and dependency-owned assets must survive API
 test pruning. The real API image confirms both dependency versions coexist
 (root minimatch 10 and API-local minimatch 9); image trimming must not change the
 API's selected major version.
+
+## Desktop ZIP audit scope: November 17, 2026
+
+A fresh pre-push audit found two additional findings with an unchanged lockfile:
+[RUSTSEC-2026-0545](https://github.com/RustSec/advisory-db/blob/main/crates/zip/RUSTSEC-2026-0545.md)
+concerns unauthenticated AES entry reads, and
+[RUSTSEC-2026-0548](https://github.com/RustSec/advisory-db/blob/main/crates/zip/RUSTSEC-2026-0548.md)
+concerns checking central-directory names but extracting local-header names with
+a streaming reader. A policy-only expiry check cannot discover new findings;
+CI also checks the unfiltered current audit report.
+
+The reviewed `zip 0.6.6` has only `tauri 1.8.3` as a consumer. Both crate archives
+were checked against their Cargo.lock SHA-256 values. Windows-target Cargo
+metadata resolves no ZIP features: Tauri disables default features and does not
+enable AES. Its updater verifies the signed archive before extraction, then uses
+`ZipArchive::by_index` and the same entry's central-directory `name_raw` in its own
+copy loop. It never switches to a streaming reader. No Rivet native ZIP extraction
+command was found. The affected paths therefore are not used by this build.
+
+The two documented exceptions keep the existing November 30 expiry and exact
+version/checksum/sole-consumer guard. They do not patch the dependency or excuse
+a new ZIP consumer, encryption feature or extraction path. The patched ZIP major
+is incompatible with Tauri 1's dependency constraint; replacing the legacy updater
+remains separate work. No dependency, application behavior or signing rule changed.

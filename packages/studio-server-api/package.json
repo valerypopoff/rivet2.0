@@ -37,6 +37,7 @@
     "test:references-managed": "tsx src/tests/managed-reference-index.integration.ts",
     "test:async-managed": "tsx src/tests/workflow-async-managed.integration.ts",
     "test:scheduled-managed": "tsx src/tests/scheduled-runs-managed.integration.ts",
+    "test:published-execution-managed": "tsx src/tests/published-execution-managed.integration.ts",
     "test:statistics-managed": "tsx src/tests/recording-statistics-managed.integration.ts",
     "test:recording-durability-managed": "tsx src/tests/recording-durability-managed.integration.ts",
     "recording-durability:measure": "tsx src/tests/recording-durability-managed.integration.ts --measure",

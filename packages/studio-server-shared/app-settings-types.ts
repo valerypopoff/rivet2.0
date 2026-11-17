@@ -1,5 +1,32 @@
 export type AppSettingsSource = 'app-settings' | 'default';
 
+export interface PublishedExecutionSettings {
+  maxActiveRunsPerPod: number | null;
+  deploymentDefault: number | null;
+  effectiveMaxActiveRunsPerPod: number | null;
+  source: 'app-settings' | 'deployment';
+  mode: 'disabled' | 'observe' | 'enforce';
+  editable: boolean;
+  updatedAt: string | null;
+}
+
+export interface PublishedExecutionSettingsDraft {
+  maxActiveRunsPerPod: number | null;
+}
+
+/** Process-local observation, not a claim that all replicas have synchronized. */
+export interface PublishedExecutionPolicySnapshot {
+  protocol: 1;
+  installation: string;
+  deploymentDefault: number;
+  revision: string;
+  source: 'app-settings' | 'deployment';
+  mode: 'disabled' | 'observe' | 'enforce';
+  limit: number;
+  active: number;
+  draining: boolean;
+}
+
 export interface ServerUiSession {
   mode: 'none' | 'key' | 'oauth';
   email: string | null;

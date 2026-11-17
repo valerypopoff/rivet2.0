@@ -61,6 +61,31 @@ import {
   withManagedPostgresPoolMax,
 } from '../managed-postgres-pool.js';
 
+test('idle connection failures stay observable without crashing accepted work or exposing connection details', async (t) => {
+  const messages: unknown[][] = [];
+  t.mock.method(console, 'warn', (...args: unknown[]) => {
+    messages.push(args);
+  });
+  const registry = new ManagedPostgresPoolRegistry();
+  const lease = registry.acquire({});
+  try {
+    const error = Object.assign(Error('private connection details'), {
+      code: '57P01',
+      client: { password: 'private' },
+    });
+    assert.doesNotThrow(() => {
+      lease.pool.emit('error', error);
+      lease.pool.emit('error', error);
+    });
+    assert.equal(messages.length, 2);
+    assert.match(String(messages[0]), /57P01/);
+    assert.ok(!JSON.stringify(messages).includes('private'));
+    assert.equal(registry.getMetrics().pools, 1);
+  } finally {
+    await lease.release();
+  }
+});
+
 test('PostgreSQL TLS policy survives final driver URL parsing', () => {
   for (const ssl of [false, { rejectUnauthorized: true }, { rejectUnauthorized: false }]) {
     const config = withAuthoritativePostgresTls({

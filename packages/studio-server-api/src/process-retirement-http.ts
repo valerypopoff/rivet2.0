@@ -1,9 +1,14 @@
 import { timingSafeEqual } from 'node:crypto';
 import express, { type Router } from 'express';
 import type { ProcessRetirement } from '../../studio-server-shared/process-retirement.js';
+import type { PublishedExecutionPolicySnapshot } from '../../studio-server-shared/app-settings-types.js';
 
 /** Never trust forwarded headers or a Rivet UI key for a process-local retirement capability. */
-export function createProcessRetirementRouter(retirement: ProcessRetirement, token: string): Router {
+export function createProcessRetirementRouter(
+  retirement: ProcessRetirement,
+  token: string,
+  readAdmission?: () => PublishedExecutionPolicySnapshot | undefined,
+): Router {
   if (token.length < 32) throw new Error('Retirement capability token is too short.');
   const router = express.Router();
   router.use((req, res, next) => {
@@ -23,6 +28,18 @@ export function createProcessRetirementRouter(retirement: ProcessRetirement, tok
   });
   router.get('/', (_req, res) => {
     res.json(retirement.snapshot());
+  });
+  router.get('/admission', (_req, res, next) => {
+    try {
+      const admission = readAdmission?.();
+      if (!admission) {
+        res.sendStatus(503);
+        return;
+      }
+      res.json({ incarnation: retirement.incarnation, admission });
+    } catch (error) {
+      next(error);
+    }
   });
   router.post('/', express.json({ limit: '1kb', strict: true }), (req, res) => {
     try {

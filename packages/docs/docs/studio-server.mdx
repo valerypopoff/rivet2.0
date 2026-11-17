@@ -165,6 +165,19 @@ archives; it is not a general PostgreSQL/S3 backup restore.
 Environment variables entered in Rivet's Settings remain supported and are
 restored from compatible legacy backups.
 
+In **Settings → Deployment**, **Concurrent runs per execution Pod** controls how
+many published endpoint, web-app and scheduled runs each execution worker can
+accept. Save an integer from 1 to 10,000; workers pick it up automatically without
+a restart. Running work finishes normally when you lower it. While full, workers
+use the usual overload response. This changes concurrency, not CPU, memory or the
+number of workers, so a higher number does not guarantee faster processing.
+
+The setting persists through upgrades and is separate for each installation.
+**Use deployment default**, then **Save**, restores the installed default. **Saved**
+confirms the setting was stored; synchronization across workers can take a few
+seconds and longer during an outage. This control is available only on supported
+replicated deployments with enforced admission.
+
 ### Move an existing installation
 
 Do not replace a running file/SQLite installation with the new images in place.

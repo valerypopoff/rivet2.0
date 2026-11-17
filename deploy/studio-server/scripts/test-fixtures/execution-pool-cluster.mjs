@@ -228,12 +228,36 @@ export async function exerciseExecutionPoolRollout({
         };
       if (!args.includes('/opt/rivet/retire-backend.mjs')) {
         const sample = executionSample(pod);
+        const deploymentDefault = Number(
+          pod.spec.containers
+            .find((container) => container.name === 'api')
+            .env.find((entry) => entry.name === 'RIVET_DEPLOYMENT_PUBLISHED_EXECUTION_MAX_ACTIVE_RUNS').value,
+        );
+        const policy =
+          sample.liveLimit === undefined
+            ? ''
+            : '\n# rivet-execution-policy ' +
+              JSON.stringify({
+                incarnation: status.incarnation,
+                admission: {
+                  protocol: 1,
+                  installation: 'default/rivet',
+                  deploymentDefault,
+                  revision: 'saved-policy',
+                  source: 'app-settings',
+                  mode: 'enforce',
+                  limit: sample.liveLimit,
+                  active: sample.active ?? 0,
+                  draining: status.state !== 'serving',
+                },
+              }) +
+              '\n';
         return {
           stdout: `rivet_published_execution_active_runs ${sample.active ?? 0}\nrivet_published_execution_admission_limit{mode="enforce"} ${
             pod.spec.containers
               .find((container) => container.name === 'api')
               .env.find((entry) => entry.name === 'RIVET_DEPLOYMENT_PUBLISHED_EXECUTION_MAX_ACTIVE_RUNS').value
-          }\n`,
+          }\n${policy}`,
         };
       }
       const offset = args.indexOf('/opt/rivet/retire-backend.mjs');

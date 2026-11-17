@@ -28,6 +28,10 @@ export type SettingsMigration = (stored: Record<string, unknown>) => Record<stri
 export type SettingsRepositoryDescriptor<T> = {
   key: string;
   currentVersion: number;
+  /** A new optional domain may be absent from predecessor restore snapshots. */
+  optionalRestore?: boolean;
+  /** Control-plane-only settings need no eager read on each graph request. */
+  capturePerRequest?: boolean;
   getPath(): string;
   getDefault(): T;
   getManagedBootstrap?(): T | undefined;
@@ -54,6 +58,7 @@ export class SettingsRevisionConflictError extends Error {
 type SettingsRequestStore = Map<VersionedSettingsRepository<unknown>, SettingsSnapshot<unknown>>;
 
 const repositories = new Set<VersionedSettingsRepository<unknown>>();
+const requestRepositories = new Set<VersionedSettingsRepository<unknown>>();
 const requestSettingsStorage = new AsyncLocalStorage<SettingsRequestStore>();
 let settingsPollTimer: NodeJS.Timeout | undefined;
 let sharedBackend: AppSettingsBackend | null = null;
@@ -163,6 +168,7 @@ export class VersionedSettingsRepository<T> {
 
   constructor(readonly descriptor: SettingsRepositoryDescriptor<T>) {
     repositories.add(this as VersionedSettingsRepository<unknown>);
+    if (descriptor.capturePerRequest !== false) requestRepositories.add(this as VersionedSettingsRepository<unknown>);
   }
 
   readSync(): SettingsSnapshot<T> {
@@ -290,6 +296,7 @@ export class VersionedSettingsRepository<T> {
 
   dispose(): void {
     repositories.delete(this as VersionedSettingsRepository<unknown>);
+    requestRepositories.delete(this as VersionedSettingsRepository<unknown>);
     this.#cache.clear();
     this.#errors.clear();
     this.#fileSignatures.clear();
@@ -315,7 +322,7 @@ export class VersionedSettingsRepository<T> {
     if (existing) {
       return this.#rememberManaged(settingsPath, existing);
     }
-    if (sharedBackend instanceof SqliteAppSettingsBackend)
+    if (sharedBackend instanceof SqliteAppSettingsBackend && !this.descriptor.optionalRestore)
       throw new Error(`Selected local generation is missing the ${this.descriptor.key} settings domain.`);
 
     let initialValue: T | undefined;
@@ -633,14 +640,20 @@ export function installRestoreSettings(
 ): void {
   for (const repository of repositories) {
     const row = rows.find((row) => row.key === repository.descriptor.key);
-    if (!row) throw new Error('Restore bootstrap settings are incomplete.');
-    repository.installRestoreSnapshot(row.value, operationId);
+    if (!row && !repository.descriptor.optionalRestore) throw new Error('Restore bootstrap settings are incomplete.');
+    repository.installRestoreSnapshot(
+      row?.value ?? {
+        version: repository.descriptor.currentVersion,
+        ...repository.descriptor.serialize(repository.descriptor.getDefault()),
+      },
+      operationId,
+    );
   }
 }
 
 export function runWithAppSettingsSnapshot<T>(callback: () => T): T {
   const snapshots: SettingsRequestStore = new Map();
-  for (const repository of repositories) {
+  for (const repository of requestRepositories) {
     snapshots.set(repository, repository.readSync());
   }
   return requestSettingsStorage.run(snapshots, callback);

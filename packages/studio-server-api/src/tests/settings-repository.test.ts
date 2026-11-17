@@ -162,7 +162,7 @@ test('settings repository pins one revision for the lifetime of a request', asyn
   });
 });
 
-test('settings repository captures every domain at the request boundary', async () => {
+test('settings repository captures every execution domain at the request boundary', async () => {
   await withTestRepository(async ({ repository: firstRepository }) => {
     await withTestRepository(async ({ repository: secondRepository }) => {
       await firstRepository.update(() => ({ count: 1, nested: { label: 'first' } }));
@@ -190,6 +190,33 @@ test('settings repository captures every domain at the request boundary', async 
       assert.equal(secondRepository.readSync().value.count, 20);
     });
   });
+});
+
+test('control-only settings add no eager reads to execution snapshots and retain normal persistence', async (t) => {
+  await withTestRepository(
+    async ({ repository }) => {
+      await repository.initialize();
+      const read = repository.readSync.bind(repository);
+      let reads = 0;
+      t.mock.method(repository, 'readSync', () => {
+        reads++;
+        return read();
+      });
+      runWithAppSettingsSnapshot(() => {});
+      assert.equal(reads, 0);
+      const updates: number[] = [];
+      const unsubscribe = repository.subscribe((snapshot) => updates.push(snapshot.value.count));
+      await repository.update(() => ({ count: 3, nested: { label: 'live' } }));
+      assert.deepEqual(updates, [3]);
+      assert.equal(
+        runWithAppSettingsSnapshot(() => repository.readSync().value.count),
+        3,
+      );
+      assert.equal(reads, 1, 'Only an explicit settings read is captured');
+      unsubscribe();
+    },
+    { capturePerRequest: false },
+  );
 });
 
 test('settings repository rejects stale optimistic revisions', async () => {

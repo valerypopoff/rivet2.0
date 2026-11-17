@@ -342,6 +342,58 @@ test('paired CPU demand converts old utilization to the admitted candidate worke
   );
 });
 
+test('paired live policies use conservative candidate capacity and validate the real observations before conversion', async () => {
+  const f = fixture(2);
+  for (const pod of f.pods)
+    pod.spec.containers[0].env = [{ name: 'RIVET_DEPLOYMENT_PUBLISHED_EXECUTION_MAX_ACTIVE_RUNS', value: '4' }];
+  const original = f.transport.exec;
+  let revision = 'first',
+    limit = 1;
+  f.transport.exec = async (url, command) => {
+    const result = await original(url, command);
+    if (command[1] !== '--input-type=module') return result;
+    return (
+      result +
+      '# rivet-execution-policy ' +
+      JSON.stringify({
+        incarnation: url,
+        admission: {
+          protocol: 1,
+          installation: 'fixture/rivet',
+          deploymentDefault: 4,
+          revision,
+          mode: 'enforce',
+          source: 'app-settings',
+          limit,
+          active: 0,
+          draining: false,
+        },
+      }) +
+      '\n'
+    );
+  };
+  const io = f.io('execution-next');
+  const { snapshot, peer } = await io.poolSnapshot();
+  assert.equal(snapshot.pods[0].limit, 1, 'Applied policy overrides the bootstrap metric/default');
+  await io.confirmAdmission(snapshot.pods, snapshot.uid);
+  revision = 'second';
+  limit = 8;
+  await assert.rejects(io.confirmAdmission(snapshot.pods, snapshot.uid), /admission changed/);
+  for (const pod of [...snapshot.pods, ...peer.pods]) {
+    pod.cpuRatio = 0;
+    pod.active = 1;
+    pod.admissionPolicy.active = 1;
+  }
+  const newer = snapshot.pods[1];
+  newer.limit = newer.admissionPolicy.limit = 8;
+  newer.admissionPolicy.revision = 'second';
+  assert.equal(requiredExecutionPoolReplicas(snapshot, peer, f.policy), 4);
+  assert.equal(executionPoolDemand(snapshot, peer, f.policy, { candidateCapacity: true }), 7);
+  newer.admissionPolicy.installation = 'foreign/rivet';
+  assert.throws(() => requiredExecutionPoolReplicas(snapshot, peer, f.policy), /installation differ/);
+  assert.equal(f.writes.length, 0);
+});
+
 test('paired handoff cannot hide overload behind the autoscaling ceiling', async () => {
   const f = fixture(2);
   const { snapshot, peer } = await f.io('execution-next').poolSnapshot();

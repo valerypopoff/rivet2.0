@@ -7,6 +7,39 @@ import {
   toPublishedExecutionAdmissionError,
 } from '../published-execution-admission.js';
 
+test('live limits preserve accepted permits, draining and the caller configuration', () => {
+  const config = { maxActiveRuns: 2, mode: 'enforce' as const, retryAfterSeconds: 3 };
+  const limits: number[] = [];
+  const admission = createPublishedExecutionAdmission(config, { onSnapshot: (s) => limits.push(s.maxActiveRuns) });
+  const first = admission.acquire('workflow-endpoint'),
+    second = admission.acquire('web-app-action');
+  assert.equal(first.kind, 'accepted');
+  assert.equal(second.kind, 'accepted');
+  admission.setMaxActiveRuns(1);
+  assert.equal(config.maxActiveRuns, 2);
+  assert.equal(admission.getSnapshot().activeRuns, 2);
+  assert.equal(admission.acquire('scheduled-run').kind, 'capacity-exceeded');
+  if (first.kind === 'accepted') {
+    first.permit.release();
+    first.permit.release();
+  }
+  assert.equal(admission.acquire('scheduled-run').kind, 'capacity-exceeded');
+  admission.setMaxActiveRuns(3);
+  const scheduled = admission.acquire('scheduled-run');
+  assert.equal(scheduled.kind, 'accepted');
+  admission.beginDrain();
+  admission.setMaxActiveRuns(4);
+  assert.equal(admission.acquire('workflow-endpoint').kind, 'draining');
+  for (const invalid of [0, -1, 1.5, NaN, Infinity, 10001]) assert.throws(() => admission.setMaxActiveRuns(invalid));
+  assert.equal(admission.getSnapshot().maxActiveRuns, 4);
+  const count = limits.length;
+  admission.setMaxActiveRuns(4);
+  assert.equal(limits.length, count);
+  if (second.kind === 'accepted') second.permit.release();
+  if (scheduled.kind === 'accepted') scheduled.permit.release();
+  assert.equal(admission.getSnapshot().activeRuns, 0);
+});
+
 test('enforced published execution admission rejects without queueing and releases a completed permit once', () => {
   const admission = createPublishedExecutionAdmission({
     maxActiveRuns: 1,

@@ -1,7 +1,7 @@
 # Deployment Status
 
-`Settings` -> `Deployment` is Rivet Studio Server's read-only operational
-topology view. It deliberately separates deployment information from
+`Settings` -> `Deployment` shows operational topology and the live published
+execution concurrency control. It separates these controls from
 `Settings` -> `Runtime libraries`, which is solely for adding, removing, and inspecting
 Code-node packages.
 
@@ -51,6 +51,42 @@ The page refreshes registry data every five seconds while it is open. Its
 `Last synchronization heartbeat` ages are a local display clock and tick once
 per second; those age labels do not imply a request is sent every second.
 
+### Live published-execution concurrency
+
+On a supported replicated deployment, **Concurrent runs per execution Pod**
+accepts an integer from 1 through 10,000. **Save** changes how many new published
+endpoint, web-app action and scheduled executions a worker may accept. It does
+not resize a Pod, change the replica minimum, limit editor/preview runs or
+increase the worker's physical processing capacity.
+
+Workers update their existing admission counter in place. Lowering from 32 to
+16 while 20 runs are active lets all 20 finish; new requests receive the existing
+overload response until capacity is available. The server does not queue them.
+Saving never restarts a Pod, cancels work, replays a run or reopens a draining
+worker. The field is unavailable when the deployment cannot enforce it.
+
+The explicit override is encrypted in the existing versioned `app_settings`
+store, scoped to `RIVET_LEGACY_RESTORE_INSTALLATION`. No schema migration is
+required. Notifications normally propagate changes promptly; the existing
+five-second settings poll covers lost notifications. An outage can delay this:
+**Saved** confirms persistence, not that every worker has applied the value.
+There is no per-execution database, disk or inter-worker request for the policy.
+
+**Use deployment default**, followed by **Save**, removes the override. The
+default comes from the installation's existing Helm/Compose configuration;
+production and staging can have different defaults and saved overrides. Restart,
+scale-up and upgrades retain the override. A restored override from another
+installation is ignored until explicitly saved for this installation. Old backup
+snapshots without the new optional domain use the default.
+
+The normal revision-protected settings form preserves unsaved input during
+background status refresh. Stale saves fail with a conflict. An uncertain write
+is read back once; the browser does not automatically repeat it. The runtime-library
+replica list below the field does not report this setting's convergence.
+
+See the [implementation and validation plan](published-execution-concurrency-plan.md)
+for rollout compatibility and the one-time release acceptance exercise.
+
 ## API and source of truth
 
 The authenticated control-plane route is:
@@ -58,6 +94,8 @@ The authenticated control-plane route is:
 ```text
 GET  /api/deployment-status
 POST /api/deployment-status/replicas/cleanup
+GET  /api/app-settings/published-execution
+PATCH /api/app-settings/published-execution  # If-Match required; PUT also supported
 ```
 
 `packages/studio-server-api/src/deployment-status.ts` validates
@@ -86,6 +124,28 @@ replicas or make a single host highly available.
 - `packages/studio-server-shared/deployment-status-types.ts` — browser/server contract.
 - `packages/studio-server-api/src/deployment-status.ts` — topology validation and status assembly.
 - `packages/studio-server-api/src/routes/deployment-status.ts` — authenticated API route.
+- `packages/studio-server-api/src/published-execution-settings.ts` — scoped setting, default and process subscription.
+- `packages/studio-server-api/src/published-execution-admission.ts` — in-memory admission and accepted-work ownership.
 - `packages/studio-server-web/dashboard/app-settings/tabs/DeploymentStatusSettingsTab.tsx` — Settings UI.
 - `packages/studio-server-web/dashboard/DeploymentReplicaReadinessPanel.tsx` — synchronization detail view.
 - `deploy/studio-server/helm/templates/_env.tpl` — Helm's explicit replicated-topology metadata.
+
+## Local validation
+
+The concurrency regressions cover revision-protected saves, installation scope,
+older backup compatibility, listener recovery and preservation of accepted work.
+Run the affected API tests with the API package's `test:files` command; the core
+files are `app-settings.test.ts`, `settings-repository.test.ts`,
+`managed-settings-sync.test.ts`, `published-execution-admission.test.ts` and
+`workflow-async-process.test.ts` under `src/tests/`.
+
+`yarn workspace @valerypopoff/rivet-studio-server-api run test:published-execution-managed`
+uses a disposable local PostgreSQL container and four independent API-policy
+processes to check propagation, missed notifications, reconnects, restarts and
+outages. It removes its owned container and volume afterward.
+
+For the browser form, run `deployment-status.spec.ts` through
+`yarn studio-server:ui:observe` in headless mode. It covers validation, Save/Revert,
+reset, stale saves, uncertain acknowledgements, background refresh and focus.
+It is also registered in the normal editor CI shards. Local verification does
+not replace the first release's focused staging acceptance.

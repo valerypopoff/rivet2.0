@@ -11,6 +11,8 @@ import type {
   NodeExecutorProxySettingsDraft,
   PublicRouteSettings,
   PublicRouteSettingsDraft,
+  PublishedExecutionSettings,
+  PublishedExecutionSettingsDraft,
   RunRecordingsSettings,
   RunRecordingsSettingsDraft,
   RuntimeLimitSettings,
@@ -24,6 +26,8 @@ import type {
   WorkflowEndpointAuthSettingsDraft,
 } from '../../studio-server-shared/app-settings-types';
 import { parseJsonResponse } from './apiRequest';
+
+export type { PublishedExecutionSettings };
 
 const API = `${RIVET_API_BASE_URL}/app-settings`;
 
@@ -278,6 +282,30 @@ export const runRecordingsSettingsResource = createAppSettingsResource<
 export const runtimeLimitSettingsResource = createAppSettingsResource<RuntimeLimitSettings, RuntimeLimitSettingsDraft>(
   'runtime-limits',
 );
+
+const executionResource = createAppSettingsResource<PublishedExecutionSettings, PublishedExecutionSettingsDraft>(
+  'published-execution',
+);
+export const publishedExecutionSettingsResource: typeof executionResource = {
+  read: executionResource.read,
+  async update(draft, revision) {
+    try {
+      return await executionResource.update(draft, revision);
+    } catch (error) {
+      const status = (error as { status?: number }).status;
+      if (status !== undefined && status < 500) throw error;
+      // A committed state-setting write may have lost its acknowledgement.
+      // Confirm the desired state; never replay the PUT automatically.
+      try {
+        const result = await executionResource.read();
+        if (result.settings.maxActiveRunsPerPod === draft.maxActiveRunsPerPod) return result;
+      } catch {
+        /* Keep the original write error when observation is unavailable. */
+      }
+      throw error;
+    }
+  },
+};
 export const trustedClientSettingsResource = createAppSettingsResource<
   TrustedClientSettings,
   TrustedClientSettingsDraft

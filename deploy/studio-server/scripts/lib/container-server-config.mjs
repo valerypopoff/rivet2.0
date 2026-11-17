@@ -248,6 +248,7 @@ export function createManagedCompose(
     RIVET_MANAGED_WORKFLOW_SCHEMA_MAX_VERSION: String(schema.version),
     RIVET_LEGACY_RESTORE_ENABLED: '1',
     RIVET_LEGACY_RESTORE_INSTALLATION: `docker/${project}`,
+    RIVET_DEPLOYMENT_PUBLISHED_EXECUTION_DEFAULTS: JSON.stringify({ mode: 'enforce', maxActiveRunsPerPod: 4 }),
     RIVET_RUNTIME_CONFIG_PROTOCOL: '1',
     RIVET_WORKSPACE_ROOT: '/workspace',
     RIVET_WORKFLOWS_ROOT: '/workflows',

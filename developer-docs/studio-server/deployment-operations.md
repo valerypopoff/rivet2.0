@@ -125,6 +125,18 @@ whole pool. `ha-frontend-readiness.json` records the join; `ha-timing.json` is
 diagnostic only and does not change a deadline or release outcome. See the
 [performance plan and evidence limits](rolling-update-performance-plan.md).
 
+The [live execution concurrency setting](deployment-status.md#live-published-execution-concurrency)
+is scoped application data. Helm admission values and installation execution
+profiles remain immutable **deployment defaults**; do not rewrite them or the
+release fingerprint to make them equal a saved runtime override. Runtime capacity
+guards sample the actual applied policy. They keep UID/incarnation, accepted-work,
+physical capacity, CPU and connection-budget checks. The paired handoff artifact
+records deployment defaults, observed limits and revision convergence separately.
+Staging restoration must not import a production override as its own authority.
+The [feature plan](published-execution-concurrency-plan.md#7-release-once-then-use-the-live-control)
+describes the focused exercise to include in the first approved staging release;
+old metrics-only workers cannot establish live-setting support.
+
 The opt-in `ha.executionPools.enabled` profile adds two stable execution slots.
 For a settled predecessor with approved headroom, an equally sized candidate pool
 serves while all predecessors withdraw and drain concurrently; candidates become

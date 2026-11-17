@@ -4,6 +4,74 @@ import http from 'node:http';
 import { setTimeout as delay } from 'node:timers/promises';
 import { startAsyncWorkflowProcess, withAsyncDeadline } from './helpers/workflow-async-process.js';
 import { listenTestServer } from './helpers/http-server-harness.js';
+import { createHash } from 'node:crypto';
+
+test(
+  'live UI policy changes preserve a real accepted endpoint tail and recording without restarting the server',
+  { timeout: 60000 },
+  async () => {
+    let release!: () => void, started!: () => void;
+    const work = new Promise<void>((r) => {
+        release = r;
+      }),
+      entered = new Promise<void>((r) => {
+        started = r;
+      });
+    const tail = await listenTestServer(
+      http.createServer((_req, res) => {
+        started();
+        void work.then(() => res.end('complete'));
+      }),
+    );
+    let api: Awaited<ReturnType<typeof startAsyncWorkflowProcess>> | undefined;
+    try {
+      api = await startAsyncWorkflowProcess({ liveExecutionPolicy: true });
+      const url = `${api.baseUrl}/api/app-settings/published-execution`;
+      const headers = {
+        'x-rivet-proxy-auth': createHash('sha256').update('async-fixture-key:proxy-auth').digest('hex'),
+      };
+      const save = async (value: number) => {
+        const current = await fetch(url, { headers });
+        assert.equal(current.status, 200);
+        const result = await fetch(url, {
+          method: 'PATCH',
+          headers: { ...headers, 'content-type': 'application/json', 'if-match': current.headers.get('etag')! },
+          body: JSON.stringify({ maxActiveRunsPerPod: value }),
+        });
+        assert.equal(result.status, 200, await result.clone().text());
+      };
+      const run = () =>
+        fetch(`${api!.baseUrl}/workflows/async-acceptance`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(tail.baseUrl),
+          signal: AbortSignal.timeout(5000),
+        });
+      assert.equal((await run()).status, 200);
+      await withAsyncDeadline(entered, 'accepted tail');
+      await save(1);
+      assert.equal((await api.command<{ activeRuns: number }>('execution-admission')).activeRuns, 1);
+      assert.equal((await run()).status, 429);
+      release();
+      const deadline = Date.now() + 5000;
+      while ((await api.command<{ activeRuns: number }>('execution-admission')).activeRuns > 0) {
+        if (Date.now() > deadline) assert.fail('Accepted work did not finish');
+        await delay(10);
+      }
+      await save(2);
+      assert.equal((await run()).status, 200);
+      await api.command('shutdown');
+      await withAsyncDeadline(api.exited, 'same process shutdown', 15000);
+      const recordings = await api.persistedMetadata();
+      assert.equal(recordings.length, 2);
+      assert.ok(recordings.every((r) => r.status === 'succeeded'));
+    } finally {
+      release();
+      await api?.close();
+      await tail.close();
+    }
+  },
+);
 
 test('foreground execution failure preserves the HTTP error and failed recording', { timeout: 60_000 }, async () => {
   const api = await startAsyncWorkflowProcess({ failure: 'foreground' });

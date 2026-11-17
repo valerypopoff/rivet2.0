@@ -9,6 +9,8 @@
   value: {{ ternary "1" "0" (and $root.Values.legacyRestore.enabled (eq $root.Values.workflowStorage.backend "managed") (not $root.Values.compatibility.legacyStartupSettingsFiles)) | quote }}
 - name: RIVET_LEGACY_RESTORE_INSTALLATION
   value: {{ printf "%s/%s" $root.Release.Namespace $root.Release.Name | quote }}
+- name: RIVET_DEPLOYMENT_PUBLISHED_EXECUTION_DEFAULTS
+  value: {{ dict "mode" $root.Values.publishedExecutionAdmission.mode "maxActiveRunsPerPod" $root.Values.publishedExecutionAdmission.maxActiveRunsPerPod | toJson | quote }}
 {{- if and (eq (default "" .profile) "control") $root.Values.legacyRestore.enabled (not $root.Values.compatibility.legacyStartupSettingsFiles) }}
 - name: RIVET_LEGACY_RESTORE_ROOT
   value: /data/rivet-restore

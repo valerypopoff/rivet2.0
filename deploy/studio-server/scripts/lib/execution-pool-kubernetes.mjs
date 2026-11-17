@@ -8,6 +8,7 @@ import {
 import { waitForHaHeadroom, createHeadroomRead } from './ha-rollout-headroom.mjs';
 import { runExecutionPoolTransition } from './execution-pool-transition.mjs';
 import { createLegacyExecutionHttpHandoff } from './legacy-execution-http-handoff.mjs';
+import { executionAdmissionCapacity } from './execution-autoscaler-admission.mjs';
 
 export function createExecutionPoolKubernetes({
   plan,
@@ -135,6 +136,16 @@ export function createExecutionPoolKubernetes({
             ) > ready.count
           )
             throw new PendingExecutionCpuSample('Candidate execution headroom needs permitted scaling');
+          // Keep bootstrap and applied capacity distinguishable in the existing
+          // handoff artifact. This is the latest guard, not a historical registry.
+          observationTotals.admission = [snapshot, peer]
+            .filter((pool) => pool.pods.length)
+            .map((pool) => ({
+              workloadUid: pool.uid,
+              deploymentDefaults: [...new Set(pool.pods.map((pod) => pod.admissionPolicy?.deploymentDefault ?? null))],
+              effectiveLimits: [...new Set(pool.pods.map((pod) => pod.limit))].sort((a, b) => a - b),
+              ...executionAdmissionCapacity(pool.pods),
+            }));
           const previous = activeOperation.record.executionPool.capacity;
           await activeOperation.checkpoint({
             executionPool: {

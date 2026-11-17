@@ -9,6 +9,18 @@ import test from 'node:test';
 import { seedDeploymentStorageSettings } from './helpers/seed-deployment-storage.js';
 
 import { getExpectedExecutorAuthToken, getExpectedProxyAuthToken } from '../auth.js';
+import {
+  publishedExecutionSettingsRepository,
+  readPublishedExecutionSettings,
+  writePublishedExecutionSettings,
+  bindPublishedExecutionSettings,
+} from '../published-execution-settings.js';
+import { createPublishedExecutionAdmission } from '../published-execution-admission.js';
+import {
+  runWithAppSettingsSnapshot,
+  captureRestoreSettings,
+  installRestoreSettings,
+} from '../app-settings/settings-repository.js';
 import { createApiApp } from '../app.js';
 import { getCommandTimeout, getMaxOutputBytes } from '../security.js';
 import {
@@ -72,6 +84,8 @@ import {
 } from '../environment-variable-settings.js';
 
 const relevantEnvKeys = [
+  'RIVET_DEPLOYMENT_PUBLISHED_EXECUTION_DEFAULTS',
+  'RIVET_LEGACY_RESTORE_INSTALLATION',
   'HTTP_PROXY',
   'HTTPS_PROXY',
   'NO_PROXY',
@@ -176,6 +190,104 @@ function trustedProxyHeaders(): Record<string, string> {
     'x-rivet-proxy-auth': getExpectedProxyAuthToken(),
   };
 }
+
+test('execution policy API requires auth and a current revision, persists overrides and resets to deployment default', async () => {
+  await withAppSettingsEnv(async () => {
+    process.env.RIVET_LEGACY_RESTORE_INSTALLATION = 'rivet/rivet';
+    process.env.RIVET_DEPLOYMENT_PUBLISHED_EXECUTION_DEFAULTS = JSON.stringify({
+      mode: 'enforce',
+      maxActiveRunsPerPod: 32,
+    });
+    const server = await startServer();
+    try {
+      const url = `${server.baseUrl}/api/app-settings/published-execution`;
+      const get = () => fetch(url, { headers: trustedProxyHeaders() });
+      const put = (value: unknown, revision?: string) =>
+        fetch(url, {
+          method: 'PUT',
+          headers: {
+            ...trustedProxyHeaders(),
+            'content-type': 'application/json',
+            ...(revision ? { 'if-match': revision } : {}),
+          },
+          body: JSON.stringify({ maxActiveRunsPerPod: value }),
+        });
+      assert.equal((await fetch(url)).status, 403);
+      const initial = await get();
+      assert.equal((await initial.json()).effectiveMaxActiveRunsPerPod, 32);
+      assert.equal((await put(48)).status, 428);
+      for (const invalid of [0, -1, 1.5, 10001, '32', true])
+        assert.equal((await put(invalid, initial.headers.get('etag')!)).status, 400);
+      const saved = await put(48, initial.headers.get('etag')!);
+      assert.equal(saved.status, 200);
+      assert.equal((await saved.json()).effectiveMaxActiveRunsPerPod, 48);
+      assert.equal((await put(16, initial.headers.get('etag')!)).status, 409);
+      publishedExecutionSettingsRepository.invalidate();
+      assert.equal((await readPublishedExecutionSettings()).effectiveMaxActiveRunsPerPod, 48);
+      const latest = await get();
+      const reset = await put(null, latest.headers.get('etag')!);
+      assert.equal(reset.status, 200);
+      assert.equal((await reset.json()).source, 'deployment');
+    } finally {
+      await server.close();
+    }
+  });
+});
+
+test('saved live policies update in-place outside a running request snapshot and stay installation-specific', async () => {
+  await withAppSettingsEnv(async () => {
+    process.env.RIVET_LEGACY_RESTORE_INSTALLATION = 'rivet/rivet';
+    process.env.RIVET_DEPLOYMENT_PUBLISHED_EXECUTION_DEFAULTS = JSON.stringify({
+      mode: 'enforce',
+      maxActiveRunsPerPod: 32,
+    });
+    await publishedExecutionSettingsRepository.initialize();
+    const admission = createPublishedExecutionAdmission({ mode: 'enforce', maxActiveRuns: 32, retryAfterSeconds: 1 });
+    assert.throws(
+      () =>
+        bindPublishedExecutionSettings(admission, {
+          RIVET_DEPLOYMENT_PUBLISHED_EXECUTION_DEFAULTS: process.env.RIVET_DEPLOYMENT_PUBLISHED_EXECUTION_DEFAULTS,
+        }),
+      /installation identity/,
+    );
+    const binding = bindPublishedExecutionSettings(admission);
+    let resume!: () => void;
+    try {
+      const paused = runWithAppSettingsSnapshot(async () => {
+        await new Promise<void>((resolve) => {
+          resume = resolve;
+        });
+        assert.equal(publishedExecutionSettingsRepository.readSync().value.maxActiveRunsPerPod, 1);
+        assert.equal(admission.getSnapshot().maxActiveRuns, 1);
+      });
+      await writePublishedExecutionSettings(
+        { maxActiveRunsPerPod: 1 },
+        publishedExecutionSettingsRepository.readSync().revision,
+      );
+      resume();
+      await paused;
+      const permit = admission.acquire('web-app-action');
+      assert.equal(permit.kind, 'accepted');
+      assert.equal(admission.acquire('workflow-endpoint').kind, 'capacity-exceeded');
+      assert.equal(binding.snapshot()?.source, 'app-settings');
+      process.env.RIVET_LEGACY_RESTORE_INSTALLATION = 'rivet-staging-persistent/rivet-qualification';
+      process.env.RIVET_DEPLOYMENT_PUBLISHED_EXECUTION_DEFAULTS = JSON.stringify({
+        mode: 'enforce',
+        maxActiveRunsPerPod: 4,
+      });
+      assert.equal((await readPublishedExecutionSettings()).effectiveMaxActiveRunsPerPod, 4);
+      const rows = captureRestoreSettings().filter((r) => r.key !== 'published execution');
+      installRestoreSettings(rows, 'old-backup');
+      assert.equal(publishedExecutionSettingsRepository.readSync().value.maxActiveRunsPerPod, null);
+      assert.equal((await readPublishedExecutionSettings()).maxActiveRunsPerPod, null);
+      if (permit.kind === 'accepted') permit.permit.release();
+    } finally {
+      resume?.();
+      binding.dispose();
+      publishedExecutionSettingsRepository.invalidate();
+    }
+  });
+});
 
 function trustedExecutorHeaders(): Record<string, string> {
   return {

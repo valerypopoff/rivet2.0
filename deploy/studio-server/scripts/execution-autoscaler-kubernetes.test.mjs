@@ -122,6 +122,21 @@ test('idle staging supports one protected worker without allowing a production f
   assert.equal(String(api.resources.requests.cpu), '2');
   assert.equal(api.resources.requests.memory, '4Gi');
   assert.equal(api.env.find((e) => e.name === 'RIVET_DEPLOYMENT_PUBLISHED_EXECUTION_MAX_ACTIVE_RUNS').value, '32');
+  for (const resource of prod.filter((r) => ['Deployment', 'StatefulSet'].includes(r.kind))) {
+    const env = resource.spec.template.spec.containers.find((c) => c.name === 'api')?.env;
+    if (!env) continue;
+    assert.deepEqual(JSON.parse(env.find((e) => e.name === 'RIVET_DEPLOYMENT_PUBLISHED_EXECUTION_DEFAULTS').value), {
+      mode: 'enforce',
+      maxActiveRunsPerPod: 32,
+    });
+    if (resource.metadata.labels['app.kubernetes.io/component'] !== 'execution') {
+      assert.equal(
+        env.some((e) => e.name === 'RIVET_DEPLOYMENT_PUBLISHED_EXECUTION_MAX_ACTIVE_RUNS'),
+        false,
+      );
+    }
+  }
+  assert.throws(() => render('env.RIVET_DEPLOYMENT_PUBLISHED_EXECUTION_DEFAULTS=shadow'), /chart-owned/);
 });
 
 test('serial paired-pool recovery preserves its original configuration with a live surge owner', () => {
@@ -171,71 +186,73 @@ test('serial paired-pool recovery preserves its original configuration with a li
   }
 });
 
-test('same-image admission changes replace the pool before mixing old and new slot limits', async () => {
-  const immutableImage = 'images.api.digest=sha256:' + 'd'.repeat(64);
-  const previous = render(...protectedValues, immutableImage, 'ha.executionPools.enabled=true');
-  const target = [
-    'publishedExecutionAdmission.maxActiveRunsPerPod=32',
-    'resources.execution.requests.cpu=2',
-    'resources.execution.requests.memory=4Gi',
-  ];
-  const candidate = render(...protectedValues, immutableImage, 'ha.executionPools.enabled=true', ...target);
-  const inventory = previous
-    .filter((resource) => resource.kind === 'StatefulSet')
-    .map((resource, i) => ({
-      ...structuredClone(resource),
-      metadata: { ...resource.metadata, uid: `owner-${i}` },
-    }));
-  const selection = prepareExecutionPoolResources({
-    resources: structuredClone(candidate),
-    inventory,
-    controlPlaneMode: 'singleton',
+for (const liveLimit of [undefined, 1])
+  test(`same-image profile replacement preserves live override ${liveLimit ?? 'absent'}`, async () => {
+    const immutableImage = 'images.api.digest=sha256:' + 'd'.repeat(64);
+    const previous = render(...protectedValues, immutableImage, 'ha.executionPools.enabled=true');
+    const target = [
+      'publishedExecutionAdmission.maxActiveRunsPerPod=32',
+      'resources.execution.requests.cpu=2',
+      'resources.execution.requests.memory=4Gi',
+    ];
+    const candidate = render(...protectedValues, immutableImage, 'ha.executionPools.enabled=true', ...target);
+    const inventory = previous
+      .filter((resource) => resource.kind === 'StatefulSet')
+      .map((resource, i) => ({
+        ...structuredClone(resource),
+        metadata: { ...resource.metadata, uid: `owner-${i}` },
+      }));
+    const selection = prepareExecutionPoolResources({
+      resources: structuredClone(candidate),
+      inventory,
+      controlPlaneMode: 'singleton',
+    });
+    assert.ok(selection.plan, 'A serial update would mix admission limits and block the headroom guard');
+    assert.throws(
+      () =>
+        prepareExecutionPoolResources({
+          resources: structuredClone(candidate),
+          inventory,
+          controlPlaneMode: 'singleton',
+          allowTransition: false,
+        }),
+      /qualified paired replacement/,
+    );
+    const sharedDisk = structuredClone(inventory);
+    sharedDisk
+      .find((item) => item.spec.replicas > 0 && item.metadata.labels['app.kubernetes.io/component'] === 'execution')
+      .spec.template.spec.volumes.push({ name: 'shared', persistentVolumeClaim: { claimName: 'old-shared-disk' } });
+    assert.throws(
+      () =>
+        prepareExecutionPoolResources({
+          resources: structuredClone(candidate),
+          inventory: sharedDisk,
+          controlPlaneMode: 'singleton',
+        }),
+      /qualified paired replacement/,
+    );
+    const result = await exerciseExecutionPoolRollout({
+      previous,
+      candidate,
+      executionSample: () => (liveLimit === undefined ? {} : { liveLimit }),
+      renderFinal: async (guards) =>
+        render(
+          ...protectedValues,
+          immutableImage,
+          ...target,
+          'ha.executionPools.enabled=true',
+          'ha.executionPools.active=' + guards.ha.executionPools.active,
+          'ha.executionPools.retiringReplicas=' + guards.ha.executionPools.retiringReplicas,
+          'replicaCount.execution=' + guards.replicaCount.execution,
+        ),
+    });
+    assert.equal(result.result.phase, 'complete');
+    assert.equal(result.result.executionPool.phase, 'complete');
+    assert.equal(
+      result.mutations.some((mutation) => mutation.startsWith('recreate:') && mutation.includes('execution')),
+      false,
+    );
   });
-  assert.ok(selection.plan, 'A serial update would mix admission limits and block the headroom guard');
-  assert.throws(
-    () =>
-      prepareExecutionPoolResources({
-        resources: structuredClone(candidate),
-        inventory,
-        controlPlaneMode: 'singleton',
-        allowTransition: false,
-      }),
-    /qualified paired replacement/,
-  );
-  const sharedDisk = structuredClone(inventory);
-  sharedDisk
-    .find((item) => item.spec.replicas > 0 && item.metadata.labels['app.kubernetes.io/component'] === 'execution')
-    .spec.template.spec.volumes.push({ name: 'shared', persistentVolumeClaim: { claimName: 'old-shared-disk' } });
-  assert.throws(
-    () =>
-      prepareExecutionPoolResources({
-        resources: structuredClone(candidate),
-        inventory: sharedDisk,
-        controlPlaneMode: 'singleton',
-      }),
-    /qualified paired replacement/,
-  );
-  const result = await exerciseExecutionPoolRollout({
-    previous,
-    candidate,
-    renderFinal: async (guards) =>
-      render(
-        ...protectedValues,
-        immutableImage,
-        ...target,
-        'ha.executionPools.enabled=true',
-        'ha.executionPools.active=' + guards.ha.executionPools.active,
-        'ha.executionPools.retiringReplicas=' + guards.ha.executionPools.retiringReplicas,
-        'replicaCount.execution=' + guards.replicaCount.execution,
-      ),
-  });
-  assert.equal(result.result.phase, 'complete');
-  assert.equal(result.result.executionPool.phase, 'complete');
-  assert.equal(
-    result.mutations.some((mutation) => mutation.startsWith('recreate:') && mutation.includes('execution')),
-    false,
-  );
-});
 
 test('native Helm paired pools preserve the old selector and declare exact read/exec/scale capabilities', async () => {
   const previous = render(...protectedValues).filter((resource) => resource.kind === 'StatefulSet');

@@ -20,6 +20,7 @@ import { WorkflowEndpointsSettingsTab } from './app-settings/tabs/WorkflowEndpoi
 import { isWebAppAuthSettingsTab, type AppSettingsTab } from './app-settings/model';
 import { useDeploymentStorageForm } from './app-settings/useDeploymentStorageForm';
 import { useDeploymentStatus } from './useDeploymentStatus';
+import { usePublishedExecutionForm } from './app-settings/usePublishedExecutionForm';
 import { useEnvironmentVariablesForm } from './app-settings/useEnvironmentVariablesForm';
 import { useNodeExecutorForms } from './app-settings/useNodeExecutorForms';
 import { usePublicRoutesForm } from './app-settings/usePublicRoutesForm';
@@ -136,6 +137,7 @@ function OpenAppSettingsModal({
   const trustedClients = useTrustedClientsForm(activeTab === 'general');
   const storage = useDeploymentStorageForm(activeTab === 'storage');
   const deploymentStatus = useDeploymentStatus(activeTab === 'deployment-status');
+  const execution = usePublishedExecutionForm(activeTab === 'deployment-status' && deploymentStatus.status?.topology === 'replicated');
   const routes = usePublicRoutesForm(usesPublicRoutes, routeConfig, onRouteConfigChange);
   const workflowAuth = useWorkflowEndpointAuthForm(activeTab === 'workflow-endpoints');
   const recordings = useRunRecordingsForm(activeTab === 'run-recordings');
@@ -157,7 +159,7 @@ function OpenAppSettingsModal({
     ) : activeTab === 'local-upgrade' ? (
       <LocalStorageUpgradeSettingsTab />
     ) : activeTab === 'deployment-status' ? (
-      <DeploymentStatusSettingsTab deployment={deploymentStatus} />
+      <DeploymentStatusSettingsTab deployment={deploymentStatus} execution={execution} />
     ) : activeTab === 'workflow-endpoints' ? (
       <WorkflowEndpointsSettingsTab auth={workflowAuth} limits={limits} routes={routes} />
     ) : activeTab === 'run-recordings' ? (

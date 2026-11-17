@@ -88,7 +88,13 @@ type ApiAppOptions = {
   health?: RuntimeHealthReader;
   metrics?: StudioMetrics;
   requestWork?: AcceptedWork;
-  retirement?: { owner: ProcessRetirement; token: string };
+  retirement?: {
+    owner: ProcessRetirement;
+    token: string;
+    readAdmission?: () =>
+      | import('../../studio-server-shared/app-settings-types.js').PublishedExecutionPolicySnapshot
+      | undefined;
+  };
 };
 
 function matchesPath(pathname: string, basePath: string): boolean {
@@ -457,7 +463,11 @@ export function createApiApp(profile = getApiRuntimeProfile(), options: ApiAppOp
   if (options.retirement)
     app.use(
       '/internal/process-retirement',
-      createProcessRetirementRouter(options.retirement.owner, options.retirement.token),
+      createProcessRetirementRouter(
+        options.retirement.owner,
+        options.retirement.token,
+        options.retirement.readAdmission,
+      ),
     );
   if (options.requestWork) app.use(createRequestWorkBarrier(options.requestWork));
   if (process.env.RIVET_HA_CONTROL_PLANE_MODE === 'singleton-overlap' && process.env.RIVET_HA_MAINTENANCE === '1') {

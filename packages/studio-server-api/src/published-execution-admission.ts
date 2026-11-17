@@ -67,6 +67,7 @@ export type PublishedExecutionAdmission = {
   acquire(surface: PublishedExecutionSurface): PublishedExecutionAdmissionResult;
   beginDrain(): void;
   getSnapshot(): PublishedExecutionAdmissionSnapshot;
+  setMaxActiveRuns(value: number): void;
 };
 
 export class PublishedExecutionAdmissionError extends Error {
@@ -93,6 +94,7 @@ export function createPublishedExecutionAdmission(
   } = {},
 ): PublishedExecutionAdmission {
   validateConfig(config);
+  config = { ...config };
 
   let activeRuns = 0;
   const activeRunsBySurface: Record<PublishedExecutionSurface, number> = {
@@ -226,6 +228,16 @@ export function createPublishedExecutionAdmission(
     },
     getSnapshot() {
       return snapshot();
+    },
+    setMaxActiveRuns(value) {
+      validateConfig({ ...config, maxActiveRuns: value });
+      if (value === config.maxActiveRuns) return;
+      config.maxActiveRuns = value;
+      // Preserve active permits and irreversible drain state. Only a new
+      // saturation period should emit another threshold diagnostic.
+      if (activeRuns < value) capacityExceeded = false;
+      if (activeRuns <= value) observeOverCapacity = false;
+      reportSnapshot();
     },
   };
 }

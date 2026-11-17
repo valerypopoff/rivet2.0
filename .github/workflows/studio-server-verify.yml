@@ -403,6 +403,9 @@ jobs:
       - name: Verify managed scheduler claims and safe schedule import
         if: matrix.lane == 'managed'
         run: yarn workspace @valerypopoff/rivet-studio-server-api run test:scheduled-managed
+      - name: Verify live execution policy synchronization and accepted work
+        if: matrix.lane == 'managed'
+        run: yarn workspace @valerypopoff/rivet-studio-server-api run test:published-execution-managed
       - name: Verify PostgreSQL recording families, presence and query bounds
         if: matrix.lane == 'managed'
         run: yarn workspace @valerypopoff/rivet-studio-server-api run test:statistics-managed
