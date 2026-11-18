@@ -5,6 +5,29 @@ those audits does not certify NGINX, Alpine libraries or binaries copied into a
 container. Build Images now requires `scan-images` before promotion, alongside
 the existing functional, migration and HA gates. Scanning does not deploy anything.
 
+## Runtime glob packages: November 18, 2026
+
+The fresh pinned scanner reports CVE-2026-112366 for the installed `picomatch`
+2.3.2 and 4.0.5 copies. The upstream advisory has no published patched release.
+The dated Yarn build-tool review does not waive an image finding.
+
+API and executor images therefore omit the reviewed unused `picomatch` and
+`micromatch` packages from their runtime copies. `check-runtime-glob-scope.mjs`
+enforces that the SDK, CLI, App Executor and execution-server dependency graph
+does not depend on them. Builders retain their complete dependency tree.
+Managed Code-node library releases are separate and are not pruned.
+
+`remove-runtime-build-globs.mjs` checks exact package names/versions, validates
+the owned copy before removal, never follows workspace/dependency links and
+preserves normalized parent timestamps. It handles hoisted and nested modules;
+workspace-local copies pass through the same rule during runtime staging.
+The separate `runtime-dependency-copy` Docker stage keeps dependency installation
+and compilation caches independent of this packaging policy. Repository contracts
+reject pruning the builder or shipping its unpruned copy. Fixture tests preserve
+other dependencies, source copies, hardlinks and external links and reject changed
+versions before deletion. Final exact-image functional probes and unchanged
+High/Critical scans remain required before publication.
+
 ## Git package floor: November 12, 2026
 
 [Build Images 43113173680](https://github.com/valerypopoff/rivet2.0/actions/runs/43113173680)

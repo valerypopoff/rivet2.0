@@ -6,7 +6,10 @@ import test from 'node:test';
 import { execFile, execFileSync, spawnSync } from 'node:child_process';
 import { desktopWebArtifact, verifyDesktopWebArtifact } from './desktop-web-artifact.mjs';
 import { nodeTestPrerequisites } from '../../packages/node/scripts/prepare-tests.mjs';
-import { assertImageDependencyLayout } from '../../deploy/studio-server/scripts/lib/image-dependency-layout.mjs';
+import {
+  assertImageDependencyLayout,
+  assertRuntimeDependencyCopyLayout,
+} from '../../deploy/studio-server/scripts/lib/image-dependency-layout.mjs';
 import { installDependencies } from './install-dependencies.mjs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { editorCiSpecs, editorCiShards, selectEditorCiSpecs } from './editor-test-shards.mjs';
@@ -731,6 +734,42 @@ test('image dependency layers require real inputs before installation and changi
   for (const copy of ['COPY . .', 'COPY ./ ./']) {
     assert.throws(() => check([...fixture, copy]), /recopy the dependency cache/);
   }
+});
+
+test('runtime dependency pruning cannot change the builder or ship its unpruned copy', () => {
+  const fixture = [
+    'FROM dependencies AS runtime-dependency-copy',
+    'RUN node /tmp/remove-runtime-build-globs.mjs /runtime-dependencies/app/node_modules',
+    'FROM scratch AS runtime-dependencies',
+    'COPY --link --from=runtime-dependency-copy --chown=10001:10001 /runtime-dependencies/ /',
+    'FROM dependencies AS builder',
+  ];
+  const check = (lines) => assertRuntimeDependencyCopyLayout(lines.join('\n'), 'fixture');
+  assert.doesNotThrow(() => check(fixture));
+  assert.throws(() => check(fixture.filter((_, i) => i !== 1)), /prune only/);
+  assert.throws(() => check([...fixture.filter((_, i) => i !== 1), fixture[1]]), /prune only/);
+  assert.throws(
+    () =>
+      check(
+        fixture.map((line, i) =>
+          i === 1 ? line.replace('/runtime-dependencies/app/node_modules', '/app/node_modules') : line,
+        ),
+      ),
+    /preserve builder/,
+  );
+  assert.throws(
+    () =>
+      check(
+        fixture.map((line, i) =>
+          i === 3 ? line.replace('--from=runtime-dependency-copy', '--from=dependencies') : line,
+        ),
+      ),
+    /ship the pruned/,
+  );
+  assert.throws(
+    () => check(fixture.map((line, i) => (i === 4 ? 'FROM runtime-dependency-copy AS builder' : line))),
+    /isolate runtime pruning/,
+  );
 });
 
 // test-style: fixture-read: inspects only generated frontend artifacts, not implementation source.

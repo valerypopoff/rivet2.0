@@ -42,7 +42,11 @@ execution dependency graph, following production/optional/peer edges while
 excluding workspace development tools, and rejects either glob package in the
 SDK, CLI, App Executor or Studio Server execution paths. The web production
 server uses Node built-ins and compiled assets; its Vite/ESLint build dependencies
-are not request handlers. Critical, other high-severity and new direct-consumer
+are not request handlers. The independent image scan still reports the unused
+installed copies, so API/executor packaging removes them only from owned runtime
+copies, including workspace-local nested modules. Builders and managed library
+releases remain intact; see [container policy](container-security.md#runtime-glob-packages-november-18-2026).
+Critical, other high-severity and new direct-consumer
 findings remain blocking. Re-review when dependency ownership changes and remove
 this exception after validating an upstream fix; never automatically extend it.
 
