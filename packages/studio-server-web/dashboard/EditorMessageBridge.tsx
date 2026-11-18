@@ -22,6 +22,7 @@ import { useEditorCommandBridge } from './useEditorCommandBridge';
 import { useOpenWorkflowProject } from './useOpenWorkflowProject';
 import { usePreviewProjectLifecycle } from './usePreviewProjectLifecycle';
 import { useWorkflowRecordingBridge } from './useWorkflowRecordingBridge';
+import { isHostedVirtualProjectPath } from './openedProjectMetadata';
 import { useDevelopmentRefreshBridge } from './useDevelopmentRefreshBridge';
 
 type EditorMessageBridgeProps = {
@@ -109,6 +110,15 @@ export const EditorMessageBridge: FC<EditorMessageBridgeProps> = ({ savedProject
       ),
     });
   }, [currentProject.metadata.id, loadedProject.path, projectDataUnsavedChanges, projectUnsavedChanges]);
+
+  useEffect(() => {
+    const projectIds = projects.openedProjectsSortedIds.filter((id) => {
+      const path = projects.openedProjects[id]?.fsPath;
+      return !!path && !isHostedVirtualProjectPath(path) &&
+        (projectUnsavedChanges[id] === true || projectDataUnsavedChanges[id] === true);
+    });
+    postMessageToDashboard({ type: 'editable-dirty-projects', editorInstanceId: hostedEditorInstanceId, projectIds });
+  }, [projects, projectUnsavedChanges, projectDataUnsavedChanges]);
 
   return null;
 };

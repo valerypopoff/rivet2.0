@@ -42,6 +42,8 @@ export type RevisionRow = {
 };
 
 export type PublishedVersionRow = {
+  release_id?: string | null;
+  restored_from?: string | null;
   version_id: string;
   workflow_id: string;
   revision_id: string;

@@ -7,9 +7,11 @@ the existing functional, migration and HA gates. Scanning does not deploy anythi
 
 ## Runtime glob packages: November 18, 2026
 
-The fresh pinned scanner reports CVE-2026-112366 for the installed `picomatch`
-2.3.2 and 4.0.5 copies. The upstream advisory has no published patched release.
-The dated Yarn build-tool review does not waive an image finding.
+The November 18 pinned image scan reported CVE-2026-112366 for the installed
+`picomatch` 2.3.2 and 4.0.5 copies. The
+[GitHub advisory](https://github.com/advisories/GHSA-fc5q-39xc-vjpf)
+was later withdrawn, and the unused Yarn audit exception was removed. Image
+scans use their own advisory data and packaging verifies the runtime boundary.
 
 API and executor images therefore omit the reviewed unused `picomatch` and
 `micromatch` packages from their runtime copies. `check-runtime-glob-scope.mjs`

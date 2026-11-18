@@ -87,6 +87,7 @@ import {
   normalizeWebAppAccessDrafts,
 } from '../routes/workflows/web-app-publication-drafts.js';
 import { hasProjectMainGraph, requireProjectMainGraphForEndpoint } from '../routes/workflows/main-graph.js';
+import { assertLegacyEndpointCanBeRestored } from '../routes/workflows/endpoint-release-graphs.js';
 import { listSavedLatestSubgraphProjectIds } from '../routes/workflows/subgraph-publication-dependencies.js';
 import {
   getWorkflowDownloadFileName,
@@ -897,6 +898,7 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
       isCurrent: snapshot.publishedVersionId === version.versionId,
       isStarred: version.isStarred,
       comment: version.comment,
+      coverage: 'project-only',
     };
   }
   async listWorkflowPublishedVersions(value: string) {
@@ -938,11 +940,7 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
       throw badRequest('Invalid comment');
     return this.#annotateVersion(value, id, { comment: comment.trim() });
   }
-  async restoreWorkflowPublishedVersion(
-    value: string,
-    id: string,
-    preconditions: WorkflowDraftPublicationPreconditions,
-  ) {
+  async restoreWorkflowPublishedVersion(value: string, id: string, preconditions: WorkflowPublicationPreconditions) {
     preconditions = structuredClone(preconditions);
     const snapshot = await this.#withWrite(async () => {
       const structure = await this.#structure(),
@@ -958,15 +956,17 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
       );
       const next = structuredClone(before);
       const version = this.#version(next, id);
-      requireProjectMainGraphForEndpoint(loadProjectAndAttachedDataFromString(version.contents)[0]);
+      assertLegacyEndpointCanBeRestored(loadProjectAndAttachedDataFromString(version.contents)[0], version.datasetsContents);
+      const endpointName = before.publishedEndpointName || before.endpointName;
+      if (!endpointName) throw badRequest('Configure an endpoint name before restoring.');
       const versionId = randomUUID(),
         publishedAt = new Date().toISOString();
-      next.contents = next.publishedContents = version.contents;
-      next.datasetsContents = next.publishedDatasetsContents = version.datasetsContents;
+      next.publishedContents = version.contents;
+      next.publishedDatasetsContents = version.datasetsContents;
       next.publishedVersionId = versionId;
-      next.endpointName = next.publishedEndpointName = version.endpointName;
-      next.lastPublishedAt = next.updatedAt = publishedAt;
-      next.publishedVersions.unshift({ ...version, versionId, publishedAt, isStarred: false, comment: '' });
+      next.publishedEndpointName = endpointName;
+      next.lastPublishedAt = publishedAt;
+      next.publishedVersions.unshift({ ...version, versionId, endpointName, publishedAt, isStarred: false, comment: '' });
       next.publicationVersion = nextPublicationVersion(before.publicationVersion);
       next.endpointStatus = this.#status(next);
       await this.#commit(structure, [{ before, after: next }]);

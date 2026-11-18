@@ -2140,6 +2140,22 @@ version. It checks npm before publishing each package and skips package versions
 that are already present in the registry, so re-running the same main-branch
 workflow does not turn an already-published package into a hard failure.
 
+### Prepared release versions (2026-11-19)
+
+App `2.39.0` adds hosted history navigation to the shared editor. Studio Server
+`1.42.0` adds frozen endpoint releases with dependency-aware revision history
+and live-only Restore. Docs `2.32.0` explains the new publishing workflow.
+The [package review](PACKAGES.md#version-update-2026-11-19--frozen-endpoint-releases)
+records the version baseline for each track.
+
+Use `yarn sync:desktop-version` to align Tauri and Cargo metadata with App. Verify
+the release with an immutable Yarn install, `yarn verify:desktop-version`,
+`yarn check:npm-publish-versions`, `yarn check:pnp:fresh`, and
+`yarn studio-server:verify:repo-structure`. Run `yarn security:audit` against
+the live npm advisory feed just before pushing. The
+[frozen-release guide](studio-server/workflow-publication.md#frozen-endpoint-releases)
+covers schema 22 and the capture setting.
+
 ### Prepared release versions (2026-11-18)
 
 Review since `3105c6eaf`, through `bef3bd9c6` and the pending settings/monitoring

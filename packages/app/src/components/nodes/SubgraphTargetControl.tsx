@@ -2,7 +2,7 @@ import { css } from '@emotion/react';
 import Select from '@atlaskit/select';
 import ChevronRightIcon from 'majesticons/line/chevron-right-line.svg?react';
 import { useAtomValue, useSetAtom, useStore } from 'jotai';
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type FC } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type FC } from 'react';
 import {
   getGraphBoundary,
   getSubgraphProjectKey,
@@ -19,9 +19,10 @@ import {
   type SubgraphProjectTreeItem,
 } from '../../providers/ProvidersContext';
 import { projectState, projectsState, referencedProjectsState } from '../../state/savedGraphs';
+import { isPublishedHistoryInspection } from '../../utils/projectComparisonDocument.js';
 import { GraphSelectorSelect, getHierarchicalGraphOptions } from '../editors/GraphSelectorEditor';
 import { OpenFolderIcon } from '../graphList/OpenFolderIcon';
-import { graphState } from '../../state/graph';
+import { graphMetadataState, graphState } from '../../state/graph';
 import { useNodeEditorSessionContext } from '../nodeEditor/NodeEditorSessionContext';
 import { filterSubgraphProjectTree, subgraphSourceScope } from '../../utils/subgraphBundleScope.js';
 import { isRecordingProjectState } from '../../state/execution.js';
@@ -184,6 +185,21 @@ function makeTargetOptions(
   ];
 }
 
+function SubgraphTargetPath({ path, title }: { path: readonly [string, string]; title?: string }) {
+  return (
+    <span className="subgraph-target-path" title={title ?? path.join(' / ')}>
+      <span className="subgraph-target-path-segment">{path[0]}</span>{' '}
+      <ChevronRightIcon
+        className="subgraph-target-path-separator"
+        viewBox="8 6 9 12"
+        aria-hidden="true"
+        focusable="false"
+      />{' '}
+      <span className="subgraph-target-path-segment">{path[1]}</span>
+    </span>
+  );
+}
+
 type SubgraphTargetControlProps = {
   node: SubGraphNode;
   isReadonly?: boolean;
@@ -226,7 +242,83 @@ export function SubgraphTargetLabel({ node, isRecording }: { node: SubGraphNode;
 
 export const SubgraphTargetControl: FC<SubgraphTargetControlProps> = (props) => {
   const recording = useAtomValue(isRecordingProjectState);
-  return recording ? <SubgraphTargetLabel node={props.node} isRecording /> : <LiveSubgraphTargetControl {...props} />;
+  const history = isPublishedHistoryInspection(useAtomValue(projectState).metadata.id);
+  if (recording) return <SubgraphTargetLabel node={props.node} isRecording />;
+  if (history) return <HistoricalSubgraphTarget node={props.node} />;
+  return <LiveSubgraphTargetControl {...props} />;
+};
+
+export const HistoricalSubgraphTarget: FC<{ node: SubGraphNode }> = ({ node }) => {
+  const catalog = useSubgraphProjectCatalog();
+  const project = useAtomValue(projectState);
+  const sourceGraphId = useAtomValue(graphMetadataState)?.id;
+  const store = useStore();
+  const { targetProjectId, targetVersion = 'latest', graphId: targetGraphId } = node.data;
+  const callerProjectId = project.metadata.id;
+  const sourceNodeId = node.id;
+  const request = useMemo(
+    () =>
+      targetProjectId && targetGraphId
+        ? { projectId: targetProjectId, version: targetVersion, callerProjectId, sourceGraphId, sourceNodeId, targetGraphId }
+        : null,
+    [callerProjectId, sourceGraphId, sourceNodeId, targetProjectId, targetVersion, targetGraphId],
+  );
+  const [lookup, setLookup] = useState<
+    { request: NonNullable<typeof request> } & ({ project: Project } | { error: string })
+  >();
+  const currentLookup = lookup?.request === request ? lookup : undefined;
+  const captured = currentLookup && 'project' in currentLookup ? currentLookup.project : undefined;
+  const target = targetProjectId ? captured : project;
+  const graph = target?.graphs[targetGraphId];
+  const error = currentLookup && 'error' in currentLookup ? currentLookup.error : undefined;
+
+  useEffect(() => {
+    if (!catalog || !request) return;
+    let current = true;
+    void catalog
+      .preview(request)
+      .then((frozen) => {
+        if (!current || store.get(projectState).metadata.id !== request.callerProjectId) return;
+        if (!frozen.graphs[request.targetGraphId]) throw new Error('The graph is missing from the captured project.');
+        const key = getSubgraphProjectKey(request);
+        store.set(referencedProjectsState, (previous) =>
+          previous[key] === frozen ? previous : { ...previous, [key]: frozen },
+        );
+        setLookup({ request, project: frozen });
+      })
+      .catch((error: unknown) => {
+        if (current)
+          setLookup({
+            request,
+            error: error instanceof Error ? error.message : 'Could not read the captured Subgraph.',
+          });
+      });
+    return () => {
+      current = false;
+    };
+  }, [catalog, request, store]);
+
+  const graphName = graph?.metadata?.name ?? 'Untitled graph';
+  const loading = !!(catalog && request && !currentLookup);
+  return (
+    <div css={controlCss}>
+      {graph && target ? (
+        targetProjectId && target.metadata.title ? (
+          <SubgraphTargetPath path={[target.metadata.title, graphName]} />
+        ) : (
+          <span className="target-label">{graphName}</span>
+        )
+      ) : (
+        <span className="target-label" role="status" title={error}>
+          {!targetGraphId
+            ? 'No graph selected'
+            : loading
+              ? 'Loading captured Subgraph…'
+              : 'Target unavailable in this revision'}
+        </span>
+      )}
+    </div>
+  );
 };
 
 const LiveSubgraphTargetControl: FC<SubgraphTargetControlProps> = ({
@@ -242,7 +334,7 @@ const LiveSubgraphTargetControl: FC<SubgraphTargetControlProps> = ({
   const ownProject = useAtomValue(projectState);
   const openedProjects = useAtomValue(projectsState).openedProjects;
   const membershipKey = openedProjects[ownProject.metadata.id]?.hostedBundleKey;
-  const graphId = useAtomValue(graphState).metadata?.id;
+  const graphId = useAtomValue(graphMetadataState)?.id;
   const referencedProjects = useAtomValue(referencedProjectsState);
   const setReferencedProjects = useSetAtom(referencedProjectsState);
   const [localTree, setLocalTree] = useState<Tree | null>(null);
@@ -446,7 +538,12 @@ const LiveSubgraphTargetControl: FC<SubgraphTargetControlProps> = ({
     setPreviewStatus((current) => ({ ...current, [key]: 'loading' }));
     setError(undefined);
     try {
-      const project = await catalog.preview({ projectId, version, callerProjectId: ownProject.metadata.id });
+      const project = await catalog.preview({
+        projectId,
+        version,
+        callerProjectId: ownProject.metadata.id,
+        ...(projectId === node.data.targetProjectId ? { sourceGraphId: graphId, sourceNodeId: node.id } : {}),
+      });
       if (!isCurrent() || requestGenerations.current.get(key) !== generation) return;
       setReferencedProjects((current) => ({ ...current, [key]: project }));
       setPreviewStatus((current) => ({ ...current, [key]: 'ready' }));
@@ -544,20 +641,7 @@ const LiveSubgraphTargetControl: FC<SubgraphTargetControlProps> = ({
                 '▸'
               )
             ) : null}
-            {option.path ? (
-              <span className="subgraph-target-path" title={option.label}>
-                <span className="subgraph-target-path-segment">{option.path[0]}</span>{' '}
-                <ChevronRightIcon
-                  className="subgraph-target-path-separator"
-                  viewBox="8 6 9 12"
-                  aria-hidden="true"
-                  focusable="false"
-                />{' '}
-                <span className="subgraph-target-path-segment">{option.path[1]}</span>
-              </span>
-            ) : (
-              <span>{option.label}</span>
-            )}
+            {option.path ? <SubgraphTargetPath path={option.path} title={option.label} /> : <span>{option.label}</span>}
           </span>
         )}
         onChange={(option) => {

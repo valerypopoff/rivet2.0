@@ -50,6 +50,7 @@ import type { ManagedExecutionProjectResult, ManagedWebAppAccessPolicy } from '.
 import type { ResolvedSubgraphProject, SubgraphProjectTarget } from '@valerypopoff/rivet2-node';
 import { ManagedWorkflowExecutionService } from './execution-service.js';
 import { createManagedWorkflowPublicationService } from './publication.js';
+import { readWorkflowReferenceOverview, readWorkflowBundleReferenceDetails } from './publication-reference-overview.js';
 import { createManagedWorkflowRecordingService } from './recordings.js';
 import { ManagedRecordingEvidence } from './recording-evidence.js';
 import { flushEvidenceWork } from '../recording-evidence-work.js';
@@ -411,15 +412,28 @@ export class ManagedWorkflowBackend implements WorkflowDataBackend {
   async readWorkflowPublishedVersionDownload(
     relativePath: string,
     versionId: string,
-  ): Promise<{ contents: string; fileName: string }> {
+  ): Promise<{ contents: string | Buffer; fileName: string }> {
     return this.#publication.readWorkflowPublishedVersionDownload(relativePath, versionId);
   }
 
-  async readWorkflowPublishedVersionPreview(
-    relativePath: string,
-    versionId: string,
-  ): Promise<{ contents: string; datasetsContents: string | null }> {
-    return this.#publication.readWorkflowPublishedVersionPreview(relativePath, versionId);
+  async readWorkflowPublishedVersionPreview(relativePath: string, versionId: string, artifactId?: string, ownerId?: string) {
+    return this.#publication.readWorkflowPublishedVersionPreview(relativePath, versionId, artifactId, ownerId);
+  }
+
+  async readWorkflowReferenceOverview() {
+    return readWorkflowReferenceOverview(this.#context);
+  }
+
+  async readWorkflowBundleReferenceDetails(bundleId: string) {
+    return readWorkflowBundleReferenceDetails(this.#context, bundleId);
+  }
+
+  async readWorkflowHistoryPreview(relativePath: string, versionId: string, ownerId?: string) {
+    return this.#publication.readWorkflowHistoryPreview(relativePath, versionId, ownerId);
+  }
+
+  async reviewEndpointRelease(relativePath: string, preconditions: WorkflowDraftPublicationPreconditions) {
+    return this.#publication.reviewEndpointRelease(relativePath, preconditions);
   }
 
   async setWorkflowPublishedVersionStar(
@@ -441,7 +455,7 @@ export class ManagedWorkflowBackend implements WorkflowDataBackend {
   async restoreWorkflowPublishedVersion(
     relativePath: string,
     versionId: string,
-    preconditions: WorkflowDraftPublicationPreconditions,
+    preconditions: WorkflowPublicationPreconditions,
   ): Promise<WorkflowPublishedVersionRestoreResponse> {
     return this.#publication.restoreWorkflowPublishedVersion(relativePath, versionId, preconditions);
   }

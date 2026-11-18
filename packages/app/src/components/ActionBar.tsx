@@ -36,6 +36,7 @@ import { isRivetAppHostCapabilityEnabled, useRivetAppHostUiConfig } from '../pro
 import { RemoteDebuggerInfo } from './RemoteDebuggerInfo.js';
 import { remoteObservationReadOnlyState } from '../state/remoteObservation.js';
 import { LoadedRecordingInfo } from './LoadedRecordingInfo.js';
+import { isPublishedHistoryInspection } from '../utils/projectComparisonDocument.js';
 
 const styles = css`
   --action-bar-height: calc(32px * var(--ui-font-scale));
@@ -267,6 +268,8 @@ export const ActionBar: FC<ActionBarProps> = ({ onRunGraph, onAbortGraph, onPaus
   const graphPaused = managedLatest ? managedControls.graphPaused : snapshotPaused;
   const observingRemote =
     (useAtomValue(remoteObservationReadOnlyState) || (managedLatest && managedControls.readOnly)) && !activeRecording;
+  const historyPreview = isPublishedHistoryInspection(projectMetadata.id);
+  const showGraphControls = !observingRemote && !historyPreview;
   const recordingPlaybackIsStarting = !!activeRecording && recordingPlaybackStarting && !graphRunning;
 
   const { sessionState: remoteDebugger, disconnect } = useRemoteDebugger();
@@ -281,7 +284,7 @@ export const ActionBar: FC<ActionBarProps> = ({ onRunGraph, onAbortGraph, onPaus
   const runButtonsBlocked =
     (!actionBarExecutionState.canRun && !graphRunning) ||
     (managedLatest && graphRunning && !managedControls.canSendAbort);
-  const showPrimaryGraphControlButton = !observingRemote && (actionBarExecutionState.showRunButton || graphRunning);
+  const showPrimaryGraphControlButton = showGraphControls && (actionBarExecutionState.showRunButton || graphRunning);
   const [addRunInputsToEvaluationModalOpen, toggleAddRunInputsToEvaluationModalOpen] = useToggle();
 
   const plugins = useDependsOnPlugins();
@@ -351,7 +354,7 @@ export const ActionBar: FC<ActionBarProps> = ({ onRunGraph, onAbortGraph, onPaus
     >
       <div className="action-bar-controls">
         <RemoteDebuggerInfo
-          showRunControls={!activeRecording}
+          showRunControls={!activeRecording && !historyPreview}
           key={`${projectMetadata.id}:${!!actionBarExecutionState.remoteDebuggerBanner}`}
           connected={!!actionBarExecutionState.remoteDebuggerBanner}
         />
@@ -370,7 +373,7 @@ export const ActionBar: FC<ActionBarProps> = ({ onRunGraph, onAbortGraph, onPaus
             <button onClick={() => unloadRecording()}>Unload Recording</button>
           </div>
         )}
-        {graphRunning && !observingRemote && (
+        {graphRunning && showGraphControls && (
           <div className={clsx('pause-button', { paused: graphPaused })}>
             <button
               disabled={managedLatest && !(graphPaused ? managedControls.canSendResume : managedControls.canSendPause)}
@@ -422,7 +425,7 @@ export const ActionBar: FC<ActionBarProps> = ({ onRunGraph, onAbortGraph, onPaus
             </button>
           </div>
         )}
-        {runButtonPresentation.showProjectGraphRunButton && !observingRemote && (
+        {runButtonPresentation.showProjectGraphRunButton && showGraphControls && (
           <div className={clsx('run-button', { running: graphRunning })}>
             <button
               disabled={runButtonsBlocked}

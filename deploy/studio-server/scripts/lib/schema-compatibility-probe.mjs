@@ -15,7 +15,8 @@ export function assertProbedSchemaTransition(from, to) {
     (from === 17 && to === 18) ||
       (from === 18 && to === 19) ||
       (from === 19 && to === 20) ||
-      (from === 20 && to === 21),
+      (from === 20 && to === 21) ||
+      (from === 21 && to === 22),
     'Schema transition has no reviewed mixed-writer probe',
   );
 }
@@ -60,14 +61,17 @@ export function readSchemaRepositoryReceipt(output, { role, version, runId }) {
 export async function probeSchemaLockContention(pool, schema, migration) {
   assert.match(schema, /^rivet_schema_probe_[a-f0-9]{32}$/);
   if (migration.version === 21) return probeResourceSchemaLockContention(pool, schema, migration);
-  assert.ok([18, 19, 20].includes(migration.version));
-  const table = migration.version === 19 ? 'workflow_revisions' : 'workflow_recordings';
-  const id = migration.version === 19 ? 'revision_id' : 'recording_id';
-  const column = migration.version === 18 ? 'cost_json' : migration.version === 19 ? 'reference_summary' : undefined;
+  assert.ok([18, 19, 20, 22].includes(migration.version));
+  const endpointRelease = migration.version === 22;
+  const table = endpointRelease ? 'workflow_published_versions' : migration.version === 19 ? 'workflow_revisions' : 'workflow_recordings';
+  const id = endpointRelease ? 'version_id' : migration.version === 19 ? 'revision_id' : 'recording_id';
+  const columns = endpointRelease ? ['release_id', 'restored_from'] :
+    migration.version === 18 ? ['cost_json'] : migration.version === 19 ? ['reference_summary'] : [];
   const clients = [];
   try {
     for (let i = 0; i < 3; i++) clients.push(await pool.connect());
     const [blocker, ddl, reader] = clients;
+    if (endpointRelease) await blocker.query(`CREATE TABLE ${schema}.workflows(workflow_id TEXT PRIMARY KEY)`);
     await blocker.query(`CREATE TABLE ${schema}.${table}(${id} TEXT PRIMARY KEY)`);
     await blocker.query(`INSERT INTO ${schema}.${table} VALUES ('preserved')`);
     await blocker.query(`INSERT INTO ${schema}.${table} SELECT 'retained-'||n FROM generate_series(1,10000) n`);
@@ -123,7 +127,7 @@ export async function probeSchemaLockContention(pool, schema, migration) {
     await ddl.query(migration.sql);
     await ddl.query('COMMIT');
     assert.deepEqual((await reader.query(`SELECT * FROM ${schema}.${table} WHERE ${id}='preserved'`)).rows, [
-      { [id]: 'preserved', ...(column ? { [column]: null } : {}) },
+      { [id]: 'preserved', ...Object.fromEntries(columns.map((column) => [column, null])) },
     ]);
     assert.equal((await reader.query(`SELECT count(*)::int AS n FROM ${schema}.${table}`)).rows[0].n, 10001);
     assert.equal(

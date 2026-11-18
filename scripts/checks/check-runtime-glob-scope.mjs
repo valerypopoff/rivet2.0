@@ -4,8 +4,8 @@ import { createRequire } from 'node:module';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-// The temporary picomatch advisory review covers build tools, never these
-// execution dependency paths. Web serves compiled assets rather than Vite/ESLint.
+// Keep build-time glob packages out of execution dependency paths.
+// The production web server serves compiled assets.
 const pnp = createRequire(import.meta.url)('pnpapi');
 const pending = [
   'core',

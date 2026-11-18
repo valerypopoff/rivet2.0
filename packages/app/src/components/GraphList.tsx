@@ -67,7 +67,7 @@ import { GraphListSectionHeader } from './graphList/GraphListSectionHeader.js';
 import { UiGraphResourceSection } from './graphList/UiGraphResourceSection.js';
 import { GraphListContextMenus } from './graphList/GraphListContextMenus.js';
 import { useWorkspaceHostCompare } from '../hooks/workspaceHost/useWorkspaceHostCompare.js';
-import { isComparisonInspectionProject } from '../utils/projectComparisonDocument.js';
+import { isDetachedInspectionProject } from '../utils/projectComparisonDocument.js';
 
 const NO_SELECTED_GRAPH: NodeGraph = {
   nodes: [],
@@ -757,7 +757,7 @@ export const GraphList: FC = memo(() => {
 
   const runningGraphs = useAtomValue(runningGraphsState);
   const project = useAtomValue(projectState);
-  const inspectionOnly = isComparisonInspectionProject(project.metadata.id);
+  const inspectionOnly = isDetachedInspectionProject(project.metadata.id);
   const clipboard = useAtomValue(clipboardState);
   const uiGraphs = Object.values(project.uiGraphs ?? {});
   const nodeLibraryItemCount = Object.keys(project.nodePrefabs ?? {}).length;

@@ -5,26 +5,32 @@ import { createControlPlaneJsonBodyParser } from '../../middleware/body-parsers.
 import { routeMaintenanceOwner } from '../../ha-maintenance-routing.js';
 import { asyncHandler } from '../../utils/asyncHandler.js';
 import { badRequest, conflict, createHttpError } from '../../utils/httpError.js';
-import { getExplicitBundleService } from './storage-backend.js';
+import { getExplicitBundleService, readWorkflowBundleReferenceDetailsWithBackend } from './storage-backend.js';
 import { notifyWorkflowTreeChanged } from './workflow-tree-events.js';
 import { requireStructuralMutation, structuralMutationSchema } from './structural-contract.js';
 
 export const bundlesRouter = Router();
-bundlesRouter.use(
-  requireAuth,
-  routeMaintenanceOwner,
-  (req, res, next) => {
-    res.set('Cache-Control', 'private, no-store');
-    if (req.get('X-Rivet-Bundle-Intent') !== '1' || req.get('Sec-Fetch-Site') === 'cross-site')
-      throw createHttpError(403, 'Bundle changes require explicit UI intent.');
-    next();
-  },
-  createControlPlaneJsonBodyParser(),
+bundlesRouter.use(requireAuth, routeMaintenanceOwner, (_req, res, next) => {
+  res.set('Cache-Control', 'private, no-store');
+  next();
+});
+
+const id = z.string().uuid();
+bundlesRouter.get(
+  '/:id/external-references',
+  asyncHandler(async (req, res) => {
+    res.json(await readWorkflowBundleReferenceDetailsWithBackend(id.parse(req.params.id)));
+  }),
 );
+
+bundlesRouter.use((req, _res, next) => {
+  if (req.get('X-Rivet-Bundle-Intent') !== '1' || req.get('Sec-Fetch-Site') === 'cross-site')
+    throw createHttpError(403, 'Bundle changes require explicit UI intent.');
+  next();
+}, createControlPlaneJsonBodyParser());
 const location = z.string().max(4096);
 const name = z.string().min(1).max(255);
 const version = z.enum(['latest', 'published']);
-const id = z.string().uuid();
 const receipt = z.object({ operationId: id, expiresAt: z.string().datetime() }).strict();
 const projectId = z.string().min(1).max(256);
 const comparisonMember = z.object({ bundleId: id, projectId }).strict();

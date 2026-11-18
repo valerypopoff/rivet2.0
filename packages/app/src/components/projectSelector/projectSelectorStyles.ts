@@ -96,7 +96,7 @@ export const projectSelectorStyles = css`
   }
 
   .file-menu:not(:hover):not(.open):has(
-      + .projects-container .draggableProject:first-child .project:not(.active):not(:hover)
+      + .projects-container .draggableProject:first-of-type .project:not(.active):not(:hover)
     )::after {
     background: var(--project-selector-divider-color);
     content: '';

@@ -17,6 +17,8 @@ The exact stored timestamp remains available on hover.
 
 Workflows can be published as HTTP endpoints, and project-contained Rivet web apps can be published as browser pages. This document describes the current publication, execution, app-serving, and recording model.
 
+[Published revision history and frozen dependencies](published-revision-history-plan.md) describes the endpoint release and history behavior and its acceptance checks.
+
 Publication and saved-version HTTP routes live in
 `routes/workflows/publication-http.ts`, registered directly on the parent workflow
 router with its existing parser and middleware order. The
@@ -135,7 +137,7 @@ is required for this feature.
 - **Stats sidecar** (`*.rivet-project.wrapper-stats.json`): generated wrapper cache for graph/node counts in `filesystem` mode; it is rebuilt when the project file changes and is not part of publication state
 - **Published snapshot** (`.published/<snapshotId>.rivet-project`): frozen copy of the currently published project version
 - **Published web app**: one `Project.uiGraphs` entry pinned to a frozen project snapshot and exposed as `${RIVET_PUBLISHED_APPS_BASE_PATH:-/apps}/<slug>`, with a companion `${RIVET_LATEST_APPS_BASE_PATH:-/apps-latest}/<slug>` route that serves the latest saved draft for the same published app slug
-- **Published version history**: every successful publish creates a durable downloadable history entry for that project
+- **Published revision history**: every successful publish creates a durable downloadable history entry for that project
   - in `filesystem` mode: `.published/<versionId>.rivet-project` plus `.published/<versionId>.json` metadata and an optional `.rivet-data` sidecar
   - in `managed` mode: a `workflow_published_versions` row pointing at a durable `workflow_revisions` project blob in object storage
   - version stars are stored on the version metadata/row, so starred history survives browser reloads and server restarts
@@ -155,7 +157,7 @@ Published snapshots always belong to workflow storage, but recording storage is 
 - in `filesystem` mode, recording bundles live under `RIVET_WORKFLOW_RECORDINGS_ROOT` and the metadata index lives under `RIVET_APP_DATA_ROOT` as `recordings.sqlite`
 - in `managed` mode, recording metadata lives in Postgres and recording artifacts live in managed object storage
 
-Published version history also belongs to workflow storage. It is not stored in the editor, browser IndexedDB, or recording storage.
+Published revision history also belongs to workflow storage. It is not stored in the editor, browser IndexedDB, or recording storage.
 
 ## Stored settings model
 
@@ -222,9 +224,9 @@ Important current behavior:
 
 - All HTTP commands that change executable publication or access require a
   `preconditions` object with `expectedProjectId` and
-  `expectedPublicationVersion`. Endpoint and web-app publish, and published
-  version restore, additionally require `expectedDraftRevisionId`. The
-  backend uses one discriminated publication-command contract for these
+  `expectedPublicationVersion`. Endpoint and web-app publish additionally
+  require `expectedDraftRevisionId`. Restore checks the reviewed project ID and
+  publication version. The backend uses one discriminated command contract for these
   actions; its exhaustive command policy requires a deliberate classification
   whenever a new action is added. The draft-token requirement is defined once
   for commands that replace executable content. The storage-backend module
@@ -346,9 +348,9 @@ The filesystem coordinator lets reads proceed together but excludes every canoni
 
 ### Crash-safe filesystem publication
 
-Filesystem endpoint and web-app publication changes use a separate, versioned `.rivet-publication-transactions` journal beneath the same workflow root. The transaction includes newly frozen project/dataset snapshots, published-version metadata, and the settings sidecar containing endpoint and web-app pointers/access policy. Retired snapshots are checksummed in the journal and removed after commitment; cleanup failures leave them for verified recovery without making the successful publication fail. Restoring a published version also includes the live project and dataset in that _same_ transaction. Star and comment edits to version metadata use the same durable write boundary. Existing `.rivet-project`, `.rivet-data`, `.published/*.json`, and settings-sidecar formats are unchanged.
+Filesystem endpoint and web-app publication changes use a separate, versioned `.rivet-publication-transactions` journal beneath the same workflow root. The transaction includes newly frozen project/dataset snapshots, published-version metadata, and the settings sidecar containing endpoint and web-app pointers/access policy. Retired snapshots are checksummed in the journal and removed after commitment; cleanup failures leave them for verified recovery without making the successful publication fail. Restore uses that journal to activate the historical snapshot and dataset while preserving the editable draft files. Star and comment edits to version metadata use the same durable write boundary. Existing `.rivet-project`, `.rivet-data`, `.published/*.json`, and settings-sidecar formats are unchanged.
 
-Before changing canonical files, the API writes and flushes the new artifacts and a journal of safe relative paths, old/new existence, byte lengths, and SHA-256 hashes. The journal is first written to a temporary name, flushed, and renamed into place; an interrupted partial journal therefore cannot be mistaken for a prepared transaction. The API then moves replaced files to transaction-owned backups, promotes staged files, validates the resulting project and JSON metadata plus every artifact's bytes, and writes the committed marker through the same flushed-temporary-file-and-rename sequence. Settings sidecars pass the same field normalizer used by ordinary reads at staging, final verification, and recovery; merely parseable JSON with an invalid access policy or published-web-app entry cannot become a committed publication. The marker is the only publication success boundary. A pre-marker error rolls back the verified old state; a post-marker cleanup error leaves the new state committed and cleanup is retried. Cleanup checks the transaction directory for unexpected evidence and verifies backup checksums before deleting them. Published snapshot datasets retain their historical copy-verbatim compatibility, including older non-JSON sidecars; they are checked by byte length and hash rather than re-serialized. Restoring a version also copies the snapshot dataset bytes verbatim into the live project and its new snapshot; only the existing preview HTTP response decodes those bytes as UTF-8. The publication state hash retains its historical UTF-8 decoding so existing status comparisons do not change for those sidecars.
+Before changing canonical files, the API writes and flushes the new artifacts and a journal of safe relative paths, old/new existence, byte lengths, and SHA-256 hashes. The journal is first written to a temporary name, flushed, and renamed into place; an interrupted partial journal therefore cannot be mistaken for a prepared transaction. The API then moves replaced files to transaction-owned backups, promotes staged files, validates the resulting project and JSON metadata plus every artifact's bytes, and writes the committed marker through the same flushed-temporary-file-and-rename sequence. Settings sidecars pass the same field normalizer used by ordinary reads at staging, final verification, and recovery; merely parseable JSON with an invalid access policy or published-web-app entry cannot become a committed publication. The marker is the only publication success boundary. A pre-marker error rolls back the verified old state; a post-marker cleanup error leaves the new state committed and cleanup is retried. Cleanup checks the transaction directory for unexpected evidence and verifies backup checksums before deleting them. Published snapshot datasets retain their original bytes, including older non-JSON sidecars, for history inspection. Restore checks the historical dataset’s readability before copying valid bytes verbatim into the new published snapshot. It preserves the current draft sidecar. Preview and publication state hashes use the existing UTF-8 decoding.
 
 Workflow-storage initialization probes flush and same-device rename support for the publication journal and `.published` directory, flushes the workflow root after creating those directories on a fresh volume, recovers publication journals before constructing the execution cache or listening, and checks every existing project settings sidecar. A missing settings sidecar still means a never-published legacy project. A malformed or invalid _existing_ sidecar is **not** treated as unpublished: startup fails with an operator-facing project-path diagnostic instead of silently removing the endpoint or dropping a malformed published web-app entry. Snapshot IDs must be safe single-component names; older safe non-UUID IDs remain accepted. Recovery refuses transaction entries that are not real same-filesystem directories, including symlinks. If a journal cannot prove the old or new generation, recovery keeps its evidence and fails closed; do not delete its directory or hand-edit one canonical artifact in isolation. Preserve the files and investigate the transaction ID and project path. Read and write operations share the filesystem coordinator, so supported API readers cannot observe the intermediate renames; external filesystem readers/writers remain outside this guarantee. Endpoint/web-app cache invalidation and tree notification occur after the transaction commits.
 
@@ -381,9 +383,9 @@ In Project Settings:
 - older already-published projects that predate the explicit `lastPublishedAt` field fall back to the settings-sidecar file timestamp
 - the `Endpoint` tab always shows one compact endpoint row with a non-editable base path prefix, editable endpoint slug, and no extra visible field label; `Publish` creates the first workflow endpoint, while `Update` republishes unpublished changes or applies an endpoint slug change
 - `Unpublish` sits next to the workflow endpoint row whenever the workflow is currently published or has unpublished changes
-- `Delete project` appears only in the `Danger zone` tab, with an irreversible-deletion disclaimer; it is enabled only when verified publication details confirm the workflow endpoint is unpublished and no web apps remain published. Failed or incoherent publication reads keep deletion disabled until an explicit successful review; stale tree metadata alone is not sufficient. When deletion is blocked by publication, the unpublish prerequisite message appears below the delete button. `Published version history` is a separate tab, not an Endpoint footer button or nested modal.
+- `Delete project` appears only in the `Danger zone` tab, with an irreversible-deletion disclaimer; it is enabled only when verified publication details confirm the workflow endpoint is unpublished and no web apps remain published. Failed or incoherent publication reads keep deletion disabled until an explicit successful review; stale tree metadata alone is not sufficient. When deletion is blocked by publication, the unpublish prerequisite message appears below the delete button. `Published revision history` is a separate tab, not an Endpoint footer button or nested modal.
 - endpoint validation in the dashboard mirrors the server: only `Published` and `Unpublished changes` projects reserve endpoint names; fully unpublished projects may keep a saved draft endpoint without blocking another project from publishing there
-- Project Settings has `Endpoint`, `Web apps`, `LLM profile suspension`, `Decision AI profile suspension`, `Published version history`, and `Danger zone` tabs. The `Endpoint` tab owns normal endpoint publication. Its endpoint help always describes the currently saved publication until the user clicks `Publish` or `Update`. Endpoint and web-app slug validation errors render directly below their slug controls, before any publication URL/help text. The `Web apps` tab lists `Project.uiGraphs` when present, shows `No web apps in the project.` when there are none, shows `No web apps are published.` above the available list when none are published yet, and lets each web app publish, update, or unpublish its own compact prefixed slug row under `${RIVET_PUBLISHED_APPS_BASE_PATH:-/apps}` without requiring or changing the workflow endpoint publication. Once a web app is published, the displayed `/apps/<slug>` path is a link that opens in a new browser tab using the current Rivet server origin; the `/apps-latest/<slug>` latest-draft link is shown only while that app row is in `Unpublished changes` and the UI graph still exists in the current draft. The app's `Update` button remains disabled until the slug draft changes or the row reports `Unpublished changes`. When web-app OAuth mode is enabled, each row also exposes an allowed-email list. Saving that access list is an access-control update only; it does not republish the app or change its publication status.
+- Project Settings has `Endpoint`, `Web apps`, `LLM profile suspension`, `Decision AI profile suspension`, `Published revision history`, and `Danger zone` tabs. The `Endpoint` tab owns normal endpoint publication. Its endpoint help always describes the currently saved publication until the user clicks `Publish` or `Update`. Endpoint and web-app slug validation errors render directly below their slug controls, before any publication URL/help text. The `Web apps` tab lists `Project.uiGraphs` when present, shows `No web apps in the project.` when there are none, shows `No web apps are published.` above the available list when none are published yet, and lets each web app publish, update, or unpublish its own compact prefixed slug row under `${RIVET_PUBLISHED_APPS_BASE_PATH:-/apps}` without requiring or changing the workflow endpoint publication. Once a web app is published, the displayed `/apps/<slug>` path is a link that opens in a new browser tab using the current Rivet server origin; the `/apps-latest/<slug>` latest-draft link is shown only while that app row is in `Unpublished changes` and the UI graph still exists in the current draft. The app's `Update` button remains disabled until the slug draft changes or the row reports `Unpublished changes`. When web-app OAuth mode is enabled, each row also exposes an allowed-email list. Saving that access list is an access-control update only; it does not republish the app or change its publication status.
 
 The Endpoint tab separates the access control from the route help with a thin divider. Internal-only access applies to both published and latest-draft routes: when the project has unpublished changes, the help shows the private latest-draft URL below the private published URL. Both URLs come from deployment configuration (`http://api/internal/...` in Docker Compose; separate control-plane and execution Service URLs in Kubernetes).
 
@@ -829,7 +831,10 @@ The download flow is non-destructive to the current UI state:
 - it does not auto-open the downloaded project in the editor
 - it does not auto-expand folders
 
-Published version history downloads always return the stored `.rivet-project` snapshot for that publish event. They do not bundle datasets or settings sidecars, matching the normal project download contract. The preview endpoint is different: it returns JSON containing the stored project snapshot plus the optional stored dataset snapshot so the editor preview can reflect the saved publish payload without turning that version into a downloadable bundle.
+A project-only history download returns the stored `.rivet-project` snapshot. A
+protected release with dependencies or datasets downloads the exact artifacts
+and a revision manifest as ZIP. History preview reads each selected artifact
+as JSON with its stored project and optional dataset snapshot.
 
 Filename format is:
 
@@ -837,9 +842,9 @@ Filename format is:
 - `Name [published].rivet-project`
 - `Name [unpublished changes].rivet-project`
 
-## Published version history
+## Published revision history
 
-Project Settings exposes a `Published version history` tab alongside Endpoint, Web apps, LLM profile suspension, and Danger zone. `WorkflowPublishedVersionHistoryPanel` lists publish events newest-first, marks the version that is currently serving the published endpoint as `Current`, lets the user star or unstar special versions, add a short comment label for each version, paginates the list after 10 versions, and lets the user download, preview, or restore any stored project snapshot. History is embedded in the settings tab; the obsolete standalone modal/controller state has been removed. History mutations lock tab navigation and modal dismissal until they settle. After restore, the settings publication snapshot is refreshed before the user can return to endpoint/web-app actions. Review first disarms the old publication preconditions, so a failed refresh leaves publication actions disabled until explicit fresh review succeeds.
+Project Settings exposes a `Published revision history` tab alongside Endpoint, Web apps, LLM profile suspension, and Danger zone. `WorkflowPublishedVersionHistoryPanel` lists publish events newest-first, marks the version that is currently serving the published endpoint as `Current`, lets the user star or unstar special versions, add a short comment label for each version, paginates the list after 10 versions, and lets the user download, preview, or restore any stored project snapshot. History is embedded in the settings tab; the obsolete standalone modal/controller state has been removed. History mutations lock tab navigation and modal dismissal until they settle. After restore, the settings publication snapshot is refreshed before the user can return to endpoint/web-app actions. Review first disarms the old publication preconditions, so a failed refresh leaves publication actions disabled until explicit fresh review succeeds.
 
 The Danger zone tab is the only place inside Project Settings that exposes Delete project. It explains irreversible removal of the project, dataset sidecars, publication history, and recordings, and warns about dependent projects/schedules. The existing fully-unpublished guard and final confirmation remain required; the other tabs do not render a delete footer. Settings tabs stay vertical and stack above the panel on narrow screens. Descriptive/help text across project settings, app settings, scheduled runs, recordings, statistics, published items, and history shares the 14px/1.5 tokens in `modal-sizing.css`.
 
@@ -852,9 +857,137 @@ Stars and comments are persisted with the published version record:
 
 In filesystem mode, the metadata filename is the authoritative version ID. If `.published/<versionId>.json` contains a mismatched internal `id`, the API ignores that metadata and falls back to the matching snapshot when it can, so a stale or hand-edited JSON file cannot point history actions at a different snapshot.
 
-Preview opens a detached editor tab through the dashboard/editor bridge instead of opening the source workflow project. The iframe receives `open-published-version-preview`, loads the virtual path `published-version-preview://<encodedRelativePath>/<encodedVersionId>/preview.rivet-project`, fetches the project and optional dataset snapshot from `POST /api/workflows/projects/published-versions/preview`, rewrites the project id to a fresh `published-version-preview:*` id, and imports datasets under that detached id. Because the path and project id are synthetic, the dashboard does not treat the preview as an active workflow project, the Project Settings modal is closed before previewing, and save/publish controls cannot write back to the source workflow. `HostedIOProvider` also rejects both prompt and no-prompt saves for preview projects as a second line of defense.
+**Preview** switches the project tree into History preview and opens the root
+revision in a detached, read-only editor tab. Each captured project tab uses
+the title `<Name> (history preview)`. History preview uses the ordinary folder,
+bundle and project rows with the captured paths. It shows separate
+rows when the release uses two revisions of the same project. Publication
+checks the captured paths and bundle membership under the topology lock before
+committing. The dashboard requests the authorized history projection first
+and loads each artifact on demand. Choosing a live project cancels a pending
+history tree request. Starting bundle comparison exits History preview and
+cancels its pending work. Within History preview, a newer frozen project
+selection supersedes the earlier artifact load. The editor acknowledges
+cancellation so the dashboard can resume following tab selection immediately.
+Historical Subgraph names, ports and navigation use the exact captured
+call-site binding. A legacy entry with only the root reports missing
+dependency history. Its uncaptured Subgraphs show a compact unavailable label and retain
+their saved ports. The sidebar’s **Exit history preview** closes the preview
+tabs and preserves ordinary editor tabs and unsaved drafts.
 
-Restore asks for browser confirmation before making server changes. If confirmed, the selected stored snapshot and dataset replace the saved live project state, then the API publishes that restored state as a brand-new current history entry at the top of the list. The restored entry uses the endpoint name stored on the selected version. In filesystem mode, one publication transaction covers the live `.rivet-project`, optional `.rivet-data` sidecar, new `.published/<newVersionId>.rivet-project` snapshot, history metadata, and settings pointer. A pre-commit failure or interruption restores the complete old generation during immediate rollback or startup recovery; post-commit cleanup does not change the result. Filesystem restore also refuses a stored snapshot whose embedded project `metadata.id` no longer matches the history owner, so a corrupt history artifact cannot detach the live project from its workflow identity. In managed mode this points both `current_draft_revision_id` and `published_revision_id` at the restored revision and creates a new `workflow_published_versions` row in one transaction. Restore invalidates the published/latest execution-cache surface only after commit; a failed validation leaves the cache unchanged. After restore, the dashboard sends `refresh-open-project-from-disk` for the restored path. If that workflow is active, the editor reloads the current tab from storage; if it is open in a hidden tab, the editor invalidates that tab's cached snapshot so it loads the restored version the next time the user switches back. Restoring a version therefore behaves like reverting the saved project to that version and clicking Publish, rather than moving the current pointer back to an old history row.
+**Restore** activates the selected revision at the current endpoint address
+and records a new history entry. It preserves the saved project, dataset,
+draft endpoint name, web-app bindings and unsaved editor tabs. If there is no
+live address, it uses the currently configured address after the same
+ownership check. The restore command checks the project ID and publication
+version. The confirmation shows the address from the same reviewed server
+snapshot used for that command. A concurrent draft save does not invalidate
+that review. Filesystem restore stages the new published snapshot, its dataset
+and the settings pointer in the publication journal. SQLite updates the published catalog
+snapshot. Managed restore repoints the root revision and its release in one
+transaction. Store and editor invalidation stay scoped to executable
+publication state.
+
+Publication settings verify the saved project ID as well as its path.
+History pairs the confirmed restore address with the reviewed publication
+version. When a mutation response is lost or incomplete, the browser refreshes
+the project tree and requires a fresh review before accepting another write.
+
+### Frozen endpoint releases
+
+Managed schema 22 stores releases and pins their project and dataset
+artifacts. Opt in to new captures with `RIVET_ENABLE_FROZEN_ENDPOINT_RELEASES=1`
+on the control-plane API after every serving replica runs a release-aware
+reader. The local development launcher enables capture by default with its
+own PostgreSQL and MinIO. The write switch has no effect on already-captured
+releases. Current
+endpoint requests on the public and internal routes use the exact release
+pointer, reuse its prepared artifacts and build run-local reference providers.
+A cold load uses the same pinned root and dependencies as Restore and Download.
+The root pin must agree with the saved revision’s object keys, and every
+dependency selector must identify one captured revision. Invalid or missing
+artifacts stop execution before the graph starts. Capture and cold loads
+require present dataset artifacts to decode to a dataset array. Standalone
+Restore also checks dataset readability before changing the live pointer.
+Editor and Latest requests keep their usual resolution.
+
+Publish reviews the root and dependencies against the saved revisions and
+bundle scope. Capture follows effective prefab and Data Bus wiring, fixed
+graph calls, configured tool handlers and Run Thread callbacks. For graph
+targets selected at runtime, it visits each possible local target once per
+captured project revision. The server revalidates saved selections in a short
+transaction. The browser checks that a release review includes the selected
+draft and the source of each captured revision. It then checks the latest
+reported unsaved edits and asks the developer to save before publishing. With
+capture enabled, **Update** can protect an existing legacy endpoint even
+when its draft is unchanged. A conflicting save
+or move requires another review. The first protected update attempts to
+capture the currently live legacy endpoint for rollback. A confirmed invalid
+legacy dataset prevents an exact rollback and requires acknowledgement before
+publishing the repaired draft. Storage read failures stop publication.
+Managed history reads require the stored revision to belong to the project
+that owns the history. Historic snapshots without a capture can still be
+previewed and downloaded. Restore requires an
+exact dependency set or a verified standalone root. To reuse an older root that
+has no exact dependency history, open its downloaded project as an editable
+draft and explicitly publish it with the reviewed saved dependencies. The
+new release has its own history entry. Downloads with captured
+dependencies include a ZIP manifest and all captured project and dataset
+artifacts. A standalone project without a dataset keeps the project download.
+
+The [release reader](../../packages/studio-server-api/src/routes/workflows/managed/endpoint-release-reader.ts)
+and the reference overview share
+[manifest validation and binding rules](../../packages/studio-server-api/src/routes/workflows/managed/endpoint-release-manifest.ts).
+The overview validates the owning project, root revision and bindings using
+bounded metadata reads. A missing active history row, a mismatched history
+revision, or a malformed release reports project-only coverage. Only a
+matching uncaptured entry or a legacy revision with no active history ID
+is eligible for legacy capture. Cold execution, Restore and full revision
+archives verify pins and artifact content. Preview checks the selected
+artifact's saved project identity before returning its bytes.
+
+The endpoint badge and hollow reference indicators use one
+[dashboard projection](../../packages/studio-server-web/dashboard/workflowProjectPublicationStatus.ts)
+of the saved project and dependency revisions. A dependency that matches the revision used by a published
+endpoint keeps its hollow green circle when the endpoint project's draft changes.
+A mismatched dependency gets a hollow yellow circle. The project name uses
+the same color as its hollow circle. The editor tracks unsaved work for
+the Save controls and the publish review guard. Saving a selected dependency
+refreshes the reference overview even when the caller's saved revision stays
+the same. The active card refreshes web-app data from the owning project's
+saved settings and revision. A change to the derived endpoint badge uses the
+existing web-app summary. The
+tree shows external reference counts beneath each bundle title, aligned with
+the bundle icon. Background refreshes from opening or closing tabs keep the
+last reference indicators visible until the current request finishes. Only
+the latest tree generation's response can replace them.
+The **External references** modal groups targets beneath the calling bundle
+project and each Subgraph's graph and node path. Each target shows its name,
+path and **Open project** action in order. The source heading's tooltip shows
+the bundle member path and saved revision time. **Open project** uses catalog
+identity and the normal persistent editor tab action.
+A missing saved revision keeps the member in its bundle and marks coverage
+incomplete. A published project whose dependency check is unavailable displays
+**Dependencies unverified**. When Update can capture a legacy endpoint, the
+status instead prompts the developer to update it. The changed-projects dialog
+groups current bundle members under **In this bundle** and lists other targets
+under **External references**. It shows the active revision and saved selection
+for each selector and updates when the saved status changes. Backfill can
+rebuild current-format summaries with a damaged identity or missing or
+malformed call fields. Known extraction gaps remain visible. A completed
+backfill sends one catalog refresh hint and leaves execution caches warm.
+
+Schema 22 is the deployment rollback floor because older readers would ignore
+the release binding. Rehearse the 21-to-22 additive migration with capture
+writes disabled. Use the managed staged cutover for an installed reader below
+the floor. Verify the readers and recent metadata-plus-object backup before
+enabling new captures. The object reference verifier includes captured
+artifacts during reconciliation and deletion. Legacy restore includes both
+release tables and inventories exact project and dataset pins even after a
+dependency project or its saved revision has been deleted. The captured
+manifest must identify the original owner of each pin before the object can
+enter the restore inventory. Restore metadata and objects together from the
+same checkpoint.
 
 The history is keyed by the stable workflow/project ID, not the display name, so renaming or moving a project keeps its history attached. Duplicating and uploading intentionally create fresh workflow IDs, so they start with empty history.
 
@@ -1250,7 +1383,7 @@ Operational defaults are intentionally conservative:
 
 The storage-backend recording entrypoint enforces `RIVET_RECORDINGS_DATASET_MODE` for every recording surface, including hosted editor uploads and cross-project Subgraph child runs. Callers may upload a dataset snapshot to reconstruct a run, but with the default `none` policy no replay dataset artifact is persisted. The API also avoids allocating a child recorder when recording is disabled and applies the configured partial-output and trace capture flags when recording is enabled.
 
-The project publication snapshot API includes Saved-latest cross-project Subgraph target IDs alongside the authoritative draft revision and publication version. Both filesystem and managed readers derive them from that same draft snapshot. Project Settings does not display a reminder about these dependencies. Target saves do not alter the caller's publication status or publication preconditions; Saved latest still resolves dynamically at execution, while Published resolves the target's published version. Removing the reminder does not pin target revisions. Recording index and metadata readers must round-trip the `subgraph_project` execution surface and exclude it from endpoint/web-app run statistics; child and caller recording identities share the request/editor correlation key when both were captured.
+The project publication snapshot API includes Saved-latest cross-project Subgraph target IDs alongside the authoritative draft revision and publication version. New managed endpoint releases freeze the effective selections at Publish. Authoring and independent publication surfaces retain their current reference policies. Recording index and metadata readers must round-trip the `subgraph_project` execution surface and exclude it from endpoint/web-app run statistics; child and caller recording identities share the request/editor correlation key when both were captured.
 
 Retention applies to both storage backends. The per-endpoint cap groups by workflow id plus historical endpoint name, preserving independent allowances when a slug is later reused by another project. Filesystem cleanup deletes bundle directories and SQLite rows. Managed cleanup deletes matching Postgres rows transactionally and removes their recording/replay objects after commit; concurrent replicas delete blobs only for rows they actually claimed. Per-endpoint and age cleanup stays workflow/endpoint-scoped on ordinary managed writes, while startup reconciliation and the optional global byte cap inspect the full recording metadata set.
 

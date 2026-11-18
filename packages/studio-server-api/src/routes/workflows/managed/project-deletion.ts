@@ -28,6 +28,13 @@ export async function deleteManagedWorkflowProject(
   `,
     [workflow.workflow_id],
   );
+  const pinned = await context.db.queryRows<Pick<RevisionRow, 'project_blob_key' | 'dataset_blob_key'>>(
+    client,
+    `SELECT p.project_blob_key, p.dataset_blob_key
+       FROM workflow_endpoint_release_projects p JOIN workflow_endpoint_releases r USING (release_id)
+       WHERE r.workflow_id = $1`,
+    [workflow.workflow_id],
+  );
   const recordings = await context.db.queryRows<RecordingRow>(
     client,
     `
@@ -40,7 +47,7 @@ export async function deleteManagedWorkflowProject(
   // Recordings outlive their source project. GC keeps referenced replay artifacts
   // until normal recording retention releases them.
   await context.maintenance.enqueueObjectDeletions(client, 'workflow-project-deletion', [
-    ...revisions.flatMap((revision) => [revision.project_blob_key, revision.dataset_blob_key]),
+    ...[...revisions, ...pinned].flatMap((revision) => [revision.project_blob_key, revision.dataset_blob_key]),
     ...recordings.flatMap((recording) => [
       recording.recording_blob_key,
       recording.replay_project_blob_key,

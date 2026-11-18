@@ -662,7 +662,7 @@ async function main() {
         }),
       );
     await writeArtifact(artifactsDir, 'immutable-release-values.json', `${JSON.stringify(generatedValues, null, 2)}\n`);
-    await run(helmBin, ['lint', chartPath, ...valueArgs]);
+    await run(helmBin, ['lint', chartPath, '--namespace', namespace, ...valueArgs]);
     const rendered = await run(helmBin, ['template', release, chartPath, '--namespace', namespace, ...valueArgs], {
       capture: true,
     });
@@ -1557,7 +1557,15 @@ async function main() {
               haRequested,
             });
             await fs.writeFile(maintenancePath, JSON.stringify(validationValues), { mode: 0o600 });
-            await run(helmBin, ['lint', chartPath, ...valueArgs, '--values', maintenancePath]);
+            await run(helmBin, [
+              'lint',
+              chartPath,
+              '--namespace',
+              namespace,
+              ...valueArgs,
+              '--values',
+              maintenancePath,
+            ]);
             const validationRender = await run(
               helmBin,
               ['template', release, chartPath, '--namespace', namespace, ...valueArgs, '--values', maintenancePath],

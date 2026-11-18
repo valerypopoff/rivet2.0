@@ -549,7 +549,7 @@
 {{- if and (eq .Values.ha.controlPlane.mode "singleton-overlap") (not .Values.ha.enabled) -}}
 {{- fail "singleton-overlap requires ha.enabled=true" -}}
 {{- end -}}
-{{- if and .Values.ha.stagingSingleExecution (or (not .Values.ha.enabled) (not .Values.autoscaling.executionController.enabled) (not (regexMatch "^rivet-staging-[a-z0-9-]+$" .Release.Namespace))) -}}
+{{- if and .Values.ha.stagingSingleExecution (or (not .Values.ha.enabled) (and (not .Values.workflowSchema.maintenanceValidation) (not .Values.autoscaling.executionController.enabled)) (not (regexMatch "^rivet-staging-[a-z0-9-]+$" .Release.Namespace))) -}}
 {{- fail "ha.stagingSingleExecution requires HA with the execution controller in a rivet-staging-* namespace" -}}
 {{- end -}}
 {{- if .Values.ha.enabled -}}
@@ -724,7 +724,8 @@
 {{- fail "Temporary execution surge requires enabled execution pools" -}}
 {{- end -}}
 {{- if .Values.ha.executionPools.enabled -}}
-{{- if or (not .Values.ha.enabled) (ne .Values.ha.controlPlane.mode "singleton") (not .Values.autoscaling.executionController.enabled) (not .Values.requestContinuity.enabled) -}}
+{{- /* Fenced validation keeps both pool identities with the replica writer paused. */ -}}
+{{- if or (not .Values.ha.enabled) (ne .Values.ha.controlPlane.mode "singleton") (not .Values.requestContinuity.enabled) (and (not .Values.workflowSchema.maintenanceValidation) (not .Values.autoscaling.executionController.enabled)) -}}
 {{- fail "Execution pools require singleton HA with the execution controller" -}}
 {{- end -}}
 {{- if not (has .Values.ha.executionPools.active (list "a" "b")) -}}
@@ -757,7 +758,7 @@
 {{- if .Values.metrics.proxyExporter.enabled -}}
 {{- fail "Request continuity currently qualifies the single-container proxy; proxyExporter needs separate lifecycle qualification" -}}
 {{- end -}}
-{{- if not .Values.autoscaling.proxy.enabled -}}
+{{- if and (not .Values.workflowSchema.maintenanceValidation) (not .Values.autoscaling.proxy.enabled) -}}
 {{- fail "Request continuity requires the qualified proxy HPA policy" -}}
 {{- end -}}
 {{- if not (and .Values.ha.enabled .Values.availability.gkeGateway (eq .Values.availability.gkeGatewayProfile "compact")) -}}

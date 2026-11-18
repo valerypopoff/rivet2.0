@@ -16,7 +16,7 @@ import {
   clearRecoverableNodeConnectionsForGraph,
   recoverableNodeConnectionsStatePerGraph,
 } from '../state/recoverableNodeConnections';
-import { isComparisonInspectionProject } from '../utils/projectComparisonDocument.js';
+import { isDetachedInspectionProject } from '../utils/projectComparisonDocument.js';
 
 export interface Command<T, U> {
   type: string;
@@ -87,7 +87,7 @@ export function readGraphCommandState(store: ReturnType<typeof useStore>): Graph
     graphId,
     editingNodeId,
     referencedProjects,
-    readOnly: store.get(isReadOnlyGraphState) || isComparisonInspectionProject(project.metadata.id),
+    readOnly: store.get(isReadOnlyGraphState) || isDetachedInspectionProject(project.metadata.id),
   };
 }
 

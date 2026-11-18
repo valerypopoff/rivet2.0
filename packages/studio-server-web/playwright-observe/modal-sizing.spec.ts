@@ -163,7 +163,7 @@ test('project settings uses vertical sections on wide and narrow viewports', asy
     'LLM profile suspension',
     'Decision AI profile suspension',
     '---',
-    'Published version history',
+    'Published revision history',
     '---',
     'Danger zone',
   ]);

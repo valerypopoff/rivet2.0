@@ -24,6 +24,7 @@ import { enqueueSubgraphProjectRecording } from './subgraph-recordings.js';
 export type HostedProcessorInput = {
   project: Project;
   datasetProvider: DatasetProvider;
+  frozenReferences?: HostedRuntimeInput['frozenReferences'];
   projectPath: string;
   inputs: Record<string, LooseDataValue>;
   context: Record<string, LooseDataValue>;

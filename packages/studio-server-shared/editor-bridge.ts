@@ -45,6 +45,7 @@ export type DashboardToEditorCommand =
     }
   | { type: 'open-recording'; recordingId: string; replaceCurrent: boolean; requestId?: string }
   | { type: 'open-published-version-preview'; relativePath: string; versionId: string; replaceCurrent: boolean }
+  | { type: 'close-history-preview'; sessionId: string }
   | {
       type: 'compare-open-project-with';
       path: string;
@@ -99,13 +100,15 @@ export type EditorToDashboardEvent =
   | { type: 'bundle-comparison-state'; state: BundleComparisonEditorState; requestId?: string }
   | { type: 'editor-ready'; editorInstanceId: string }
   | { type: 'editor-initialization-failed' }
-  | { type: 'open-subgraph-target'; projectId: string; graphId: string }
+  | { type: 'open-subgraph-target'; projectId: string; graphId: string; previewPath?: string }
   | { type: 'workflow-project-reconciliation-captured'; context: HostedProjectReconciliationContext; requestId: string }
   | { type: 'workflow-project-conflicts'; snapshot: HostedProjectConflictSnapshot }
   | { type: 'project-opened'; path: string; requestId?: string }
+  | { type: 'project-open-cancelled'; requestId: string }
   | { type: 'project-open-failed'; path: string; error: string; requestId?: string }
   | { type: 'active-project-path-changed'; path: string }
   | { type: 'active-project-unsaved-changes-changed'; path: string; hasUnsavedChanges: boolean }
+  | { type: 'editable-dirty-projects'; editorInstanceId: string; projectIds: string[] }
   | { type: 'open-project-count-changed'; count: number }
   | { type: 'project-compare-failed'; path: string; error: string }
   | { type: 'workflow-paths-moved-applied'; requestId?: string }
@@ -224,6 +227,8 @@ export function isDashboardToEditorCommand(value: unknown): value is DashboardTo
         typeof value.replaceCurrent === 'boolean' &&
         (value.requestId == null || typeof value.requestId === 'string')
       );
+    case 'close-history-preview':
+      return typeof value.sessionId === 'string' && value.sessionId.length <= 128;
     case 'open-published-version-preview':
       return (
         typeof value.relativePath === 'string' &&
@@ -304,13 +309,16 @@ export function isEditorToDashboardEvent(value: unknown): value is EditorToDashb
     case 'editor-ready':
       return typeof value.editorInstanceId === 'string';
     case 'open-subgraph-target':
-      return typeof value.projectId === 'string' && typeof value.graphId === 'string';
+      return typeof value.projectId === 'string' && typeof value.graphId === 'string' &&
+        (value.previewPath === undefined || typeof value.previewPath === 'string');
     case 'workflow-project-reconciliation-captured':
       return typeof value.requestId === 'string' && isHostedProjectReconciliationContext(value.context);
     case 'workflow-project-conflicts':
       return isHostedProjectConflictSnapshot(value.snapshot);
     case 'project-opened':
       return typeof value.path === 'string' && (value.requestId == null || typeof value.requestId === 'string');
+    case 'project-open-cancelled':
+      return typeof value.requestId === 'string';
     case 'active-project-path-changed':
       return typeof value.path === 'string';
     case 'project-saved':
@@ -318,6 +326,9 @@ export function isEditorToDashboardEvent(value: unknown): value is EditorToDashb
         typeof value.path === 'string' &&
         (value.hasNewerUnsavedChanges == null || typeof value.hasNewerUnsavedChanges === 'boolean')
       );
+    case 'editable-dirty-projects':
+      return typeof value.editorInstanceId === 'string' && Array.isArray(value.projectIds) &&
+        value.projectIds.length <= 4096 && value.projectIds.every((id) => typeof id === 'string');
     case 'active-project-unsaved-changes-changed':
       return typeof value.path === 'string' && typeof value.hasUnsavedChanges === 'boolean';
     case 'project-compare-failed':

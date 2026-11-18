@@ -233,9 +233,10 @@ export function useWorkflowLibrarySelection({
     (project: WorkflowProjectItem) => {
       clearPendingPreviewOpen();
       setSelectedProjectPath(project.absolutePath);
+      onWorkflowProjectOpenIntent(project.absolutePath);
       onOpenProject(project.absolutePath, { title: project.name, bundleId: project.bundleId ?? null });
     },
-    [clearPendingPreviewOpen, onOpenProject],
+    [clearPendingPreviewOpen, onOpenProject, onWorkflowProjectOpenIntent],
   );
 
   return {

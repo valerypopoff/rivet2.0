@@ -4,9 +4,10 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { getWorkflowsRoot } from '../../security.js';
 import { loadProjectFromFile, loadProjectFromString } from '@valerypopoff/rivet2-node';
+import { assertLegacyEndpointCanBeRestored } from './endpoint-release-graphs.js';
 
 import type {
-  WorkflowDraftPublicationPreconditions,
+  WorkflowPublicationPreconditions,
   WorkflowPublishedVersionRestoreResponse,
   WorkflowPublishedVersionPreviewResponse,
   WorkflowPublishedVersionSummary,
@@ -23,7 +24,6 @@ import {
   getPublishedWorkflowSnapshotDatasetPath,
   getPublishedWorkflowSnapshotMetadataPath,
   getPublishedWorkflowSnapshotPath,
-  getWorkflowDatasetPath,
   getWorkflowProjectSettingsPath,
   isSafePublishedSnapshotId,
   pathExists,
@@ -610,6 +610,7 @@ function mapPublishedVersionRecordToSummary(record: FilesystemPublishedVersionRe
     isCurrent: record.isCurrent,
     isStarred: record.isStarred,
     comment: record.comment,
+    coverage: 'project-only',
   };
 }
 
@@ -777,7 +778,7 @@ export async function readWorkflowPublishedVersionPreview(
 export async function restoreWorkflowPublishedVersion(
   relativePath: unknown,
   versionId: unknown,
-  preconditions: WorkflowDraftPublicationPreconditions,
+  preconditions: WorkflowPublicationPreconditions,
   onCommitted?: () => void,
 ): Promise<WorkflowPublishedVersionRestoreResponse> {
   if (typeof versionId !== 'string' || !versionId.trim()) {
@@ -803,9 +804,15 @@ export async function restoreWorkflowPublishedVersion(
     throw createHttpError(404, 'Published version not found');
   }
 
-  await ensureWorkflowEndpointNameIsUnique(root, projectPath, record.endpointName);
+  const endpointName = existingSettings.publishedEndpointName || existingSettings.endpointName;
+  if (!endpointName) throw createHttpError(400, 'Configure an endpoint name before restoring.');
+  await ensureWorkflowEndpointNameIsUnique(root, projectPath, endpointName);
 
   const snapshot = await readWorkflowPublishedVersionSnapshot(relativePath, record.id);
+  assertLegacyEndpointCanBeRestored(
+    loadProjectFromString(snapshot.contents),
+    snapshot.datasetsContents?.toString('utf8') ?? null,
+  );
   const restoredSnapshotId = randomUUID();
   const lastPublishedAt = new Date().toISOString();
   const legacyMetadataChange = await getCurrentPublishedWorkflowVersionMetadataChange({
@@ -816,13 +823,13 @@ export async function restoreWorkflowPublishedVersion(
   const publishedStateHash = createWorkflowPublicationStateHashFromContents(
     snapshot.contents,
     snapshot.datasetsContents,
-    record.endpointName,
+    endpointName,
   );
   const metadataChange = await createPublishedWorkflowVersionMetadataChange({
     root,
     projectPath,
     snapshotId: restoredSnapshotId,
-    endpointName: record.endpointName,
+    endpointName,
     stateHash: publishedStateHash,
     publishedAt: lastPublishedAt,
   });
@@ -841,14 +848,12 @@ export async function restoreWorkflowPublishedVersion(
             },
           ]),
       metadataChange,
-      { path: projectPath, contents: snapshot.contents },
-      { path: getWorkflowDatasetPath(projectPath), contents: snapshot.datasetsContents },
       createStoredWorkflowProjectSettingsChange(
         projectPath,
         {
-          endpointName: record.endpointName,
+          endpointName: existingSettings.endpointName,
           endpointAccess: existingSettings.endpointAccess,
-          publishedEndpointName: record.endpointName,
+          publishedEndpointName: endpointName,
           publishedSnapshotId: restoredSnapshotId,
           publishedStateHash,
           lastPublishedAt,

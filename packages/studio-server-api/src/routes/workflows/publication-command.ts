@@ -12,6 +12,8 @@ export type WorkflowPublicationCommand =
       kind: 'publish-endpoint';
       relativePath: string;
       endpointName: string;
+      releaseReviewToken?: string;
+      acknowledgeMissingRollback?: boolean;
       preconditions: WorkflowDraftPublicationPreconditions;
     }
   | {
@@ -24,7 +26,7 @@ export type WorkflowPublicationCommand =
       kind: 'restore-version';
       relativePath: string;
       versionId: string;
-      preconditions: WorkflowDraftPublicationPreconditions;
+      preconditions: WorkflowPublicationPreconditions;
     }
   | { kind: 'unpublish-endpoint'; relativePath: string; preconditions: WorkflowPublicationPreconditions }
   | {
@@ -52,8 +54,8 @@ export function publicationCommandPublishesDraft(kind: WorkflowPublicationComman
   switch (kind) {
     case 'publish-endpoint':
     case 'publish-web-apps':
-    case 'restore-version':
       return true;
+    case 'restore-version':
     case 'unpublish-endpoint':
     case 'set-endpoint-access':
     case 'set-web-app-access':

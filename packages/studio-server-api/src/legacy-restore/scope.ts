@@ -16,6 +16,8 @@ export const LEGACY_RESTORE_TABLES = [
   'workflows',
   'workflow_revisions',
   'workflow_published_versions',
+  'workflow_endpoint_releases',
+  'workflow_endpoint_release_projects',
   'workflow_endpoints',
   'workflow_web_apps',
   'workflow_recordings',
@@ -184,6 +186,12 @@ export async function captureRestoreObjects(
   )
     throw new Error('Storage namespaces overlap.');
   const keys = new Set<string>();
+  const addArtifact = (reference: unknown, expectedRoot: string) => {
+    if (reference == null) return;
+    if (typeof reference !== 'string') throw new Error('Invalid artifact reference.');
+    if (!reference.startsWith(expectedRoot)) throw new Error('Artifact reference belongs to a different resource.');
+    keys.add(validateRestoreObjectKey(config.objectStoragePrefix, reference, 'workflow'));
+  };
   const sources: Array<[string, string[]]> = [
     ['workflow_revisions', ['project_blob_key', 'dataset_blob_key']],
     ['workflow_recordings', ['recording_blob_key', 'replay_project_blob_key', 'replay_dataset_blob_key']],
@@ -193,17 +201,35 @@ export async function captureRestoreObjects(
     // Column names come exclusively from this owner's closed declaration.
     const identity = table === 'workflow_revisions' ? 'workflow_id, revision_id' : 'workflow_id, recording_id';
     const rows = await pool.query(`SELECT ${identity}, ${columns.join(',')} FROM public.${table}`);
-    for (const row of rows.rows)
-      for (const column of columns) {
-        const reference = row[column];
-        if (reference != null) {
-          if (typeof reference !== 'string') throw new Error('Invalid artifact reference.');
-          const expectedRoot = `${row.workflow_id}/${table === 'workflow_revisions' ? 'revisions' : 'recordings'}/${row.revision_id ?? row.recording_id}/`;
-          if (!reference.startsWith(expectedRoot))
-            throw new Error('Artifact reference belongs to a different resource.');
-          keys.add(validateRestoreObjectKey(config.objectStoragePrefix, reference, 'workflow'));
-        }
-      }
+    for (const row of rows.rows) {
+      const expectedRoot = `${row.workflow_id}/${table === 'workflow_revisions' ? 'revisions' : 'recordings'}/${row.revision_id ?? row.recording_id}/`;
+      for (const column of columns) addArtifact(row[column], expectedRoot);
+    }
+  }
+  if (tables.includes('workflow_endpoint_release_projects')) {
+    // A pin outlives its source revision. The manifest identifies its original project.
+    const { rows } = await pool.query<{
+      workflow_id: string | null;
+      revision_id: string;
+      project_blob_key: string;
+      dataset_blob_key: string | null;
+    }>(`
+      SELECT owner.workflow_id, pin.revision_id, pin.project_blob_key, pin.dataset_blob_key
+      FROM public.workflow_endpoint_release_projects pin
+      JOIN public.workflow_endpoint_releases release USING (release_id)
+      LEFT JOIN LATERAL (
+        SELECT min(project->>'projectId') AS workflow_id
+        FROM jsonb_array_elements(release.manifest->'projects') AS projects(project)
+        WHERE release.manifest->'version' = '1'::jsonb AND project->>'artifactId' = pin.revision_id
+        HAVING count(*) = 1
+      ) owner ON true
+    `);
+    for (const row of rows) {
+      if (!row.workflow_id) throw new Error('Captured endpoint artifact has no unique project owner.');
+      const expectedRoot = `${row.workflow_id}/revisions/${row.revision_id}/`;
+      addArtifact(row.project_blob_key, expectedRoot);
+      addArtifact(row.dataset_blob_key, expectedRoot);
+    }
   }
   if (!keys.size) return [];
   const s3 = new S3Client(createManagedWorkflowS3ClientConfig(config));

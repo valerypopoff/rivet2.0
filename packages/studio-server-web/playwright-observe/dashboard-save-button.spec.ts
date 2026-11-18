@@ -41,9 +41,9 @@ const project: WorkflowProjectItem = {
   absolutePath: projectPath,
   updatedAt: '2026-09-08T00:00:00.000Z',
   settings: {
-    status: 'unpublished',
-    endpointName: '',
-    lastPublishedAt: null,
+    status: 'published',
+    endpointName: 'dashboard-save-fixture',
+    lastPublishedAt: '2026-09-08T00:00:00.000Z',
     publishedWebApps: [],
   },
 };
@@ -99,9 +99,14 @@ test('dashboard Save sends a data-only command and remains explicit in Evaluatio
   await page.route('**/api/workflows/tree', async (route) => {
     const tree: WorkflowTreeResponse = {
       root: '/workflows',
-      sync: { epoch: 'dashboard-save-button', revision: 0 },
+      sync: { epoch: 'dashboard-save-button', revision: saveSequence },
       folders: [],
-      projects: [project],
+      projects: [
+        {
+          ...project,
+          settings: { ...project.settings, status: saveSequence ? 'unpublished_changes' : 'published' },
+        },
+      ],
     };
     await route.fulfill({ json: tree });
   });
@@ -134,15 +139,21 @@ test('dashboard Save sends a data-only command and remains explicit in Evaluatio
   await page.goto('/', { waitUntil: 'domcontentloaded' });
   await authenticateIfNeeded(page);
   await waitForDashboardReady(page);
-  await page.locator('.project-row', { hasText: projectName }).dblclick();
+  const projectRow = page.locator('.project-row', { hasText: projectName });
+  await projectRow.dblclick();
 
-  const saveButton = page.locator('.active-project-save-button');
+  const active = page.locator('.active-project-section');
+  const saveButton = active.locator('.active-project-save-button');
   await dragNode(page, 40);
   await expect(saveButton).toBeVisible({ timeout: 30_000 });
+  await expect(active.getByText('Published', { exact: true })).toBeVisible();
+  await expect(projectRow).toHaveClass(/project-row-status-published\b/);
   await saveButton.click();
 
   await expect.poll(() => savedPaths).toEqual([projectPath]);
   await expect(saveButton).toHaveCount(0);
+  await expect(active.getByText('Unpublished changes', { exact: true })).toBeVisible();
+  await expect(projectRow).toHaveClass(/project-row-status-unpublished_changes\b/);
   expect(pageErrors).toEqual([]);
   expect(
     await page.evaluate(

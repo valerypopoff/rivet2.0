@@ -212,6 +212,7 @@ async function executeWorkflowEndpoint(
   const processor = await createHostedProcessor({
     project,
     datasetProvider,
+    frozenReferences: 'frozenReferences' in executionProject ? executionProject.frozenReferences : undefined,
     projectPath: projectVirtualPath,
     earlyOutputs: true,
     abortSignal: options.abortSignal,

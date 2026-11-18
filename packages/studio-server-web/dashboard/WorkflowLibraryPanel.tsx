@@ -1,9 +1,10 @@
 import Button from '@atlaskit/button';
+import { ModalTransition } from '@atlaskit/modal-dialog';
 import RecordingIcon from 'majesticons/line/video-line.svg?react';
 import SettingsCogIcon from 'majesticons/line/settings-cog-line.svg?react';
 import ScheduleIcon from 'majesticons/line/calendar-line.svg?react';
 import type { Dispatch, FC, SetStateAction } from 'react';
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { ScheduledRunsModal } from './ScheduledRunsModal';
 import { requestScheduledRuns } from './scheduledRunApi';
 import type { ScheduledRunSummary } from '../../studio-server-shared/scheduled-run-types';
@@ -34,10 +35,17 @@ import type {
 } from '../../studio-server-shared/workflow-bundle-comparison-types';
 import { useWorkflowBundleComparison } from './useWorkflowBundleComparison';
 import { WorkflowBundleComparisonTree } from './WorkflowBundleComparisonTree';
+import { WorkflowHistoryPreviewPanel } from './WorkflowHistoryPreviewPanel';
+import type { HistoryPreviewSession } from './useWorkflowHistoryPreview';
+import { useWorkflowReferenceOverview, WorkflowPublicationReferenceContext, WorkflowReferenceDetailsModal } from './WorkflowPublicationReferences';
 
 interface WorkflowLibraryPanelProps {
   sendBundleComparison: BundleComparisonSend;
   bundleComparisonState: BundleComparisonEditorState;
+  historyPreview: HistoryPreviewSession | null;
+  dirtyProjectIds: string[];
+  onOpenHistoryProject(artifactId: string): void;
+  onExitHistoryPreview(): void;
   editorInstanceId?: string | null;
   onBundleComparisonNavigator?: (handler: ((projectId: string, graphId: string) => boolean) | null) => void;
   onOpenProject: (path: string, options?: WorkflowProjectOpenOptions) => void;
@@ -95,6 +103,10 @@ const SidebarExpandIcon: FC = () => (
 export const WorkflowLibraryPanel: FC<WorkflowLibraryPanelProps> = ({
   sendBundleComparison,
   bundleComparisonState,
+  historyPreview,
+  dirtyProjectIds,
+  onOpenHistoryProject,
+  onExitHistoryPreview,
   editorInstanceId,
   onBundleComparisonNavigator,
   onOpenProject,
@@ -132,11 +144,11 @@ export const WorkflowLibraryPanel: FC<WorkflowLibraryPanelProps> = ({
   const libraryScroll = useRef(0);
   const comparing = useRef(false);
   useLayoutEffect(() => {
-    const active = comparison.session !== null || comparison.pending !== null;
+    const active = !!historyPreview || comparison.session !== null || comparison.pending !== null;
     if (active && !comparing.current) libraryScroll.current = bodyRef.current?.scrollTop ?? 0;
     if (!active && comparing.current && bodyRef.current) bodyRef.current.scrollTop = libraryScroll.current;
     comparing.current = active;
-  }, [comparison.session, comparison.pending]);
+  }, [comparison.session, comparison.pending, historyPreview]);
   useEffect(() => {
     onBundleComparisonNavigator?.(comparison.navigate);
     return () => onBundleComparisonNavigator?.(null);
@@ -189,7 +201,10 @@ export const WorkflowLibraryPanel: FC<WorkflowLibraryPanelProps> = ({
     onOpenProject,
     onRefreshOpenProjectFromDisk,
     onOpenRecording,
-    onOpenPublishedVersionPreview,
+    onOpenPublishedVersionPreview: (path, versionId, options) => {
+      if (!options?.replaceCurrent && (comparison.session || comparison.pending)) comparison.exit();
+      onOpenPublishedVersionPreview(path, versionId, options);
+    },
     onCompareOpenProjectWith,
     onDeleteProject,
     onWorkflowPathsMoved,
@@ -252,6 +267,8 @@ export const WorkflowLibraryPanel: FC<WorkflowLibraryPanelProps> = ({
     setAppSettingsOpen,
   } = controller;
 
+  const treeGeneration = useMemo(() => ({ folders, rootProjects }), [folders, rootProjects]);
+  const references = useWorkflowReferenceOverview(controller.allProjects, treeGeneration);
   let bodyContent: JSX.Element | null = null;
   const membershipChanged =
     comparison.session &&
@@ -338,9 +355,10 @@ export const WorkflowLibraryPanel: FC<WorkflowLibraryPanelProps> = ({
   }
 
   const panelContentVisible = contentVisible && !collapsed;
-  const openedProjectDotStatus = openedWorkflowProject ? getWorkflowProjectDotStatus(openedWorkflowProject) : null;
+  const openedProjectDotStatus = openedWorkflowProject ? getWorkflowProjectDotStatus(openedWorkflowProject, references.value) : null;
 
   return (
+    <WorkflowPublicationReferenceContext.Provider value={references.value}>
     <div className="workflow-library-panel">
       <div
         className={`workflow-library-panel-content${panelContentVisible ? '' : ' workflow-library-panel-content-hidden'}`}
@@ -361,23 +379,25 @@ export const WorkflowLibraryPanel: FC<WorkflowLibraryPanelProps> = ({
           <span className="header-title">Rivet Studio Server</span>
         </button>
 
-        <div className="active-project-slot">
-          <ActiveProjectSection
-            activeProject={activeProject}
-            isCurrentlyOpen={isActiveProjectOpen}
-            hasUnsavedChanges={activeProjectHasUnsavedChanges}
-            editorReady={editorReady}
-            onSave={onSaveProject}
-            onOpenSettings={handleOpenSettings}
-          />
-        </div>
+        {!historyPreview && (
+          <div className="active-project-slot">
+            <ActiveProjectSection
+              activeProject={activeProject}
+              isCurrentlyOpen={isActiveProjectOpen}
+              hasUnsavedChanges={activeProjectHasUnsavedChanges}
+              editorReady={editorReady}
+              onSave={onSaveProject}
+              onOpenSettings={handleOpenSettings}
+            />
+          </div>
+        )}
 
         <div
           ref={bodyRef}
           className={`body${dragOverRoot ? ' drag-over-root' : ''}`}
-          onDragOver={comparison.session ? undefined : handleRootDragOver}
-          onDragLeave={comparison.session ? undefined : handleRootDragLeave}
-          onDrop={comparison.session ? undefined : (event) => void handleRootDrop(event)}
+          onDragOver={comparison.session || historyPreview ? undefined : handleRootDragOver}
+          onDragLeave={comparison.session || historyPreview ? undefined : handleRootDragLeave}
+          onDrop={comparison.session || historyPreview ? undefined : (event) => void handleRootDrop(event)}
         >
           {comparison.session || comparison.pending ? (
             <div className="bundle-comparison-toolbar">
@@ -405,7 +425,16 @@ export const WorkflowLibraryPanel: FC<WorkflowLibraryPanelProps> = ({
               Bundle membership or locations changed. Exit comparison and start again to review the updated bundles.
             </div>
           ) : null}
-          {bodyContent}
+          {historyPreview ? (
+            <WorkflowHistoryPreviewPanel
+              key={historyPreview.id}
+              session={historyPreview}
+              openedPath={openedProjectPath}
+              bundleFolders={controller.bundleFolders}
+              onOpen={onOpenHistoryProject}
+              onExit={onExitHistoryPreview}
+            />
+          ) : bodyContent}
           {controller.bundleAction ? (
             <div className="bundle-action-status" role="status" title={controller.bundleAction.name}>
               {controller.bundleAction.kind === 'duplication'
@@ -413,7 +442,7 @@ export const WorkflowLibraryPanel: FC<WorkflowLibraryPanelProps> = ({
                 : `Converting ${controller.bundleAction.name}…`}
             </div>
           ) : null}
-          {!comparison.session ? (
+          {!comparison.session && !historyPreview ? (
             <div className="body-actions">
               <button
                 type="button"
@@ -496,12 +525,30 @@ export const WorkflowLibraryPanel: FC<WorkflowLibraryPanelProps> = ({
           </Button>
         </div>
 
-        <WorkflowLibraryContextMenus controller={controller} onCompareBundle={comparison.begin} />
+        <ModalTransition>
+          {references.dialog && (
+            <WorkflowReferenceDetailsModal
+              key={'bundle' in references.dialog ? references.dialog.bundle.bundleId : references.dialog.callerId}
+              dialog={references.dialog}
+              projects={controller.allProjects}
+              onOpen={onProjectPersistentOpen}
+              onClose={references.close}
+            />
+          )}
+        </ModalTransition>
+        <WorkflowLibraryContextMenus
+          controller={controller}
+          onCompareBundle={(bundleId, opener) => {
+            onExitHistoryPreview();
+            comparison.begin(bundleId, opener);
+          }}
+        />
         <WorkflowBundleDragPreview preview={controller.dragPreview} />
         <WorkflowLibraryModals
           comparison={comparison}
           scheduledRunsOpen={scheduledRunsOpen}
           controller={controller}
+          dirtyProjectIds={dirtyProjectIds}
           routeConfig={routeConfig}
           onRouteConfigChange={onRouteConfigChange}
         />
@@ -531,5 +578,6 @@ export const WorkflowLibraryPanel: FC<WorkflowLibraryPanelProps> = ({
         </button>
       ) : null}
     </div>
+    </WorkflowPublicationReferenceContext.Provider>
   );
 };

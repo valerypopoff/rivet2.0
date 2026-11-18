@@ -585,7 +585,13 @@ assert.equal(findStep(editorJob, 'Install dependencies', 'Editor shards')['timeo
 const browserCheck = findStep(editorJob, 'Prepare browser runtime', 'Editor shards');
 const browserTests = findStep(editorJob, 'Run hosted editor regressions', 'Editor shards');
 assert.match(browserCheck.run, /yarn node scripts\/ci\/verify-browser-environment\.mjs/);
-assert.match(browserCheck.run, /docker create --init --ipc=host --publish 127\.0\.0\.1:3100:3100/);
+function checkBrowserImageSetup(setup) {
+  assert.match(
+    setup.run,
+    /^node scripts\/ci\/pull-docker-image\.mjs "\$RIVET_CI_BROWSER_IMAGE"\ncontainer_id=\$\(docker create --pull=never --init --ipc=host --publish 127\.0\.0\.1:3100:3100 /,
+  );
+}
+checkBrowserImageSetup(browserCheck);
 assert.match(browserCheck.run, /target=\/workspace,readonly/);
 assert.match(browserCheck.run, /--host 0\.0\.0\.0 --port 3100/);
 assert.ok(browserCheck.run.indexOf('echo "container_id=') < browserCheck.run.indexOf('docker start'));
@@ -970,7 +976,7 @@ for (const [id, before] of [
   assert.equal(setup.id, 'browser-runtime');
   assert.equal(setup['timeout-minutes'], 4);
   assert.ok(job.steps.indexOf(setup) < job.steps.indexOf(findStep(job, before, id)));
-  assert.match(setup.run, /docker create --init --ipc=host --publish 127\.0\.0\.1:3100:3100/);
+  checkBrowserImageSetup(setup);
   assert.match(setup.run, /target=\/workspace,readonly/);
   assert.match(setup.run, /--host 0\.0\.0\.0 --port 3100/);
   assert.match(setup.run, /yarn node scripts\/ci\/verify-browser-environment\.mjs/);
@@ -1889,6 +1895,12 @@ for (const workflowPath of [
 ]) {
   const caller = parseWorkflow(workflowPath);
   assert.ok(caller.workflow.on.push.paths.length > 0, `${workflowPath} must be path-gated.`);
+  if (workflowPath.includes('developer-')) {
+    assert.ok(
+      caller.workflow.on.push.paths.includes('security/dependency-audit-exceptions.json'),
+      'Developer Desktop Release must run after a JavaScript audit exception repair.',
+    );
+  }
   assert.match(
     String(caller.workflow.concurrency['cancel-in-progress']),
     /github\.event_name == 'push'/,

@@ -11,12 +11,13 @@ import {
 const actual = { projectId: 'project', publicationVersion: '9', draftRevisionId: 'draft', endpointPublished: true };
 const reviewed = { expectedProjectId: 'project', expectedPublicationVersion: '9', expectedDraftRevisionId: 'draft' };
 
-test('publication policy distinguishes draft publication from policy-only changes and fences identity', () => {
+test('publication fences project identity and version, and only Publish checks the reviewed draft', () => {
   assertPublicationPreconditions(reviewed, actual, 'publish-endpoint');
   const olderDraft = { ...reviewed, expectedDraftRevisionId: 'old' };
-  assertPublicationPreconditions(olderDraft, actual, 'unpublish-endpoint');
-  assertPublicationPreconditions(olderDraft, actual, 'set-endpoint-access');
-  for (const kind of ['publish-endpoint', 'publish-web-apps', 'restore-version'] as const) {
+  for (const kind of ['unpublish-endpoint', 'set-endpoint-access', 'restore-version'] as const) {
+    assertPublicationPreconditions(olderDraft, actual, kind);
+  }
+  for (const kind of ['publish-endpoint', 'publish-web-apps'] as const) {
     assert.throws(() => assertPublicationPreconditions(olderDraft, actual, kind), {
       status: 409,
       code: 'publication_draft_changed',
@@ -27,11 +28,12 @@ test('publication policy distinguishes draft publication from policy-only change
       assertPublicationPreconditions({ ...reviewed, expectedProjectId: 'replacement' }, actual, 'unpublish-endpoint'),
     { status: 409, code: 'publication_project_changed' },
   );
-  assert.throws(
-    () =>
-      assertPublicationPreconditions({ ...reviewed, expectedPublicationVersion: '8' }, actual, 'set-web-app-access'),
-    { status: 409, code: 'publication_state_changed' },
-  );
+  for (const kind of ['set-web-app-access', 'restore-version'] as const) {
+    assert.throws(
+      () => assertPublicationPreconditions({ ...olderDraft, expectedPublicationVersion: '8' }, actual, kind),
+      { status: 409, code: 'publication_state_changed' },
+    );
+  }
 });
 
 test('endpoint access fails closed without active publication and rejects invalid values', () => {

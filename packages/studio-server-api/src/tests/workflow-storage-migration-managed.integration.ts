@@ -58,7 +58,7 @@ import { installRestoreSettings, configureAppSettingsBackendForTests } from '../
 import { getExpectedProxyAuthToken, getExpectedUiSessionToken } from '../auth.js';
 import { createBrowserBackupArchive, browserBackupDirectory } from '../local-metadata/browser-backup.js';
 import { fingerprintVmMigrationSource } from '../scripts/vm-migration-source-manifest.js';
-import { createManagedWorkflowS3ClientConfig } from '../routes/workflows/managed/blob-store.js';
+import { createManagedWorkflowS3ClientConfig, createRevisionBlobKey } from '../routes/workflows/managed/blob-store.js';
 import {
   leaveVmMigrationMode,
   reviewVmMigrationDeployment,
@@ -810,7 +810,8 @@ fixture: try {
     await servingPool.end();
     assert.equal(await restoreControl.exclusive(owner), true);
     const s3 = new S3Client(createManagedWorkflowS3ClientConfig(target));
-    const sentinel = target.objectStoragePrefix + 'unrelated/sentinel.txt';
+    const sentinelReference = createRevisionBlobKey('unrelated', randomUUID(), 'project');
+    const sentinel = target.objectStoragePrefix + sentinelReference;
     await s3.send(
       new PutObjectCommand({ Bucket: target.objectStorageBucket, Key: sentinel, Body: 'keep outside Rivet ownership' }),
     );
@@ -833,7 +834,8 @@ fixture: try {
       };
       const prepared = await prepareLegacyRestoreSource(roots, target);
       const restoreTables = await existingRestoreTables(pool!);
-      assert.ok(restoreTables.includes('workflow_run_evidence'));
+      for (const table of ['workflow_run_evidence', 'workflow_endpoint_releases', 'workflow_endpoint_release_projects'])
+        assert.ok(restoreTables.includes(table), table);
       const definitions = await pool!.query<{ name: string; definition: string }>(
         `SELECT t.tgname AS name, pg_get_triggerdef(t.oid, true) AS definition
          FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid
@@ -893,17 +895,78 @@ fixture: try {
           JSON.stringify({ state: 'succeeded', durationMs: 1 }),
         ],
       );
-      const objects = await captureRestoreObjects(pool!, target);
-      assert.equal(
-        objects.some((object) => object.key === sentinel),
-        false,
+      // A deleted dependency can still be retained by a frozen release.
+      const {
+        rows: [releaseRoot],
+      } = await pool!.query<{
+        revision_id: string;
+        project_blob_key: string;
+        dataset_blob_key: string | null;
+      }>(
+        `SELECT r.revision_id, r.project_blob_key, r.dataset_blob_key FROM workflows w JOIN workflow_revisions r
+           ON r.workflow_id=w.workflow_id AND r.revision_id=w.current_draft_revision_id WHERE w.workflow_id=$1`,
+        [projectId],
       );
+      assert.ok(releaseRoot);
+      const dependencyId = randomUUID();
+      const dependencyRevisionId = randomUUID();
+      const projectReference = createRevisionBlobKey(dependencyId, dependencyRevisionId, 'project');
+      const datasetReference = createRevisionBlobKey(dependencyId, dependencyRevisionId, 'dataset');
+      const pinnedKeys = [projectReference, datasetReference].map((key) => target.objectStoragePrefix + key);
+      for (const key of pinnedKeys)
+        await s3.send(
+          new PutObjectCommand({ Bucket: target.objectStorageBucket, Key: key, Body: 'frozen artifact bytes' }),
+        );
+      const releaseId = randomUUID();
+      await pool!.query('INSERT INTO workflow_endpoint_releases (release_id,workflow_id,manifest) VALUES ($1,$2,$3)', [
+        releaseId,
+        projectId,
+        JSON.stringify({
+          version: 1,
+          rootArtifactId: releaseRoot.revision_id,
+          projects: [
+            { projectId, artifactId: releaseRoot.revision_id },
+            { projectId: dependencyId, artifactId: dependencyRevisionId },
+          ],
+        }),
+      ]);
+      await pool!.query(
+        `INSERT INTO workflow_endpoint_release_projects (release_id,revision_id,project_blob_key,dataset_blob_key)
+         VALUES ($1,$2,$3,$4),($1,$5,$6,$7)`,
+        [
+          releaseId,
+          releaseRoot.revision_id,
+          releaseRoot.project_blob_key,
+          releaseRoot.dataset_blob_key,
+          dependencyRevisionId,
+          sentinelReference,
+          datasetReference,
+        ],
+      );
+      await assert.rejects(captureRestoreObjects(pool!, target), /artifact reference belongs to a different resource/i);
+      await pool!.query(
+        'UPDATE workflow_endpoint_release_projects SET project_blob_key=$1 WHERE release_id=$2 AND revision_id=$3',
+        [projectReference, releaseId, dependencyRevisionId],
+      );
+
+      const objects = await captureRestoreObjects(pool!, target);
+      const inventoriedKeys = new Set(objects.map((object) => object.key));
+      assert.ok(
+        pinnedKeys.every((key) => inventoriedKeys.has(key)),
+        'Pins survive the removal of their source revision.',
+      );
+      assert.equal(inventoriedKeys.has(sentinel), false);
       await clearRestoreObjects(target, objects);
       await clearRestoreTables(pool!);
-      assert.equal(
-        (await pool!.query('SELECT COUNT(*)::INTEGER AS count FROM workflow_run_evidence')).rows[0]?.count,
-        0,
+      for (const key of pinnedKeys)
+        await assert.rejects(s3.send(new GetObjectCommand({ Bucket: target.objectStorageBucket, Key: key })), {
+          name: 'NoSuchKey',
+        });
+      const remaining = await pool!.query(
+        `SELECT 1 FROM workflow_run_evidence UNION ALL SELECT 1 FROM workflow_endpoint_releases
+         UNION ALL SELECT 1 FROM workflow_endpoint_release_projects LIMIT 1`,
       );
+      assert.equal(remaining.rowCount, 0);
       const options = {
         roots,
         target,

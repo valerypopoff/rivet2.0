@@ -15,7 +15,13 @@ import {
   reportHostedChildRecordingFailure,
 } from './hostedLocalExecutionRecordingPersistence';
 import { rememberSubgraphPreviewStreamingOutputs } from '../../app/src/utils/subgraphPreviewStreaming';
-import type { WorkflowProjectReferencesResponse } from '../../studio-server-shared/workflow-types';
+import {
+  getWorkflowPublishedVersionPreviewFromVirtualProjectPath,
+  getWorkflowPublishedVersionPreviewVirtualProjectPath,
+  type WorkflowProjectReferencesResponse,
+} from '../../studio-server-shared/workflow-types';
+import { loadHistoricalSubgraph, loadHistoryProjectReference, resolveHistoricalSubgraph } from './hostedHistorySubgraphs';
+import { toast } from 'react-toastify';
 import {
   getWorkflowRecordingCreatedAt,
   WORKFLOW_RECORDING_CREATED_AT_HEADER,
@@ -39,6 +45,7 @@ async function readJson<T>(response: Response): Promise<T> {
 }
 
 export const hostedSubgraphProjectCatalog: SubgraphProjectCatalogProvider = {
+  loadHistoryProjectReference,
   async graphReferences(target, signal) {
     if (!target.graphIds.length) return { projectId: target.projectId, complete: true, references: [] };
     let relativePath: string | undefined;
@@ -95,13 +102,34 @@ export const hostedSubgraphProjectCatalog: SubgraphProjectCatalogProvider = {
       })),
     };
   },
-  openGraph({ projectId, graphId }) {
+  openGraph(target) {
+    const { projectId, graphId } = target;
+    if (getWorkflowPublishedVersionPreviewFromVirtualProjectPath(target.callerProjectId ?? '')) {
+      void resolveHistoricalSubgraph({ ...target, version: target.version ?? 'latest', targetGraphId: graphId })
+        .then((matched) => {
+          if (!matched?.source.sessionId) throw new Error('Open the revision from Published revision history.');
+          const previewPath = getWorkflowPublishedVersionPreviewVirtualProjectPath(
+            matched.source.relativePath,
+            matched.source.versionId,
+            {
+              ownerId: matched.root.projectId,
+              artifactId: matched.target.artifactId,
+              sessionId: matched.source.sessionId,
+            },
+          );
+          postMessageToDashboard({ type: 'open-subgraph-target', projectId, graphId, previewPath });
+        })
+        .catch((error: Error) => toast.error(error.message));
+      return;
+    }
     postMessageToDashboard({ type: 'open-subgraph-target', projectId, graphId });
   },
   async listTree() {
     return readJson(await fetch(`${RIVET_API_BASE_URL}/workflows/tree`, { cache: 'no-store' }));
   },
   async preview(target) {
+    const historical = await loadHistoricalSubgraph(target);
+    if (historical) return historical;
     const body = await readJson<{ project: Project; streamingOutputNodeIdsByGraph?: Record<string, string[]> }>(
       await fetch(targetUrl(target, 'preview'), { cache: 'no-store' }),
     );

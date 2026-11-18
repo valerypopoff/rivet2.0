@@ -551,6 +551,9 @@ async function installRunRecordingRoutes(
   await page.route('**/api/v1/models', (route) => route.fulfill({ json: { data: [] } }));
   await page.route('**/api/app-settings/local-upgrade/setup', (route) => route.fulfill({ json: { eligible: false } }));
   await page.route('**/api/workflows/scheduled-runs/summary', (route) => route.fulfill({ json: { enabledCount: 0 } }));
+  await page.route('**/api/workflows/projects/reference-overview', (route) =>
+    route.fulfill({ json: { complete: true, bundles: [], endpoints: [] } }),
+  );
   await page.route(/\/api\/workflows\/(?:tree|evaluation-runs\/library)\/events$/, (route) =>
     route.fulfill({ contentType: 'text/event-stream', body: 'retry: 60000\n\n' }),
   );

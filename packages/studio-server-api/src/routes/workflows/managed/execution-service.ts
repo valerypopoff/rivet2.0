@@ -1,4 +1,9 @@
 import { workflowFailure } from '../workflow-failure.js';
+import { LRUCache } from 'lru-cache';
+import type { ManagedWorkflowBlobStore } from './blob-store.js';
+import { MAX_ENDPOINT_RELEASE_BYTES } from './endpoint-release-manifest.js';
+import { loadEndpointReleaseArtifacts, readEndpointRelease } from './endpoint-release-reader.js';
+import { createPreparedEndpointRelease } from './endpoint-release-runtime.js';
 import { validateManagedSubgraphTarget } from './subgraph-access.js';
 import { performance } from 'node:perf_hooks';
 import {
@@ -32,6 +37,7 @@ import type {
 
 type ManagedWorkflowExecutionContext = {
   pool: Pool;
+  blobStore?: ManagedWorkflowBlobStore;
   executionCache: ManagedWorkflowExecutionCache;
   executionInvalidationController: ManagedWorkflowExecutionInvalidationController;
   queries: {
@@ -58,13 +64,20 @@ type ManagedWorkflowExecutionServiceDependencies = {
 
 // Only immutable source bytes and route metadata may be shared by concurrent
 // loads. Mutable project/dataset state is constructed for each caller below.
-type ManagedExecutionSource = Omit<ManagedExecutionProjectResult, 'project' | 'attachedData' | 'datasetProvider'> & {
+type ReadyEndpointRelease = ReturnType<typeof createPreparedEndpointRelease>;
+type ManagedExecutionSource = Omit<ManagedExecutionProjectResult, 'project' | 'attachedData' | 'datasetProvider' | 'frozenReferences'> & {
+  release?: ReadyEndpointRelease;
   workflowId: string;
   materialization: ManagedRevisionMaterializationCacheEntry;
 };
 
 export class ManagedWorkflowExecutionService {
   readonly #pool: Pool;
+  readonly #blobStore?: ManagedWorkflowBlobStore;
+  readonly #readyReleases = new LRUCache<string, ReadyEndpointRelease>({
+    max: 128, maxSize: MAX_ENDPOINT_RELEASE_BYTES, sizeCalculation: (entry) => entry.bytes,
+  });
+  readonly #releaseLoads = new Map<string, Promise<ReadyEndpointRelease>>();
   readonly #executionCache: ManagedWorkflowExecutionCache;
   readonly #invalidationController: ManagedWorkflowExecutionInvalidationController;
   readonly #getWorkflowByRelativePath: (
@@ -93,6 +106,7 @@ export class ManagedWorkflowExecutionService {
 
   constructor(dependencies: ManagedWorkflowExecutionServiceDependencies) {
     this.#pool = dependencies.context.pool;
+    this.#blobStore = dependencies.context.blobStore;
     this.#executionCache = dependencies.context.executionCache;
     this.#invalidationController = dependencies.context.executionInvalidationController;
     this.#getWorkflowByRelativePath = dependencies.context.queries.getWorkflowByRelativePath;
@@ -253,14 +267,17 @@ export class ManagedWorkflowExecutionService {
   #materializeExecutionProject(source: ManagedExecutionSource | null): ManagedExecutionProjectResult | null {
     if (!source) return null;
     const startedAt = performance.now();
-    const { workflowId, materialization, ...metadata } = source;
+    const { workflowId, materialization, release, ...metadata } = source;
     const { project, attachedData, datasets } = this.#executionCache.parsedDefinitions.materialize(materialization);
     if (project.metadata.id !== workflowId) {
       throw createHttpError(500, 'Execution project artifact has a mismatched saved identity.');
     }
     const detachedMetadata = structuredClone(metadata);
     detachedMetadata.debug.materializeMs += Math.max(0, Math.round(performance.now() - startedAt));
-    return { ...detachedMetadata, project, attachedData, datasetProvider: new NodeDatasetProvider(datasets) };
+    return {
+      ...detachedMetadata, project, attachedData, datasetProvider: new NodeDatasetProvider(datasets),
+      ...(release ? { frozenReferences: release.createRunReferences(this.#executionCache.parsedDefinitions) } : {}),
+    };
   }
 
   async #loadExecutionProjectByEndpointOnce(
@@ -331,9 +348,12 @@ export class ManagedWorkflowExecutionService {
     try {
       const materializeStartedAt = performance.now();
 
+      const release = pointer.releaseId
+        ? await this.#loadReadyRelease(pointer.releaseId, pointer.workflowId, pointer.revisionId)
+        : undefined;
       let materialization: ManagedRevisionMaterializationCacheEntry;
       try {
-        materialization = await this.#getOrLoadRevisionMaterialization(pointer.revisionId, revision);
+        materialization = release?.root ?? (await this.#getOrLoadRevisionMaterialization(pointer.revisionId, revision));
       } catch (error) {
         const isMissingRevision =
           typeof error === 'object' &&
@@ -372,6 +392,7 @@ export class ManagedWorkflowExecutionService {
       return {
         workflowId: pointer.workflowId,
         materialization,
+        release,
         projectVirtualPath: getManagedWorkflowProjectVirtualPath(pointer.relativePath),
         revisionKey: `managed:${pointer.revisionId}`,
         endpointAccess: pointer.endpointAccess,
@@ -388,6 +409,28 @@ export class ManagedWorkflowExecutionService {
     } finally {
       this.#invalidationController.endWorkflowLoad(pointer.workflowId);
     }
+  }
+
+  async #loadReadyRelease(releaseId: string, workflowId: string, revisionId: string) {
+    const cached = this.#readyReleases.get(releaseId);
+    if (cached && cached.root.revisionId === revisionId && cached.projectId === workflowId) return cached;
+    const key = JSON.stringify([releaseId, workflowId, revisionId]);
+    const pending = this.#releaseLoads.get(key);
+    if (pending) return pending;
+    // Full captures are larger than the old pre-admission root read. Bound
+    // distinct cold loads while allowing duplicate requests to share one.
+    if (this.#releaseLoads.size >= 4)
+      throw createHttpError(503, 'Captured endpoint revisions are busy loading. Try again shortly.');
+    const blobStore = this.#blobStore;
+    if (!blobStore) throw createHttpError(503, 'This server cannot read the captured endpoint revision.');
+    const load = (async () => {
+      const stored = await readEndpointRelease(this.#pool, releaseId, workflowId, revisionId);
+      const release = createPreparedEndpointRelease(stored, await loadEndpointReleaseArtifacts({ blobStore }, stored));
+      this.#readyReleases.set(releaseId, release);
+      return release;
+    })().finally(() => this.#releaseLoads.delete(key));
+    this.#releaseLoads.set(key, load);
+    return load;
   }
 
   #retryAfterMaterialize<T>(

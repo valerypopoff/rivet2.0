@@ -658,11 +658,10 @@ export function useWorkflowLibraryController(options: {
   }, []);
 
   const handlePublishedVersionRestored = useCallback(
-    async (response: WorkflowPublishedVersionRestoreResponse) => {
-      onRefreshOpenProjectFromDisk(response.project.absolutePath);
+    async (_response: WorkflowPublishedVersionRestoreResponse) => {
       await refresh(false);
     },
-    [onRefreshOpenProjectFromDisk, refresh],
+    [refresh],
   );
 
   const handleFolderRowClick = useCallback(

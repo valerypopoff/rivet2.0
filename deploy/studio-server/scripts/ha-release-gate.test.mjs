@@ -30,7 +30,8 @@ test('reviewed schema expands include resource telemetry without approving futur
   assert.doesNotThrow(() => assertProbedSchemaTransition(18, 19));
   assert.doesNotThrow(() => assertProbedSchemaTransition(19, 20));
   assert.doesNotThrow(() => assertProbedSchemaTransition(20, 21));
-  assert.throws(() => assertProbedSchemaTransition(21, 22), /no reviewed mixed-writer probe/);
+  assert.doesNotThrow(() => assertProbedSchemaTransition(21, 22));
+  assert.throws(() => assertProbedSchemaTransition(22, 23), /no reviewed mixed-writer probe/);
   assert.throws(() => assertProbedSchemaTransition(17, 21), /no reviewed mixed-writer probe/);
 });
 import { ProviderHaReleaseGate, withProviderReadRetry } from './kubernetes-ha-provider-gate.mjs';

@@ -14,6 +14,7 @@ import {
 } from '@valerypopoff/rivet2-core';
 import { toast, type Id as ToastId } from 'react-toastify';
 import { isRecordingSnapshotPath } from '../utils/recordingPlayback.js';
+import { isPublishedHistoryInspection } from '../utils/projectComparisonDocument.js';
 import { rebindLoadedRecordingPathState } from '../state/execution.js';
 import { useIOProvider } from '../providers/ProvidersContext.js';
 import { useRivetAppHostCallbacks } from '../providers/HostCallbacksContext.js';
@@ -36,6 +37,7 @@ import {
   projectUnsavedChangesState,
   projectsState,
   projectState,
+  referencedProjectsState,
   savedProjectContentDigestsState,
 } from '../state/savedGraphs.js';
 import { renewProjectBindingState, projectBindingRegistryState } from '../state/projectBindings.js';
@@ -254,6 +256,11 @@ export function useWorkspaceTransitions() {
           graphId: fallbackGraphId,
           replace: projectInfo.markClean,
         });
+        const previousProjectId = store.get(projectState).metadata.id;
+        if (previousProjectId !== targetProjectId &&
+            (isPublishedHistoryInspection(previousProjectId) || isPublishedHistoryInspection(targetProjectId))) {
+          store.set(referencedProjectsState, {});
+        }
         setProject(transition.project);
         if (projectInfo.markClean) {
           // Reloaded bytes must not inherit Undo/wire recovery from the content
@@ -264,7 +271,7 @@ export function useWorkspaceTransitions() {
         }
         setNavigationStack(transition.navigationStack);
         cleanupNodeAtomFamilies(transition.cleanupNodeIds);
-        setIsReadOnlyGraph(false);
+        setIsReadOnlyGraph(isPublishedHistoryInspection(targetProjectId));
         setHistoricalGraph(null);
         setWorkspaceTarget({ projectId: targetProjectId, target: workspaceTarget });
         setGraph(transition.graph);
@@ -356,7 +363,7 @@ export function useWorkspaceTransitions() {
       });
       setGraph(transition.graph);
       setSelectedNodes(transition.selectedNodes);
-      setIsReadOnlyGraph(false);
+      setIsReadOnlyGraph(isPublishedHistoryInspection(project.metadata.id));
       setHistoricalGraph(null);
       const nextGraphId = transition.graph.metadata?.id;
       if (nextGraphId) {
@@ -390,7 +397,7 @@ export function useWorkspaceTransitions() {
 
       store.set(nodeEditorSessionRevisionState, (revision) => revision + 1);
       setSelectedNodes([...(options.selectedNodeIds ?? [])]);
-      setIsReadOnlyGraph(false);
+      setIsReadOnlyGraph(isPublishedHistoryInspection(latestProject.metadata.id));
       setHistoricalGraph(null);
       setWorkspaceTarget({
         projectId: latestProject.metadata.id,
@@ -403,7 +410,7 @@ export function useWorkspaceTransitions() {
 
       store.set(nodeEditorSessionRevisionState, (revision) => revision + 1);
       setSelectedNodes([]);
-      setIsReadOnlyGraph(false);
+      setIsReadOnlyGraph(isPublishedHistoryInspection(latestProject.metadata.id));
       setHistoricalGraph(null);
       setWorkspaceTarget({
         projectId: latestProject.metadata.id,

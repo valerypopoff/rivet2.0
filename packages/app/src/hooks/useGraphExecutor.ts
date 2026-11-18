@@ -1,5 +1,7 @@
 import { useAtomValue } from 'jotai';
 import { useEffect } from 'react';
+import { projectState } from '../state/savedGraphs.js';
+import { isPublishedHistoryInspection } from '../utils/projectComparisonDocument.js';
 import { currentProjectLoadedRecordingState } from '../state/execution';
 import { selectedExecutorState } from '../state/settings';
 import { canRunGraphFromEditor, shouldUseRemoteExecutor } from '../state/selectors/executionSelectors.js';
@@ -19,6 +21,7 @@ export function useGraphExecutor() {
   const session = useExecutorSessionState();
   const hasLoadedRecording = !!loadedRecording;
   const managedControls = useManagedLatestControlState();
+  const historyPreview = isPublishedHistoryInspection(useAtomValue(projectState).metadata.id);
   const observingRemote =
     (useAtomValue(remoteObservationReadOnlyState) || managedControls?.readOnly) && !hasLoadedRecording;
   const ignoreEditorRun = useStableCallback(async (options: EditorGraphRunOptions = {}) => {
@@ -72,7 +75,7 @@ export function useGraphExecutor() {
       return undefined;
     }
 
-    if (!allowEditorGraphRun) {
+    if (historyPreview || !allowEditorGraphRun) {
       return await ignoreEditorRun(options);
     }
 
@@ -84,8 +87,8 @@ export function useGraphExecutor() {
     tryAbortGraph: observingRemote ? async () => {} : graphControlExecutor.tryAbortGraph,
     tryPauseGraph: observingRemote ? () => {} : graphControlExecutor.tryPauseGraph,
     tryResumeGraph: observingRemote ? () => {} : graphControlExecutor.tryResumeGraph,
-    tryRunEvaluation: observingRemote ? async () => undefined : liveExecutor.tryRunEvaluation,
-    tryRetryInterruptedEvaluation: observingRemote
+    tryRunEvaluation: observingRemote || historyPreview ? async () => undefined : liveExecutor.tryRunEvaluation,
+    tryRetryInterruptedEvaluation: observingRemote || historyPreview
       ? async () => undefined
       : remoteExecutor.tryRetryInterruptedEvaluation,
   };

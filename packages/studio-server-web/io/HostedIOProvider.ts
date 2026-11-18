@@ -215,13 +215,6 @@ function getCurrentLoadedProjectPath(): string | null {
   return loadedProject.path?.trim() || null;
 }
 
-function createPublishedVersionPreviewProjectId(): ProjectId {
-  const randomId =
-    globalThis.crypto?.randomUUID?.() ?? `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
-
-  return `published-version-preview:${randomId}` as ProjectId;
-}
-
 function isPublishedVersionPreviewProject(project: Project): boolean {
   return String(project.metadata.id).startsWith('published-version-preview:');
 }
@@ -229,15 +222,17 @@ function isPublishedVersionPreviewProject(project: Project): boolean {
 function createPublishedVersionPreviewProject(
   project: Project,
   reference: WorkflowPublishedVersionPreviewReference,
+  path: string,
 ): Project {
   const title = project.metadata.title?.trim() || reference.relativePath.split('/').pop() || 'Published version';
+  const previewLabel = reference.sessionId ? 'history preview' : 'published preview';
 
   return {
     ...project,
     metadata: {
       ...project.metadata,
-      id: createPublishedVersionPreviewProjectId(),
-      title: `${title} (published preview)`,
+      id: path as ProjectId,
+      title: `${title} (${previewLabel})`,
     },
   };
 }
@@ -577,14 +572,14 @@ export class HostedIOProvider implements IOProvider {
       const preview = await fetchWorkflowPublishedVersionPreview(
         previewReference.relativePath,
         previewReference.versionId,
-        { signal: options.signal },
+        { signal: options.signal, artifactId: previewReference.artifactId, ownerId: previewReference.ownerId },
       );
       const {
         project: projectData,
         evaluation,
         datasets,
       } = await deserializeHostedProjectPayload(preview.contents, path, options.signal, preview.datasetsContents);
-      const previewProject = createPublishedVersionPreviewProject(projectData, previewReference);
+      const previewProject = createPublishedVersionPreviewProject(projectData, previewReference, path);
       evaluation.evaluationDatasets = evaluation.evaluationDatasets.map((dataset) => ({
         ...dataset,
         projectId: previewProject.metadata.id,

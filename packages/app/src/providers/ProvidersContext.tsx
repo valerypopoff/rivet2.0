@@ -95,8 +95,16 @@ export type SubgraphProjectCatalogProvider = {
     projectId: ProjectId;
     version: 'latest' | 'published';
     callerProjectId?: ProjectId;
+    sourceGraphId?: GraphId;
+    sourceNodeId?: string;
+    targetGraphId?: GraphId;
   }): Promise<Project>;
-  openGraph(target: { projectId: ProjectId; graphId: GraphId }): void;
+  openGraph(target: {
+    projectId: ProjectId; graphId: GraphId;
+    callerProjectId?: ProjectId; version?: 'latest' | 'published';
+    sourceGraphId?: GraphId; sourceNodeId?: string;
+  }): void;
+  loadHistoryProjectReference?(sourcePath: string, projectId: ProjectId): Promise<Project>;
   /** Advisory saved/publication scan; absence means only local open projects can be inspected. */
   graphReferences?(
     target: { projectId: ProjectId; graphIds: readonly GraphId[] },

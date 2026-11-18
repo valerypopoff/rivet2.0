@@ -201,6 +201,8 @@ function apply(resources) {
 
 function helm() {
   if (args[0] === 'version') return 'v3.20.1';
+  if (args[0] === 'lint' && original[original.indexOf('--namespace') + 1] !== state.namespace)
+    fail('Helm lint must use the requested namespace.');
   if (['lint', 'template'].includes(args[0]))
     return execFileSync(process.env.RIVET_FIXTURE_REAL_HELM, original, {
       encoding: 'utf8',

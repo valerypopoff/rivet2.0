@@ -542,9 +542,10 @@ test('observer uses the remote browser without installing a host Chromium and pr
 });
 
 test('balanced editor shards cover every selected spec exactly once and reject invalid selection', () => {
-  assert.equal(editorCiSpecs.length, 41);
+  assert.equal(editorCiSpecs.length, 42);
   assert.ok(editorCiSpecs.includes('bundle-merge.spec.ts'));
   assert.ok(editorCiSpecs.includes('bundle-comparison.spec.ts'));
+  assert.ok(editorCiSpecs.includes('published-revision-history.spec.ts'));
   assert.ok(editorCiSpecs.includes('managed-debugger-channels.spec.ts'));
   assert.ok(editorCiSpecs.includes('hosted-editor-search-shortcuts.spec.ts'));
   assert.ok(editorCiSpecs.includes('bundle-local-execution-history.spec.ts'));

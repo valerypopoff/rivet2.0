@@ -53,14 +53,21 @@ export function getManagedWorkflowVirtualDatasetPath(projectVirtualPath: string)
 export type WorkflowPublishedVersionPreviewReference = {
   relativePath: string;
   versionId: string;
+  ownerId?: string;
+  artifactId?: string;
+  sessionId?: string;
 };
 
-export function getWorkflowPublishedVersionPreviewVirtualProjectPath(relativePath: string, versionId: string): string {
+export function getWorkflowPublishedVersionPreviewVirtualProjectPath(
+  relativePath: string, versionId: string,
+  scope?: { ownerId: string; artifactId: string; sessionId: string },
+): string {
   return [
     WORKFLOW_PUBLISHED_VERSION_PREVIEW_VIRTUAL_PROJECT_PATH_PREFIX,
     encodeURIComponent(normalizeWorkflowVirtualRelativePath(relativePath)),
     '/',
     encodeURIComponent(versionId),
+    ...(scope ? ['/', encodeURIComponent(scope.ownerId), '/', encodeURIComponent(scope.artifactId), '/', encodeURIComponent(scope.sessionId)] : []),
     '/preview',
     WORKFLOW_PROJECT_EXTENSION,
   ].join('');
@@ -80,21 +87,18 @@ export function getWorkflowPublishedVersionPreviewFromVirtualProjectPath(
   }
 
   const encodedReference = remainder.slice(0, -suffix.length);
-  const slashIndex = encodedReference.lastIndexOf('/');
-  if (slashIndex <= 0 || slashIndex === encodedReference.length - 1) {
-    return null;
-  }
+  const parts = encodedReference.split('/');
+  if ((parts.length !== 2 && parts.length !== 5) || parts.some((part) => !part)) return null;
 
   try {
-    const relativePath = normalizeWorkflowVirtualRelativePath(
-      decodeURIComponent(encodedReference.slice(0, slashIndex)),
-    );
-    const versionId = decodeURIComponent(encodedReference.slice(slashIndex + 1)).trim();
+    const [path, version, ownerId, artifactId, sessionId] = parts.map(decodeURIComponent);
+    const relativePath = normalizeWorkflowVirtualRelativePath(path!);
+    const versionId = version!.trim();
     if (!relativePath || !versionId) {
       return null;
     }
 
-    return { relativePath, versionId };
+    return { relativePath, versionId, ...(sessionId && ownerId && artifactId ? { ownerId, artifactId, sessionId } : {}) };
   } catch {
     return null;
   }
@@ -125,8 +129,16 @@ export type WorkflowDraftPublicationPreconditions = WorkflowPublicationPrecondit
   expectedDraftRevisionId: string;
 };
 
+export type WorkflowEndpointReleaseReview = {
+  token: string;
+  projects: Array<WorkflowReleaseProject & { fromDraft: boolean }>;
+  missingRollback: boolean;
+};
+
 export type WorkflowProjectSettingsDraft = {
   endpointName: string;
+  releaseReviewToken?: string;
+  acknowledgeMissingRollback?: boolean;
 };
 
 export type WorkflowPublishedWebAppSummary = {
@@ -332,6 +344,84 @@ export type WorkflowTreeResponse = {
   sync: WorkflowTreeSyncState;
 };
 
+export type WorkflowReleaseSelector = 'latest' | 'published' | 'project-reference';
+
+export function getWorkflowReleaseSelectorLabel(selector: WorkflowReleaseSelector): string {
+  if (selector === 'latest') return 'Saved latest';
+  if (selector === 'published') return 'Published';
+  return 'Project reference';
+}
+
+export type WorkflowReleaseProject = {
+  artifactId: string;
+  projectId: string;
+  name: string;
+  relativePath: string;
+  bundleRelativePath?: string;
+  savedAt: string;
+};
+
+export type WorkflowReleaseReference = {
+  sourceArtifactId: string;
+  sourceGraphId: string;
+  nodeId: string;
+  targetArtifactId: string;
+  targetGraphId: string;
+  selector: WorkflowReleaseSelector;
+};
+
+export type WorkflowReleaseDependencyStatus = {
+  projectId: string;
+  name: string;
+  relativePath: string | null;
+  changed: boolean;
+  unavailable: boolean;
+  revisions?: Array<{
+    selector: WorkflowReleaseSelector;
+    activeRevisionId: string;
+    savedRevisionId: string | null;
+  }>;
+};
+
+export type WorkflowReferenceOverview = {
+  endpoints: Array<{
+    projectId: string;
+    coverage: 'complete' | 'project-only';
+    canCaptureRelease?: boolean;
+    dependencies: WorkflowReleaseDependencyStatus[];
+  }>;
+  bundles: Array<{ bundleId: string; count: number; complete: boolean }>;
+  complete: boolean;
+};
+
+export type WorkflowBundleReferenceDetails = {
+  complete: boolean;
+  projects: Array<{
+    projectId: string;
+    name: string;
+    relativePath: string | null;
+    uses: Array<{
+      sourcePath: string;
+      sourceName: string;
+      sourceGraphName?: string;
+      nodeTitle?: string;
+      targetGraphId?: string;
+      selector: WorkflowReleaseSelector;
+      savedAt: string;
+    }>;
+  }>;
+};
+
+export type WorkflowHistoryPreview = {
+  rootArtifactId: string;
+  endpointName: string;
+  publishedAt: string;
+  coverage: 'frozen' | 'project-only';
+  capturedAt?: string;
+  projects: WorkflowReleaseProject[];
+  references: WorkflowReleaseReference[];
+};
+
 export type WorkflowPublishedVersionSummary = {
   id: string;
   projectId: string;
@@ -339,6 +429,8 @@ export type WorkflowPublishedVersionSummary = {
   endpointName: string;
   publishedAt: string;
   isCurrent: boolean;
+  coverage?: 'frozen' | 'project-only';
+  restoredFrom?: string;
   isStarred: boolean;
   comment: string;
 };

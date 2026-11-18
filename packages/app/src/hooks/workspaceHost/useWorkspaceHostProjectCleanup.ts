@@ -25,7 +25,7 @@ import { useProjectExecutionSnapshots } from '../useProjectExecutionSnapshots.js
 import { useStableCallback } from '../useStableCallback.js';
 import { removeProjectWorkspaceTargetState } from '../../state/workspaceTarget.js';
 import { clearUiGraphPreviewSessions } from '../../components/rivetWebApps/uiGraphPreviewSession.js';
-import { isComparisonInspectionProject } from '../../utils/projectComparisonDocument.js';
+import { isDetachedInspectionProject } from '../../utils/projectComparisonDocument.js';
 import { clearProjectFullscreenOutputState } from '../../state/fullscreenOutput.js';
 
 function clearCodeEditorModelCacheForClosedProject(projectId: ProjectId, isStillClosed: () => boolean): void {
@@ -89,7 +89,7 @@ export function useWorkspaceHostProjectCleanup() {
       });
       removeWorkspaceTarget(projectId);
       executorSessionRegistry.removeProject(projectId);
-      if (isComparisonInspectionProject(projectId)) store.set(deleteProjectContextState, projectId);
+      if (isDetachedInspectionProject(projectId)) store.set(deleteProjectContextState, projectId);
       else releaseProjectContextState(projectId);
       clearCodeEditorModelCacheForClosedProject(projectId, () => !store.get(projectsState).openedProjects[projectId]);
     },

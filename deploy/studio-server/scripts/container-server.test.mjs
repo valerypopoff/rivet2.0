@@ -19,6 +19,8 @@ import {
 import {
   containerServerConfig,
   containerCredentialDefaults,
+  containerStages,
+  containerStorageChoices,
   createManagedCompose,
   containerStorageIdentity,
   serializeManagedCompose,
@@ -187,6 +189,7 @@ test('the shared dotenv example declares the complete current launcher input con
     'RIVET_PORT',
     'RIVET_SERVER_UI_AUTH_MODE',
     'RIVET_RECORDING_DURABILITY_ENABLED',
+    'RIVET_ENABLE_FROZEN_ENDPOINT_RELEASES',
     'RIVET_LOCAL_POSTGRES_PASSWORD',
     'RIVET_LOCAL_S3_ACCESS_KEY_ID',
     'RIVET_LOCAL_S3_SECRET_ACCESS_KEY',
@@ -461,6 +464,38 @@ test('all six container commands enable durable recording by default and honor a
       );
     }
   }
+});
+
+test('frozen endpoint captures default on only for local development and honor the configured rollout flag', () => {
+  for (const stage of containerStages) {
+    for (const storage of containerStorageChoices) {
+      const env = environment(stage);
+      const defaultFlag = stage === 'dev' && storage === 'local-storage' ? '1' : '0';
+      const override = defaultFlag === '1' ? '0' : '1';
+      for (const [setting, expected] of [
+        [undefined, defaultFlag],
+        [override, override],
+      ]) {
+        const config = containerServerConfig(
+          { ...env, RIVET_ENABLE_FROZEN_ENDPOINT_RELEASES: setting },
+          stage,
+          storage,
+        );
+        const model = createManagedCompose(config, images);
+        assert.equal(model.services.backend.environment.RIVET_ENABLE_FROZEN_ENDPOINT_RELEASES, expected);
+        assert.equal(model.services.execution.environment.RIVET_ENABLE_FROZEN_ENDPOINT_RELEASES, undefined);
+      }
+    }
+  }
+  assert.throws(
+    () =>
+      containerServerConfig(
+        { ...environment('dev'), RIVET_ENABLE_FROZEN_ENDPOINT_RELEASES: 'invalid' },
+        'dev',
+        'local-storage',
+      ),
+    /RIVET_ENABLE_FROZEN_ENDPOINT_RELEASES must be 0 or 1/,
+  );
 });
 
 test('migration jobs use an exact schema version without narrowing serving compatibility across all six commands', () => {

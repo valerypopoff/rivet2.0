@@ -689,16 +689,71 @@ export async function downloadWorkflowPublishedVersion(relativePath: string, ver
 export async function fetchWorkflowPublishedVersionPreview(
   relativePath: string,
   versionId: string,
-  options: { signal?: AbortSignal } = {},
+  options: { signal?: AbortSignal; artifactId?: string; ownerId?: string } = {},
 ): Promise<WorkflowPublishedVersionPreviewResponse> {
   const response = await fetch(`${API}/workflows/projects/published-versions/preview`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ relativePath, versionId }),
+    body: JSON.stringify({ relativePath, versionId, artifactId: options.artifactId, ownerId: options.ownerId }),
     signal: options.signal,
   });
 
   return workflowJsonResponse<WorkflowPublishedVersionPreviewResponse>(response);
+}
+
+export async function fetchWorkflowHistoryPreview(relativePath: string, versionId: string, options: { ownerId?: string; signal?: AbortSignal } = {}) {
+  return workflowJsonResponse<import('../../studio-server-shared/workflow-types').WorkflowHistoryPreview>(
+    await fetch(`${API}/workflows/projects/published-versions/preview-tree`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ relativePath, versionId, ownerId: options.ownerId }),
+      signal: options.signal,
+    }),
+  );
+}
+
+export async function reviewEndpointRelease(relativePath: string, preconditions: WorkflowPublicationPreconditions) {
+  const response = await fetch(`${API}/workflows/projects/endpoint-release-review`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ relativePath, preconditions }),
+  });
+  const review = await workflowJsonResponse<import('../../studio-server-shared/workflow-types').WorkflowEndpointReleaseReview | null>(
+    response,
+  );
+  if (
+    review !== null &&
+    (typeof review?.token !== 'string' ||
+      !review.token ||
+      typeof review.missingRollback !== 'boolean' ||
+      !Array.isArray(review.projects) ||
+      !review.projects.every(
+        (project) =>
+          typeof project?.projectId === 'string' &&
+          typeof project.artifactId === 'string' &&
+          typeof project.fromDraft === 'boolean',
+      ) ||
+      !review.projects.some(
+        (project) =>
+          project?.projectId === preconditions.expectedProjectId &&
+          project.artifactId === preconditions.expectedDraftRevisionId &&
+          project.fromDraft === true,
+      ))
+  ) {
+    throw createResponseError(response.status, 'The endpoint release review is incomplete. Review the project again.');
+  }
+  return review;
+}
+
+export async function fetchWorkflowReferenceOverview(signal: AbortSignal) {
+  return workflowJsonResponse<import('../../studio-server-shared/workflow-types').WorkflowReferenceOverview | null>(
+    await fetch(`${API}/workflows/projects/reference-overview`, { cache: 'no-store', signal }),
+  );
+}
+
+export async function fetchWorkflowBundleReferenceDetails(bundleId: string, signal: AbortSignal) {
+  return workflowJsonResponse<import('../../studio-server-shared/workflow-types').WorkflowBundleReferenceDetails | null>(
+    await fetch(`${API}/workflows/bundles/${encodeURIComponent(bundleId)}/external-references`, { cache: 'no-store', signal }),
+  );
 }
 
 export async function fetchCurrentWorkflowPublishedVersion(
@@ -742,6 +797,22 @@ export async function setWorkflowPublishedVersionComment(
   return workflowJsonResponse<WorkflowPublishedVersionCommentResponse>(response);
 }
 
+function requirePublicationProject(response: Response, project: WorkflowProjectItem | undefined): WorkflowProjectItem {
+  if (
+    typeof project?.relativePath !== 'string' ||
+    typeof project.settings?.endpointName !== 'string' ||
+    !Array.isArray(project.settings.publishedWebApps)
+  ) {
+    throw createResponseError(response.status, 'The publication response is missing the saved project state.');
+  }
+  return project;
+}
+
+async function readPublicationProjectResponse(response: Response): Promise<WorkflowProjectItem> {
+  const data = await workflowJsonResponse<{ project: WorkflowProjectItem }>(response);
+  return requirePublicationProject(response, data?.project);
+}
+
 export async function restoreWorkflowPublishedVersion(
   relativePath: string,
   versionId: string,
@@ -753,7 +824,19 @@ export async function restoreWorkflowPublishedVersion(
     body: JSON.stringify({ relativePath, versionId, preconditions }),
   });
 
-  return workflowJsonResponse<WorkflowPublishedVersionRestoreResponse>(response);
+  const data = await workflowJsonResponse<WorkflowPublishedVersionRestoreResponse>(response);
+  requirePublicationProject(response, data?.project);
+  const version = data?.version;
+  if (
+    typeof version?.id !== 'string' ||
+    !version.id ||
+    typeof version.endpointName !== 'string' ||
+    typeof version.publishedAt !== 'string' ||
+    typeof version.comment !== 'string'
+  ) {
+    throw createResponseError(response.status, 'The restore response is missing the saved revision.');
+  }
+  return data;
 }
 
 export async function fetchWorkflowProjectWebApps(relativePath: string): Promise<WorkflowProjectWebAppsResponse> {
@@ -786,8 +869,7 @@ export async function publishWorkflowProjectWebApps(
     body: JSON.stringify({ relativePath, publications, preconditions }),
   });
 
-  const data = await workflowJsonResponse<{ project: WorkflowProjectItem }>(response);
-  return data.project;
+  return readPublicationProjectResponse(response);
 }
 
 export async function updateWorkflowProjectWebAppAccess(
@@ -801,8 +883,7 @@ export async function updateWorkflowProjectWebAppAccess(
     body: JSON.stringify({ relativePath, accessUpdates, preconditions }),
   });
 
-  const data = await workflowJsonResponse<{ project: WorkflowProjectItem }>(response);
-  return data.project;
+  return readPublicationProjectResponse(response);
 }
 
 export async function unpublishWorkflowProjectWebApp(
@@ -816,8 +897,7 @@ export async function unpublishWorkflowProjectWebApp(
     body: JSON.stringify({ relativePath, uiGraphId, preconditions }),
   });
 
-  const data = await workflowJsonResponse<{ project: WorkflowProjectItem }>(response);
-  return data.project;
+  return readPublicationProjectResponse(response);
 }
 
 export async function moveWorkflowItem(
@@ -864,8 +944,7 @@ export async function publishWorkflowProject(
     body: JSON.stringify({ relativePath, settings, preconditions }),
   });
 
-  const data = await workflowJsonResponse<{ project: WorkflowProjectItem }>(response);
-  return data.project;
+  return readPublicationProjectResponse(response);
 }
 
 export async function unpublishWorkflowProject(
@@ -878,8 +957,7 @@ export async function unpublishWorkflowProject(
     body: JSON.stringify({ relativePath, preconditions }),
   });
 
-  const data = await workflowJsonResponse<{ project: WorkflowProjectItem }>(response);
-  return data.project;
+  return readPublicationProjectResponse(response);
 }
 
 export async function updateWorkflowEndpointAccess(
@@ -892,8 +970,8 @@ export async function updateWorkflowEndpointAccess(
     headers: { 'Content-Type': 'application/json', ...getWorkflowTreeMutationHeaders() },
     body: JSON.stringify({ relativePath, access, preconditions }),
   });
-  const data = await workflowJsonResponse<{ project: WorkflowProjectItem }>(response);
-  return data.project;
+
+  return readPublicationProjectResponse(response);
 }
 
 export async function deleteWorkflowProject(

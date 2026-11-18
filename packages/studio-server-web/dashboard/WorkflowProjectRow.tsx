@@ -1,7 +1,8 @@
 import type { FC } from 'react';
 import type { WorkflowProjectItem } from './types';
 import { WorkflowInlineRenameInput } from './WorkflowInlineRenameInput';
-import { getWorkflowProjectDotStatus, getWorkflowProjectPublicationStatus } from './workflowProjectPublicationStatus';
+import { useWorkflowPublicationReferences } from './WorkflowPublicationReferences';
+import { getWorkflowProjectPublicationStatus, getWorkflowReferenceProjectId } from './workflowProjectPublicationStatus';
 import type { DraggedWorkflowItem } from './workflowLibraryHelpers';
 import { namespaceIdentity } from './workflowNamespaceMutations';
 
@@ -42,7 +43,10 @@ export const WorkflowProjectRow: FC<WorkflowProjectRowProps> = ({
   onRenameCancel,
   getParentRelativePath,
 }) => {
-  const publicationStatus = getWorkflowProjectPublicationStatus(project);
+  const references = useWorkflowPublicationReferences();
+  const publicationStatus = getWorkflowProjectPublicationStatus(project, references);
+  const marker = references?.markerByProject.get(getWorkflowReferenceProjectId(project));
+  const markerLabel = marker === 'changed' ? 'Changes affect a published endpoint' : 'Used by a published endpoint';
   const rowClassName = [
     'project-row',
     `project-row-status-${publicationStatus}`,
@@ -63,13 +67,24 @@ export const WorkflowProjectRow: FC<WorkflowProjectRowProps> = ({
   };
 
   const projectRowContent = (
-    <ProjectRowContent
-      project={project}
-      editing={editing}
-      renaming={renaming}
-      onRenameSubmit={onRenameSubmit}
-      onRenameCancel={onRenameCancel}
-    />
+    <div className="project-main">
+      {publicationStatus !== 'unpublished' ? (
+        <span className={`project-status-dot ${publicationStatus}`} aria-hidden="true" />
+      ) : null}
+      {marker ? (
+        <span
+          className={`reference-project-marker ${marker}`}
+          role="img"
+          aria-label={markerLabel}
+          title={markerLabel}
+        />
+      ) : null}
+      {editing ? (
+        <ProjectRenameInput project={project} onSubmit={onRenameSubmit} onCancel={onRenameCancel} />
+      ) : (
+        <WorkflowProjectLabel name={project.name} renaming={renaming} />
+      )}
+    </div>
   );
 
   if (editing || renaming) {
@@ -115,37 +130,14 @@ export const WorkflowProjectRow: FC<WorkflowProjectRowProps> = ({
   );
 };
 
-type ProjectRowContentProps = {
-  project: WorkflowProjectItem;
-  editing: boolean;
-  renaming: boolean;
-  onRenameSubmit: (project: WorkflowProjectItem, name: string) => void | Promise<void>;
-  onRenameCancel: (project: WorkflowProjectItem) => void;
-};
-
-const ProjectRowContent: FC<ProjectRowContentProps> = ({
-  project,
-  editing,
-  renaming,
-  onRenameSubmit,
-  onRenameCancel,
-}) => {
-  const dotStatus = getWorkflowProjectDotStatus(project);
-
+export function WorkflowProjectLabel({ name, renaming }: { name: string; renaming?: boolean }) {
   return (
-    <div className="project-main">
-      {dotStatus ? <span className={`project-status-dot ${dotStatus}`} aria-hidden="true" /> : null}
-      {editing ? (
-        <ProjectRenameInput project={project} onSubmit={onRenameSubmit} onCancel={onRenameCancel} />
-      ) : (
-        <div className="project-label-wrap">
-          {renaming ? <span className="project-rename-spinner" aria-hidden="true" /> : null}
-          <div className="label">{project.name}</div>
-        </div>
-      )}
+    <div className="project-label-wrap">
+      {renaming ? <span className="project-rename-spinner" aria-hidden="true" /> : null}
+      <div className="label">{name}</div>
     </div>
   );
-};
+}
 
 type ProjectRenameInputProps = {
   project: WorkflowProjectItem;

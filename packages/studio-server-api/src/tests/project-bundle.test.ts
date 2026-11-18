@@ -1320,6 +1320,41 @@ test('failed start rollback retains directory ownership and recovers after remov
   }
 });
 
+test('bundle reference details require authentication without requiring mutation intent', async () => {
+  const suite = await createFilesystemWorkflowSuiteHarness();
+  try {
+    await suite.resetAndEnsureWorkflowsRoot();
+    await withEnvOverride('RIVET_KEY', 'bundle-fixture-key-not-a-real-secret', async () => {
+      await suite.withWorkflowApiServer(async (base) => {
+        const bundles = `${base}/bundles`;
+        const references = `${bundles}/${randomUUID()}/external-references`;
+        assert.equal((await fetch(references)).status, 403);
+
+        const headers = { 'x-rivet-proxy-auth': getExpectedProxyAuthToken() };
+        const read = await fetch(references, { headers });
+        assert.equal(read.status, 200);
+        assert.equal(read.headers.get('cache-control'), 'private, no-store');
+        assert.equal(await read.json(), null); // The filesystem has no bundle reference index.
+
+        const rejectedIntents: Record<string, string>[] = [
+          {},
+          { 'X-Rivet-Bundle-Intent': '1', 'Sec-Fetch-Site': 'cross-site' },
+        ];
+        for (const intent of rejectedIntents) {
+          const write = await fetch(`${bundles}/kind`, {
+            method: 'POST',
+            headers: { ...headers, ...intent, 'Content-Type': 'application/json' },
+            body: '{invalid JSON',
+          });
+          assert.equal(write.status, 403);
+        }
+      });
+    });
+  } finally {
+    await suite.cleanupWorkflowSuite();
+  }
+});
+
 test('filesystem saved export HTTP requires auth and supports exact Range/If-Range resumption', async () => {
   const suite = await createFilesystemWorkflowSuiteHarness();
   const f = projectBundleFixture();

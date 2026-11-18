@@ -3,6 +3,13 @@ import type { SubgraphProjectTarget } from '@valerypopoff/rivet2-node';
 import { createHttpError } from '../../../utils/httpError.js';
 
 /** Live hierarchy, one SQL snapshot; never infer access from authored hints or cached project bytes. */
+export function isSubgraphReferenceInScope(
+  callerBundleId: string | null | undefined,
+  targetBundleId: string | null | undefined,
+) {
+  return !targetBundleId || callerBundleId === targetBundleId;
+}
+
 export async function validateManagedSubgraphTarget(pool: Pool, target: SubgraphProjectTarget): Promise<void> {
   const result = await pool.query<{ bundle_id: string | null; caller_bundle_id: string | null }>(
     `
@@ -24,7 +31,7 @@ export async function validateManagedSubgraphTarget(pool: Pool, target: Subgraph
   );
   const row = result.rows[0];
   if (!row) throw createHttpError(404, 'Subgraph target project was not found.');
-  if (row.bundle_id && row.bundle_id !== row.caller_bundle_id)
+  if (!isSubgraphReferenceInScope(row.caller_bundle_id, row.bundle_id))
     throw createHttpError(
       403,
       'This project belongs to a bundle. Only projects in the same bundle can reference it through a Subgraph node.',

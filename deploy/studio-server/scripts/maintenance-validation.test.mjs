@@ -8,8 +8,17 @@ import { maintenanceValidationValues } from './lib/managed-release-cutover.mjs';
 import { createMaintenanceValidationValues, getMaintenanceValidationTargets } from './lib/maintenance-validation.mjs';
 
 const root = fileURLToPath(new URL('../../../', import.meta.url));
-function render({ overlays = [], sameLayout = false, haRequested = false, overrides = [] } = {}) {
-  const values = createMaintenanceValidationValues(maintenanceValidationValues, { sameLayout, haRequested });
+function render({
+  overlays = [],
+  sameLayout = false,
+  haRequested = false,
+  overrides = [],
+  maintenance = true,
+  namespace = 'rivet',
+} = {}) {
+  const values = maintenance
+    ? createMaintenanceValidationValues(maintenanceValidationValues, { sameLayout, haRequested })
+    : {};
   return parseAllDocuments(
     execFileSync(
       resolveHelmBinOrThrow(root),
@@ -17,6 +26,8 @@ function render({ overlays = [], sameLayout = false, haRequested = false, overri
         'template',
         'rivet',
         'deploy/studio-server/helm',
+        '--namespace',
+        namespace,
         '-f',
         'deploy/studio-server/helm/overlays/local-kubernetes.yaml',
         ...overlays.flatMap((name) => ['-f', `deploy/studio-server/helm/overlays/${name}.yaml`]),
@@ -93,6 +104,88 @@ test('same-layout compact HA validates every API pod using its real container an
     ],
   );
   assert.equal(new Set(targets.map((target) => target.podName)).size, 3);
+});
+
+test('schema 22 maintenance keeps both execution pool owners while traffic and replica writers are paused', () => {
+  const configuration = {
+    overlays: [...ha, 'gke-proxy-continuity'],
+    sameLayout: true,
+    haRequested: true,
+    overrides: [
+      'ha.executionPools.enabled=true',
+      'ha.executionPools.active=b',
+      'ha.executionPools.maxSurgeReplicas=2',
+      'requestContinuity.routeName=fixture-route',
+      'requestContinuity.backendPolicyName=fixture-policy',
+      'requestContinuity.gatewayName=fixture-gateway',
+      'requestContinuity.gcpProject=fixture-project',
+      'requestContinuity.gcpRegion=fixture-region',
+    ],
+  };
+  const component = (resource) => resource.metadata?.labels?.['app.kubernetes.io/component'];
+  const executionPools = (resources) =>
+    resources.filter((resource) => resource.kind === 'StatefulSet' && component(resource) === 'execution');
+  const identity = (resources) =>
+    executionPools(resources).map(({ metadata, spec }) => ({
+      name: metadata.name,
+      serviceName: spec.serviceName,
+      selector: spec.selector,
+      replicas: spec.replicas,
+    }));
+  const serving = render({ ...configuration, maintenance: false });
+  const fenced = render(configuration);
+  const pools = executionPools(fenced);
+  assert.equal(pools.length, 2);
+  assert.deepEqual(identity(fenced), identity(serving));
+  assert.deepEqual(
+    pools.map((pool) => pool.spec.replicas),
+    [0, 2],
+  );
+  for (const pool of pools) {
+    const template = pool.spec.template;
+    assert.equal(template.metadata.annotations['rivet.dev/managed-schema-reader-version'], '22');
+    assert.ok(
+      template.spec.containers[0].env.some(
+        ({ name, value }) => name === 'RIVET_RELEASE_MAINTENANCE' && value === 'true',
+      ),
+    );
+  }
+  const migration = fenced.find(
+    (resource) => resource.kind === 'Job' && component(resource) === 'workflow-schema-migration',
+  );
+  assert.match(migration.spec.template.spec.containers[0].args[0], /MIGRATION_POLICY="maintenance".*MAX_VERSION="22"/);
+  assert.ok(
+    !fenced.some((resource) => resource.kind === 'HorizontalPodAutoscaler' || component(resource) === 'autoscaler'),
+  );
+  for (const frontend of ['proxy', 'web']) {
+    const workload = fenced.find((resource) => resource.kind === 'Deployment' && component(resource) === frontend);
+    assert.equal(workload.spec.replicas, 0);
+  }
+
+  assert.throws(
+    () =>
+      render({
+        ...configuration,
+        maintenance: false,
+        overrides: [...configuration.overrides, 'autoscaling.executionController.enabled=false'],
+      }),
+    /Execution pools require singleton HA with the execution controller/,
+  );
+
+  const staging = render({
+    ...configuration,
+    namespace: 'rivet-staging-schema-22',
+    overrides: [
+      ...configuration.overrides,
+      'ha.stagingSingleExecution=true',
+      'replicaCount.execution=1',
+      'autoscaling.execution.minReplicas=1',
+    ],
+  });
+  assert.deepEqual(
+    executionPools(staging).map((pool) => pool.spec.replicas),
+    [0, 1],
+  );
 });
 
 test('replicated HA validates dedicated maintenance and all editor/execution owners', () => {

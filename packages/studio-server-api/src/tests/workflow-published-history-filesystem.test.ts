@@ -33,10 +33,10 @@ test.after(cleanupWorkflowSuite);
 test('published history HTTP routes preserve saved bytes, annotations and reviewed restoration', async (t) => {
   const created = await workflowMutations.createWorkflowProjectItem('', "PublishedHistory café's (draft)");
   const firstContents = await fs.readFile(created.absolutePath, 'utf8');
-  // Invalid UTF-8 distinguishes preserving the snapshot bytes from decoding and
-  // re-encoding them. The JSON preview still exposes the existing text view.
-  const firstDatasetBytes = Buffer.from([0, 255, 254, 13, 10]);
-  const firstDatasetContents = firstDatasetBytes.toString('utf8');
+  // Noncanonical whitespace proves that Restore preserves the original bytes.
+  const firstDatasetContents = ' { "datasets" : [] }\r\n';
+  const firstDatasetBytes = Buffer.from(firstDatasetContents);
+  const secondDatasetContents = rivetNode.serializeDatasets([]);
   const datasetPath = workflowFs.getWorkflowDatasetPath(created.absolutePath);
   await fs.writeFile(datasetPath, firstDatasetBytes);
 
@@ -50,7 +50,7 @@ test('published history HTTP routes preserve saved bytes, annotations and review
   assert.ok(typeof secondContents === 'string');
   assert.notEqual(secondContents, firstContents);
   await fs.writeFile(created.absolutePath, secondContents, 'utf8');
-  await fs.writeFile(workflowFs.getWorkflowDatasetPath(created.absolutePath), 'second published dataset', 'utf8');
+  await fs.writeFile(datasetPath, secondDatasetContents, 'utf8');
   await workflowMutations.publishWorkflowProjectItem(created.relativePath, {
     endpointName: 'published-history-endpoint',
   });
@@ -73,7 +73,6 @@ test('published history HTTP routes preserve saved bytes, annotations and review
       return {
         expectedProjectId: snapshot.projectId,
         expectedPublicationVersion: snapshot.publicationVersion,
-        expectedDraftRevisionId: snapshot.draftRevisionId,
       };
     };
     const history = await readHistory();
@@ -156,31 +155,46 @@ test('published history HTTP routes preserve saved bytes, annotations and review
       ['preview', { versionId: 'missing-version' }, 'POST', 404],
       ['star', { versionId: history.versions[1]!.id, isStarred: 'true' }, 'PATCH', 400],
       ['comment', { versionId: history.versions[1]!.id, comment: 'x'.repeat(241) }, 'PATCH', 400],
-      ['restore', { versionId: history.versions[1]!.id, preconditions: stale }, 'POST', 409],
+      ['restore', { versionId: history.versions[1]!.id, preconditions: { ...stale, expectedPublicationVersion: '0' } }, 'POST', 409],
     ] as const) {
       const response = await request(action, body, method);
       assert.equal(response.status, status, action);
       const error = await response.json();
       assert.equal(typeof error.error, 'string');
-      if (action === 'restore') assert.equal(error.code, 'publication_draft_changed');
+      if (action === 'restore') assert.equal(error.code, 'publication_state_changed');
     }
     assert.deepEqual(await readHistory(), historyAfterStar, 'Rejected requests do not change saved history.');
     assert.equal(await fs.readFile(created.absolutePath, 'utf8'), editedContents);
     assert.deepEqual(await treeState(), beforeAnnotations, 'Rejected requests do not notify the tree.');
+
+    const restoreRequest = () => request('restore', { versionId: history.versions[1]!.id, preconditions: stale });
+    const firstSnapshotDatasetPath = workflowFs.getPublishedWorkflowSnapshotDatasetPath(
+      workflowsRoot,
+      history.versions[1]!.id,
+    );
+    await fs.writeFile(firstSnapshotDatasetPath, '{"datasets":{}}', 'utf8');
+    try {
+      const rejected = await restoreRequest();
+      assert.equal(rejected.status, 503);
+      assert.match((await rejected.json()).error, /endpoint dataset is invalid/i);
+      assert.deepEqual(await readHistory(), historyAfterStar);
+      assert.deepEqual(await treeState(), beforeAnnotations);
+    } finally {
+      await fs.writeFile(firstSnapshotDatasetPath, firstDatasetBytes);
+    }
 
     const cacheInvalidations = observeFilesystemExecutionInvalidations(
       t,
       filesystemExecutionCache.getFilesystemExecutionCache(),
     );
 
-    const restored = await readJson<WorkflowPublishedVersionRestoreResponse>(
-      await request('restore', { versionId: history.versions[1]!.id, preconditions: await reviewedState() }),
-    );
+    const restored = await readJson<WorkflowPublishedVersionRestoreResponse>(await restoreRequest());
     assert.deepEqual(Object.keys(restored).sort(), ['project', 'version']);
     assert.equal(restored.version.isCurrent, true);
     assert.notEqual(restored.version.id, history.versions[1]!.id);
     assert.equal(restored.version.endpointName, 'published-history-endpoint');
-    assert.equal(restored.project.settings.status, 'published');
+    assert.equal(restored.project.settings.status, 'unpublished_changes');
+    assert.equal(await fs.readFile(created.absolutePath, 'utf8'), editedContents);
     assert.equal(cacheInvalidations.markedIndexDirty, true);
     assert.deepEqual(cacheInvalidations.invalidatedMaterializationPathCalls.at(-1), [created.absolutePath]);
     assert.deepEqual(await treeState(), { ...beforeAnnotations, revision: beforeAnnotations.revision + 1 });
@@ -198,8 +212,8 @@ test('published history HTTP routes preserve saved bytes, annotations and review
     );
     assert.equal(await restoredDownload.text(), firstContents);
     assert.equal(restoredPreview.datasetsContents, firstDatasetContents);
-    assert.equal(await fs.readFile(created.absolutePath, 'utf8'), firstContents);
-    assert.deepEqual(await fs.readFile(datasetPath), firstDatasetBytes);
+    assert.equal(await fs.readFile(created.absolutePath, 'utf8'), editedContents);
+    assert.equal(await fs.readFile(datasetPath, 'utf8'), secondDatasetContents);
     assert.deepEqual(
       await fs.readFile(workflowFs.getPublishedWorkflowSnapshotDatasetPath(workflowsRoot, restored.version.id)),
       firstDatasetBytes,

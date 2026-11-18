@@ -2,7 +2,8 @@ import Button, { LoadingButton } from '@atlaskit/button';
 import { useEffect, useState, type FC } from 'react';
 
 import { fetchWorkflowProjectWebApps } from './workflowApi';
-import { getWorkflowProjectPublicationStatus } from './workflowProjectPublicationStatus';
+import { PublicationReferencePill, useWorkflowPublicationReferences } from './WorkflowPublicationReferences';
+import { getWorkflowProjectEndpointStatus, getWorkflowProjectPublicationStatus } from './workflowProjectPublicationStatus';
 import type { WorkflowProjectItem, WorkflowProjectStatus, WorkflowProjectWebAppSummary } from './types';
 
 const STATUS_LABELS: Record<WorkflowProjectStatus, string> = {
@@ -82,9 +83,10 @@ export const ActiveProjectSection: FC<ActiveProjectSectionProps> = ({
   onSave,
   onOpenSettings,
 }) => {
+  const references = useWorkflowPublicationReferences();
   const activeProjectRelativePath = activeProject?.relativePath ?? null;
   const activeProjectUpdatedAt = activeProject?.updatedAt ?? null;
-  const activeProjectStatus = activeProject?.settings.status ?? null;
+  const savedEndpointStatus = activeProject?.settings.status ?? null;
   const publicationVersion = activeProject?.settings.publicationVersion ?? null;
   const webAppCount = activeProject?.stats?.webAppCount ?? 0;
   const publishedWebAppCount = activeProject?.settings.publishedWebApps?.length ?? 0;
@@ -122,7 +124,7 @@ export const ActiveProjectSection: FC<ActiveProjectSectionProps> = ({
   }, [
     activeProjectRelativePath,
     activeProjectUpdatedAt,
-    activeProjectStatus,
+    savedEndpointStatus,
     publicationVersion,
     publishedWebAppsSignature,
     publishedWebAppCount,
@@ -139,7 +141,8 @@ export const ActiveProjectSection: FC<ActiveProjectSectionProps> = ({
     );
   }
 
-  const statusLabel = STATUS_LABELS[activeProject.settings.status];
+  const activeProjectStatus = getWorkflowProjectEndpointStatus(activeProject, references);
+  const statusLabel = STATUS_LABELS[activeProjectStatus];
   const loadedCurrentWebApps =
     loadedWebApps?.relativePath === activeProject.relativePath ? loadedWebApps.webApps : null;
   const webAppStatusSummary = getWebAppStatusSummary(
@@ -147,7 +150,7 @@ export const ActiveProjectSection: FC<ActiveProjectSectionProps> = ({
     loadedCurrentWebApps,
     loadedWebApps?.relativePath === activeProject.relativePath && loadedWebApps.webApps === null,
   );
-  const aggregatePublicationStatus = getWorkflowProjectPublicationStatus(activeProject);
+  const aggregatePublicationStatus = getWorkflowProjectPublicationStatus(activeProject, references);
   const baseName = activeProject.fileName.replace(/\.[^.]+$/, '');
   const graphCount = activeProject.stats?.graphCount ?? 0;
   const totalNodeCount = activeProject.stats?.totalNodeCount ?? 0;
@@ -171,7 +174,8 @@ export const ActiveProjectSection: FC<ActiveProjectSectionProps> = ({
           <div className="active-project-status-list">
             <div className="active-project-status-line">
               <span className="active-project-status-label">Endpoint:</span>
-              <span className={`project-status-badge ${activeProject.settings.status}`}>{statusLabel}</span>
+              <span className={`project-status-badge ${activeProjectStatus}`}>{statusLabel}</span>
+              <PublicationReferencePill project={activeProject} />
             </div>
             <div className="active-project-status-line">
               <span className="active-project-status-label">{webAppStatusSummary.label}:</span>

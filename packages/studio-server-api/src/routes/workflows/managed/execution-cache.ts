@@ -7,6 +7,7 @@ export type ManagedEndpointPointerCacheEntry = {
   workflowId: string;
   relativePath: string;
   revisionId: string;
+  releaseId?: string;
   endpointAccess?: 'public' | 'internal';
   webAppUiGraphId?: string;
   webAppAllowedEmails?: string[];

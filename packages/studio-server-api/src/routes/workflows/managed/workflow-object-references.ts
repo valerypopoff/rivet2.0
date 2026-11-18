@@ -13,6 +13,10 @@ export const MANAGED_WORKFLOW_OBJECT_REFERENCES_CTE = `
     UNION
     SELECT dataset_blob_key AS object_key FROM workflow_revisions WHERE dataset_blob_key IS NOT NULL
     UNION
+    SELECT project_blob_key AS object_key FROM workflow_endpoint_release_projects
+    UNION
+    SELECT dataset_blob_key AS object_key FROM workflow_endpoint_release_projects WHERE dataset_blob_key IS NOT NULL
+    UNION
     SELECT recording_blob_key AS object_key FROM workflow_recordings
     UNION
     SELECT replay_project_blob_key AS object_key FROM workflow_recordings

@@ -1,6 +1,6 @@
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { type ProjectId, type RemoteRunRequestId } from '@valerypopoff/rivet2-core';
+import { InMemoryDatasetProvider, type ProjectId, type RemoteRunRequestId } from '@valerypopoff/rivet2-core';
 import { createExecutorSessionRegistry } from './ExecutorSessionContext.js';
 import { attachAndStartDesktopSidecarForRuntime } from '../hooks/executorSessionRuntimeResources.js';
 import { FakeWebSocket } from '../hooks/executorSessionTestUtils.js';
@@ -497,28 +497,35 @@ describe('ExecutorSessionRegistry', () => {
     assert.deepEqual(calls, ['first-disconnect', 'second-disconnect']);
   });
 
-  test('propagates the current dataset provider to existing and new runtimes', () => {
-    const registry = createExecutorSessionRegistry({ onStateChange: () => {} });
-    const provider = {} as Parameters<typeof registry.setDatasetProvider>[0];
-    const firstRuntime = registry.getRuntime('project-a' as ProjectId);
-    const firstCalls: Parameters<typeof registry.setDatasetProvider>[0][] = [];
+  test('new runtimes inherit the dataset provider without notifying observers', async () => {
+    const original = globalThis.WebSocket;
+    globalThis.WebSocket = FakeWebSocket as unknown as typeof WebSocket;
+    FakeWebSocket.instances = [];
+    let revision = 0;
+    const registry = createExecutorSessionRegistry({ onStateChange: () => revision++ });
+    try {
+      const first = registry.getRuntime('project-a' as ProjectId);
+      registry.setDatasetProvider(new InMemoryDatasetProvider([]));
 
-    const originalSetFirstDatasetProvider = firstRuntime.setDatasetProvider.bind(firstRuntime);
-    firstRuntime.setDatasetProvider = (nextProvider) => {
-      firstCalls.push(nextProvider);
-      originalSetFirstDatasetProvider(nextProvider);
-    };
-    registry.setDatasetProvider(provider);
-    const secondRuntime = registry.getRuntime('project-b' as ProjectId);
-    const secondCalls: Parameters<typeof registry.setDatasetProvider>[0][] = [];
+      const beforeCreation = revision;
+      const second = registry.getRuntime('project-b' as ProjectId);
+      assert.equal(revision, beforeCreation);
+      for (const runtime of [first, second]) {
+        await runtime.connectInternalHostedExecutor('ws://internal');
+        FakeWebSocket.instances.at(-1)!.open();
+        assert.equal(runtime.getRuntimeState().capabilities.canBridgeDatasets, true);
+      }
 
-    secondRuntime.setDatasetProvider = (nextProvider) => {
-      secondCalls.push(nextProvider);
-    };
-    registry.setDatasetProvider(null);
-
-    assert.deepEqual(firstCalls, [provider, null]);
-    assert.deepEqual(secondCalls, [null]);
+      const beforeRemoval = revision;
+      registry.setDatasetProvider(null);
+      assert.equal(revision, beforeRemoval + 2);
+      for (const runtime of [first, second]) {
+        assert.equal(runtime.getRuntimeState().capabilities.canBridgeDatasets, false);
+      }
+    } finally {
+      registry.disconnectAll();
+      globalThis.WebSocket = original;
+    }
   });
 
   test('notifies project-scoped disconnect subscribers for the owning runtime', async () => {

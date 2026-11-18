@@ -103,16 +103,18 @@ export async function verifyFolderParentMigration(pool, { migrations, migrate, v
   assert.equal(forwardVersions[0], 17, 'The upgrade must still exercise the folder-parent repair.');
   assert.deepEqual(migrated, { currentVersion: forwardVersions.at(-1), appliedVersions: forwardVersions });
   await verify(pool, options);
+  if (forwardVersions.includes(19)) {
+    for (const { value } of saved.workflow_revisions) value.reference_summary = null;
+  }
+  if (forwardVersions.includes(22)) {
+    for (const { value } of saved.workflow_published_versions) {
+      value.release_id = null;
+      value.restored_from = null;
+    }
+  }
   assert.deepEqual(
     await snapshot(),
-    forwardVersions.includes(19)
-      ? {
-          ...saved,
-          workflow_revisions: saved.workflow_revisions.map(({ value }) => ({
-            value: { ...value, reference_summary: null },
-          })),
-        }
-      : saved,
+    saved,
     'Repair must preserve saved revisions, datasets, identities and publications.',
   );
   assert.equal((await pool.query('SELECT value FROM unrelated_application_sentinel')).rows[0].value, 'keep');

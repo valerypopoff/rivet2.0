@@ -31,7 +31,14 @@ export function useGoToSubgraphNode() {
     // to its current path before opening the selected graph.
     if (subGraphNode.data.targetProjectId) {
       if (subGraphNode.data.graphId) {
-        catalog?.openGraph({ projectId: subGraphNode.data.targetProjectId, graphId: subGraphNode.data.graphId });
+        catalog?.openGraph({
+          projectId: subGraphNode.data.targetProjectId,
+          graphId: subGraphNode.data.graphId,
+          callerProjectId: project.metadata.id,
+          version: subGraphNode.data.targetVersion ?? 'latest',
+          sourceGraphId: graph?.id,
+          sourceNodeId: subGraphNode.id,
+        });
       }
       return;
     }

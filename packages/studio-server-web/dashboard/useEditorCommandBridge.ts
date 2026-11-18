@@ -1,5 +1,6 @@
 import type { ProjectId } from '@valerypopoff/rivet2-core';
 import { createEditorBundleComparison } from './editorBundleComparison';
+import { getWorkflowPublishedVersionPreviewFromVirtualProjectPath } from '../../studio-server-shared/workflow-types';
 import { beginDevelopmentCommand } from './developmentActivity';
 import { useSetAtom, useStore } from 'jotai';
 import { useEffect, useRef } from 'react';
@@ -137,7 +138,8 @@ export function useEditorCommandBridge({
     };
 
     const comparison = createEditorBundleComparison(context);
-    const runSerializedCommand = async (command: SerializedEditorCommand): Promise<void> => {
+    let historyOpen: { sessionId: string; controller: AbortController } | undefined;
+    const runSerializedCommand = async (command: SerializedEditorCommand, signal?: AbortSignal): Promise<void> => {
       switch (command.type) {
         case 'bundle-comparison':
           return comparison.run(command);
@@ -162,8 +164,16 @@ export function useEditorCommandBridge({
           });
           return;
         case 'open-project':
-          await handleOpenProjectCommand(context, command);
+          await handleOpenProjectCommand(context, command, { signal });
           return;
+        case 'close-history-preview': {
+          const projects = context.getProjects();
+          for (const id of projects.openedProjectsSortedIds) {
+            const scope = getWorkflowPublishedVersionPreviewFromVirtualProjectPath(projects.openedProjects[id]?.fsPath ?? '');
+            if (scope?.sessionId === command.sessionId) await context.getWorkspace().closeProject(id);
+          }
+          return;
+        }
         case 'delete-workflow-project':
           await handleDeleteWorkflowProjectCommand(context, command);
           return;
@@ -185,11 +195,11 @@ export function useEditorCommandBridge({
       }
     };
 
-    const enqueueSerializedCommand = (command: SerializedEditorCommand): void => {
+    const enqueueSerializedCommand = (command: SerializedEditorCommand, signal?: AbortSignal): void => {
       const finish = beginDevelopmentCommand();
       const queued = serializedCommandQueueRef.current
         .catch(() => undefined)
-        .then(() => runSerializedCommand(command))
+        .then(() => runSerializedCommand(command, signal))
         .finally(finish);
       serializedCommandQueueRef.current = queued.catch((error) => {
         console.error('Failed to process hosted editor command:', error);
@@ -230,12 +240,27 @@ export function useEditorCommandBridge({
         case 'trigger-editor-duplicate-shortcut':
           replayEditorDuplicateShortcut(event.data.modifier);
           break;
-        case 'open-project':
+        case 'open-project': {
+          comparison.cancelPending();
+          // Supersede snapshot reads on receipt, even while activation is queued.
+          historyOpen?.controller.abort();
+          const sessionId = getWorkflowPublishedVersionPreviewFromVirtualProjectPath(event.data.path)?.sessionId;
+          historyOpen = sessionId ? { sessionId, controller: new AbortController() } : undefined;
+          enqueueSerializedCommand(event.data, historyOpen?.controller.signal);
+          break;
+        }
         case 'open-recording':
         case 'open-published-version-preview':
         case 'refresh-open-project-from-disk':
         case 'compare-open-project-with':
           comparison.cancelPending();
+          enqueueSerializedCommand(event.data);
+          break;
+        case 'close-history-preview':
+          if (historyOpen?.sessionId === event.data.sessionId) {
+            historyOpen.controller.abort();
+            historyOpen = undefined;
+          }
           enqueueSerializedCommand(event.data);
           break;
         case 'workflow-paths-moved':
@@ -251,6 +276,7 @@ export function useEditorCommandBridge({
     window.addEventListener('message', handler);
     return () => {
       window.removeEventListener('message', handler);
+      historyOpen?.controller.abort();
       comparison.dispose();
     };
   }, [clearLoadedRecordingForPath, preview, rebindLoadedRecordingPath, recording, setLoadedProject]);

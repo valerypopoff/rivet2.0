@@ -1,4 +1,4 @@
-import { isComparisonInspectionProject } from '../../utils/projectComparisonDocument.js';
+import { isDetachedInspectionProject } from '../../utils/projectComparisonDocument.js';
 
 type Groups = Record<string, Record<string, unknown>>;
 /** Strip only reserved inspection documents from a captured copy, never live atoms. */
@@ -17,7 +17,7 @@ export function excludeComparisonInspection(groups: Groups): Groups {
   const tabs = source.projectsState as
     | { openedProjects: Record<string, { fsPath?: string; openedGraph?: string }>; openedProjectsSortedIds: string[] }
     | undefined;
-  if (!tabs || !Object.keys(tabs.openedProjects).some(isComparisonInspectionProject)) return groups;
+  if (!tabs || !Object.keys(tabs.openedProjects).some(isDetachedInspectionProject)) return groups;
   const project = { ...source };
   for (const key of [
     'openedProjectSnapshotsState',
@@ -28,20 +28,20 @@ export function excludeComparisonInspection(groups: Groups): Groups {
   ]) {
     const value = project[key];
     if (value && typeof value === 'object' && !Array.isArray(value))
-      project[key] = Object.fromEntries(Object.entries(value).filter(([id]) => !isComparisonInspectionProject(id)));
+      project[key] = Object.fromEntries(Object.entries(value).filter(([id]) => !isDetachedInspectionProject(id)));
   }
-  for (const id of Object.keys(tabs.openedProjects).filter(isComparisonInspectionProject))
+  for (const id of Object.keys(tabs.openedProjects).filter(isDetachedInspectionProject))
     delete project[`projectContext__"${id}"`];
-  const ids = tabs.openedProjectsSortedIds.filter((id) => !isComparisonInspectionProject(id));
+  const ids = tabs.openedProjectsSortedIds.filter((id) => !isDetachedInspectionProject(id));
   project.projectsState = {
     ...tabs,
     openedProjects: Object.fromEntries(
-      Object.entries(tabs.openedProjects).filter(([id]) => !isComparisonInspectionProject(id)),
+      Object.entries(tabs.openedProjects).filter(([id]) => !isDetachedInspectionProject(id)),
     ),
     openedProjectsSortedIds: ids,
   };
   const active = source.projectState as { metadata?: { id?: string } } | undefined;
-  if (!active?.metadata?.id || !isComparisonInspectionProject(active.metadata.id)) return { ...groups, project };
+  if (!active?.metadata?.id || !isDetachedInspectionProject(active.metadata.id)) return { ...groups, project };
   const snapshots = project.openedProjectSnapshotsState as
     | Record<string, { project: { graphs: Record<string, unknown> }; data?: unknown }>
     | undefined;

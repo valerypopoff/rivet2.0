@@ -9,7 +9,8 @@ import { loadedProjectState, projectState, projectsState, referencedProjectsStat
 import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { TauriProjectReferenceLoader } from '../model/TauriProjectReferenceLoader';
 import { handleError } from '../utils/errorHandling.js';
-import { usePathPolicyProvider, useIOProvider } from '../providers/ProvidersContext.js';
+import { usePathPolicyProvider, useIOProvider, useSubgraphProjectCatalog } from '../providers/ProvidersContext.js';
+import { isPublishedHistoryInspection } from '../utils/projectComparisonDocument.js';
 import { readProjectBundleForExecution } from '../io/DesktopProjectBundle.js';
 
 export function useReloadProjectReferences() {
@@ -18,6 +19,7 @@ export function useReloadProjectReferences() {
   const openedProjects = useAtomValue(projectsState);
   const bundleManifestPath = openedProjects.openedProjects[project.metadata.id]?.bundleManifestPath;
   const pathPolicy = usePathPolicyProvider();
+  const catalog = useSubgraphProjectCatalog();
   const ioProvider = useIOProvider();
 
   const setReferencedProjects = useSetAtom(referencedProjectsState);
@@ -41,8 +43,15 @@ export function useReloadProjectReferences() {
     try {
       // The saved bundle binding also owns editor definitions. A nested member
       // cannot rediscover the manifest from its immediate parent directory.
-      const bundle = await readProjectBundleForExecution(ioProvider, loadedProject.path, bundleManifestPath);
-      const loader: ProjectReferenceLoader = bundle
+      const history = isPublishedHistoryInspection(loadedProject.path);
+      const bundle = history ? null : await readProjectBundleForExecution(ioProvider, loadedProject.path, bundleManifestPath);
+      const loader: ProjectReferenceLoader = history ? {
+        async loadProject(_path, reference) {
+          if (!catalog?.loadHistoryProjectReference || !loadedProject.path)
+            throw new Error('This reference was not captured in this revision.');
+          return catalog.loadHistoryProjectReference(loadedProject.path, reference.id);
+        },
+      } : bundle
         ? {
             async loadProject(_path, reference) {
               const artifactId = bundle.manifest.references.find(
@@ -81,7 +90,7 @@ export function useReloadProjectReferences() {
         },
       });
     }
-  }, [loadedProject.path, bundleManifestPath, pathPolicy, referenceRoot, setReferencedProjects, ioProvider]);
+  }, [loadedProject.path, bundleManifestPath, pathPolicy, referenceRoot, setReferencedProjects, ioProvider, catalog]);
 
   useEffect(() => {
     void reloadReferences();
