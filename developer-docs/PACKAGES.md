@@ -2,6 +2,21 @@
 
 > Detailed package-by-package reference for the current monorepo.
 
+## Version update 2026-11-19 — frozen endpoint releases
+
+App, Docs, and Studio Server last changed versions in `a2de21b30`. This review
+covers their subsequent changes through `2dd81bf71`.
+
+| Packages | Version | Changes since the last bump |
+| --- | --- | --- |
+| App | `2.38.1` → `2.39.0` | Adds read-only History preview to the shared editor, including navigation between frozen Subgraph targets and protection for ordinary editor tabs. |
+| All five Studio Server packages | `1.41.0` → `1.42.0` | Adds frozen endpoint dependencies, dependency status in the project tree, and Restore that preserves editable drafts. API, shared and web implement the feature. Bootstrap and executor follow the product version. |
+| Docs | `2.31.0` → `2.32.0` | Adds instructions for frozen endpoint releases, reference indicators, History preview, and Restore. |
+
+Core, Node, CLI and Evaluations share `2.32.0`. App Executor is `2.24.0`. Their
+latest package changes are included in `3105c6eaf`. See
+[release preparation](BUILD-AND-CI.md#prepared-release-versions-2026-11-19).
+
 ## Version update: 2026-11-18 — live deployment controls and resource monitoring
 
 Every track's last actual version-changing commit is `3105c6eaf`. This review

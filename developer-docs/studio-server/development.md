@@ -1909,23 +1909,20 @@ committing or pushing the source never applies that recovery to a live cluster.
 
 The five private `@valerypopoff/rivet-studio-server-*` workspaces form one
 Studio Server product and use one lockstep package version. Their current
-version is `1.41.0`. `yarn studio-server:verify:repo-structure` rejects version
+version is `1.42.0`. `yarn studio-server:verify:repo-structure` rejects version
 drift between the API, web, executor, shared, and bootstrap manifests.
-This minor release covers changes since `3105c6eaf` through `bef3bd9c6` and
-the pending settings/monitoring fixes: live published-execution concurrency,
-built-in CPU/RAM history, resource-view switching, recording/statistics layout
-and settings navigation improvements. API, shared and web have local
-changes; bootstrap and executor follow product lockstep as release companions.
-Local execution-isolation tooling remains a prototype, not a production runtime
-switch. Schema 21 belongs to the resource-monitoring implementation, not this
-metadata update; versioning adds no migration or reference-index backfill.
+This minor release adds frozen endpoint dependencies, History preview, saved
+dependency indicators, and Restore that preserves editable drafts. API, shared
+and web implement the feature. Bootstrap and executor follow product lockstep.
+The [frozen-release guide](workflow-publication.md#frozen-endpoint-releases)
+describes schema 22 and when to enable capture.
 Backend overlap was covered by `1.31.0`; compact HA/autoscaling by `1.30.0`.
 This version update does not enable optional rollout features or establish new
 GKE qualification; see the [performance implementation status](rolling-update-performance-plan.md).
 Bump all five manifests together even when only one workspace has runtime
 changes; run the repository-structure check before
 building a release candidate. See the prepared release matrix in
-[Build and CI](../BUILD-AND-CI.md#prepared-release-versions-2026-11-18) for the
+[Build and CI](../BUILD-AND-CI.md#prepared-release-versions-2026-11-19) for the
 separate desktop, sidecar, documentation and public runtime version decisions.
 
 These private package versions are release metadata, not npm publication or
