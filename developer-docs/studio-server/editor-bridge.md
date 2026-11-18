@@ -460,6 +460,38 @@ Recovery checkpoint failure after a completed open is separate from open failure
 26. On `project-opened`, both sides of the hosted bridge explicitly move focus to the editor iframe so keyboard shortcuts target the editor instead of the workflow-library row that triggered the open.
 27. If the iframe reloads, `onLoad` resets `editorReady` to `false`, re-enabling the command buffer until `editor-ready` is sent again.
 
+## Node full-output modal ownership
+
+Full-output selection belongs to the editor's project tab. `state/fullscreenOutput.ts`
+retains one graph/node selection per runtime project ID; the existing
+`fullscreenOutputNodeState` export is an active-tab facade. Output data and process
+pages continue to come from that project's execution snapshot. Opening a second
+recording does not carry the first recording's modal into it, even when both
+artifacts retain identical graph and node IDs. Returning to the first tab restores
+its modal without another playback.
+
+Only the active modal is mounted. Close callbacks capture their original selection;
+late dismissal or cleanup cannot clear another tab or a newer selection. Missing-node
+cleanup rechecks the live graph before clearing: Undo may already have
+restored the node, or tab activation may have overtaken the effect. Tab close,
+committed content replacement and a graph change invalidate the affected selection.
+Same-document renames and failed/cancelled closes preserve it. Graph-builder
+Undo/Redo still restores the active project's selection without modifying other
+tabs. Resize bounds retain their shared preference; search, inspector and DOM
+scroll state follow ordinary modal remount behavior. No modal state is written to
+recordings, project files or the server. See the
+[implementation plan](recording-output-modal-ownership-plan.md).
+
+Run Activity's deferred full-output action captures the existing editor-session
+revision, so leaving and returning to the same project/graph cannot revive an old
+request. While its frame is pending, a newer full-output selection or dismissal
+cancels it, including an open-and-close round trip. The temporary selection
+subscription is released on completion, cancellation and disposal, before the
+action publishes its own selection. Closing the activity drawer and ordinary
+immutable output updates still allow an otherwise valid request to finish.
+An obsolete modal selection is cleared before watching begins, so its delayed
+automatic cleanup cannot be mistaken for a newer user choice and cancel the open.
+
 ## Project-tab keyboard navigation
 
 App's `ProjectSelector` owns adjacent project-tab shortcuts on all platforms:

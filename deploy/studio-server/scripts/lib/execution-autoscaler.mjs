@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { journalForReleaseOperation, haPreparationSettled } from './release-operation-journal.mjs';
 import { assertFenceIntent } from './execution-autoscaler-fence.mjs';
 import { proxyContinuitySettled } from './release-operation-state.mjs';
+import { executionAdmissionCapacity } from './execution-autoscaler-admission.mjs';
 
 export function autoscalerPolicy(input) {
   const policy = {
@@ -79,8 +80,7 @@ function executionReplicaDemand(snapshot, policy, { cpuRoundoff = false } = {}) 
   )
     throw new Error('Execution inventory is incomplete or outside approved bounds.');
   let slots = 0,
-    cpu = 0,
-    limits = new Set();
+    cpu = 0;
   const names = new Set(),
     uids = new Set(),
     ordinals = new Set();
@@ -109,15 +109,14 @@ function executionReplicaDemand(snapshot, policy, { cpuRoundoff = false } = {}) 
     names.add(pod.name);
     uids.add(pod.uid);
     ordinals.add(pod.ordinal);
-    limits.add(pod.limit);
     slots += pod.active;
     cpu += pod.cpuRatio;
   }
-  if (limits.size !== 1) throw new Error('Execution admission limits differ; wait for the owned deployment.');
+  const admission = executionAdmissionCapacity(snapshot.pods);
   const cpuDemand = cpu / (policy.targetCpuPercent / 100);
   return Math.max(
     policy.minReplicas,
-    Math.ceil(slots / (([...limits][0] * policy.targetSlotsPercent) / 100)),
+    Math.ceil(slots / ((admission.limit * policy.targetSlotsPercent) / 100)),
     // At the hard capacity boundary, decimal metrics must not invent an extra
     // owner from floating-point addition. Keep the normal scaling calculation.
     Math.ceil(cpuDemand - (cpuRoundoff ? Number.EPSILON * snapshot.pods.length * Math.max(1, cpuDemand) : 0)),
@@ -138,7 +137,7 @@ function executionPoolObservation(snapshot, peer, policy, candidateCapacity) {
     for (const pool of pools)
       if (pool.replicas !== 0 || pool.pods.length) recommendExecutionReplicas(pool, { ...policy, minReplicas: 1 });
   }
-  const limit = candidateCapacity ? snapshot.pods[0].limit : undefined;
+  const limit = candidateCapacity ? executionAdmissionCapacity(snapshot.pods).limit : undefined;
   // CPU utilization is relative to each Pod's request. Convert occupied CPU
   // to candidate-sized owners too; comparing percentages would over/under-size
   // a handoff between differently requested pools. Provider variation uses the
@@ -149,7 +148,11 @@ function executionPoolObservation(snapshot, peer, policy, candidateCapacity) {
     pods: pods.map((pod, ordinal) => ({
       ...pod,
       ordinal,
-      ...(candidateCapacity ? { limit, cpuRatio: (pod.cpuRatio * pod.cpuRequest) / cpuRequest } : {}),
+      // Every real pool was validated above. This is a virtual observation in
+      // candidate-sized units, not another per-process policy report.
+      ...(candidateCapacity
+        ? { limit, admissionPolicy: undefined, cpuRatio: (pod.cpuRatio * pod.cpuRequest) / cpuRequest }
+        : {}),
     })),
   };
 }
@@ -526,6 +529,10 @@ async function reconcileExecutionAutoscalingTick({
     if (snapshot.poolCapacity?.otherReplicas > 0)
       throw Error('A peer execution pool is still present outside its recorded handoff');
     const desired = recommendExecutionReplicas(snapshot, policy);
+    const admission = executionAdmissionCapacity(snapshot.pods);
+    if (admission.converging || (record.admissionRevision ?? null) !== admission.revision) {
+      await save({ lowSince: null, lastSampleAt: null, admissionRevision: admission.revision });
+    }
     completedObservation = true;
     if (snapshot.uid !== (record.target?.workloadUid ?? snapshot.uid))
       throw new Error('Execution StatefulSet was replaced during retirement.');
@@ -542,6 +549,10 @@ async function reconcileExecutionAutoscalingTick({
       return { state: 'scaled-up', replicas: wanted };
     }
     if (!retiring) {
+      if (admission.converging) {
+        await save({ lowSince: null, lastSampleAt: now() });
+        return { state: 'admission-converging', desired };
+      }
       const low = desired < snapshot.replicas;
       const continuous = record.lastSampleAt !== null && now() - record.lastSampleAt <= policy.pollSeconds * 2500;
       const lowSince = low ? (continuous ? record.lowSince ?? now() : now()) : null;
@@ -566,6 +577,7 @@ async function reconcileExecutionAutoscalingTick({
         operationId: uuid(),
         withdrawnAt: now(),
       };
+      await io.confirmAdmission?.(snapshot.pods, snapshot.uid);
       const fence = await io.prepareFence(retirementTarget);
       await save({
         phase: 'fencing',
@@ -626,6 +638,8 @@ async function reconcileExecutionAutoscalingTick({
     if (record.phase !== 'draining' || !['checking', 'draining', 'drained'].includes(target.state))
       throw new Error('Drain intent is unconfirmed; inspect without replaying.');
     if (target.state !== 'drained') return { state: 'waiting-for-work' };
+    if (admission.converging) return { state: 'admission-converging', desired };
+    await io.confirmAdmission?.(snapshot.pods, snapshot.uid);
     // A load spike may have added higher ordinals. Never remove those to reach
     // the old tail: replace only the exact drained UID, preserving capacity.
     const replace = target.ordinal !== snapshot.replicas - 1 || desired >= snapshot.replicas;

@@ -94,8 +94,8 @@ export function createBackendRetirement({
 }
 
 export function createApiRetirementParticipant(url, token) {
-  async function request(method, body) {
-    const response = await fetch(url, {
+  async function request(method, body, suffix = '') {
+    const response = await fetch(url + suffix, {
       method,
       headers: { 'x-rivet-retirement-token': token, ...(body ? { 'content-type': 'application/json' } : {}) },
       ...(body ? { body: JSON.stringify(body) } : {}),
@@ -107,6 +107,7 @@ export function createApiRetirementParticipant(url, token) {
   }
   return {
     status: () => request('GET'),
+    admission: () => request('GET', undefined, '/admission'),
     // The begin command is sent once. A lost acknowledgement blocks replacement,
     // never restarts the operation or replays unrelated writes.
     begin: (operationId, incarnation) => request('POST', { protocol: 1, operationId, incarnation }),

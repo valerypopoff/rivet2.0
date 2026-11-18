@@ -18,6 +18,7 @@ import { rebindLoadedRecordingPathState } from '../state/execution.js';
 import { useIOProvider } from '../providers/ProvidersContext.js';
 import { useRivetAppHostCallbacks } from '../providers/HostCallbacksContext.js';
 import { cleanupNodeAtomFamilies, graphState, historicalGraphState, isReadOnlyGraphState } from '../state/graph.js';
+import { reconcileProjectFullscreenOutputState } from '../state/fullscreenOutput.js';
 import {
   canvasPositionState,
   graphNavigationStackState,
@@ -248,6 +249,11 @@ export function useWorkspaceTransitions() {
           }));
         }
         if (projectInfo.markClean && targetProjectHasOpenTab) store.set(renewProjectBindingState, targetProjectId);
+        store.set(reconcileProjectFullscreenOutputState, {
+          projectId: targetProjectId,
+          graphId: fallbackGraphId,
+          replace: projectInfo.markClean,
+        });
         setProject(transition.project);
         if (projectInfo.markClean) {
           // Reloaded bytes must not inherit Undo/wire recovery from the content
@@ -331,9 +337,10 @@ export function useWorkspaceTransitions() {
           persistedProjectEditorState: store.get(projectEditorStateByProjectIdState)[project.metadata.id],
           legacyCanvasPositionsByGraph,
         }),
-        nextGraphView: graphNavigationStack.stack.some((view) => view.projectId != null) && savedGraph.metadata?.id
-          ? { ...(options.graphView ?? getFallbackGraphView(savedGraph.metadata.id)), projectId: project.metadata.id }
-          : options.graphView,
+        nextGraphView:
+          graphNavigationStack.stack.some((view) => view.projectId != null) && savedGraph.metadata?.id
+            ? { ...(options.graphView ?? getFallbackGraphView(savedGraph.metadata.id)), projectId: project.metadata.id }
+            : options.graphView,
         previousNavigationStack: graphNavigationStack,
         pushHistory: options.pushHistory ?? true,
       });
@@ -343,6 +350,10 @@ export function useWorkspaceTransitions() {
       }
 
       store.set(nodeEditorSessionRevisionState, (revision) => revision + 1);
+      store.set(reconcileProjectFullscreenOutputState, {
+        projectId: project.metadata.id,
+        graphId: transition.graph.metadata?.id,
+      });
       setGraph(transition.graph);
       setSelectedNodes(transition.selectedNodes);
       setIsReadOnlyGraph(false);

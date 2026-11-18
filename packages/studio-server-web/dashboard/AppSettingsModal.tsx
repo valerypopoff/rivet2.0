@@ -1,9 +1,10 @@
 import ModalDialog, { ModalBody, ModalTransition } from '@atlaskit/modal-dialog';
-import { type Dispatch, type FC, type SetStateAction, useEffect, useState } from 'react';
+import { type Dispatch, type FC, Fragment, type SetStateAction, useEffect, useState } from 'react';
 
 import { SettingsActions } from './app-settings/SettingsControls';
 import { DockerSettingsTab } from './app-settings/tabs/DockerSettingsTab';
 import { DeploymentStatusSettingsTab } from './app-settings/tabs/DeploymentStatusSettingsTab';
+import { ResourceMonitoringPanel } from './ResourceMonitoringPanel';
 import { EnvironmentVariablesSettingsTab } from './app-settings/tabs/EnvironmentVariablesSettingsTab';
 import { GeneralSettingsTab } from './app-settings/tabs/GeneralSettingsTab';
 import { NodeExecutorSettingsTab } from './app-settings/tabs/NodeExecutorSettingsTab';
@@ -20,6 +21,7 @@ import { WorkflowEndpointsSettingsTab } from './app-settings/tabs/WorkflowEndpoi
 import { isWebAppAuthSettingsTab, type AppSettingsTab } from './app-settings/model';
 import { useDeploymentStorageForm } from './app-settings/useDeploymentStorageForm';
 import { useDeploymentStatus } from './useDeploymentStatus';
+import { usePublishedExecutionForm } from './app-settings/usePublishedExecutionForm';
 import { useEnvironmentVariablesForm } from './app-settings/useEnvironmentVariablesForm';
 import { useNodeExecutorForms } from './app-settings/useNodeExecutorForms';
 import { usePublicRoutesForm } from './app-settings/usePublicRoutesForm';
@@ -41,20 +43,21 @@ interface AppSettingsModalProps {
 
 const tabs: ReadonlyArray<{ id: AppSettingsTab; label: string }> = [
   { id: 'general', label: 'General' },
+  { id: 'workflow-endpoints', label: 'Endpoints' },
+  { id: 'web-apps', label: 'Web apps' },
+  { id: 'environment-variables', label: 'Environment variables' },
+  { id: 'run-recordings', label: 'Run recordings' },
   { id: 'shell-execution', label: 'Shell execution' },
-  { id: 'server-ui-access', label: 'Server UI access' },
+  { id: 'node-executor-proxy', label: 'Node executor proxy' },
+  { id: 'runtime-libraries', label: 'Runtime libraries' },
+  { id: 'oauth', label: 'OAuth' },
+  { id: 'server-ui-access', label: 'Rivet Server UI access' },
   { id: 'storage', label: 'Storage' },
   { id: 'local-upgrade', label: 'Local storage upgrade' },
   { id: 'vm-migration', label: 'Migration' },
-  { id: 'deployment-status', label: 'Deployment' },
-  { id: 'workflow-endpoints', label: 'Workflow endpoints' },
-  { id: 'run-recordings', label: 'Run recordings' },
-  { id: 'runtime-libraries', label: 'Runtime libraries' },
-  { id: 'node-executor-proxy', label: 'Node executor proxy' },
-  { id: 'environment-variables', label: 'Environment variables' },
-  { id: 'web-apps', label: 'Web apps' },
-  { id: 'oauth', label: 'OAuth' },
   { id: 'docker', label: 'Docker' },
+  { id: 'deployment-status', label: 'Deployment' },
+  { id: 'resource-monitoring', label: 'CPU and RAM monitoring' },
 ];
 
 type TabSettingsAction = {
@@ -136,6 +139,9 @@ function OpenAppSettingsModal({
   const trustedClients = useTrustedClientsForm(activeTab === 'general');
   const storage = useDeploymentStorageForm(activeTab === 'storage');
   const deploymentStatus = useDeploymentStatus(activeTab === 'deployment-status');
+  const execution = usePublishedExecutionForm(
+    activeTab === 'deployment-status' && deploymentStatus.status?.topology === 'replicated',
+  );
   const routes = usePublicRoutesForm(usesPublicRoutes, routeConfig, onRouteConfigChange);
   const workflowAuth = useWorkflowEndpointAuthForm(activeTab === 'workflow-endpoints');
   const recordings = useRunRecordingsForm(activeTab === 'run-recordings');
@@ -157,7 +163,11 @@ function OpenAppSettingsModal({
     ) : activeTab === 'local-upgrade' ? (
       <LocalStorageUpgradeSettingsTab />
     ) : activeTab === 'deployment-status' ? (
-      <DeploymentStatusSettingsTab deployment={deploymentStatus} />
+      <DeploymentStatusSettingsTab deployment={deploymentStatus} execution={execution} />
+    ) : activeTab === 'resource-monitoring' ? (
+      <div className="project-settings-tab-panel" role="tabpanel">
+        <ResourceMonitoringPanel />
+      </div>
     ) : activeTab === 'workflow-endpoints' ? (
       <WorkflowEndpointsSettingsTab auth={workflowAuth} limits={limits} routes={routes} />
     ) : activeTab === 'run-recordings' ? (
@@ -178,6 +188,7 @@ function OpenAppSettingsModal({
 
   const tabActions: TabSettingsAction[] =
     activeTab === 'deployment-status' ||
+    activeTab === 'resource-monitoring' ||
     activeTab === 'runtime-libraries' ||
     activeTab === 'storage' ||
     activeTab === 'vm-migration' ||
@@ -413,32 +424,38 @@ function OpenAppSettingsModal({
                         (tab.id !== 'vm-migration' || migrationVisible),
                     )
                     .map((tab) => (
-                      <button
-                        key={tab.id}
-                        type="button"
-                        className={`project-settings-tab app-settings-nav-tab${activeTab === tab.id ? ' active' : ''}`}
-                        role="tab"
-                        aria-selected={activeTab === tab.id}
-                        disabled={savingTab}
-                        onClick={() => setActiveTab(tab.id)}
-                      >
-                        {tab.id === 'local-upgrade' ? (
-                          <svg
-                            className="app-settings-upgrade-warning"
-                            aria-hidden="true"
-                            viewBox="0 0 24 24"
-                            fill="none"
-                            stroke="currentColor"
-                            strokeWidth="2"
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                          >
-                            <path d="M12 3 2 21h20L12 3Z" />
-                            <path d="M12 9v5M12 17h.01" />
-                          </svg>
+                      <Fragment key={tab.id}>
+                        {tab.id === 'workflow-endpoints' ||
+                        tab.id === 'run-recordings' ||
+                        tab.id === 'server-ui-access' ? (
+                          <div className="project-settings-tab-separator" role="separator" aria-hidden="true" />
                         ) : null}
-                        {tab.label}
-                      </button>
+                        <button
+                          type="button"
+                          className={`project-settings-tab app-settings-nav-tab${activeTab === tab.id ? ' active' : ''}`}
+                          role="tab"
+                          aria-selected={activeTab === tab.id}
+                          disabled={savingTab}
+                          onClick={() => setActiveTab(tab.id)}
+                        >
+                          {tab.id === 'local-upgrade' ? (
+                            <svg
+                              className="app-settings-upgrade-warning"
+                              aria-hidden="true"
+                              viewBox="0 0 24 24"
+                              fill="none"
+                              stroke="currentColor"
+                              strokeWidth="2"
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                            >
+                              <path d="M12 3 2 21h20L12 3Z" />
+                              <path d="M12 9v5M12 17h.01" />
+                            </svg>
+                          ) : null}
+                          {tab.label}
+                        </button>
+                      </Fragment>
                     ))}
                 </div>
               </aside>

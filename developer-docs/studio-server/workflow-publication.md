@@ -218,7 +218,7 @@ Important current behavior:
   publishing draft changes. The segmented control says "External"
   rather than "Public" because it controls network reachability, not whether
   callers need a bearer key. The "Endpoint access" tooltip points to the
-  separate `Settings` -> `Workflow endpoints` -> `Access control` setting.
+  separate `Settings` -> `Endpoints` -> `Access control` setting.
 
 - All HTTP commands that change executable publication or access require a
   `preconditions` object with `expectedProjectId` and
@@ -902,9 +902,9 @@ Published web app routes match app slugs case-insensitively, but preserve the st
 - `POST ${RIVET_LATEST_APPS_BASE_PATH:-/apps-latest}/:slug/actions/run`
   - runs the clicked button's same-project graph action against the latest saved draft
 
-Top-level workflow and web-app route prefixes are wrapper app settings once saved. `Settings` -> `Workflow endpoints` -> `Routes` stores the published/latest workflow slugs, and `Settings` -> `Web apps` -> `Routes` stores the published/latest app slugs. Fresh/upgraded single-host mode persists the domain in SQLite; legacy file mode uses `settings/public-routes.json` under `RIVET_APP_DATA_ROOT`, and Kubernetes uses PostgreSQL. Supported Compose and Kubernetes proxies poll the authenticated non-secret settings snapshot; custom legacy deployments can retain the JSON-file watcher fallback. In either topology the proxy regenerates its nginx route include, validates it with `nginx -t`, and reloads nginx when the settings change. The legacy `settings/web-app-routes.json` file is still accepted as a migration fallback for the two web-app route families. `RIVET_PUBLISHED_WORKFLOWS_BASE_PATH`, `RIVET_LATEST_WORKFLOWS_BASE_PATH`, `RIVET_PUBLISHED_APPS_BASE_PATH`, and `RIVET_LATEST_APPS_BASE_PATH` are first-run/deployment defaults when no saved public-route settings value exists. The older `RIVET_WEB_APPS_BASE_PATH` and `RIVET_LATEST_WEB_APPS_BASE_PATH` names still work as aliases for the web-app defaults.
+Top-level workflow and web-app route prefixes are wrapper app settings once saved. `Settings` -> `Endpoints` -> `Routes` stores the published/latest workflow slugs, and `Settings` -> `Web apps` -> `Routes` stores the published/latest app slugs. Fresh/upgraded single-host mode persists the domain in SQLite; legacy file mode uses `settings/public-routes.json` under `RIVET_APP_DATA_ROOT`, and Kubernetes uses PostgreSQL. Supported Compose and Kubernetes proxies poll the authenticated non-secret settings snapshot; custom legacy deployments can retain the JSON-file watcher fallback. In either topology the proxy regenerates its nginx route include, validates it with `nginx -t`, and reloads nginx when the settings change. The legacy `settings/web-app-routes.json` file is still accepted as a migration fallback for the two web-app route families. `RIVET_PUBLISHED_WORKFLOWS_BASE_PATH`, `RIVET_LATEST_WORKFLOWS_BASE_PATH`, `RIVET_PUBLISHED_APPS_BASE_PATH`, and `RIVET_LATEST_APPS_BASE_PATH` are first-run/deployment defaults when no saved public-route settings value exists. The older `RIVET_WEB_APPS_BASE_PATH` and `RIVET_LATEST_WEB_APPS_BASE_PATH` names still work as aliases for the web-app defaults.
 
-Project Settings displays workflow and web-app endpoint prefixes from the runtime `/api/config` response instead of hardcoding bundled Vite env values. After changing workflow route slugs in `Settings` -> `Workflow endpoints` -> `Routes` or web-app route slugs in `Settings` -> `Web apps` -> `Routes`, the settings modal waits until `/api/config` reflects the new paths before reporting success, so dashboard links and prefixed slug inputs update without a manual Docker/Compose/Kubernetes restart. In proxy-fronted deployments, the new public paths are served after the proxy's internal nginx reload completes; no image rebuild is required.
+Project Settings displays workflow and web-app endpoint prefixes from the runtime `/api/config` response instead of hardcoding bundled Vite env values. After changing workflow route slugs in `Settings` -> `Endpoints` -> `Routes` or web-app route slugs in `Settings` -> `Web apps` -> `Routes`, the settings modal waits until `/api/config` reflects the new paths before reporting success, so dashboard links and prefixed slug inputs update without a manual Docker/Compose/Kubernetes restart. In proxy-fronted deployments, the new public paths are served after the proxy's internal nginx reload completes; no image rebuild is required.
 
 Newly rendered app pages use the upstream resumable WebSocket action transport at `/apps/<slug>/actions/ws` or `/apps-latest/<slug>/actions/ws`. It starts each action idempotently, streams graph-authored `Report Progress` events, supports explicit cancellation, and reconnects/resumes from durable event sequence numbers without running the graph a second time. The existing `POST .../actions/run` routes remain available for an already-open page produced by an older Rivet renderer; the client never falls back from an interrupted socket action to HTTP because a retry could duplicate an external side effect.
 
@@ -1151,7 +1151,7 @@ Do not replace this path with `runGraph(...)` unless upstream exposes an equival
 
 Public execution auth is separate from server UI auth:
 
-- `Settings` -> `Workflow endpoints` -> `Access control` controls whether workflow endpoint routes require `Authorization: Bearer <RIVET_KEY>`; it is enabled by default and stored in app data
+- `Settings` -> `Endpoints` -> `Access control` controls whether workflow endpoint routes require `Authorization: Bearer <RIVET_KEY>`; it is enabled by default and stored in app data
 - hosts allowlisted in `Settings` -> `General` -> `Trusted hosts` bypass public-route bearer auth because nginx forwards a trusted internal-host signal
 - if public auth is enabled but `RIVET_KEY` is empty, the public execution routes fail with `500`
 

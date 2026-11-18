@@ -2,10 +2,12 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { removeDependencyTestFixtures } from './remove-dependency-test-fixtures.mjs';
+import { removeRuntimeBuildGlobs } from './remove-runtime-build-globs.mjs';
 
 // Preserve workspace link targets and public dist exports, not the entire
 // monorepo's source/tests/desktop assets. Third-party runtime dependencies stay
-// available to plugins/Code nodes; only reviewed unexported fixtures are pruned.
+// available to plugins/Code nodes; only reviewed fixtures and unused build glob
+// packages are pruned from the owned runtime copies, never the source tree.
 export async function prepareRuntimePackages(sourceRoot, destination, profile) {
   if (!['api', 'executor'].includes(profile)) throw new Error('Unknown container runtime profile.');
   await fs.mkdir(destination); // Fresh owned staging only; never delete an existing tree.
@@ -51,6 +53,7 @@ export async function prepareRuntimePackages(sourceRoot, destination, profile) {
       verbatimSymlinks: true,
     });
     await removeDependencyTestFixtures(path.join(target, 'node_modules'));
+    await removeRuntimeBuildGlobs(path.join(target, 'node_modules'));
   }
 }
 

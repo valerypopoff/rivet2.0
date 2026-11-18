@@ -7,6 +7,10 @@ import net from 'node:net';
 import { pathToFileURL } from 'node:url';
 
 type AsyncWorkflowOptions = {
+  liveExecutionPolicy?: boolean;
+  resourceMonitoring?: boolean;
+  maxActiveRuns?: number;
+  httpEchoUrl?: string;
   recordingDurability?: boolean;
   holdRecordingWork?: boolean;
   endpointName?: string;
@@ -30,6 +34,13 @@ type AsyncWorkflowProcess = {
   close(): Promise<void>;
 };
 export async function startAsyncWorkflowProcess(options: AsyncWorkflowOptions = {}) {
+  const maxActiveRuns = options.maxActiveRuns ?? 4;
+  if (!Number.isInteger(maxActiveRuns) || maxActiveRuns < 1 || maxActiveRuns > 32)
+    throw Error('Invalid fixture concurrency');
+  if (options.httpEchoUrl) {
+    const target = new URL(options.httpEchoUrl);
+    if (target.protocol !== 'http:' || target.hostname !== '127.0.0.1') throw Error('The echo fixture must be local');
+  }
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-async-acceptance-'));
   return startOwnedProcess(root, options, false);
 }
@@ -40,6 +51,7 @@ async function startOwnedProcess(
   options: AsyncWorkflowOptions,
   resume: boolean,
 ): Promise<AsyncWorkflowProcess> {
+  const maxActiveRuns = options.maxActiveRuns ?? 4;
   const reservation = net.createServer();
   await new Promise<void>((resolve) => reservation.listen(0, '127.0.0.1', resolve));
   const port = (reservation.address() as net.AddressInfo).port;
@@ -66,7 +78,27 @@ async function startOwnedProcess(
     ...(options.holdRecordingWork ? { RIVET_ASYNC_TEST_HOLD_RECORDING_WORK: 'true' } : {}),
     RIVET_SHUTDOWN_GRACE_SECONDS: String(options.graceSeconds ?? 2),
     RIVET_PUBLISHED_EXECUTION_ADMISSION_MODE: 'enforce',
-    RIVET_PUBLISHED_EXECUTION_MAX_ACTIVE_RUNS: '4',
+    RIVET_PUBLISHED_EXECUTION_MAX_ACTIVE_RUNS: String(maxActiveRuns),
+    ...(options.liveExecutionPolicy || options.resourceMonitoring
+      ? {
+          RIVET_LEGACY_RESTORE_INSTALLATION: 'fixture/async',
+          RIVET_DEPLOYMENT_PUBLISHED_EXECUTION_DEFAULTS: JSON.stringify({
+            mode: 'enforce',
+            maxActiveRunsPerPod: maxActiveRuns,
+          }),
+        }
+      : {}),
+    ...(options.resourceMonitoring
+      ? {
+          RIVET_DEPLOYMENT_RESOURCE_MONITORING: JSON.stringify({
+            enabled: true,
+            containerized: false,
+            name: 'fixture',
+            reportUrl: `http://127.0.0.1:${port}/internal/resource-monitoring`,
+          }),
+        }
+      : {}),
+    ...(options.httpEchoUrl ? { RIVET_ASYNC_TEST_HTTP_ECHO_URL: options.httpEchoUrl } : {}),
     ...(options.storage ? { RIVET_ASYNC_TEST_STORAGE: JSON.stringify(options.storage) } : {}),
     ...(options.endpointName ? { RIVET_ASYNC_TEST_ENDPOINT_NAME: options.endpointName } : {}),
     ...(options.projectName ? { RIVET_ASYNC_TEST_PROJECT_NAME: options.projectName } : {}),

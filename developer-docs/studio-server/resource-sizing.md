@@ -5,25 +5,34 @@ and ceiling: the compact production baseline is five application Pods plus one c
 execution maximum must fit the real DB/node/provider budgets. Local protocol
 tests are not representative-load or GKE capacity measurements.
 
+Settings → CPU and RAM monitoring provides [built-in CPU/RAM history](resource-monitoring.md)
+for reporting execution and control containers. Use its duration-weighted
+averages, approximate p95 and observed peaks alongside workload-specific
+acceptance tests. Five-second samples can miss shorter spikes; process-only
+fallback excludes child executors. Monitoring neither proves the 32-run
+configuration safe nor changes resource requests, limits or autoscaling.
+
 ## Separate execution profiles for production and staging
 
-**Configuration published November 17, 2026; profiles not deployed or load-certified.**
-The first activation stopped in retained preparation before workload changes
-because its new progress step was missing from the provider's source-owned list.
-The local repair covers profiled bootstrap/reuse through the real progress wrapper
-and the exported receipt through the production verifier. A failed attempt remains
-failed; quarantine and its recovery lock are not authority to retry or deploy.
+These are installation-specific deployment profiles, not load certifications.
+Retained preparation validates profiled bootstrap/reuse through the real progress
+wrapper and the exported receipt through the production verifier. A failed attempt
+remains failed; quarantine and its recovery lock are not authority to retry or deploy.
 Keep these installation-specific targets in operator-owned values; the shared
 production overlay retains its conservative admission default.
 
-| Environment                | Execution minimum | Active published runs per Pod | CPU / RAM requests per execution Pod                                   |
-| -------------------------- | ----------------- | ----------------------------- | ---------------------------------------------------------------------- |
-| Production candidate       | 2                 | 32                            | 2 CPUs / 4 GiB                                                         |
-| Retained staging candidate | 1                 | 4                             | Existing reservations; this installation currently admits 500m / 1 GiB |
+| Environment              | Execution minimum | Active published runs per Pod | CPU / RAM requests per execution Pod |
+| ------------------------ | ----------------- | ----------------------------- | ------------------------------------ |
+| Production default       | 2                 | 32                            | 2 CPUs / 4 GiB                       |
+| Retained staging default | 1                 | 4                             | 500m / 1 GiB                         |
 
 `publishedExecutionAdmission.maxActiveRunsPerPod` owns
 `RIVET_DEPLOYMENT_PUBLISHED_EXECUTION_MAX_ACTIVE_RUNS`; keep admission in
-`enforce` mode. Two production workers provide 64 admission slots, not a proven
+`enforce` mode. It is the **bootstrap default**, not an assertion that the current
+runtime override must equal it. [Settings -> Deployment](deployment-status.md)
+can change the per-Pod limit without changing these values, reservations or replica
+floors. The saved override is installation-scoped and survives an upgrade; reset
+explicitly restores the default. Two production workers at the default provide 64 admission slots, not a proven
 64-run throughput guarantee. The controller already scales from occupied slots
 as well as CPU: at its 60% slot target, 39 active runs across two 32-slot workers
 recommend a third worker, subject to the existing observation/cooldown rules.
@@ -102,9 +111,10 @@ changing that profile on an existing retained installation requires an explicit
 owned preparation, rather than silently adopting mismatched predecessor Pods.
 
 During a journal-owned paired handoff, demand checks validate each pool's metrics
-and uniform admission limit separately, then size candidate growth using the
-candidate's limit. This supports four-to-32-slot adoption without weakening the
-mixed-limit guard within a pool or outside an owned transition. CPU demand is
+and applied admission policy separately, then size candidate growth using the
+candidate's smallest verified limit. This supports four-to-32-slot adoption and
+temporary live-setting convergence without accepting unexplained mixed limits
+within a pool or outside an owned transition. CPU demand is
 also converted from each observed Pod's utilization and CPU request to the
 smallest admitted candidate request, so a change in CPU size does not compare
 incompatible percentages or assume extra provider capacity. The retirement check

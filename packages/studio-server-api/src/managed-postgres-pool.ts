@@ -11,6 +11,21 @@ type ManagedPostgresPoolEntry = {
   endPromise: Promise<void> | null;
 };
 
+function createManagedPool(config: PoolConfig): Pool {
+  const pool = new Pool(config);
+  // pg removes a failed idle connection and emits an error on the pool. An
+  // unobserved event would kill otherwise accepted executions during an outage.
+  pool.on('error', (error: Error & { code?: string }) => {
+    const code = /^[A-Z0-9_]{1,32}$/.test(error.code ?? '') ? error.code : 'connection_lost';
+    try {
+      console.warn(`[managed-postgres] Idle connection lost (${code}); future operations will reconnect.`);
+    } catch {
+      /* Diagnostics never affect pool ownership or accepted executions. */
+    }
+  });
+  return pool;
+}
+
 export type ManagedPostgresPoolLease = {
   pool: Pool;
   release(): Promise<void>;
@@ -83,10 +98,7 @@ export class ManagedPostgresPoolRegistry {
   readonly #createPool: (config: PoolConfig) => Pool;
   readonly #env: NodeJS.ProcessEnv;
 
-  constructor(
-    createPool: (config: PoolConfig) => Pool = (config) => new Pool(config),
-    env: NodeJS.ProcessEnv = process.env,
-  ) {
+  constructor(createPool: (config: PoolConfig) => Pool = createManagedPool, env: NodeJS.ProcessEnv = process.env) {
     this.#createPool = createPool;
     this.#env = env;
   }

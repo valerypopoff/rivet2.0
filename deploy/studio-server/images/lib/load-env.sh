@@ -124,6 +124,8 @@ load_optional_dotenv_preserving_deployment_storage() {
   deployment_restore_root="${RIVET_LEGACY_RESTORE_ROOT:-}"
   deployment_restore_token="${RIVET_LEGACY_RESTORE_SUPERVISOR_TOKEN:-}"
   deployment_restore_installation="${RIVET_LEGACY_RESTORE_INSTALLATION:-}"
+  deployment_execution_defaults="${RIVET_DEPLOYMENT_PUBLISHED_EXECUTION_DEFAULTS:-}"
+  deployment_resource_monitoring="${RIVET_DEPLOYMENT_RESOURCE_MONITORING:-}"
   deployment_restore_execution_ready="${RIVET_LEGACY_RESTORE_EXECUTION_READY_URL:-}"
   deployment_restore_evaluation_ready="${RIVET_LEGACY_RESTORE_EVALUATION_READY_URL:-}"
 
@@ -171,6 +173,8 @@ load_optional_dotenv_preserving_deployment_storage() {
   export RIVET_LEGACY_RESTORE_ROOT="$deployment_restore_root"
   export RIVET_LEGACY_RESTORE_SUPERVISOR_TOKEN="$deployment_restore_token"
   export RIVET_LEGACY_RESTORE_INSTALLATION="$deployment_restore_installation"
+  export RIVET_DEPLOYMENT_PUBLISHED_EXECUTION_DEFAULTS="$deployment_execution_defaults"
+  export RIVET_DEPLOYMENT_RESOURCE_MONITORING="$deployment_resource_monitoring"
   export RIVET_LEGACY_RESTORE_EXECUTION_READY_URL="$deployment_restore_execution_ready"
   export RIVET_LEGACY_RESTORE_EVALUATION_READY_URL="$deployment_restore_evaluation_ready"
   # Release admission and reader ownership cannot be changed by stale Vault env.

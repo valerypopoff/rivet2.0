@@ -1,4 +1,9 @@
 import { Router, type Request, type Response } from 'express';
+import {
+  publishedExecutionSettingsRepository,
+  readPublishedExecutionSettings,
+  writePublishedExecutionSettings,
+} from '../published-execution-settings.js';
 import { requireVmMigrationOperatorAuth } from '../middleware/auth.js';
 import { registerLocalUpgradeHttpRoutes } from './local-upgrade-http.js';
 import type { RuntimeLimitSettingsDraft, ServerUiSession } from '../../../studio-server-shared/app-settings-types.js';
@@ -140,6 +145,13 @@ function registerSettingsResource(options: {
   appSettingsRouter.put(options.path, jsonBody, writeHandler);
   appSettingsRouter.patch(options.path, jsonBody, writeHandler);
 }
+
+registerSettingsResource({
+  path: '/published-execution',
+  repository: publishedExecutionSettingsRepository,
+  read: readPublishedExecutionSettings,
+  write: writePublishedExecutionSettings,
+});
 
 function normalizeRuntimeLimitSettingsDraft(value: unknown): RuntimeLimitSettingsDraft {
   const raw = value && typeof value === 'object' ? (value as RuntimeLimitSettingsDraft) : {};

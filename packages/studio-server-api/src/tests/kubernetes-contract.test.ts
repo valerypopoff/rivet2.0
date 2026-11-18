@@ -1,4 +1,4 @@
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -553,34 +553,38 @@ test('Kubernetes restores chart-owned storage values after Vault dotenv loading'
   }
 });
 
-test('Vault may supply S3 credentials but cannot override Kubernetes object location', (context) => {
+test('Vault may supply S3 credentials but cannot override object location or execution defaults', (context) => {
   const shell = process.platform === 'win32' ? 'C:/Program Files/Git/usr/bin/sh.exe' : 'sh';
   if (process.platform === 'win32' && !fs.existsSync(shell)) {
     context.skip('A POSIX shell is unavailable on this Windows host');
     return;
   }
-  const output = execFileSync(
-    shell,
-    [
-      '-c',
-      '. deploy/studio-server/images/lib/load-env.sh\n' +
-        'load_optional_dotenv() { RIVET_DEPLOYMENT_TOPOLOGY=standalone; RIVET_DEPLOYMENT_STORAGE_MODE=filesystem; RIVET_DEPLOYMENT_STORAGE_BUCKET=wrong; RIVET_DEPLOYMENT_STORAGE_PREFIX=wrong/; RIVET_DEPLOYMENT_STORAGE_ACCESS_KEY=from-vault; }\n' +
-        'load_optional_dotenv_preserving_deployment_storage /vault/dotenv\n' +
-        'printf "%s|%s|%s|%s|%s" "$RIVET_DEPLOYMENT_TOPOLOGY" "$RIVET_DEPLOYMENT_STORAGE_MODE" "$RIVET_DEPLOYMENT_STORAGE_BUCKET" "$RIVET_DEPLOYMENT_STORAGE_PREFIX" "$RIVET_DEPLOYMENT_STORAGE_ACCESS_KEY"',
-    ],
-    {
-      cwd: repoRoot,
-      env: {
-        ...process.env,
-        RIVET_DEPLOYMENT_TOPOLOGY: 'replicated',
-        RIVET_DEPLOYMENT_STORAGE_MODE: 'managed',
-        RIVET_DEPLOYMENT_STORAGE_BUCKET: 'chart-bucket',
-        RIVET_DEPLOYMENT_STORAGE_PREFIX: 'tenant/workflows/',
+  for (const maxActiveRunsPerPod of [4, 32]) {
+    const defaults = JSON.stringify({ mode: 'enforce', maxActiveRunsPerPod });
+    const output = execFileSync(
+      shell,
+      [
+        '-c',
+        '. deploy/studio-server/images/lib/load-env.sh\n' +
+          'load_optional_dotenv() { RIVET_DEPLOYMENT_TOPOLOGY=standalone; RIVET_DEPLOYMENT_STORAGE_MODE=filesystem; RIVET_DEPLOYMENT_STORAGE_BUCKET=wrong; RIVET_DEPLOYMENT_STORAGE_PREFIX=wrong/; RIVET_DEPLOYMENT_STORAGE_ACCESS_KEY=from-vault; RIVET_DEPLOYMENT_PUBLISHED_EXECUTION_DEFAULTS=wrong; }\n' +
+          'load_optional_dotenv_preserving_deployment_storage /vault/dotenv\n' +
+          'printf "%s|%s|%s|%s|%s|%s" "$RIVET_DEPLOYMENT_TOPOLOGY" "$RIVET_DEPLOYMENT_STORAGE_MODE" "$RIVET_DEPLOYMENT_STORAGE_BUCKET" "$RIVET_DEPLOYMENT_STORAGE_PREFIX" "$RIVET_DEPLOYMENT_STORAGE_ACCESS_KEY" "$RIVET_DEPLOYMENT_PUBLISHED_EXECUTION_DEFAULTS"',
+      ],
+      {
+        cwd: repoRoot,
+        env: {
+          ...process.env,
+          RIVET_DEPLOYMENT_TOPOLOGY: 'replicated',
+          RIVET_DEPLOYMENT_STORAGE_MODE: 'managed',
+          RIVET_DEPLOYMENT_STORAGE_BUCKET: 'chart-bucket',
+          RIVET_DEPLOYMENT_STORAGE_PREFIX: 'tenant/workflows/',
+          RIVET_DEPLOYMENT_PUBLISHED_EXECUTION_DEFAULTS: defaults,
+        },
+        encoding: 'utf8',
       },
-      encoding: 'utf8',
-    },
-  );
-  assert.equal(output, 'replicated|managed|chart-bucket|tenant/workflows/|from-vault');
+    );
+    assert.equal(output, `replicated|managed|chart-bucket|tenant/workflows/|from-vault|${defaults}`);
+  }
 });
 
 test('dotenv cannot redirect replicated or single-host scratch paths but standalone remains configurable', (context) => {
@@ -618,7 +622,7 @@ test('Vault may supply a database password but cannot redirect Kubernetes Postgr
     context.skip('A POSIX shell is unavailable on this Windows host');
     return;
   }
-  const output = execFileSync(
+  const result = spawnSync(
     shell,
     [
       '-c',
@@ -640,9 +644,12 @@ test('Vault may supply a database password but cannot redirect Kubernetes Postgr
         RIVET_DEPLOYMENT_DATABASE_POOL_MAX: '10',
       },
       encoding: 'utf8',
+      timeout: 10000,
     },
   );
-  assert.equal(output, '|chart-postgres|5432|rivet|rivet-user|10|from-vault');
+  assert.ifError(result.error);
+  assert.equal(result.status, 0, `Shell exit=${result.status}, signal=${result.signal}: ${result.stderr}`);
+  assert.equal(result.stdout, '|chart-postgres|5432|rivet|rivet-user|10|from-vault');
 });
 
 test('chart passes the workflow prefix to bootstrap and rejects unsafe object namespaces', async () => {

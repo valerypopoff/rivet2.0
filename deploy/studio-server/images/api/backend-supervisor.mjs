@@ -209,13 +209,13 @@ export async function startBackendSupervisor({
     finish = resolve;
   });
   const apiReadyUrl = `http://127.0.0.1:${config.apiPort}/readyz`;
+  const apiRetirement = retirementEnabled
+    ? createApiRetirementParticipant(`http://127.0.0.1:${config.apiPort}/internal/process-retirement`, controlToken)
+    : undefined;
   const retirement = retirementEnabled
     ? createBackendRetirement({
         incarnation,
-        api: createApiRetirementParticipant(
-          `http://127.0.0.1:${config.apiPort}/internal/process-retirement`,
-          controlToken,
-        ),
+        api: apiRetirement,
         executor: apiOnly
           ? (() => {
               let operationId = null;
@@ -331,8 +331,23 @@ export async function startBackendSupervisor({
         throw new Error('The retirement control socket must be pod-local /tmp scratch.');
       retirementControl = createServer(async (request, response) => {
         response.setHeader('Cache-Control', 'no-store');
-        if (request.headers.origin !== undefined || request.url !== '/retirement') {
+        if (request.headers.origin !== undefined || !['/retirement', '/admission'].includes(request.url)) {
           response.writeHead(403).end();
+          return;
+        }
+        if (request.url === '/admission') {
+          if (request.method !== 'GET' || config.api.RIVET_API_PROFILE !== 'execution') {
+            response.writeHead(404).end();
+            return;
+          }
+          try {
+            const sample = await apiRetirement.admission();
+            if (sample.incarnation !== incarnation || !sample.admission)
+              throw Error('Execution policy owner is unavailable.');
+            response.writeHead(200).end(JSON.stringify({ ...retirement.snapshot(), admission: sample.admission }));
+          } catch {
+            response.writeHead(503).end();
+          }
           return;
         }
         if (request.method === 'GET') {

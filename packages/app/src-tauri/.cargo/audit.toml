@@ -8,14 +8,20 @@ ignore = [
   # Short-lived reachability review for the signed Windows updater, NOT a patched
   # zip release. Exact crate identities and sole consumer are checked in CI.
   # Unix updater archives are tar; Tauri's ZIP loop creates no symlinks and the
-  # Unix permission code is not compiled on Windows. Re-reviewed 2026-11-02
+  # Unix permission code is not compiled on Windows. Re-reviewed 2026-11-17
   # against the current audit and unchanged crate checksums/call paths;
-  # re-review by 2026-11-16.
+  # re-review by 2026-11-30.
   "RUSTSEC-2026-0367",
   "RUSTSEC-2026-0368",
   "RUSTSEC-2026-0369",
   # The declared-size symlink allocation is absent from pinned zip 0.6.6;
   # Tauri's signed updater uses its own copy loop, not ZipArchive::extract.
-  # Same exact dependency/consumer guard and 2026-11-16 re-review deadline.
+  # Same exact dependency/consumer guard and 2026-11-30 re-review deadline.
   "RUSTSEC-2026-0429",
+  # AES support is disabled in the pinned Tauri ZIP dependency; its updater
+  # never reads password-protected entries. Same dependency guard and expiry.
+  "RUSTSEC-2026-0545",
+  # Tauri uses ZipArchive and central-directory names for its own copy loop,
+  # never the inconsistent local-header streaming extraction from this advisory.
+  "RUSTSEC-2026-0548",
 ]

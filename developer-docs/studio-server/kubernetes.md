@@ -2162,13 +2162,13 @@ If server UI auth should use OAuth, do not provide retired `RIVET_SERVER_UI_OAUT
 
 1. First deploy with `RIVET_SERVER_UI_AUTH_MODE=none` or `key`.
 2. Open `Settings` -> `OAuth` and save the shared OAuth provider settings and session policy.
-3. Open `Settings` -> `Server UI access` and save `Server UI admin emails`.
+3. Open `Settings` -> `Rivet Server UI access` and save `Server UI admin emails`.
 4. Register `https://<public-host>/__rivet_auth/oauth/callback` with the provider for the server UI callback. If web-app OAuth is also enabled, register the app callback path configured in the same OAuth tab, usually `https://<public-host>/apps/auth/callback`.
 5. Change deployment env to `RIVET_SERVER_UI_AUTH_MODE=oauth` and roll out the backend API so the mode env is re-read.
 
 For a new GitOps install, bootstrap the server UI with `RIVET_SERVER_UI_AUTH_MODE=none` or `key`, then save OAuth and admin-email settings through the authenticated UI before switching the deployment mode to `oauth`. Do not insert plaintext JSON into `app_settings`; payload encryption and revisioning are application-owned. An upgrade may instead use the one-time read-only legacy PVC import described above.
 
-Public workflow execution routes require `Authorization: Bearer <RIVET_KEY>` when `Settings` -> `Workflow endpoints` -> `Access control` is enabled. It is enabled by default and stored in the encrypted workflow-endpoint-auth settings domain.
+Public workflow execution routes require `Authorization: Bearer <RIVET_KEY>` when `Settings` -> `Endpoints` -> `Access control` is enabled. It is enabled by default and stored in the encrypted workflow-endpoint-auth settings domain.
 
 Web-app routes under `/apps/*` and `/apps-latest/*` follow the persisted `Settings` -> `Web apps` -> `Auth` mode:
 

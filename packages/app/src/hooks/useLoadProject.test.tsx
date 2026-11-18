@@ -49,6 +49,8 @@ import {
 import { createBlankProjectWithDefaultGraph } from '../utils/blankProject.js';
 import { addOpenedProject } from '../utils/openedProjects.js';
 import { useLoadProject } from './useLoadProject.js';
+import { useWorkspaceTransitions } from './useWorkspaceTransitions.js';
+import { fullscreenOutputNodeState, fullscreenOutputSelectionState } from '../state/fullscreenOutput.js';
 import { useBundleExecutionRouting } from './useBundleExecutionRouting.js';
 import { useLoadProjectWithFileBrowser } from './useLoadProjectWithFileBrowser.js';
 import { useWorkspaceHostCloseProject } from './workspaceHost/useWorkspaceHostCloseProject.js';
@@ -211,6 +213,7 @@ async function mount(
     loadProjectDataNoPrompt: load,
   };
   let activate!: ReturnType<typeof useLoadProject>;
+  let transitions!: ReturnType<typeof useWorkspaceTransitions>;
   let routeBundle!: ReturnType<typeof useBundleExecutionRouting>;
   let openFile!: ReturnType<typeof useLoadProjectWithFileBrowser>;
   let closeProject!: ReturnType<typeof useWorkspaceHostCloseProject>;
@@ -228,6 +231,7 @@ async function mount(
   const errors: unknown[] = [];
   function Harness() {
     activate = useLoadProject();
+    transitions = useWorkspaceTransitions();
     routeBundle = useBundleExecutionRouting();
     openFile = useLoadProjectWithFileBrowser();
     closeProject = useWorkspaceHostCloseProject();
@@ -265,6 +269,9 @@ async function mount(
     storage,
     errors,
     activate,
+    get switchGraph() {
+      return transitions.switchGraph;
+    },
     routeBundle,
     startBundleRun: (rootRunId: string) =>
       routeBundle(a.metadata.id, 'start', {
@@ -1569,12 +1576,91 @@ test('certifying an earlier snapshot cannot clear newer live edits', async () =>
   }
 });
 
+test('full output survives tab activation and same-document rename, but not committed replacement or tab closure', async () => {
+  const fixture = await mount(async () => {
+    throw new Error('Unexpected disk load');
+  });
+  const { store } = fixture;
+  const a = structuredClone(fixture.a);
+  const b = structuredClone(fixture.b);
+  const node = TextNodeImpl.create();
+  a.graphs[a.metadata.mainGraphId!]!.nodes.push(node);
+  b.graphs[b.metadata.mainGraphId!]!.nodes.push(node);
+  try {
+    await act(async () => {
+      store.set(projectState, a);
+      store.set(openedProjectSnapshotsState, { [b.metadata.id]: { project: b } });
+      store.set(
+        savedProjectContentDigestsState,
+        markProjectClean(markProjectClean({}, { project: a }), { project: b }),
+      );
+      store.set(graphState, { ...store.get(graphState), nodes: [node] });
+      store.set(fullscreenOutputNodeState, node.id);
+    });
+    const aModal = store.get(fullscreenOutputSelectionState);
+    assert.ok(aModal);
+    await act(async () => assert.equal(await fixture.activate(fixture.info(b.metadata.id)), true));
+    assert.equal(store.get(fullscreenOutputNodeState), null);
+    await act(async () => store.set(fullscreenOutputNodeState, node.id));
+    const bModal = store.get(fullscreenOutputSelectionState);
+    assert.ok(bModal);
+    await act(async () => assert.equal(await fixture.activate(fixture.info(a.metadata.id)), true));
+    assert.equal(store.get(fullscreenOutputSelectionState), aModal);
+    await act(async () => fixture.metadata.updateProjectMetadata(a.metadata.id, { title: 'Renamed A' }));
+    assert.equal(store.get(fullscreenOutputSelectionState), aModal);
+    await act(async () => assert.equal(await fixture.replaceSnapshot(b.metadata.id, { project: b }), true));
+    assert.equal(store.get(fullscreenOutputSelectionState), aModal, 'inactive reload leaves the active modal intact');
+    await act(async () => assert.equal(await fixture.activate(fixture.info(b.metadata.id)), true));
+    assert.equal(store.get(fullscreenOutputSelectionState), null, 'inactive same-ID replacement retires its modal');
+    await act(async () => store.set(fullscreenOutputNodeState, node.id));
+    await act(async () => assert.equal(await fixture.closeProject(a.metadata.id), true));
+    assert.equal(store.get(fullscreenOutputNodeState), node.id, 'closing an inactive tab preserves the active modal');
+    await act(async () => assert.equal(await fixture.open.openProjectSnapshot({ project: a }), true));
+    assert.equal(store.get(fullscreenOutputNodeState), null, 'a reopened tab cannot inherit its previous modal');
+    await act(async () => store.set(fullscreenOutputNodeState, node.id));
+    assert.equal(store.get(fullscreenOutputNodeState), node.id);
+    await act(async () => assert.equal(await fixture.replaceSnapshot(a.metadata.id, { project: a }), true));
+    assert.equal(store.get(fullscreenOutputNodeState), null, 'active same-ID replacement retires its modal too');
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+test('a real graph switch closes its tab modal without resurrecting it through graph history', async () => {
+  const fixture = await mount(async () => {
+    throw new Error('Unexpected disk load');
+  });
+  const { store, a } = fixture;
+  const original = store.get(graphState);
+  const node = TextNodeImpl.create();
+  try {
+    await act(async () => {
+      store.set(graphState, { ...original, nodes: [node] });
+      store.set(fullscreenOutputNodeState, node.id);
+      assert.equal(store.get(fullscreenOutputNodeState), node.id);
+      fixture.switchGraph({ metadata: { id: 'another-graph' as GraphId, name: 'Other' }, nodes: [], connections: [] });
+    });
+    assert.equal(store.get(fullscreenOutputNodeState), null);
+    await act(async () => fixture.switchGraph(a.graphs[a.metadata.mainGraphId!]!));
+    assert.equal(store.get(fullscreenOutputNodeState), null);
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
 test('failed close replacements retain the only usable active tab', async () => {
   const fixture = await mount(async () => {
     throw new Error('All replacement IO failed');
   });
   try {
+    await act(async () => {
+      const node = TextNodeImpl.create();
+      fixture.store.set(graphState, { ...fixture.store.get(graphState), nodes: [node] });
+      fixture.store.set(fullscreenOutputNodeState, node.id);
+    });
+    const modal = fixture.store.get(fullscreenOutputSelectionState);
     await act(async () => assert.equal(await fixture.closeProject(fixture.a.metadata.id), false));
+    assert.equal(fixture.store.get(fullscreenOutputSelectionState), modal);
     assert.equal(fixture.store.get(projectState).metadata.id, fixture.a.metadata.id);
     assert.ok(fixture.info(fixture.a.metadata.id));
     assert.equal(fixture.store.get(projectUnsavedChangesState)[fixture.a.metadata.id], true);

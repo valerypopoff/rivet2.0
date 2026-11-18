@@ -36,7 +36,7 @@
     "test:benchmark-support": "node --test scripts/benchmarks/editor-performance/support.test.mjs",
     "test:container-security": "node --test scripts/ci/scan-container-images.test.mjs scripts/qualification-image-publication.test.mjs deploy/studio-server/images/lib/remove-dependency-test-fixtures.test.mjs deploy/studio-server/images/lib/harden-package-manager-caches.test.mjs deploy/studio-server/images/lib/run-runtime-probe.test.mjs",
     "benchmark:editor": "node scripts/benchmarks/editor-performance/run.mjs",
-    "security:audit": "node scripts/checks/check-dependency-audit.mjs",
+    "security:audit": "node scripts/checks/check-dependency-audit.mjs && node scripts/checks/check-runtime-glob-scope.mjs",
     "security:audit:rust-exceptions": "node scripts/checks/check-rust-audit-exceptions.mjs",
     "check:file-tree": "node scripts/checks/check-file-tree.mjs",
     "check:compiled-workspace-exports": "node scripts/checks/check-compiled-workspace-exports.mjs",

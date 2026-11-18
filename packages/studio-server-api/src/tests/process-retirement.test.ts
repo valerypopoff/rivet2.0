@@ -20,6 +20,47 @@ function deferred() {
 }
 const tick = () => new Promise<void>((resolve) => setImmediate(resolve));
 
+test('admission observation is bound to the process-local retirement capability', async () => {
+  const owner = new ProcessRetirement(
+    randomUUID(),
+    () => {},
+    async () => {},
+  );
+  const token = 'process-local-fixture-token'.repeat(2);
+  const policy = {
+    protocol: 1 as const,
+    installation: 'rivet/rivet',
+    deploymentDefault: 32,
+    revision: 'revision-1',
+    source: 'app-settings' as const,
+    mode: 'enforce' as const,
+    limit: 16,
+    active: 20,
+    draining: false,
+  };
+  const app = express();
+  app.use(
+    '/retirement',
+    createProcessRetirementRouter(owner, token, () => policy),
+  );
+  const server = await listenTestServer(createServer(app));
+  try {
+    const url = `${server.baseUrl}/retirement/admission`;
+    assert.equal((await fetch(url)).status, 403);
+    assert.equal(
+      (await fetch(url, { headers: { 'x-rivet-retirement-token': token, origin: 'http://localhost' } })).status,
+      403,
+    );
+    const response = await fetch(url, { headers: { 'x-rivet-retirement-token': token } });
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), { incarnation: owner.incarnation, admission: policy });
+    assert.equal(response.headers.get('cache-control'), 'no-store');
+    assert.equal(owner.snapshot().state, 'serving');
+  } finally {
+    await server.close();
+  }
+});
+
 test('routing withdrawal is owned but leaves request admission open until explicit fencing', async () => {
   const work = new AcceptedWork();
   let withdrawals = 0;

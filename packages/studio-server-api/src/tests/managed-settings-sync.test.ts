@@ -25,6 +25,87 @@ import { createManagedWorkflowRevisionFactory } from '../routes/workflows/manage
 import type { ManagedWorkflowBlobStore } from '../routes/workflows/managed/blob-store.js';
 import { createWorkflowRecordingStore } from '../routes/workflows/recordings-store.js';
 
+test('a disconnected settings listener handles both driver errors without crashing or duplicating reconnect timers', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const clients: Client[] = [];
+  t.mock.method(Client.prototype, 'connect', async function (this: Client) {
+    clients.push(this);
+    return this;
+  } as Client['connect']);
+  t.mock.method(Client.prototype, 'query', (async () => ({ rows: [] })) as unknown as Client['query']);
+  t.mock.method(Client.prototype, 'end', (async () => {}) as Client['end']);
+  t.mock.method(Pool.prototype, 'query', (async () => ({ rows: [] })) as unknown as Pool['query']);
+  const backend = new PostgresAppSettingsBackend({
+    poolConfig: { host: 'listener-fixture.invalid' },
+    encryptionSecret: 'fixture',
+    logger: { log() {}, error() {}, warn() {} },
+  });
+  try {
+    await backend.initialize();
+    assert.equal(clients.length, 1);
+    assert.doesNotThrow(() => {
+      clients[0]!.emit('error', Error('server terminated connection'));
+      clients[0]!.emit('error', Error('socket closed unexpectedly'));
+      clients[0]!.emit('end');
+    });
+    t.mock.timers.tick(1000);
+    await setImmediate();
+    assert.equal(clients.length, 2, 'Repeated errors must share one reconnect');
+    clients[0]!.emit('error', Error('Late error from the old socket'));
+    t.mock.timers.tick(1000);
+    await setImmediate();
+    assert.equal(clients.length, 2, 'An old socket must not schedule another connection');
+  } finally {
+    await backend.dispose();
+  }
+});
+
+for (const scenario of ['disconnect', 'dispose'] as const) {
+  test(`settings listener owns its connection before LISTEN completes: ${scenario}`, async (t) => {
+    let client!: Client;
+    let finishListen!: () => void;
+    let failListen!: (error: Error) => void;
+    let closed = 0;
+    const listen = new Promise<void>((resolve, reject) => {
+      finishListen = resolve;
+      failListen = reject;
+    });
+    t.mock.method(Client.prototype, 'connect', async function (this: Client) {
+      client = this;
+    });
+    t.mock.method(Client.prototype, 'query', (() => listen) as unknown as Client['query']);
+    t.mock.method(Client.prototype, 'end', (async () => {
+      closed++;
+    }) as Client['end']);
+    t.mock.method(Pool.prototype, 'query', (async () => ({ rows: [] })) as unknown as Pool['query']);
+    const backend = new PostgresAppSettingsBackend({
+      poolConfig: { host: `listener-establish-${scenario}.invalid` },
+      encryptionSecret: 'fixture',
+      logger: { log() {}, error() {}, warn() {} },
+    });
+    const initialized = backend.initialize();
+    try {
+      await setImmediate();
+      assert.ok(client);
+      if (scenario === 'disconnect') {
+        const error = Error('Disconnected while LISTEN was pending');
+        assert.doesNotThrow(() => client.emit('error', error));
+        failListen(error);
+        await initialized;
+      } else {
+        await backend.dispose();
+        assert.equal(closed, 1, 'Shutdown must own even the opening connection');
+        finishListen();
+        await assert.rejects(initialized, /disposed/);
+      }
+    } finally {
+      finishListen();
+      await initialized.catch(() => undefined);
+      await backend.dispose();
+    }
+  });
+}
+
 test('concurrent settings disposal waits for the same pending pool close', async (t) => {
   let finish!: () => void;
   const gate = new Promise<void>((resolve) => {

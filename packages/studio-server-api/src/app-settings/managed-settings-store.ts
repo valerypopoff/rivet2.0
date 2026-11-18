@@ -189,8 +189,10 @@ export class PostgresAppSettingsBackend implements AppSettingsBackend {
     }
 
     await this.#refreshRevisionIndex(false, 'initialization');
+    if (this.#disposed) throw new Error('PostgreSQL app-settings backend is disposed.');
     this.#initialized = true;
     await this.#connectListener();
+    if (this.#disposed) throw new Error('PostgreSQL app-settings backend is disposed.');
     this.#pollTimer = setInterval(() => {
       if (this.#pollInFlight) {
         return;
@@ -452,9 +454,33 @@ export class PostgresAppSettingsBackend implements AppSettingsBackend {
       return;
     }
     const client = new Client(this.#poolConfig);
+    const scheduleReconnect = () => {
+      if (this.#disposed || this.#listenerClient || this.#listenerReconnectTimer) return;
+      this.#listenerReconnectTimer = setTimeout(() => {
+        this.#listenerReconnectTimer = undefined;
+        void this.#connectListener();
+      }, 1_000);
+      this.#listenerReconnectTimer.unref?.();
+    };
+    const disconnected = () => {
+      // Late events from a replaced connection must not disturb its successor.
+      if (this.#listenerClient !== client) return;
+      this.#listenerClient = null;
+      this.#listenerConnected = false;
+      this.#recordSynchronizationState();
+      if (!this.#disposed) this.#recordSynchronization('notification', 'failure');
+      scheduleReconnect();
+    };
+    // Own the connection before either await, including errors before LISTEN
+    // completes and shutdown during startup. pg can emit more than one error.
+    this.#listenerClient = client;
+    client.on('error', disconnected);
+    client.once('end', disconnected);
     try {
       await client.connect();
+      if (this.#disposed) return;
       await client.query(`LISTEN ${APP_SETTINGS_CHANNEL}`);
+      if (this.#disposed || this.#listenerClient !== client) return;
       client.on('notification', (message) => {
         if (message.channel !== APP_SETTINGS_CHANNEL) {
           return;
@@ -483,38 +509,18 @@ export class PostgresAppSettingsBackend implements AppSettingsBackend {
           this.#report('warn', '[app-settings] Ignoring malformed PostgreSQL change notification:', error);
         }
       });
-      const reconnect = () => {
-        if (this.#listenerClient === client) {
-          this.#listenerClient = null;
-          this.#listenerConnected = false;
-          this.#recordSynchronizationState();
-          if (!this.#disposed) this.#recordSynchronization('notification', 'failure');
-        }
-        if (!this.#disposed && !this.#listenerReconnectTimer) {
-          this.#listenerReconnectTimer = setTimeout(() => {
-            this.#listenerReconnectTimer = undefined;
-            void this.#connectListener();
-          }, 1_000);
-          this.#listenerReconnectTimer.unref?.();
-        }
-      };
-      client.once('error', reconnect);
-      client.once('end', reconnect);
-      this.#listenerClient = client;
       this.#listenerConnected = true;
       this.#recordSynchronizationState();
     } catch (error) {
+      if (this.#disposed) return; // Disposal already owns this connection's close.
+      if (this.#listenerClient === client) {
+        this.#listenerClient = null;
+        this.#listenerConnected = false;
+      }
       await client.end().catch(() => undefined);
-      this.#listenerConnected = false;
       this.#recordSynchronization('notification', 'failure');
       this.#report('warn', '[app-settings] PostgreSQL LISTEN unavailable; polling remains active:', error);
-      if (!this.#disposed && !this.#listenerReconnectTimer) {
-        this.#listenerReconnectTimer = setTimeout(() => {
-          this.#listenerReconnectTimer = undefined;
-          void this.#connectListener();
-        }, 1_000);
-        this.#listenerReconnectTimer.unref?.();
-      }
+      scheduleReconnect();
     }
   }
 }

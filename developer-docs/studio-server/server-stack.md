@@ -5,6 +5,12 @@ Docker Compose and Kubernetes run the same images and managed API roles.
 Desktop, Node and CLI graph execution are unchanged. File/SQLite implementations
 remain migration/compatibility internals; existing data is never adopted automatically.
 
+All six supported commands automatically enable [CPU/RAM monitoring](resource-monitoring.md)
+for the API-owned execution and control containers. Collection reads the
+container's cgroups, uses the existing internal authentication and PostgreSQL
+pool, and needs no extra service, Docker socket or MinIO configuration. Its
+additive tables are created by the ordinary migration job.
+
 ## Six single-machine commands
 
 ```bash

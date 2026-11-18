@@ -10,6 +10,7 @@ import {
   reconcileExecutionAutoscaling,
 } from './lib/execution-autoscaler.mjs';
 import { journalForReleaseOperation } from './lib/release-operation-journal.mjs';
+import { executionAdmissionCapacity, admissionPolicySample } from './lib/execution-autoscaler-admission.mjs';
 import {
   assertRuntimeAutoscalingEvidence,
   assertCooperativeAutoscalingEvidence,
@@ -149,6 +150,127 @@ function fixture(replicas = 3, policyOverrides = {}) {
     },
   };
 }
+
+const livePolicy = (pod, value, revision = 'saved-policy', extra = {}) => {
+  pod.limit = value;
+  pod.admissionPolicy = {
+    protocol: 1,
+    installation: 'rivet/rivet',
+    deploymentDefault: 10,
+    revision,
+    mode: 'enforce',
+    source: 'app-settings',
+    limit: value,
+    active: pod.active,
+    draining: false,
+    ...extra,
+  };
+};
+
+test('live admission convergence allows conservative growth and prevents new shrink', async () => {
+  const f = fixture(3);
+  f.snapshot.pods.forEach((p, i) => livePolicy(p, i ? 20 : 10, i ? 'new' : 'old'));
+  assert.equal((await f.tick()).state, 'admission-converging');
+  f.advance(120);
+  assert.equal((await f.tick()).state, 'admission-converging');
+  assert.equal(f.calls.length, 0);
+  assert.equal(f.journal().lowSince, null);
+  f.snapshot.pods.forEach((p, i) => {
+    p.active = 10;
+    livePolicy(p, i ? 20 : 10, i ? 'new' : 'old');
+  });
+  assert.equal((await f.tick()).state, 'scaled-up');
+  assert.deepEqual(f.calls, [['scale', 3, 5]]);
+});
+
+test('a uniform live policy update restarts low-load stabilization without changing deployment identity', async () => {
+  const f = fixture(3);
+  f.snapshot.pods.forEach((p) => livePolicy(p, 10, 'old'));
+  await f.tick();
+  const digest = f.journal().policyDigest;
+  f.advance(40);
+  f.snapshot.pods.forEach((p) => livePolicy(p, 20, 'new'));
+  assert.equal((await f.tick()).state, 'observing');
+  assert.equal(f.calls.length, 0);
+  assert.equal(f.journal().policyDigest, digest);
+  for (let i = 0; i < 3; i++) {
+    f.advance();
+    await f.tick();
+  }
+  assert.equal(f.journal().phase, 'fencing');
+});
+
+test('runtime policy observations reject drift, legacy mixed limits, ambiguous revisions and changed processes', () => {
+  const f = fixture(2),
+    [a, b] = f.snapshot.pods;
+  livePolicy(a, 10, 'a');
+  livePolicy(b, 20, 'b');
+  const sample = structuredClone(b);
+  for (const change of [
+    { installation: 'foreign/release' },
+    { deploymentDefault: 4 },
+    { mode: 'observe' },
+    { revision: 'a' },
+    { limit: 11 },
+    { protocol: 2 },
+    { active: -1 },
+  ]) {
+    b.admissionPolicy = { ...sample.admissionPolicy, ...change };
+    assert.throws(() => executionAdmissionCapacity([a, b]));
+  }
+  delete b.admissionPolicy;
+  assert.throws(() => executionAdmissionCapacity([a, b]), /Legacy/);
+  const text =
+    '# rivet-execution-policy ' + JSON.stringify({ incarnation: 'new-process', admission: sample.admissionPolicy });
+  assert.throws(() => admissionPolicySample(text, { incarnation: 'old-process' }), /incarnation/);
+  assert.equal(admissionPolicySample('', { incarnation: 'old' }), undefined);
+  assert.deepEqual(admissionPolicySample(text, { incarnation: 'new-process' }), sample.admissionPolicy);
+});
+
+test('a setting change before retirement leaves no unissued intent and an owned drain waits for convergence', async () => {
+  const f = fixture(3);
+  f.snapshot.pods.forEach((p) => livePolicy(p, 10));
+  await f.tick();
+  for (let i = 0; i < 2; i++) {
+    f.advance();
+    await f.tick();
+  }
+  f.advance();
+  f.io.confirmAdmission = async () => {
+    throw Error('Execution admission changed before retirement');
+  };
+  await assert.rejects(f.tick(), /admission changed/);
+  assert.equal(f.journal().phase, 'complete');
+  assert.equal(f.calls.length, 0);
+  f.io.confirmAdmission = async () => {};
+  // Failure resets stabilization; a fresh stable observation can proceed.
+  for (let i = 0; i < 5; i++) {
+    f.advance();
+    await f.tick();
+  }
+  for (let i = 0; i < 6 && f.journal().phase !== 'draining'; i++) {
+    f.advance();
+    await f.tick();
+  }
+  assert.equal(f.journal().phase, 'draining');
+  const target = f.snapshot.pods.find((p) => p.uid === f.journal().target.uid);
+  target.state = 'drained';
+  livePolicy(f.snapshot.pods[0], 20, 'new');
+  assert.equal((await f.tick()).state, 'admission-converging');
+  assert.equal(f.journal().phase, 'draining');
+  assert.equal(
+    f.calls.some(([action]) => action === 'delete' || action === 'scale'),
+    false,
+  );
+  f.snapshot.pods.forEach((p) => livePolicy(p, 20, 'new'));
+  f.io.confirmAdmission = async () => {
+    throw Error('Execution admission changed before retirement');
+  };
+  await assert.rejects(f.tick(), /admission changed/);
+  assert.equal(f.journal().phase, 'draining');
+  f.io.confirmAdmission = async () => {};
+  assert.equal((await f.tick()).state, 'scaled-down');
+});
 
 test('policy rejects unsafe, fractional and incompatible bounds', () => {
   for (const value of [

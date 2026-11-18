@@ -21,7 +21,7 @@ export function ServerUiAccessSettingsTab({ auth }: { auth: ReturnType<typeof us
 
   return (
     <div className="project-settings-tab-panel app-settings-server-ui-access-panel" role="tabpanel">
-      <section className="app-settings-section" aria-label="Server UI access">
+      <section className="app-settings-section" aria-label="Rivet Server UI access">
         {!session && !sessionError ? <p role="status">Checking sign-in status…</p> : null}
         {session?.mode === 'oauth' && session.email ? (
           <div className="app-settings-field">
@@ -36,8 +36,8 @@ export function ServerUiAccessSettingsTab({ auth }: { auth: ReturnType<typeof us
             <span className="app-settings-field-label">Access mode</span>
             <span className="app-settings-field-help">
               The editor and dashboard gate is selected by <code>RIVET_SERVER_UI_AUTH_MODE</code> in <code>.env</code>{' '}
-              or deployment env. Use <code>none</code>, <code>key</code>, or <code>oauth</code>, then restart or roll out
-              the API so it reads the new mode.
+              or deployment env. Use <code>none</code>, <code>key</code>, or <code>oauth</code>, then restart or roll
+              out the API so it reads the new mode.
             </span>
           </div>
           <label className="app-settings-field">

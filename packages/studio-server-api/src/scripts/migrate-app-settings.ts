@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import type { Stats } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { publishedExecutionSettingsRepository } from '../published-execution-settings.js';
 import { Pool } from 'pg';
 
 import { PostgresAppSettingsBackend } from '../app-settings/managed-settings-store.js';
@@ -41,6 +42,7 @@ const descriptors: ReadonlyArray<SettingsRepositoryDescriptor<unknown>> = [
   webAppAuthSettingsRepository.descriptor,
   workflowEndpointAuthSettingsRepository.descriptor,
   runRecordingsSettingsRepository.descriptor,
+  publishedExecutionSettingsRepository.descriptor,
 ];
 
 export type SettingsRow = {

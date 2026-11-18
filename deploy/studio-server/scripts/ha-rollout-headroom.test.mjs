@@ -98,6 +98,37 @@ test('headroom accounts for the departing owner and all accepted work', () => {
   assert.equal(result.spareOwnersAtTarget, -2);
 });
 
+test('ordinary rollout guards use conservative live capacity during policy propagation', () => {
+  const sample = snapshot();
+  for (const [index, pod] of sample.pods.entries()) {
+    pod.active = 1;
+    pod.limit = index === 0 ? 32 : 1;
+    pod.admissionPolicy = {
+      protocol: 1,
+      installation: 'fixture/rivet',
+      deploymentDefault: 10,
+      revision: index === 0 ? 'new' : 'old',
+      source: 'app-settings',
+      mode: 'enforce',
+      limit: pod.limit,
+      active: pod.active,
+      draining: false,
+    };
+  }
+  const partial = assessHaExecutionHeadroom(sample, policy, sample.pods[2]);
+  assert.equal(partial.admissionLimitPerOwner, 1);
+  assert.equal(partial.requiredServingOwners, 3);
+  assert.equal(partial.sufficient, false);
+  assert.equal(partial.admissionConverging, true);
+  for (const pod of sample.pods) {
+    pod.limit = pod.admissionPolicy.limit = 32;
+    pod.admissionPolicy.revision = 'new';
+  }
+  const settled = assessHaExecutionHeadroom(sample, policy, sample.pods[2]);
+  assert.equal(settled.sufficient, true);
+  assert.equal(settled.admissionConverging, false);
+});
+
 test('CPU rounding cannot invent an extra required owner at reserved capacity', () => {
   const sample = snapshot();
   sample.pods[0].cpuRatio = 0.5 + Number.EPSILON;

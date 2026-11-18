@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createStore } from 'jotai';
 import {
-  createBuiltInRegistry,
+  TextNodeImpl,
   type GraphId,
   type GraphRunId,
   type ProcessId,
@@ -19,8 +19,16 @@ import {
   type ProcessDataForNode,
 } from '../../state/dataFlow.js';
 import { graphState } from '../../state/graph.js';
-import { fullscreenOutputNodeState, graphNavigationStackState } from '../../state/graphBuilder.js';
+import {
+  fullscreenOutputNodeState,
+  graphNavigationStackState,
+  nodeEditorSessionRevisionState,
+} from '../../state/graphBuilder.js';
 import { renewProjectBindingState, retireWorkspaceExecutionState } from '../../state/projectBindings.js';
+import {
+  clearInvalidFullscreenOutputSelectionState,
+  fullscreenOutputSelectionState,
+} from '../../state/fullscreenOutput.js';
 import { projectState, projectsState } from '../../state/savedGraphs.js';
 import { runActivityDrawerOpenState } from '../../state/ui.js';
 import { createRunActivityOutputNavigation } from './runActivityOutputNavigation.js';
@@ -28,7 +36,7 @@ import type { RunActivityInvocationIdentity } from './types.js';
 
 function fixture(bound = true) {
   const store = createStore();
-  const node = createBuiltInRegistry().create('text');
+  const node = TextNodeImpl.create();
   const graph = { metadata: { id: 'output-graph' as GraphId }, nodes: [node], connections: [] };
   const project: Project = {
     metadata: { id: 'output-project' as ProjectId, title: '', description: '' },
@@ -79,6 +87,12 @@ const invalidations: Record<string, (f: Fixture) => void> = {
     store.set(projectState, { ...project, metadata: { ...project.metadata, id: 'clone' as ProjectId } }),
   'same-ID binding renewal': ({ store, project }) => store.set(renewProjectBindingState, project.metadata.id),
   'workspace release': ({ store }) => store.set(retireWorkspaceExecutionState),
+  'leaving and returning to the same graph session': ({ store, project }) => {
+    store.set(nodeEditorSessionRevisionState, (revision) => revision + 1);
+    store.set(projectState, { ...project, metadata: { ...project.metadata, id: 'neighbor' as ProjectId } });
+    store.set(nodeEditorSessionRevisionState, (revision) => revision + 1);
+    store.set(projectState, project);
+  },
   'close and reopen same path': ({ store }) => {
     const before = store.get(projectsState);
     store.set(projectsState, { openedProjects: {}, openedProjectsSortedIds: [] });
@@ -128,40 +142,65 @@ test('valid output survives drawer closure and ordinary immutable data updates, 
   assert.equal(f.store.get(fullscreenOutputNodeState), null);
 });
 
-test('latest output intent wins and exact tool port is rechecked on the live process', () => {
+for (const dismiss of [false, true]) {
+  test(`a pending Run Activity open cannot override ${dismiss ? 'a newer output dismissal' : 'a newer inline output choice'}`, () => {
+    const f = fixture();
+    const other = TextNodeImpl.create();
+    f.store.set(graphState, { ...f.graph, nodes: [...f.graph.nodes, other] });
+    f.store.set(lastRunDataByNodeState, {
+      [f.target.nodeId]: [f.process],
+      [other.id]: [{ ...f.process, nodeId: other.id }],
+    });
+    f.navigation.schedule(f.target);
+    f.store.set(fullscreenOutputNodeState, other.id);
+    if (dismiss) f.store.set(fullscreenOutputNodeState, null);
+    // The first request's frame can already be queued when the user changes intent.
+    f.callbacks[0]!(0);
+    assert.equal(f.store.get(fullscreenOutputNodeState), dismiss ? null : other.id);
+  });
+}
+
+test('cleanup of an obsolete modal cannot cancel a valid new Run Activity open', () => {
+  const f = fixture();
+  const removed = TextNodeImpl.create();
+  f.store.set(graphState, { ...f.graph, nodes: [...f.graph.nodes, removed] });
+  f.store.set(fullscreenOutputNodeState, removed.id);
+  const obsolete = f.store.get(fullscreenOutputSelectionState)!;
+  f.store.set(graphState, f.graph);
+  f.navigation.schedule(f.target);
+  // A renderer effect from the removed node may still be queued after navigation.
+  f.store.set(clearInvalidFullscreenOutputSelectionState, obsolete);
+  f.callbacks[0]!(0);
+  assert.equal(f.store.get(fullscreenOutputNodeState), f.target.nodeId);
+});
+
+test('the newest Run Activity open succeeds even if its cancelled predecessor frame is delivered', () => {
   const f = fixture();
   f.navigation.schedule(f.target);
   f.navigation.schedule({ ...f.target, outputPortId: 'output' as PortId });
   assert.deepEqual(f.cancelled, [1]);
   f.callbacks[0]!(0);
   assert.equal(f.store.get(fullscreenOutputNodeState), null);
-  f.store.set(lastRunDataByNodeState, {
-    [f.target.nodeId]: [
-      {
-        ...f.process,
-        data: {
-          status: { type: 'ok' },
-          outputData: { ['other' as PortId]: { type: 'string', storage: 'inline', value: 'not the tool result' } },
-        },
-      },
-    ],
-  });
   f.callbacks[1]!(0);
-  assert.equal(f.store.get(fullscreenOutputNodeState), null);
-  f.store.set(lastRunDataByNodeState, {
-    [f.target.nodeId]: [
-      {
-        ...f.process,
-        data: {
-          status: { type: 'ok' },
-          splitOutputData: {
-            0: { ['output' as PortId]: { type: 'string', storage: 'inline', value: 'split result' } },
-          },
-        },
-      },
-    ],
-  });
-  f.navigation.schedule({ ...f.target, outputPortId: 'output' as PortId });
-  f.callbacks[2]!(0);
   assert.equal(f.store.get(fullscreenOutputNodeState), f.target.nodeId);
 });
+
+for (const split of [false, true]) {
+  test(`tool-result navigation ${split ? 'accepts retained split output' : 'rejects an output without the requested port'}`, () => {
+    const f = fixture();
+    const value = f.process.data.outputData!['output' as PortId]!;
+    f.navigation.schedule({ ...f.target, outputPortId: 'output' as PortId });
+    f.store.set(lastRunDataByNodeState, {
+      [f.target.nodeId]: [
+        {
+          ...f.process,
+          data: split
+            ? { status: { type: 'ok' }, splitOutputData: { 0: { ['output' as PortId]: value } } }
+            : { status: { type: 'ok' }, outputData: { ['other' as PortId]: value } },
+        },
+      ],
+    });
+    f.callbacks[0]!(0);
+    assert.equal(f.store.get(fullscreenOutputNodeState), split ? f.target.nodeId : null);
+  });
+}

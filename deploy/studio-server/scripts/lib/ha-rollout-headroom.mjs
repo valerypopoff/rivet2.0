@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { autoscalerPolicy, autoscalerPolicyFromConfig, recommendExecutionReplicas } from './execution-autoscaler.mjs';
+import { executionAdmissionCapacity } from './execution-autoscaler-admission.mjs';
 import { readConcurrently } from './read-concurrently.mjs';
 import { kubernetesReadRetryReason } from './kubernetes-read-errors.mjs';
 import {
@@ -321,7 +322,8 @@ export function assessHaExecutionHeadroom(snapshot, input, departing) {
     throw new Error('Departing execution owner changed during demand inspection.');
   const slots = snapshot.pods.reduce((sum, pod) => sum + pod.active, 0);
   const cpu = snapshot.pods.reduce((sum, pod) => sum + pod.cpuRatio, 0);
-  const limit = snapshot.pods[0].limit;
+  const admission = executionAdmissionCapacity(snapshot.pods);
+  const limit = admission.limit;
   const available = snapshot.pods.filter(
     (pod) => pod.ready && pod.state === 'serving' && !pod.operationId && pod.uid !== departing?.uid,
   ).length;
@@ -341,6 +343,8 @@ export function assessHaExecutionHeadroom(snapshot, input, departing) {
     targetServingOwners: target,
     activeSlots: slots,
     admissionLimitPerOwner: limit,
+    admissionConverging: admission.converging,
+    admissionRevision: admission.revision,
     totalCpuRequestRatio: cpu,
     targetSlotsPercent: policy.targetSlotsPercent,
     targetCpuPercent: policy.targetCpuPercent,

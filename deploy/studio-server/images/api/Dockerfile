@@ -68,9 +68,13 @@ RUN --mount=type=cache,target=/root/.cache/yarn \
     cp -al /app/node_modules /runtime-dependencies/app/ && \
     node -e "require('node:fs').utimesSync('/runtime-dependencies/app', 0, 0)"
 
+FROM dependencies AS runtime-dependency-copy
+RUN --mount=type=bind,source=deploy/studio-server/images/lib/remove-runtime-build-globs.mjs,target=/tmp/remove-runtime-build-globs.mjs,readonly \
+    node /tmp/remove-runtime-build-globs.mjs /runtime-dependencies/app/node_modules
+
 FROM scratch AS runtime-dependencies
 # Include the normalized parent: --link otherwise creates it with the build time.
-COPY --link --from=dependencies --chown=10001:10001 /runtime-dependencies/ /
+COPY --link --from=runtime-dependency-copy --chown=10001:10001 /runtime-dependencies/ /
 
 FROM dependencies AS builder
 COPY packages ./packages

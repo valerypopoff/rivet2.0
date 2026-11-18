@@ -49,6 +49,13 @@ RUN node deploy/studio-server/images/qualification/install-dependencies.mjs "$SO
     YARN_NODE_LINKER=node-modules yarn workspace @valerypopoff/rivet2-evaluations run build && \
     YARN_NODE_LINKER=node-modules yarn workspace @valerypopoff/rivet-studio-server-shared run build && \
     YARN_NODE_LINKER=node-modules yarn workspace @valerypopoff/rivet-studio-server-web run build
+# Compilation is finished. The actor runs prepared probes and Playwright, not
+# Vite/ESLint, so omit their unused glob packages from its installed runtime.
+RUN --mount=type=bind,source=source/deploy/studio-server/images/lib/remove-runtime-build-globs.mjs,target=/tmp/remove-runtime-build-globs.mjs,readonly \
+    node /tmp/remove-runtime-build-globs.mjs /app/node_modules && \
+    for modules in /app/packages/*/node_modules; do \
+      if [ -d "$modules" ]; then node /tmp/remove-runtime-build-globs.mjs "$modules" || exit 1; fi; \
+    done
 COPY --from=esbuild-security --chown=10001:10001 /out/@esbuild /app/node_modules/@esbuild
 COPY --from=esbuild-security --chown=10001:10001 /out/esbuild /app/node_modules/esbuild/bin/esbuild
 RUN --mount=type=bind,source=source/deploy/studio-server/images/lib/verify-runtime-dependencies.mjs,target=/tmp/verify-runtime-dependencies.mjs,readonly \

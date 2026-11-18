@@ -10,6 +10,13 @@ import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { runInNewContext } from 'node:vm';
 
+test('the reviewed build glob packages stay outside execution dependency paths', () => {
+  execFileSync(process.execPath, [fileURLToPath(new URL('./check-runtime-glob-scope.mjs', import.meta.url))], {
+    timeout: 15_000,
+    stdio: 'pipe',
+  });
+});
+
 // Resolve through the actual consumer, not a coincidentally patched root copy.
 const apiRequire = createRequire(new URL('../../packages/studio-server-api/package.json', import.meta.url));
 const expressRequire = createRequire(apiRequire.resolve('express'));

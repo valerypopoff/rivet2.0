@@ -9,6 +9,18 @@ import test from 'node:test';
 import { seedDeploymentStorageSettings } from './helpers/seed-deployment-storage.js';
 
 import { getExpectedExecutorAuthToken, getExpectedProxyAuthToken } from '../auth.js';
+import {
+  publishedExecutionSettingsRepository,
+  readPublishedExecutionSettings,
+  writePublishedExecutionSettings,
+  bindPublishedExecutionSettings,
+} from '../published-execution-settings.js';
+import { createPublishedExecutionAdmission } from '../published-execution-admission.js';
+import {
+  runWithAppSettingsSnapshot,
+  captureRestoreSettings,
+  installRestoreSettings,
+} from '../app-settings/settings-repository.js';
 import { createApiApp } from '../app.js';
 import { getCommandTimeout, getMaxOutputBytes } from '../security.js';
 import {
@@ -17,10 +29,7 @@ import {
   writeRunRecordingsSettings,
   writeNodeExecutorProxySettings,
 } from '../routes/app-settings.js';
-import {
-  getRunRecordingsSettingsPath,
-  getWorkflowRecordingConfig,
-} from '../routes/workflows/recordings-config.js';
+import { getRunRecordingsSettingsPath, getWorkflowRecordingConfig } from '../routes/workflows/recordings-config.js';
 import { getWebAppAuthMode } from '../web-app-oauth.js';
 import {
   getWebAppAuthSettingsPath,
@@ -60,10 +69,7 @@ import {
   readWorkflowEndpointAuthSettings,
   writeWorkflowEndpointAuthSettings,
 } from '../workflow-endpoint-auth-settings.js';
-import {
-  getManagedWorkflowStorageConfig,
-  getWorkflowStorageBackendMode,
-} from '../routes/workflows/storage-config.js';
+import { getManagedWorkflowStorageConfig, getWorkflowStorageBackendMode } from '../routes/workflows/storage-config.js';
 import { writePrivateJsonSettingsFile } from '../settings-file-writer.js';
 import {
   getEnvironmentVariableSettingsPath,
@@ -72,6 +78,8 @@ import {
 } from '../environment-variable-settings.js';
 
 const relevantEnvKeys = [
+  'RIVET_DEPLOYMENT_PUBLISHED_EXECUTION_DEFAULTS',
+  'RIVET_LEGACY_RESTORE_INSTALLATION',
   'HTTP_PROXY',
   'HTTPS_PROXY',
   'NO_PROXY',
@@ -177,6 +185,114 @@ function trustedProxyHeaders(): Record<string, string> {
   };
 }
 
+test('execution policy API requires auth and a current revision, persists overrides and resets to deployment default', async () => {
+  await withAppSettingsEnv(async () => {
+    process.env.RIVET_LEGACY_RESTORE_INSTALLATION = 'fixture:MixedCase';
+    process.env.RIVET_DEPLOYMENT_PUBLISHED_EXECUTION_DEFAULTS = JSON.stringify({
+      mode: 'enforce',
+      maxActiveRunsPerPod: 32,
+    });
+    const server = await startServer();
+    try {
+      const url = `${server.baseUrl}/api/app-settings/published-execution`;
+      const get = () => fetch(url, { headers: trustedProxyHeaders() });
+      const put = (value: unknown, revision?: string) =>
+        fetch(url, {
+          method: 'PUT',
+          headers: {
+            ...trustedProxyHeaders(),
+            'content-type': 'application/json',
+            ...(revision ? { 'if-match': revision } : {}),
+          },
+          body: JSON.stringify({ maxActiveRunsPerPod: value }),
+        });
+      assert.equal((await fetch(url)).status, 403);
+      const initial = await get();
+      assert.equal((await initial.json()).effectiveMaxActiveRunsPerPod, 32);
+      assert.equal((await put(48)).status, 428);
+      for (const invalid of [0, -1, 1.5, 10001, '32', true]) {
+        const response = await put(invalid, initial.headers.get('etag')!);
+        assert.equal(response.status, 400);
+        assert.equal(
+          (await response.json()).error,
+          'Concurrent runs per execution replica must be an integer from 1 to 10000.',
+        );
+      }
+      const saved = await put(48, initial.headers.get('etag')!);
+      assert.equal(saved.status, 200);
+      assert.equal((await saved.json()).effectiveMaxActiveRunsPerPod, 48);
+      assert.equal((await put(16, initial.headers.get('etag')!)).status, 409);
+      publishedExecutionSettingsRepository.invalidate();
+      assert.equal((await readPublishedExecutionSettings()).effectiveMaxActiveRunsPerPod, 48);
+      process.env.RIVET_LEGACY_RESTORE_INSTALLATION = 'fixture:mixedcase';
+      assert.equal((await readPublishedExecutionSettings()).effectiveMaxActiveRunsPerPod, 32);
+      process.env.RIVET_LEGACY_RESTORE_INSTALLATION = 'fixture:MixedCase';
+      assert.equal((await readPublishedExecutionSettings()).effectiveMaxActiveRunsPerPod, 48);
+      const latest = await get();
+      const reset = await put(null, latest.headers.get('etag')!);
+      assert.equal(reset.status, 200);
+      assert.equal((await reset.json()).source, 'deployment');
+    } finally {
+      await server.close();
+    }
+  });
+});
+
+test('saved live policies update in-place outside a running request snapshot and stay installation-specific', async () => {
+  await withAppSettingsEnv(async () => {
+    process.env.RIVET_LEGACY_RESTORE_INSTALLATION = 'rivet/rivet';
+    process.env.RIVET_DEPLOYMENT_PUBLISHED_EXECUTION_DEFAULTS = JSON.stringify({
+      mode: 'enforce',
+      maxActiveRunsPerPod: 32,
+    });
+    await publishedExecutionSettingsRepository.initialize();
+    const admission = createPublishedExecutionAdmission({ mode: 'enforce', maxActiveRuns: 32, retryAfterSeconds: 1 });
+    assert.throws(
+      () =>
+        bindPublishedExecutionSettings(admission, {
+          RIVET_DEPLOYMENT_PUBLISHED_EXECUTION_DEFAULTS: process.env.RIVET_DEPLOYMENT_PUBLISHED_EXECUTION_DEFAULTS,
+        }),
+      /installation identity/,
+    );
+    const binding = bindPublishedExecutionSettings(admission);
+    let resume!: () => void;
+    try {
+      const paused = runWithAppSettingsSnapshot(async () => {
+        await new Promise<void>((resolve) => {
+          resume = resolve;
+        });
+        assert.equal(publishedExecutionSettingsRepository.readSync().value.maxActiveRunsPerPod, 1);
+        assert.equal(admission.getSnapshot().maxActiveRuns, 1);
+      });
+      await writePublishedExecutionSettings(
+        { maxActiveRunsPerPod: 1 },
+        publishedExecutionSettingsRepository.readSync().revision,
+      );
+      resume();
+      await paused;
+      const permit = admission.acquire('web-app-action');
+      assert.equal(permit.kind, 'accepted');
+      assert.equal(admission.acquire('workflow-endpoint').kind, 'capacity-exceeded');
+      assert.equal(binding.snapshot()?.source, 'app-settings');
+      process.env.RIVET_LEGACY_RESTORE_INSTALLATION = 'rivet-staging-persistent/rivet-qualification';
+      process.env.RIVET_DEPLOYMENT_PUBLISHED_EXECUTION_DEFAULTS = JSON.stringify({
+        mode: 'enforce',
+        maxActiveRunsPerPod: 4,
+      });
+      assert.equal((await readPublishedExecutionSettings()).effectiveMaxActiveRunsPerPod, 4);
+      const rows = captureRestoreSettings().filter((r) => r.key !== 'published execution');
+      installRestoreSettings(rows, 'old-backup');
+      assert.equal(publishedExecutionSettingsRepository.readSync().value.maxActiveRunsPerPod, null);
+      assert.equal((await readPublishedExecutionSettings()).maxActiveRunsPerPod, null);
+      if (permit.kind === 'accepted') permit.permit.release();
+    } finally {
+      resume?.();
+      binding.dispose();
+      publishedExecutionSettingsRepository.invalidate();
+    }
+  });
+});
+
 function trustedExecutorHeaders(): Record<string, string> {
   return {
     ...trustedProxyHeaders(),
@@ -185,9 +301,11 @@ function trustedExecutorHeaders(): Record<string, string> {
 }
 
 function setNodeExecutorProxySettingsReloaderForTest(reloader: (() => Promise<unknown> | unknown) | undefined) {
-  (globalThis as typeof globalThis & {
-    __rivetReloadNodeExecutorProxySettings?: () => Promise<unknown> | unknown;
-  }).__rivetReloadNodeExecutorProxySettings = reloader;
+  (
+    globalThis as typeof globalThis & {
+      __rivetReloadNodeExecutorProxySettings?: () => Promise<unknown> | unknown;
+    }
+  ).__rivetReloadNodeExecutorProxySettings = reloader;
 }
 
 function assertPrivateSettingsFile(filePath: string): void {
@@ -249,7 +367,7 @@ test('Node executor proxy settings API saves and returns persisted values', asyn
       });
 
       assert.equal(saveResponse.status, 200);
-      const saved = await saveResponse.json() as Record<string, unknown>;
+      const saved = (await saveResponse.json()) as Record<string, unknown>;
       assert.equal(saved.source, 'app-settings');
       assert.equal(saved.httpProxy, 'http://172.17.0.1:3128');
 
@@ -257,7 +375,7 @@ test('Node executor proxy settings API saves and returns persisted values', asyn
         headers: trustedProxyHeaders(),
       });
       assert.equal(readResponse.status, 200);
-      const settings = await readResponse.json() as Record<string, unknown>;
+      const settings = (await readResponse.json()) as Record<string, unknown>;
       assert.equal(settings.httpProxy, 'http://172.17.0.1:3128');
       assert.equal(settings.httpsProxy, 'http://172.17.0.1:3128');
       assert.equal(settings.noProxy, 'localhost,127.0.0.1,::1,api,web,executor,proxy,172.17.0.1');
@@ -333,7 +451,7 @@ test('Executor URL override settings ignore environment values until saved', asy
         },
       });
       assert.equal(configResponse.status, 200);
-      const config = await configResponse.json() as Record<string, unknown>;
+      const config = (await configResponse.json()) as Record<string, unknown>;
       assert.equal(config.executorWsUrl, 'wss://derived.example.test/ws/executor/internal');
       assert.equal(config.executorWsUrlIsOverride, false);
       assert.equal(config.remoteDebuggerDefaultWs, 'wss://derived.example.test/ws/latest-debugger');
@@ -374,7 +492,7 @@ test('Executor URL override settings API saves and config returns persisted over
       });
 
       assert.equal(saveResponse.status, 200);
-      const saved = await saveResponse.json() as Record<string, unknown>;
+      const saved = (await saveResponse.json()) as Record<string, unknown>;
       assert.equal(saved.source, 'app-settings');
       assert.equal(saved.executorWsUrl, 'wss://override.example.test/ws/executor/internal');
 
@@ -382,7 +500,7 @@ test('Executor URL override settings API saves and config returns persisted over
         headers: trustedProxyHeaders(),
       });
       assert.equal(readResponse.status, 200);
-      const settings = await readResponse.json() as Record<string, unknown>;
+      const settings = (await readResponse.json()) as Record<string, unknown>;
       assert.equal(settings.executorWsUrl, 'wss://override.example.test/ws/executor/internal');
       assert.equal(settings.remoteDebuggerDefaultWs, 'wss://override.example.test/ws/latest-debugger');
 
@@ -394,7 +512,7 @@ test('Executor URL override settings API saves and config returns persisted over
         },
       });
       assert.equal(configResponse.status, 200);
-      const config = await configResponse.json() as Record<string, unknown>;
+      const config = (await configResponse.json()) as Record<string, unknown>;
       assert.equal(config.executorWsUrl, 'wss://override.example.test/ws/executor/internal');
       assert.equal(config.executorWsUrlIsOverride, true);
       assert.equal(config.remoteDebuggerDefaultWs, 'wss://override.example.test/ws/latest-debugger');
@@ -423,7 +541,7 @@ test('Executor URL override settings reject non-websocket URLs', async () => {
       });
 
       assert.equal(saveResponse.status, 400);
-      assert.match((await saveResponse.json() as { error: string }).error, /must use ws or wss/);
+      assert.match(((await saveResponse.json()) as { error: string }).error, /must use ws or wss/);
     } finally {
       await server?.close();
     }
@@ -459,7 +577,7 @@ test('Workflow endpoint auth settings API saves and returns persisted values', a
         headers: trustedProxyHeaders(),
       });
       assert.equal(defaultResponse.status, 200);
-      const defaultSettings = await defaultResponse.json() as Record<string, unknown>;
+      const defaultSettings = (await defaultResponse.json()) as Record<string, unknown>;
       assert.equal(defaultSettings.source, 'default');
       assert.equal(defaultSettings.requireBearerAuth, true);
 
@@ -474,7 +592,7 @@ test('Workflow endpoint auth settings API saves and returns persisted values', a
         }),
       });
       assert.equal(saveResponse.status, 200);
-      const savedSettings = await saveResponse.json() as Record<string, unknown>;
+      const savedSettings = (await saveResponse.json()) as Record<string, unknown>;
       assert.equal(savedSettings.source, 'app-settings');
       assert.equal(savedSettings.requireBearerAuth, false);
 
@@ -482,7 +600,7 @@ test('Workflow endpoint auth settings API saves and returns persisted values', a
         headers: trustedProxyHeaders(),
       });
       assert.equal(readResponse.status, 200);
-      const readSettings = await readResponse.json() as Record<string, unknown>;
+      const readSettings = (await readResponse.json()) as Record<string, unknown>;
       assert.equal(readSettings.requireBearerAuth, false);
     } finally {
       await server?.close();
@@ -507,7 +625,7 @@ test('Workflow endpoint auth settings reject non-boolean values', async () => {
       });
 
       assert.equal(saveResponse.status, 400);
-      assert.match((await saveResponse.json() as { error: string }).error, /must be true or false/);
+      assert.match(((await saveResponse.json()) as { error: string }).error, /must be true or false/);
     } finally {
       await server?.close();
     }
@@ -523,24 +641,14 @@ test('Trusted client settings default empty and ignore environment values', asyn
     assert.deepEqual(defaultSettings.trustedClients, []);
 
     const savedSettings = await writeTrustedClientSettings({
-      trustedClients: [
-        ' 10.20.0.0/16 ',
-        '10.20.0.0/16',
-        '127.0.0.1',
-      ],
+      trustedClients: [' 10.20.0.0/16 ', '10.20.0.0/16', '127.0.0.1'],
     });
     assert.equal(savedSettings.source, 'app-settings');
-    assert.deepEqual(savedSettings.trustedClients, [
-      '10.20.0.0/16',
-      '127.0.0.1',
-    ]);
+    assert.deepEqual(savedSettings.trustedClients, ['10.20.0.0/16', '127.0.0.1']);
 
     process.env.RIVET_UI_TOKEN_FREE_HOSTS = 'ignored.example.test';
     const nextSettings = await readTrustedClientSettings();
-    assert.deepEqual(nextSettings.trustedClients, [
-      '10.20.0.0/16',
-      '127.0.0.1',
-    ]);
+    assert.deepEqual(nextSettings.trustedClients, ['10.20.0.0/16', '127.0.0.1']);
   });
 });
 
@@ -560,19 +668,15 @@ test('Trusted client settings API saves and returns persisted hosts', async () =
         }),
       });
       assert.equal(saveResponse.status, 200);
-      const savedSettings = await saveResponse.json() as Record<string, unknown>;
+      const savedSettings = (await saveResponse.json()) as Record<string, unknown>;
       assert.equal(savedSettings.source, 'app-settings');
-      assert.deepEqual(savedSettings.trustedClients, [
-        '10.20.0.0/16',
-        '127.0.0.1',
-        '::1',
-      ]);
+      assert.deepEqual(savedSettings.trustedClients, ['10.20.0.0/16', '127.0.0.1', '::1']);
 
       const readResponse = await fetch(`${server.baseUrl}/api/app-settings/trusted-clients`, {
         headers: trustedProxyHeaders(),
       });
       assert.equal(readResponse.status, 200);
-      const readSettings = await readResponse.json() as Record<string, unknown>;
+      const readSettings = (await readResponse.json()) as Record<string, unknown>;
       assert.deepEqual(readSettings.trustedClients, savedSettings.trustedClients);
 
       const settingsPath = getTrustedClientSettingsPath();
@@ -597,14 +701,8 @@ test('Trusted client settings reject unsafe host values', async () => {
       writeTrustedClientSettings({ trustedClients: ['trusted.example.test:8080'] }),
       /IP address or CIDR/,
     );
-    await assert.rejects(
-      writeTrustedClientSettings({ trustedClients: ['*.example.test'] }),
-      /IP address or CIDR/,
-    );
-    await assert.rejects(
-      writeTrustedClientSettings({ trustedClients: 'trusted.example.test' }),
-      /must be a list/,
-    );
+    await assert.rejects(writeTrustedClientSettings({ trustedClients: ['*.example.test'] }), /IP address or CIDR/);
+    await assert.rejects(writeTrustedClientSettings({ trustedClients: 'trusted.example.test' }), /must be a list/);
     await assert.rejects(
       writeTrustedClientSettings({
         trustedClients: Array.from({ length: 101 }, (_, index) => `trusted-${index}.example.test`),
@@ -707,7 +805,9 @@ test('App settings concurrent saves use unique temporary files', async () => {
 
     const appDataRoot = process.env.RIVET_APP_DATA_ROOT;
     assert.ok(appDataRoot);
-    const leftoverTempFiles = fs.readdirSync(path.join(appDataRoot, 'settings')).filter((fileName) => fileName.endsWith('.tmp'));
+    const leftoverTempFiles = fs
+      .readdirSync(path.join(appDataRoot, 'settings'))
+      .filter((fileName) => fileName.endsWith('.tmp'));
     assert.deepEqual(leftoverTempFiles, []);
 
     const proxySettings = await readNodeExecutorProxySettings();
@@ -768,7 +868,7 @@ test('managed executor runtime configuration is loopback and service-token restr
       const response = await fetch(url, { headers: trustedExecutorHeaders() });
       assert.equal(response.status, 200);
       assert.equal(response.headers.get('cache-control'), 'no-store');
-      const body = await response.json() as { protocolVersion: number; proxy: { httpProxy: string } };
+      const body = (await response.json()) as { protocolVersion: number; proxy: { httpProxy: string } };
       assert.equal(body.protocolVersion, 1);
       assert.equal(body.proxy.httpProxy, '');
     } finally {
@@ -851,7 +951,7 @@ test('Run recordings settings API saves and returns persisted values', async () 
       });
 
       assert.equal(saveResponse.status, 200);
-      const saved = await saveResponse.json() as Record<string, unknown>;
+      const saved = (await saveResponse.json()) as Record<string, unknown>;
       assert.equal(saved.source, 'app-settings');
       assert.equal(saved.maxPendingWrites, 80);
       assert.equal(saved.maxRunsPerEndpoint, 2000);
@@ -861,7 +961,7 @@ test('Run recordings settings API saves and returns persisted values', async () 
         headers: trustedProxyHeaders(),
       });
       assert.equal(readResponse.status, 200);
-      const settings = await readResponse.json() as Record<string, unknown>;
+      const settings = (await readResponse.json()) as Record<string, unknown>;
       assert.equal(settings.maxPendingWrites, 80);
       assert.equal(settings.maxRunsPerEndpoint, 2000);
       assert.equal(settings.retentionDays, 0);
@@ -957,7 +1057,7 @@ test('Runtime limit settings API saves and returns persisted values', async () =
       });
 
       assert.equal(saveResponse.status, 200);
-      const saved = await saveResponse.json() as Record<string, unknown>;
+      const saved = (await saveResponse.json()) as Record<string, unknown>;
       assert.equal(saved.source, 'app-settings');
       assert.equal(saved.commandTimeoutSeconds, 60);
       assert.equal(saved.maxOutputBytes, 20 * 1024 * 1024);
@@ -969,7 +1069,7 @@ test('Runtime limit settings API saves and returns persisted values', async () =
         headers: trustedProxyHeaders(),
       });
       assert.equal(readResponse.status, 200);
-      const settings = await readResponse.json() as Record<string, unknown>;
+      const settings = (await readResponse.json()) as Record<string, unknown>;
       assert.equal(settings.commandTimeoutSeconds, 60);
       assert.equal(settings.maxOutputBytes, 20 * 1024 * 1024);
       assert.equal(settings.proxyReadTimeoutSeconds, 300);
@@ -987,7 +1087,7 @@ test('Runtime limit settings API saves and returns persisted values', async () =
         }),
       });
       assert.equal(partialSaveResponse.status, 200);
-      const partiallySaved = await partialSaveResponse.json() as Record<string, unknown>;
+      const partiallySaved = (await partialSaveResponse.json()) as Record<string, unknown>;
       assert.equal(partiallySaved.commandTimeoutSeconds, 60);
       assert.equal(partiallySaved.maxOutputBytes, 20 * 1024 * 1024);
       assert.equal(partiallySaved.proxyReadTimeoutSeconds, 360);
@@ -1023,12 +1123,20 @@ test('web-app action route preflight runs before a declared payload limit is eva
         // Send only the declared size. A streaming fetch body races the
         // intentional early connection close and obscures the status under test.
         const status = await new Promise<number | undefined>((resolve, reject) => {
-          const request = http.request(`${server.baseUrl}${route}`, {
-            method: 'POST', headers: { 'content-type': 'application/json', 'content-length': String(1024 * 1024 + 20) },
-          }, (response) => {
-            response.resume();
-            response.once('end', () => { resolve(response.statusCode); request.destroy(); });
-          });
+          const request = http.request(
+            `${server.baseUrl}${route}`,
+            {
+              method: 'POST',
+              headers: { 'content-type': 'application/json', 'content-length': String(1024 * 1024 + 20) },
+            },
+            (response) => {
+              response.resume();
+              response.once('end', () => {
+                resolve(response.statusCode);
+                request.destroy();
+              });
+            },
+          );
           request.once('error', reject);
           request.setTimeout(5_000, () => request.destroy(new Error('Preflight did not reject before body receipt')));
           request.flushHeaders();
@@ -1091,7 +1199,8 @@ test('Deployment storage settings ignore storage and database environment variab
     process.env.RIVET_STORAGE_MODE = 'managed';
     process.env.RIVET_ARTIFACTS_HOST_PATH = '../env-artifacts';
     process.env.RIVET_DATABASE_MODE = 'managed';
-    process.env.RIVET_DATABASE_CONNECTION_STRING = 'postgresql://env-user:env-pass@example-db:5432/rivet?sslmode=disable';
+    process.env.RIVET_DATABASE_CONNECTION_STRING =
+      'postgresql://env-user:env-pass@example-db:5432/rivet?sslmode=disable';
     process.env.RIVET_DATABASE_SSL_MODE = 'require';
     process.env.RIVET_STORAGE_URL = 'https://env-bucket.sfo3.digitaloceanspaces.com';
     process.env.RIVET_STORAGE_ACCESS_KEY_ID = 'env-key-id';
@@ -1168,10 +1277,12 @@ test('Deployment storage settings API refuses an unmigrated local switch without
         method: 'PUT',
         headers: { ...trustedProxyHeaders(), 'content-type': 'application/json' },
         body: JSON.stringify({
-          storageMode: 'managed', databaseMode: 'managed',
+          storageMode: 'managed',
+          databaseMode: 'managed',
           databaseConnectionString: 'postgresql://db-user:db-pass@example-db:5432/rivet',
           storageUrl: 'https://saved-bucket.sfo3.digitaloceanspaces.com',
-          storageAccessKeyId: 'saved-key-id', storageAccessKey: 'saved-secret',
+          storageAccessKeyId: 'saved-key-id',
+          storageAccessKey: 'saved-secret',
           storageModeChangeBlockedReason: null,
         }),
       });
@@ -1188,10 +1299,12 @@ test('Deployment storage settings API refuses an unmigrated local switch without
 test('Deployment storage settings API updates existing managed config and hides secrets', async () => {
   await withAppSettingsEnv(async () => {
     await seedDeploymentStorageSettings({
-      storageMode: 'managed', databaseMode: 'managed',
+      storageMode: 'managed',
+      databaseMode: 'managed',
       databaseConnectionString: 'postgresql://db-user:db-pass@example-db:5432/rivet',
       storageUrl: 'https://saved-bucket.sfo3.digitaloceanspaces.com',
-      storageAccessKeyId: 'saved-key-id', storageAccessKey: 'saved-secret',
+      storageAccessKeyId: 'saved-key-id',
+      storageAccessKey: 'saved-secret',
     });
     let server: Awaited<ReturnType<typeof startServer>> | undefined;
     try {
@@ -1215,7 +1328,7 @@ test('Deployment storage settings API updates existing managed config and hides 
       });
 
       assert.equal(saveResponse.status, 200);
-      const saved = await saveResponse.json() as Record<string, unknown>;
+      const saved = (await saveResponse.json()) as Record<string, unknown>;
       assert.equal(saved.source, 'app-settings');
       assert.equal(saved.storageMode, 'managed');
       assert.match(String(saved.storageModeChangeBlockedReason), /separate verified operator migration/);
@@ -1251,7 +1364,7 @@ test('Deployment storage settings API updates existing managed config and hides 
       });
 
       assert.equal(rotateResponse.status, 200);
-      const rotated = await rotateResponse.json() as Record<string, unknown>;
+      const rotated = (await rotateResponse.json()) as Record<string, unknown>;
       assert.equal(rotated.databaseConnectionStringConfigured, true);
       assert.equal(rotated.storageAccessKeyConfigured, true);
       assert.equal(getManagedWorkflowStorageConfig().objectStorageAccessKeyId, 'saved-key-id-2');
@@ -1312,15 +1425,18 @@ test('Deployment storage settings preserve secrets and reject an unverified mana
     });
 
     const before = await readDeploymentStorageSettings();
-    await assert.rejects(writeDeploymentStorageSettings({
-      storageMode: 'filesystem',
-      artifactsHostPath: '../artifacts',
-      databaseMode: 'managed',
-      databaseConnectionString: '',
-      storageUrl: 'https://saved-bucket.sfo3.digitaloceanspaces.com',
-      storageAccessKeyId: 'saved-key-id',
-      storageAccessKey: '',
-    }), /separate verified operator migration/);
+    await assert.rejects(
+      writeDeploymentStorageSettings({
+        storageMode: 'filesystem',
+        artifactsHostPath: '../artifacts',
+        databaseMode: 'managed',
+        databaseConnectionString: '',
+        storageUrl: 'https://saved-bucket.sfo3.digitaloceanspaces.com',
+        storageAccessKeyId: 'saved-key-id',
+        storageAccessKey: '',
+      }),
+      /separate verified operator migration/,
+    );
     assert.deepEqual(await readDeploymentStorageSettings(), before);
 
     await writeDeploymentStorageSettings({
@@ -1449,7 +1565,7 @@ test('Public route settings API saves and returns persisted values', async () =>
       });
 
       assert.equal(saveResponse.status, 200);
-      const saved = await saveResponse.json() as Record<string, unknown>;
+      const saved = (await saveResponse.json()) as Record<string, unknown>;
       assert.equal(saved.source, 'app-settings');
       assert.equal(saved.publishedWorkflowsBasePath, '/published-workflows');
       assert.equal(saved.latestWorkflowsBasePath, '/latest-workflows');
@@ -1460,7 +1576,7 @@ test('Public route settings API saves and returns persisted values', async () =>
         headers: trustedProxyHeaders(),
       });
       assert.equal(configResponse.status, 200);
-      const config = await configResponse.json() as Record<string, unknown>;
+      const config = (await configResponse.json()) as Record<string, unknown>;
       assert.equal(config.publishedWorkflowsBasePath, '/published-workflows');
       assert.equal(config.latestWorkflowsBasePath, '/latest-workflows');
       assert.equal(config.publishedAppsBasePath, '/published-apps');
@@ -1484,7 +1600,7 @@ test('Public route settings move workflow and web-app dispatch without recreatin
     await writeWebAppAuthSettings({ mode: 'none' });
 
     const readError = async (response: Response): Promise<string> => {
-      const body = await response.json() as { error?: unknown };
+      const body = (await response.json()) as { error?: unknown };
       return String(body.error ?? '');
     };
 
@@ -1587,62 +1703,68 @@ test('Public route settings keep the legacy web-app route endpoint compatible', 
 test('Public route settings reject invalid or conflicting slugs', async () => {
   await withAppSettingsEnv(async () => {
     await assert.rejects(
-      () => writePublicRouteSettings({
-        publishedWorkflowsBasePath: 'api',
-        latestWorkflowsBasePath: 'latest-workflows',
-        publishedAppsBasePath: 'apps',
-        latestAppsBasePath: 'latest-apps',
-      }),
+      () =>
+        writePublicRouteSettings({
+          publishedWorkflowsBasePath: 'api',
+          latestWorkflowsBasePath: 'latest-workflows',
+          publishedAppsBasePath: 'apps',
+          latestAppsBasePath: 'latest-apps',
+        }),
       /reserved "api" route/,
     );
 
     await assert.rejects(
-      () => writePublicRouteSettings({
-        publishedWorkflowsBasePath: 'workflows',
-        latestWorkflowsBasePath: 'workflows-latest',
-        publishedAppsBasePath: 'workflows',
-        latestAppsBasePath: 'latest-apps',
-      }),
+      () =>
+        writePublicRouteSettings({
+          publishedWorkflowsBasePath: 'workflows',
+          latestWorkflowsBasePath: 'workflows-latest',
+          publishedAppsBasePath: 'workflows',
+          latestAppsBasePath: 'latest-apps',
+        }),
       /must be different/,
     );
 
     await assert.rejects(
-      () => writePublicRouteSettings({
-        publishedWorkflowsBasePath: 'workflows',
-        latestWorkflowsBasePath: 'ui-auth',
-        publishedAppsBasePath: 'apps',
-        latestAppsBasePath: 'latest-apps',
-      }),
+      () =>
+        writePublicRouteSettings({
+          publishedWorkflowsBasePath: 'workflows',
+          latestWorkflowsBasePath: 'ui-auth',
+          publishedAppsBasePath: 'apps',
+          latestAppsBasePath: 'latest-apps',
+        }),
       /reserved "ui-auth" route/,
     );
 
     await assert.rejects(
-      () => writePublicRouteSettings({
-        publishedWorkflowsBasePath: 'workflows',
-        latestWorkflowsBasePath: 'workflows-latest',
-        publishedAppsBasePath: 'assets',
-        latestAppsBasePath: 'latest-apps',
-      }),
+      () =>
+        writePublicRouteSettings({
+          publishedWorkflowsBasePath: 'workflows',
+          latestWorkflowsBasePath: 'workflows-latest',
+          publishedAppsBasePath: 'assets',
+          latestAppsBasePath: 'latest-apps',
+        }),
       /reserved "assets" route/,
     );
 
     await assert.rejects(
-      () => writePublicRouteSettings({
-        publishedWorkflowsBasePath: 'workflows',
-        latestWorkflowsBasePath: 'workflows-latest',
-        publishedAppsBasePath: 'nested/apps',
-        latestAppsBasePath: 'latest-apps',
-      }),
+      () =>
+        writePublicRouteSettings({
+          publishedWorkflowsBasePath: 'workflows',
+          latestWorkflowsBasePath: 'workflows-latest',
+          publishedAppsBasePath: 'nested/apps',
+          latestAppsBasePath: 'latest-apps',
+        }),
       /single URL path segment/,
     );
 
     await assert.rejects(
-      () => writePublicRouteSettings({
-        publishedWorkflowsBasePath: 'workflows',
-        latestWorkflowsBasePath: 'workflows-latest',
-        publishedAppsBasePath: 'apps',
-        latestAppsBasePath: 'apps',
-      }),
+      () =>
+        writePublicRouteSettings({
+          publishedWorkflowsBasePath: 'workflows',
+          latestWorkflowsBasePath: 'workflows-latest',
+          publishedAppsBasePath: 'apps',
+          latestAppsBasePath: 'apps',
+        }),
       /must be different/,
     );
   });
@@ -1744,7 +1866,7 @@ test('Web app auth settings API saves and hides secrets', async () => {
       });
 
       assert.equal(saveResponse.status, 200);
-      const saved = await saveResponse.json() as Record<string, unknown>;
+      const saved = (await saveResponse.json()) as Record<string, unknown>;
       assert.equal(saved.source, 'app-settings');
       assert.equal(saved.mode, 'oauth');
       assert.equal(saved.clientSecretConfigured, true);
@@ -1775,7 +1897,7 @@ test('Web app auth settings API saves and hides secrets', async () => {
       });
 
       assert.equal(rotateResponse.status, 200);
-      const rotated = await rotateResponse.json() as Record<string, unknown>;
+      const rotated = (await rotateResponse.json()) as Record<string, unknown>;
       assert.equal(rotated.clientSecretConfigured, true);
       assert.equal(rotated.sessionSecretConfigured, true);
       assert.equal(rotated.scopes, 'profile email');

@@ -137,6 +137,7 @@ export const defaultApiTestFiles = [
   'src/tests/release-maintenance.test.ts',
   'src/tests/remap-bundle-project.test.ts',
   'src/tests/request-correlation.test.ts',
+  'src/tests/resource-monitoring.test.ts',
   'src/tests/restore-preparation.test.ts',
   'src/tests/retirement-http-connections.test.ts',
   'src/tests/runtime-health.test.ts',

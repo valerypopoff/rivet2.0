@@ -25,6 +25,33 @@ selected shard must report a nonzero passing count, zero failures and exit zero,
 without invoking the intentionally broken global Yarn shim. A reporter-prefix
 difference alone must not fail this check.
 
+The JavaScript security audit must also run before pushes even when manifests
+and the lockfile are unchanged: registry advisories can change independently of
+the source. `test:style`, an immutable install and Rust audit do not query npm's
+current findings. A failed security gate also blocks exact-commit desktop
+publication after successful compilation; that downstream refusal is expected.
+
+The 2026-11-18 review for `picomatch` advisory `1247710`
+([GHSA-fc5q-39xc-vjpf](https://github.com/advisories/GHSA-fc5q-39xc-vjpf))
+is limited to the locked micromatch and optional bundle-visualizer callers and
+expires on **2026-11-30**. No patched version is published; this is a reachability
+review, not a dependency repair. `security:audit` also runs
+`scripts/checks/check-runtime-glob-scope.mjs`, covered by the regression suite.
+This static owner check traverses the actual Yarn
+execution dependency graph, following production/optional/peer edges while
+excluding workspace development tools, and rejects either glob package in the
+SDK, CLI, App Executor or Studio Server execution paths. The web production
+server uses Node built-ins and compiled assets; its Vite/ESLint build dependencies
+are not request handlers. The independent image scan still reports the unused
+installed copies, so API/executor packaging removes them only from owned runtime
+copies, including workspace-local nested modules. Builders and managed library
+releases remain intact; see [container policy](container-security.md#runtime-glob-packages-november-18-2026).
+The main-only qualification actor applies the same omission after compilation;
+its prepared probes and Playwright runner are covered by the dependency-scope gate.
+Critical, other high-severity and new direct-consumer
+findings remain blocking. Re-review when dependency ownership changes and remove
+this exception after validating an upstream fix; never automatically extend it.
+
 ## Schema and browser fixture contracts
 
 The shared Docker launcher dotenv contract keeps a closed inventory of documented
@@ -366,6 +393,16 @@ cloud authentication or Docker requirement to hosted CI. These upstream CLI
 versions match the actor's upstream sources; the actor additionally rebuilds
 them with its patched Go/dependency graph and retains its final-image tool check.
 Local proof used the actual patched Linux tools with Docker networking disabled.
+
+The native Helm-status case belongs to `provider-tool-contracts.test.mjs` in
+this pinned native step. Keeping it in the general source suite instead used
+the runner's unreviewed Helm 4 and exposed the native process to the whole source
+suite's startup load. A local full-suite run reproduced its 10-second timeout
+before any loopback request even with pinned Helm; both versions passed in
+isolation. Moving this integration case preserves the assertion and deadline
+without serializing the source suite or changing production timeouts. Its Helm
+storage/plugin settings are fixture-owned, failures include the request trace,
+and the workflow explicitly exports the pinned Helm path before native tests.
 The new native cases took about eight seconds together. This is measured local
 test time, not a promise about hosted checkout, downloads or total workflow time.
 See [the preparation contract audit](automated-runtime-qualification.md#local-provider-preparation-contracts).
@@ -977,3 +1014,27 @@ relative links must remain usable, and dependency-owned assets must survive API
 test pruning. The real API image confirms both dependency versions coexist
 (root minimatch 10 and API-local minimatch 9); image trimming must not change the
 API's selected major version.
+
+## Desktop ZIP audit scope: November 17, 2026
+
+A fresh pre-push audit found two additional findings with an unchanged lockfile:
+[RUSTSEC-2026-0545](https://github.com/RustSec/advisory-db/blob/main/crates/zip/RUSTSEC-2026-0545.md)
+concerns unauthenticated AES entry reads, and
+[RUSTSEC-2026-0548](https://github.com/RustSec/advisory-db/blob/main/crates/zip/RUSTSEC-2026-0548.md)
+concerns checking central-directory names but extracting local-header names with
+a streaming reader. A policy-only expiry check cannot discover new findings;
+CI also checks the unfiltered current audit report.
+
+The reviewed `zip 0.6.6` has only `tauri 1.8.3` as a consumer. Both crate archives
+were checked against their Cargo.lock SHA-256 values. Windows-target Cargo
+metadata resolves no ZIP features: Tauri disables default features and does not
+enable AES. Its updater verifies the signed archive before extraction, then uses
+`ZipArchive::by_index` and the same entry's central-directory `name_raw` in its own
+copy loop. It never switches to a streaming reader. No Rivet native ZIP extraction
+command was found. The affected paths therefore are not used by this build.
+
+The two documented exceptions keep the existing November 30 expiry and exact
+version/checksum/sole-consumer guard. They do not patch the dependency or excuse
+a new ZIP consumer, encryption feature or extraction path. The patched ZIP major
+is incompatible with Tauri 1's dependency constraint; replacing the legacy updater
+remains separate work. No dependency, application behavior or signing rule changed.

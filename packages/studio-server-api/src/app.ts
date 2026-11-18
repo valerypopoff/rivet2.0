@@ -44,6 +44,7 @@ import { uiAuthRouter } from './routes/ui-auth.js';
 import { webAppOAuthRouter } from './web-app-oauth.js';
 import { runtimeLibrariesRouter } from './routes/runtime-libraries.js';
 import { createDeploymentStatusRouter } from './routes/deployment-status.js';
+import { createResourceHistoryRouter, createResourceReportRouter } from './resource-monitoring/routes.js';
 import { getDeploymentTopology } from './deployment-status.js';
 import {
   getLatestWebAppsBasePath,
@@ -88,7 +89,13 @@ type ApiAppOptions = {
   health?: RuntimeHealthReader;
   metrics?: StudioMetrics;
   requestWork?: AcceptedWork;
-  retirement?: { owner: ProcessRetirement; token: string };
+  retirement?: {
+    owner: ProcessRetirement;
+    token: string;
+    readAdmission?: () =>
+      | import('../../studio-server-shared/app-settings-types.js').PublishedExecutionPolicySnapshot
+      | undefined;
+  };
 };
 
 function matchesPath(pathname: string, basePath: string): boolean {
@@ -314,6 +321,7 @@ function dispatchDynamicBasePath(getBasePath: () => string, router: ExpressRoute
 }
 
 function mountControlPlaneRoutes(app: Express, profile: ApiRuntimeProfile, health: RuntimeHealthReader): void {
+  app.use('/internal/resource-monitoring', createResourceReportRouter());
   app.get('/internal/executor-runtime-config', (req, res) => {
     const address = req.socket.remoteAddress;
     if (
@@ -373,6 +381,7 @@ function mountControlPlaneRoutes(app: Express, profile: ApiRuntimeProfile, healt
   app.use('/api/projects', projectsRouter);
   app.use('/api/workflows', workflowsRouter);
   app.use('/api/runtime-libraries', runtimeLibrariesRouter);
+  app.use('/api/deployment-status/resources', createResourceHistoryRouter());
   app.use(
     '/api/deployment-status',
     createDeploymentStatusRouter(profile, () => {
@@ -457,7 +466,11 @@ export function createApiApp(profile = getApiRuntimeProfile(), options: ApiAppOp
   if (options.retirement)
     app.use(
       '/internal/process-retirement',
-      createProcessRetirementRouter(options.retirement.owner, options.retirement.token),
+      createProcessRetirementRouter(
+        options.retirement.owner,
+        options.retirement.token,
+        options.retirement.readAdmission,
+      ),
     );
   if (options.requestWork) app.use(createRequestWorkBarrier(options.requestWork));
   if (process.env.RIVET_HA_CONTROL_PLANE_MODE === 'singleton-overlap' && process.env.RIVET_HA_MAINTENANCE === '1') {

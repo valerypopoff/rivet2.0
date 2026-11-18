@@ -2,12 +2,16 @@ import assert from 'node:assert/strict';
 
 // This is the repository's deliberate shell-form Dockerfile contract, not a
 // general Dockerfile parser. Ignore comments and normalize continuations/CRLF.
-export function assertImageDependencyLayout(source, workspaceManifests, label) {
-  const instructions = source
+function dockerInstructions(source) {
+  return source
     .replace(/\\\r?\n/g, ' ')
     .split(/\r?\n/)
     .map((line) => line.trim().replace(/\s+/g, ' '))
     .filter((line) => line && !line.startsWith('#'));
+}
+
+export function assertImageDependencyLayout(source, workspaceManifests, label) {
+  const instructions = dockerInstructions(source);
   const install = instructions.findIndex(
     (line) => line.startsWith('RUN ') && /\byarn install --immutable(?: |$)/.test(line),
   );
@@ -37,5 +41,33 @@ export function assertImageDependencyLayout(source, workspaceManifests, label) {
   assert.ok(
     !instructions.some((line) => /^COPY \.\/? \.\/?$/.test(line)),
     `${label} must not recopy the dependency cache after installing.`,
+  );
+}
+
+export function assertRuntimeDependencyCopyLayout(source, label) {
+  const lines = dockerInstructions(source);
+  const copy = lines.indexOf('FROM dependencies AS runtime-dependency-copy');
+  const runtime = lines.indexOf('FROM scratch AS runtime-dependencies');
+  const builder = lines.indexOf('FROM dependencies AS builder');
+  assert.ok(
+    copy >= 0 && runtime > copy && builder > runtime,
+    `${label} must isolate runtime pruning from the builder.`,
+  );
+  const pruning = lines.flatMap((line, index) =>
+    line.startsWith('RUN ') && line.includes('node /tmp/remove-runtime-build-globs.mjs') ? [index] : [],
+  );
+  assert.ok(
+    pruning.length === 1 && pruning[0] > copy && pruning[0] < runtime,
+    `${label} must prune only the runtime dependency copy.`,
+  );
+  assert.ok(
+    lines[pruning[0]].endsWith('node /tmp/remove-runtime-build-globs.mjs /runtime-dependencies/app/node_modules'),
+    `${label} must preserve builder node_modules.`,
+  );
+  assert.ok(
+    lines
+      .slice(runtime, builder)
+      .includes('COPY --link --from=runtime-dependency-copy --chown=10001:10001 /runtime-dependencies/ /'),
+    `${label} must ship the pruned runtime copy.`,
   );
 }
