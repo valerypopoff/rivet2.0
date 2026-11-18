@@ -735,6 +735,16 @@ the image tag/digest and `RIVET_CI_PLAYWRIGHT_VERSION` together when the resolve
 Playwright lockfile version changes; run the smoke and browser suite in that
 exact image before publishing. The workflow guard enforces the pin and bounds.
 
+[Verify Studio Server 44411054034](https://github.com/valerypopoff/rivet2.0/actions/runs/44411054034)
+lost the connection to the Playwright registry during a layer download, before the
+editor tests started. All prepared browser jobs now use the same bounded
+image-download retry as the candidate fixtures. It retries recognised registry
+transport errors at most twice, using the original digest and a 5-second then
+15-second delay. Authentication, missing images, integrity and other failures
+still fail setup. Once the pull succeeds, `docker create --pull=never` uses the
+local image. Browser startup, smoke checks and editor tests have their own
+failure paths.
+
 Dependency installation has its own 3-minute limit, browser pull/start/smoke 4 minutes,
 and actual browser tests 12 minutes; the existing 20-minute whole-job ceiling
 remains. Setup gets an explicit timing summary before tests, the Playwright

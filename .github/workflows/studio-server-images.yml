@@ -569,8 +569,8 @@ jobs:
         timeout-minutes: 4
         shell: bash
         run: |
-          docker pull "$RIVET_CI_BROWSER_IMAGE"
-          container_id=$(docker create --init --ipc=host --publish 127.0.0.1:3100:3100 \
+          node scripts/ci/pull-docker-image.mjs "$RIVET_CI_BROWSER_IMAGE"
+          container_id=$(docker create --pull=never --init --ipc=host --publish 127.0.0.1:3100:3100 \
             --label "rivet.ci.browser=$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-image-smoke" \
             --mount "type=bind,source=$GITHUB_WORKSPACE,target=/workspace,readonly" \
             --workdir /workspace --env PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 \
@@ -691,8 +691,8 @@ jobs:
         timeout-minutes: 4
         shell: bash
         run: |
-          docker pull "$RIVET_CI_BROWSER_IMAGE"
-          container_id=$(docker create --init --ipc=host --publish 127.0.0.1:3100:3100 \
+          node scripts/ci/pull-docker-image.mjs "$RIVET_CI_BROWSER_IMAGE"
+          container_id=$(docker create --pull=never --init --ipc=host --publish 127.0.0.1:3100:3100 \
             --label "rivet.ci.browser=$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-ha-${{ matrix.scenario }}" \
             --mount "type=bind,source=$GITHUB_WORKSPACE,target=/workspace,readonly" \
             --workdir /workspace --env PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 \
