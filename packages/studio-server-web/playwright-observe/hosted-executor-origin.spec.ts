@@ -209,6 +209,16 @@ for (const projectId of ['restored-project', 'constructor', '__proto__']) {
   test(`executor observers wait for saved workspace hydration before reading project tabs (${projectId})`, async ({
     page,
   }) => {
+    const startupWarnings: string[] = [];
+    page.on('console', (message) => {
+      const text = message.text();
+      if (
+        (text.includes('Cannot update a component') && text.includes('ExecutorSessionProvider')) ||
+        text.includes('The pseudo class ":first-child" is potentially unsafe')
+      ) {
+        startupWarnings.push(text);
+      }
+    });
     await seedHostedEditorProject(page, {
       graphId: 'restored-graph',
       projectId,
@@ -230,6 +240,7 @@ for (const projectId of ['restored-project', 'constructor', '__proto__']) {
     await page.reload({ waitUntil: 'domcontentloaded' });
     await expect(page.locator('.node-canvas').first()).toBeVisible();
     await expect(page.locator('.projects-container .project .project-name')).toHaveText(['Restored']);
+    expect(startupWarnings).toEqual([]);
     expect(await page.pageErrors()).toEqual([]);
   });
 }

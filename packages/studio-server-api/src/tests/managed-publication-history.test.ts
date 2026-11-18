@@ -33,11 +33,12 @@ type EndpointSyncCall = {
 const now = '2026-05-21T10:00:00.000Z';
 
 test('publication command policy classifies every active mutation and rejects unknown kinds', () => {
-  for (const kind of ['publish-endpoint', 'publish-web-apps', 'restore-version'] as const) {
+  for (const kind of ['publish-endpoint', 'publish-web-apps'] as const) {
     assert.equal(publicationCommandPublishesDraft(kind), true);
   }
   for (const kind of [
     'unpublish-endpoint',
+    'restore-version',
     'set-endpoint-access',
     'set-web-app-access',
     'unpublish-web-app',
@@ -180,6 +181,12 @@ function createPublicationHarness(
     queryOneCalls.push({ sql, params });
     const normalized = normalizeSql(sql);
 
+    if (normalized.includes('FROM workflow_published_versions pv JOIN workflow_revisions')) {
+      const version = publishedVersions.get(String(params[1]));
+      const revision = version && revisions.get(version.revision_id);
+      return (version && revision ? { ...version, ...revision } : null) as T | null;
+    }
+
     if (normalized.startsWith('SELECT version_id') && normalized.includes('FROM workflow_published_versions')) {
       return (publishedVersions.get(String(params[1])) ?? null) as T | null;
     }
@@ -212,6 +219,7 @@ function createPublicationHarness(
         endpoint_name: String(params[3]),
         is_starred: explicitIsStarredInsert && params[5] === true,
         comment: explicitCommentInsert ? String(params[5] ?? '') : '',
+        restored_from: normalized.includes('restored_from') ? String(params[5]) : null,
       }) as T;
     }
 
@@ -343,6 +351,8 @@ test('managed policy and restore commands retain reviewed state while waiting fo
     let expected!: ReturnType<typeof createPublicationHarness>['reviewedPreconditions'];
     const harness = createPublicationHarness({
       workflow,
+      publishedVersions: [createPublishedVersion({ version_id: 'version-a', revision_id: workflow.current_draft_revision_id })],
+      revisions: [createRevision({ revision_id: workflow.current_draft_revision_id })],
       beforeWorkflowRead: () => {
         workflow.publication_version = '8';
         expected.expectedPublicationVersion = '8';
@@ -768,11 +778,11 @@ test('managed published version restore republishes a stored revision as a new c
       published_endpoint_name: 'current-endpoint',
     }),
     workflowAfterMutation: createWorkflow({
-      current_draft_revision_id: 'old-revision',
+      current_draft_revision_id: 'current-revision',
       published_revision_id: 'old-revision',
       published_version_id: 'restored-version',
-      endpoint_name: 'restore-endpoint',
-      published_endpoint_name: 'restore-endpoint',
+      endpoint_name: 'current-endpoint',
+      published_endpoint_name: 'current-endpoint',
       last_published_at: now,
     }),
     revisions: [createRevision({ revision_id: 'current-revision' }), createRevision({ revision_id: 'old-revision' })],
@@ -787,22 +797,23 @@ test('managed published version restore republishes a stored revision as a new c
 
   assert.notEqual(result.version.id, 'old-version');
   assert.equal(result.version.projectId, 'workflow-a');
-  assert.equal(result.version.endpointName, 'restore-endpoint');
+  assert.equal(result.version.endpointName, 'current-endpoint');
+  assert.equal(result.version.restoredFrom, 'old-version');
   assert.equal(result.version.isCurrent, true);
-  assert.equal(result.project.settings.status, 'published');
+  assert.equal(result.project.settings.status, 'unpublished_changes');
   assert.deepEqual(endpointSyncCalls, [
     {
       workflowId: 'workflow-a',
-      draftEndpointName: 'restore-endpoint',
-      publishedEndpointName: 'restore-endpoint',
+      draftEndpointName: 'current-endpoint',
+      publishedEndpointName: 'current-endpoint',
     },
   ]);
 
   const workflowUpdate = clientQueries.find((query) =>
-    normalizeSql(query.sql).startsWith('UPDATE workflows SET current_draft_revision_id = $2'),
+    normalizeSql(query.sql).startsWith('UPDATE workflows SET published_revision_id = $2'),
   );
   assert.ok(workflowUpdate);
-  assert.deepEqual(workflowUpdate.params, ['workflow-a', 'old-revision', result.version.id, 'restore-endpoint']);
+  assert.deepEqual(workflowUpdate.params, ['workflow-a', 'old-revision', result.version.id, 'current-endpoint']);
   assert.deepEqual(invalidationRequests, ['workflow-a']);
   assert.deepEqual(invalidationCommits, ['workflow-a']);
 });
@@ -827,9 +838,9 @@ test('managed published version restore supports legacy current versions without
       last_published_at: legacyPublishedAt,
     }),
     workflowAfterMutation: createWorkflow({
-      current_draft_revision_id: 'legacy-published-revision',
+      current_draft_revision_id: 'draft-revision',
       published_revision_id: 'legacy-published-revision',
-      endpoint_name: 'legacy-endpoint',
+      endpoint_name: 'draft-endpoint',
       published_endpoint_name: 'legacy-endpoint',
       last_published_at: now,
     }),
@@ -848,7 +859,7 @@ test('managed published version restore supports legacy current versions without
   assert.notEqual(result.version.id, 'legacy-published-revision');
   assert.equal(result.version.endpointName, 'legacy-endpoint');
   assert.equal(result.version.isCurrent, true);
-  assert.equal(result.project.settings.status, 'published');
+  assert.equal(result.project.settings.status, 'unpublished_changes');
 
   const publishedVersionInserts = [...clientQueries, ...queryOneCalls].filter((query) =>
     normalizeSql(query.sql).startsWith('INSERT INTO workflow_published_versions'),
@@ -867,7 +878,7 @@ test('managed published version restore supports legacy current versions without
   assert.deepEqual(endpointSyncCalls, [
     {
       workflowId: 'workflow-a',
-      draftEndpointName: 'legacy-endpoint',
+      draftEndpointName: 'draft-endpoint',
       publishedEndpointName: 'legacy-endpoint',
     },
   ]);

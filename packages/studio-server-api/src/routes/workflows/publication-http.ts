@@ -10,6 +10,9 @@ import {
   executeWorkflowPublicationCommandWithBackend,
   listWorkflowProjectWebAppsWithBackend,
   listWorkflowPublishedVersionsWithBackend,
+  readWorkflowHistoryPreviewWithBackend,
+  readWorkflowReferenceOverviewWithBackend,
+  reviewEndpointReleaseWithBackend,
   readWorkflowPublishedVersionDownloadWithBackend,
   readWorkflowPublishedVersionPreviewWithBackend,
   setWorkflowPublishedVersionCommentWithBackend,
@@ -39,6 +42,8 @@ const publishProjectSchema = z
     settings: z
       .object({
         endpointName: z.string(),
+        releaseReviewToken: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+        acknowledgeMissingRollback: z.boolean().optional(),
         // Accept the old duplicate field only when it agrees with the one
         // authoritative revision token; it is not forwarded to storage.
         expectedRevisionId: z.string().trim().min(1).optional(),
@@ -108,8 +113,13 @@ const publishedVersionDownloadSchema = z.object({
   versionId: z.string(),
 });
 
+const historyPreviewSchema = publishedVersionDownloadSchema.extend({
+  artifactId: z.string().min(1).max(256).optional(),
+  ownerId: z.string().min(1).max(256).optional(),
+});
+
 const publishedVersionRestoreSchema = publishedVersionDownloadSchema.extend({
-  preconditions: draftPublicationPreconditionsSchema,
+  preconditions: publicationPreconditionsSchema,
 });
 
 const publishedVersionStarSchema = z.object({
@@ -140,19 +150,28 @@ export function registerWorkflowPublishedVersionHttpRoutes(workflowsRouter: Rout
     asyncHandler(async (req, res) => {
       const { relativePath, versionId } = req.body as z.infer<typeof publishedVersionDownloadSchema>;
       const download = await readWorkflowPublishedVersionDownloadWithBackend(relativePath, versionId);
-      res.setHeader('Content-Type', 'application/x-yaml; charset=utf-8');
+      res.setHeader('Content-Type', typeof download.contents === 'string' ? 'application/x-yaml; charset=utf-8' : 'application/zip');
       res.setHeader('Content-Disposition', createWorkflowDownloadContentDisposition(download.fileName));
       res.status(200).send(download.contents);
     }),
   );
 
   workflowsRouter.post(
+    '/projects/published-versions/preview-tree',
+    jsonBody,
+    validateBody(historyPreviewSchema),
+    asyncHandler(async (req, res) => {
+      const { relativePath, versionId, ownerId } = req.body as z.infer<typeof historyPreviewSchema>;
+      res.json(await readWorkflowHistoryPreviewWithBackend(relativePath, versionId, ownerId));
+    }),
+  );
+  workflowsRouter.post(
     '/projects/published-versions/preview',
     jsonBody,
-    validateBody(publishedVersionDownloadSchema),
+    validateBody(historyPreviewSchema),
     asyncHandler(async (req, res) => {
-      const { relativePath, versionId } = req.body as z.infer<typeof publishedVersionDownloadSchema>;
-      res.json(await readWorkflowPublishedVersionPreviewWithBackend(relativePath, versionId));
+      const { relativePath, versionId, artifactId, ownerId } = req.body as z.infer<typeof historyPreviewSchema>;
+      res.json(await readWorkflowPublishedVersionPreviewWithBackend(relativePath, versionId, artifactId, ownerId));
     }),
   );
 
@@ -195,6 +214,22 @@ export function registerWorkflowPublishedVersionHttpRoutes(workflowsRouter: Rout
 }
 
 export function registerWorkflowPublicationHttpRoutes(workflowsRouter: Router, jsonBody: RequestHandler): void {
+  workflowsRouter.get('/projects/reference-overview', asyncHandler(async (_req, res) => {
+    res.json(await readWorkflowReferenceOverviewWithBackend());
+  }));
+  const releaseReviewSchema = z.object({
+    relativePath: workflowPathSchema,
+    preconditions: draftPublicationPreconditionsSchema,
+  });
+  workflowsRouter.post(
+    '/projects/endpoint-release-review',
+    jsonBody,
+    validateBody(releaseReviewSchema),
+    asyncHandler(async (req, res) => {
+      const { relativePath, preconditions } = req.body as z.infer<typeof releaseReviewSchema>;
+      res.json(await reviewEndpointReleaseWithBackend(relativePath, preconditions));
+    }),
+  );
   workflowsRouter.get(
     '/projects/web-apps',
     asyncHandler(async (req, res) => {
@@ -266,6 +301,8 @@ export function registerWorkflowPublicationHttpRoutes(workflowsRouter: Router, j
         kind: 'publish-endpoint',
         relativePath,
         endpointName: settings.endpointName,
+        releaseReviewToken: settings.releaseReviewToken,
+        acknowledgeMissingRollback: settings.acknowledgeMissingRollback,
         preconditions,
       });
       notifyWorkflowTreeChanged(req);

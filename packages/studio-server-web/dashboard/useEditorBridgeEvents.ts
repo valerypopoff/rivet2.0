@@ -22,16 +22,17 @@ type UseEditorBridgeEventsOptions = {
   editorReady: boolean;
   focusEditorFrame: () => void;
   onSaveShortcut: () => void;
-  onOpenSubgraphTarget: (projectId: string, graphId: string) => void;
+  onOpenSubgraphTarget: (projectId: string, graphId: string, previewPath?: string) => void;
   iframeRef: RefObject<HTMLIFrameElement | null>;
   onActiveWorkflowProjectPathChange: (path: string) => void;
   onActiveProjectUnsavedChangesChange: (path: string, hasUnsavedChanges: boolean) => void;
+  onEditableDirtyProjects(editorInstanceId: string, projectIds: string[]): void;
   onEditorReady: (editorInstanceId: string) => void;
   onEditorInitializationFailed: () => void;
   onProjectConflicts: (snapshot: HostedProjectConflictSnapshot) => void;
   onReconciliationCaptured: (context: HostedProjectReconciliationContext, requestId: string) => void;
   onOpenProjectCountChange: (count: number) => void;
-  onProjectOpenFailed: (error: string, requestId?: string) => void;
+  onProjectNotOpened: (requestId?: string, error?: string) => void;
   onProjectOpened: (path: string, requestId?: string) => void;
   onProjectSaved: (path: string, hasNewerUnsavedChanges?: boolean) => void;
   onWorkflowPathsMovedApplied: (requestId?: string) => void;
@@ -50,12 +51,13 @@ export function useEditorBridgeEvents(options: UseEditorBridgeEventsOptions) {
     iframeRef,
     onActiveWorkflowProjectPathChange,
     onActiveProjectUnsavedChangesChange,
+    onEditableDirtyProjects,
     onEditorReady,
     onEditorInitializationFailed,
     onProjectConflicts,
     onReconciliationCaptured,
     onOpenProjectCountChange,
-    onProjectOpenFailed,
+    onProjectNotOpened,
     onProjectOpened,
     onProjectSaved,
     onWorkflowPathsMovedApplied,
@@ -169,7 +171,7 @@ export function useEditorBridgeEvents(options: UseEditorBridgeEventsOptions) {
           onEditorReady(event.data.editorInstanceId);
           break;
         case 'open-subgraph-target':
-          onOpenSubgraphTarget(event.data.projectId, event.data.graphId);
+          onOpenSubgraphTarget(event.data.projectId, event.data.graphId, event.data.previewPath);
           break;
         case 'workflow-project-conflicts':
           onProjectConflicts(event.data.snapshot);
@@ -185,6 +187,9 @@ export function useEditorBridgeEvents(options: UseEditorBridgeEventsOptions) {
           break;
         case 'active-project-path-changed':
           onActiveWorkflowProjectPathChange(event.data.path);
+          break;
+        case 'editable-dirty-projects':
+          onEditableDirtyProjects(event.data.editorInstanceId, event.data.projectIds);
           break;
         case 'active-project-unsaved-changes-changed':
           onActiveProjectUnsavedChangesChange(event.data.path, event.data.hasUnsavedChanges);
@@ -207,8 +212,11 @@ export function useEditorBridgeEvents(options: UseEditorBridgeEventsOptions) {
         case 'workflow-project-content-change-resolved':
           onWorkflowProjectContentChangeResolved(event.data.requestId, event.data.resolved);
           break;
+        case 'project-open-cancelled':
+          onProjectNotOpened(event.data.requestId);
+          break;
         case 'project-open-failed':
-          onProjectOpenFailed(event.data.error, event.data.requestId);
+          onProjectNotOpened(event.data.requestId, event.data.error);
           toast.error(`Failed to open project: ${event.data.error}`);
           break;
         case 'project-compare-failed':
@@ -223,6 +231,7 @@ export function useEditorBridgeEvents(options: UseEditorBridgeEventsOptions) {
     focusEditorFrame,
     iframeRef,
     onActiveProjectUnsavedChangesChange,
+    onEditableDirtyProjects,
     onActiveWorkflowProjectPathChange,
     onEditorReady,
     onEditorInitializationFailed,
@@ -230,7 +239,7 @@ export function useEditorBridgeEvents(options: UseEditorBridgeEventsOptions) {
     onProjectConflicts,
     onReconciliationCaptured,
     onOpenProjectCountChange,
-    onProjectOpenFailed,
+    onProjectNotOpened,
     onProjectOpened,
     onProjectSaved,
     onWorkflowPathsMovedApplied,

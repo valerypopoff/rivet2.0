@@ -1679,6 +1679,15 @@ downtime. A two-stage/intermediate deployment cannot bypass these rules.
 
 ### Restored-copy migration validation
 
+Fenced validation of an installed HA layout retains both execution pool
+controllers, the active slot and the request-continuity configuration. The
+maintenance overlay pauses autoscalers, sets proxy and web replicas to zero,
+and fences the API. The chart permits those pauses during validation while
+still checking the pool and gateway identities. The serving render requires
+the normal autoscaler policies again. This also applies to the single-worker
+staging profile. Helm lint and template both use the selected namespace so the
+chart checks the staging namespace rule consistently.
+
 The installation's reusable migration adapter uses the same private
 `--request/--receipt` protocol as backup adapters. It accepts two stages:
 

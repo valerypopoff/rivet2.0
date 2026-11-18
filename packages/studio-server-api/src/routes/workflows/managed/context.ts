@@ -195,7 +195,7 @@ export function createManagedWorkflowContext(
       notifyWebAppSocketPolicyInvalidation(`managed:${workflowId}`);
     },
     onAllChanged: notifyAllWebAppSocketPolicyInvalidations,
-    onExternalInvalidation: process.env.RIVET_HA_DEPLOYMENT === '1' ? notifyExternalWorkflowTreeChanged : undefined,
+    onExternalInvalidation: notifyExternalWorkflowTreeChanged,
     onEvaluationLibraryChanged:
       process.env.RIVET_HA_DEPLOYMENT === '1' ? notifyExternalEvaluationLibraryChanged : undefined,
   });

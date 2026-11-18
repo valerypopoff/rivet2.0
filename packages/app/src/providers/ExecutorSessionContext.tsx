@@ -151,10 +151,10 @@ export function createExecutorSessionRegistry(options: {
       acceptsProject: bundle ? () => true : undefined,
       acceptsLatestProject: (id) => (bundle ? bundle.members.has(id as ProjectId) : id === projectId),
       getProjectLifetime,
+      datasetProvider: currentDatasetProvider,
       onStateChange: options.onStateChange,
       resolveInternalHostedExecutorUrl: options.resolveInternalHostedExecutorUrl,
     });
-    runtime.setDatasetProvider(currentDatasetProvider);
     runtime.subscribeMessages(
       (message, data, requestId, admission) => {
         if (

@@ -2087,7 +2087,8 @@ test('SQLite publication history, restoration, access and latest execution use S
       conditions(internal),
     );
     assert.notEqual(restored.version.id, first.id);
-    assert.equal(restored.project.settings.status, 'published');
+    assert.equal(restored.project.settings.status, 'unpublished_changes');
+    assert.equal(restored.project.revisionId, saved.revisionId);
     assert.equal((await backend.listWorkflowPublishedVersions(created.relativePath)).versions.length, 2);
     assert.equal(
       (await backend.listWorkflowPublishedVersions(created.relativePath)).versions.find(
@@ -2095,10 +2096,8 @@ test('SQLite publication history, restoration, access and latest execution use S
       )!.comment,
       'Keep this',
     );
-    assert.equal(
-      (await backend.loadHostedProject(created.absolutePath)).contents,
-      (await backend.readWorkflowPublishedVersionPreview(created.relativePath, first.id)).contents,
-    );
+    assert.equal((await backend.loadLatestExecutionProject('story'))!.project.metadata.description, 'New draft');
+    assert.notEqual((await backend.loadPublishedExecutionProject('story'))!.project.metadata.description, 'New draft');
     const unpublished = await backend.unpublishWorkflowProjectItem(created.relativePath, conditions(restored.project));
     assert.equal(unpublished.settings.status, 'unpublished');
     assert.equal(await backend.loadPublishedExecutionProject('story'), null);

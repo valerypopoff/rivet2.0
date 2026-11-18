@@ -3,6 +3,7 @@ import ModalDialog, { ModalBody, ModalHeader, ModalTitle, ModalTransition } from
 import { useEffect, useRef, useState, type FC } from 'react';
 import type { HostedRouteConfig, WorkflowProjectItem } from './types';
 import { getPublishedItems } from './publishedItems';
+import { useWorkflowPublicationReferences } from './WorkflowPublicationReferences';
 import { SegmentedControl, SegmentedControlButton } from './SegmentedControl';
 import './PublishedItemsModal.css';
 
@@ -56,7 +57,8 @@ const OpenPublishedItemsModal: FC<{
   const [copyResult, setCopyResult] = useState<{ itemId: string; outcome: 'copied' | 'failed' } | null>(null);
   const copiedResetTimeoutRef = useRef<number | null>(null);
 
-  const items = getPublishedItems(projects, routeConfig);
+  const references = useWorkflowPublicationReferences();
+  const items = getPublishedItems(projects, routeConfig, references);
   const endpointItems = items.filter((item) => item.kind === 'endpoint');
   const webAppItems = items.filter((item) => item.kind === 'web-app');
   const visibleItems = activeKind === 'endpoint' ? endpointItems : webAppItems;

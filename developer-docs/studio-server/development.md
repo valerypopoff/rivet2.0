@@ -202,8 +202,11 @@ and bundle observers must mount only after `RivetAppLoader` finishes storage
 initialization, through its `wrapInitialized` boundary. Otherwise an early
 `atomWithStorage` subscription can retain empty defaults despite valid recovered
 data. `hosted-executor-origin.spec.ts` verifies seeded project tabs on first open
-and reload, alongside executor origin/reconnection checks; the reload lifecycle
-suite covers durable unsaved edits. Run these against a fixed production preview
+and reload, alongside executor origin and reconnection checks. The seeded-tab test
+checks for React render-time updates from the executor registry and Emotion
+selector warnings from the project-tab divider. That selector uses
+`:first-of-type` for the sibling tab wrappers. The reload lifecycle suite covers
+durable unsaved edits. Run these against a fixed production preview
 when validating bootstrap changes, not a provider module changed mid-HMR session.
 Isolated focus fixtures use `openHostedDashboardFixture` only before their scenario
 starts. It permits one reload when a same-origin main-frame script request fails

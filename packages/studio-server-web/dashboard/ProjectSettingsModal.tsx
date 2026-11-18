@@ -17,6 +17,8 @@ import type {
 } from './types';
 import { SegmentedControl, SegmentedControlButton } from './SegmentedControl';
 import { LLMProfileHealthSettings } from './LLMProfileHealthSettings';
+import { PublicationReferencePill, useWorkflowPublicationReferences } from './WorkflowPublicationReferences';
+import { getWorkflowProjectEndpointStatus, getWorkflowReferenceProjectId } from './workflowProjectPublicationStatus';
 import { useProjectSettingsActions } from './useProjectSettingsActions';
 import { WorkflowPublishedVersionHistoryPanel } from './WorkflowPublishedVersionHistoryModal';
 import { ProjectIncomingReferences } from './ProjectIncomingReferences';
@@ -122,6 +124,7 @@ type ProjectSettingsTab = 'workflow' | 'web-apps' | 'llm-health' | 'classifier-h
 type ProjectSettingsModalProps = {
   activeProject: WorkflowProjectItem;
   allProjects: WorkflowProjectItem[];
+  dirtyProjectIds: readonly string[];
   isOpen: boolean;
   initialTab?: ProjectSettingsTab;
   onClose: () => void;
@@ -137,6 +140,7 @@ type ProjectSettingsModalProps = {
 export const ProjectSettingsModal: FC<ProjectSettingsModalProps> = ({
   activeProject,
   allProjects,
+  dirtyProjectIds,
   isOpen,
   initialTab = 'workflow',
   onClose,
@@ -168,6 +172,7 @@ export const ProjectSettingsModal: FC<ProjectSettingsModalProps> = ({
     loadingWebApps,
     reviewedPublication,
     publicationConflict,
+    refreshUnconfirmedPublication,
     reviewLatestPublication,
     savingWebApps,
     deletingProject,
@@ -185,6 +190,7 @@ export const ProjectSettingsModal: FC<ProjectSettingsModalProps> = ({
   } = useProjectSettingsActions({
     activeProject,
     allProjects,
+    dirtyProjectIds,
     isOpen,
     onClose,
     onDeleteProject,
@@ -193,13 +199,15 @@ export const ProjectSettingsModal: FC<ProjectSettingsModalProps> = ({
   });
 
   const displayProject = snapshotProject ?? activeProject;
-  const displayedProjectStatus: WorkflowProjectStatus = displayProject.settings.status;
+  const references = useWorkflowPublicationReferences();
+  const displayedProjectStatus = getWorkflowProjectEndpointStatus(displayProject, references);
   const baseFileName = useMemo(() => activeProject.fileName.replace(/\.[^.]+$/, ''), [activeProject.fileName]);
   const publishedEndpointName =
     displayProject.settings.publishedEndpointName || displayProject.settings.endpointName || 'endpoint-name';
   const isUnpublishedProject = displayedProjectStatus === 'unpublished';
   const endpointAccess = displayProject.settings.endpointAccess ?? 'public';
-  const hasWorkflowChangesToPublish = displayedProjectStatus === 'unpublished_changes';
+  const canCaptureRelease = references?.canCaptureRelease.has(getWorkflowReferenceProjectId(displayProject));
+  const hasWorkflowChangesToPublish = displayedProjectStatus === 'unpublished_changes' || canCaptureRelease;
   const hasWorkflowEndpointDraftChange =
     settingsDraft.endpointName.trim() !== displayProject.settings.endpointName.trim();
   const hasWebApps = webApps.length > 0;
@@ -241,7 +249,7 @@ export const ProjectSettingsModal: FC<ProjectSettingsModalProps> = ({
           ['web-apps', 'Web apps'],
           ['llm-health', 'LLM profile suspension'],
           ['classifier-health', 'Decision AI profile suspension'],
-          ['history', 'Published version history'],
+          ['history', 'Published revision history'],
           ['danger', 'Danger zone'],
         ] as const
       ).map(([id, label]) => (
@@ -270,6 +278,7 @@ export const ProjectSettingsModal: FC<ProjectSettingsModalProps> = ({
           <span className={`project-status-badge ${displayedProjectStatus}`}>
             {getWorkflowProjectStatusLabel(displayedProjectStatus)}
           </span>
+          <PublicationReferencePill project={displayProject} />
           {isUnpublishedProject ? (
             <span className="project-settings-status-note">Workflow is not published as endpoint.</span>
           ) : null}
@@ -566,12 +575,14 @@ export const ProjectSettingsModal: FC<ProjectSettingsModalProps> = ({
               <div className="project-settings-modal-content project-settings-sections-layout">
                 <aside>{renderTabs()}</aside>
                 <div className="project-settings-section-content">
-                  {!loadingWebApps && !reviewedPublication ? (
+                  {!loadingWebApps && !reviewedPublication && !(activeTab === 'history' && publicationConflict === 'unconfirmed') ? (
                     <div className="project-settings-publication-conflict" role="alert">
                       <span>
-                        {publicationConflict
-                          ? 'The project or its publication changed during your attempt. Review the latest state before trying again; your edits remain here.'
-                          : 'Publication state could not be loaded. Review the latest state before changing publication.'}
+                        {publicationConflict === 'unconfirmed'
+                          ? 'The publication outcome could not be confirmed. Review the current state before sending another update.'
+                          : publicationConflict === 'changed'
+                            ? 'The project or its publication changed during your attempt. Review the latest state before trying again; your edits remain here.'
+                            : 'Publication state could not be loaded. Review the latest state before changing publication.'}
                       </span>
                       <Button appearance="subtle" onClick={() => void reviewLatestPublication()}>
                         Review latest
@@ -601,7 +612,7 @@ export const ProjectSettingsModal: FC<ProjectSettingsModalProps> = ({
                     />
                   ) : null}
                   {activeTab === 'history' ? (
-                    <div className="project-settings-tab-panel" role="tabpanel" aria-label="Published version history">
+                    <div className="project-settings-tab-panel" role="tabpanel" aria-label="Published revision history">
                       <WorkflowPublishedVersionHistoryPanel
                         project={displayProject}
                         isOpen={isOpen}
@@ -610,6 +621,7 @@ export const ProjectSettingsModal: FC<ProjectSettingsModalProps> = ({
                           onClose();
                           onPreviewPublishedVersion(relativePath, versionId);
                         }}
+                        onRestoreUnconfirmed={refreshUnconfirmedPublication}
                         onRestored={async (response) => {
                           try {
                             await onPublishedVersionRestored(response);

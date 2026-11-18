@@ -359,7 +359,7 @@ export function createManagedWorkflowQueries(pool: Pool): ManagedWorkflowQueries
         };
       }
 
-      const row = await queryOne<CurrentDraftRevisionRow>(
+      const row = await queryOne<CurrentDraftRevisionRow & { release_id?: string | null; history_version_id?: string | null }>(
         client,
         runKind === 'published'
           ? `
@@ -384,10 +384,12 @@ export function createManagedWorkflowQueries(pool: Pool): ManagedWorkflowQueries
               r.stats_graph_count,
               r.stats_total_node_count,
               r.stats_web_app_count,
-              r.created_at AS revision_created_at
+              r.created_at AS revision_created_at,
+              v.release_id, v.version_id AS history_version_id
             FROM workflow_endpoints e
             JOIN workflows w ON w.workflow_id = e.workflow_id
             JOIN workflow_revisions r ON r.revision_id = w.published_revision_id
+            LEFT JOIN workflow_published_versions v ON v.version_id = w.published_version_id AND v.workflow_id = w.workflow_id
             WHERE e.lookup_name = $1 AND e.is_published = TRUE
           `
           : `
@@ -426,6 +428,8 @@ export function createManagedWorkflowQueries(pool: Pool): ManagedWorkflowQueries
         return null;
       }
 
+      if (runKind === 'published' && row.published_version_id && row.history_version_id === null)
+        throw createHttpError(503, 'The active endpoint revision is missing from history.');
       const split = splitCurrentDraftRevisionRow(row);
       return {
         pointer: {
@@ -433,6 +437,7 @@ export function createManagedWorkflowQueries(pool: Pool): ManagedWorkflowQueries
           relativePath: split.workflow.relative_path,
           revisionId: split.revision.revision_id,
           endpointAccess: split.workflow.endpoint_access ?? 'public',
+          ...(row.release_id ? { releaseId: row.release_id } : {}),
         },
         revision: split.revision,
       };

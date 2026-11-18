@@ -18,12 +18,15 @@ import {
 } from '../../../utils/subgraphBundleScope.js';
 import type { SharedEditorProps } from '../SharedEditorProps';
 import { SegmentedEditor } from '../SegmentedEditor';
-import { SubgraphTargetControl, SubgraphTargetLabel } from '../../nodes/SubgraphTargetControl';
+import { HistoricalSubgraphTarget, SubgraphTargetControl, SubgraphTargetLabel } from '../../nodes/SubgraphTargetControl';
+import { isPublishedHistoryInspection } from '../../../utils/projectComparisonDocument.js';
 import { useNodeEditorSessionContext } from '../../nodeEditor/NodeEditorSessionContext.js';
 import { isRecordingProjectState } from '../../../state/execution.js';
 
 export const SubgraphTargetEditor: FC<SharedEditorProps> = (props) => {
   const recording = useAtomValue(isRecordingProjectState);
+  const history = isPublishedHistoryInspection(useAtomValue(projectState).metadata.id);
+  if (history) return <Field name="graphId" label="Graph">{() => <HistoricalSubgraphTarget node={props.node as SubGraphNode} />}</Field>;
   return recording ? (
     <Field name="graphId" label="Recorded graph">
       {() => <SubgraphTargetLabel node={props.node as SubGraphNode} isRecording />}

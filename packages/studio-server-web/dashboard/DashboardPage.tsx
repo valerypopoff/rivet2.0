@@ -17,6 +17,7 @@ import { focusIframeElement } from './editorBridgeFocus';
 import { useDashboardSidebar } from './useDashboardSidebar';
 import { useEditorBridgeEvents } from './useEditorBridgeEvents';
 import { fetchHostedConfig, fetchWorkflowTree } from './workflowApi';
+import { useWorkflowHistoryPreview } from './useWorkflowHistoryPreview';
 import { normalizeWorkflowPath } from './workflowLibraryHelpers';
 import type {
   ProjectCompareSideLabels,
@@ -101,6 +102,7 @@ export const DashboardPage: FC = () => {
   const [openedProjectPath, setOpenedProjectPath] = useState('');
   const [activeWorkflowProjectPath, setActiveWorkflowProjectPath] = useState('');
   const [projectUnsavedChangesByPath, setProjectUnsavedChangesByPath] = useState<Record<string, boolean>>({});
+  const [dirtyProjectIds, setDirtyProjectIds] = useState<string[]>([]);
   const [editorReady, setEditorReady] = useState(false);
   const [editorInitializationFailed, setEditorInitializationFailed] = useState(false);
   const [openProjectCount, setOpenProjectCount] = useState(0);
@@ -211,13 +213,6 @@ export const DashboardPage: FC = () => {
     [editorSession, rememberPendingWorkflowProjectOpen, clearPendingWorkflowProjectOpen],
   );
 
-  const handleWorkflowProjectOpenIntent = useCallback(
-    (path: string) => {
-      rememberPendingWorkflowProjectOpen(path);
-    },
-    [rememberPendingWorkflowProjectOpen],
-  );
-
   const bundleComparisonNavigator = useRef<((projectId: string, graphId: string) => boolean) | null>(null);
   const registerBundleComparisonNavigator = useCallback(
     (handler: ((projectId: string, graphId: string) => boolean) | null) => {
@@ -225,8 +220,45 @@ export const DashboardPage: FC = () => {
     },
     [],
   );
+  const handleWorkflowProjectOpenIntentCanceled = useCallback(
+    (path: string) => {
+      if (pendingWorkflowProjectOpenPathRef.current === path && pendingWorkflowProjectOpenRequestIdRef.current)
+        editorSession.cancelQueued(pendingWorkflowProjectOpenRequestIdRef.current);
+      clearPendingWorkflowProjectOpen(path);
+    },
+    [clearPendingWorkflowProjectOpen, editorSession],
+  );
+
+  const {
+    session: historyPreview,
+    open: handleOpenPublishedVersionPreview,
+    openArtifact: openHistoryArtifact,
+    openSubgraph: openHistorySubgraph,
+    exit: exitHistoryPreview,
+    cancelPending: cancelPendingHistoryPreview,
+  } = useWorkflowHistoryPreview({
+    editorSession,
+    postEditorCommand,
+    openProject: handleOpenProject,
+    pendingOpenPath: pendingWorkflowProjectOpenPathRef,
+    cancelPendingOpen: handleWorkflowProjectOpenIntentCanceled,
+  });
+
+  const handleWorkflowProjectOpenIntent = useCallback(
+    (path: string) => {
+      cancelPendingHistoryPreview();
+      rememberPendingWorkflowProjectOpen(path);
+    },
+    [cancelPendingHistoryPreview, rememberPendingWorkflowProjectOpen],
+  );
+
   const handleOpenSubgraphTarget = useCallback(
-    async (projectId: string, graphId: string) => {
+    async (projectId: string, graphId: string, previewPath?: string) => {
+      if (previewPath) {
+        openHistorySubgraph(previewPath, graphId);
+        return;
+      }
+      cancelPendingHistoryPreview();
       if (bundleComparisonNavigator.current?.(projectId, graphId)) return;
       try {
         const tree = await fetchWorkflowTree();
@@ -249,16 +281,7 @@ export const DashboardPage: FC = () => {
         toast.error(error instanceof Error ? error.message : 'Could not open the selected Subgraph project.');
       }
     },
-    [handleOpenProject],
-  );
-
-  const handleWorkflowProjectOpenIntentCanceled = useCallback(
-    (path: string) => {
-      if (pendingWorkflowProjectOpenPathRef.current === path && pendingWorkflowProjectOpenRequestIdRef.current)
-        editorSession.cancelQueued(pendingWorkflowProjectOpenRequestIdRef.current);
-      clearPendingWorkflowProjectOpen(path);
-    },
-    [clearPendingWorkflowProjectOpen, editorSession],
+    [cancelPendingHistoryPreview, handleOpenProject, openHistorySubgraph],
   );
 
   const handleRefreshOpenProjectFromDisk = useCallback(
@@ -268,7 +291,7 @@ export const DashboardPage: FC = () => {
     [postEditorCommand],
   );
 
-  const settlePendingRecordingOpen = useCallback(
+  const settlePendingProjectOpen = useCallback(
     (requestId: string | undefined, result: RecordingOpenResult): boolean => {
       return editorSession.acknowledge(requestId, 'project-open-result', result);
     },
@@ -301,18 +324,6 @@ export const DashboardPage: FC = () => {
         });
     },
     [editorSession],
-  );
-
-  const handleOpenPublishedVersionPreview = useCallback(
-    (relativePath: string, versionId: string, options?: { replaceCurrent?: boolean }) => {
-      postEditorCommand({
-        type: 'open-published-version-preview',
-        relativePath,
-        versionId,
-        replaceCurrent: Boolean(options?.replaceCurrent),
-      });
-    },
-    [postEditorCommand],
   );
 
   const handleCompareOpenProjectWith = useCallback(
@@ -564,10 +575,15 @@ export const DashboardPage: FC = () => {
         };
       });
     },
+    onEditableDirtyProjects: (id, projectIds) => {
+      if (id === editorInstanceRef.current) setDirtyProjectIds(projectIds);
+    },
     onEditorReady: (editorInstanceId) => {
       setEditorInitializationFailed(false);
       if (editorInstanceRef.current !== editorInstanceId) {
         setBundleComparisonState({ owner: null, projectId: null });
+        setDirtyProjectIds([]);
+        exitHistoryPreview();
         resetEditorReconciliation();
         editorInstanceRef.current = editorInstanceId;
         setReconciliationSequence((sequence) => sequence + 1);
@@ -591,11 +607,11 @@ export const DashboardPage: FC = () => {
     onOpenProjectCountChange: (count) => {
       setOpenProjectCount(count);
     },
-    onProjectOpenFailed: (error, requestId) => {
-      settlePendingRecordingOpen(requestId, { opened: false, error });
+    onProjectNotOpened: (requestId, error) => {
+      settlePendingProjectOpen(requestId, { opened: false, error });
     },
     onProjectOpened: (path, requestId) => {
-      const acknowledgedOpen = settlePendingRecordingOpen(requestId, { opened: true });
+      const acknowledgedOpen = settlePendingProjectOpen(requestId, { opened: true });
       if (requestId && !pendingWorkflowProjectOpenPathRef.current && !acknowledgedOpen) {
         return;
       }
@@ -646,6 +662,10 @@ export const DashboardPage: FC = () => {
           projectUnsavedChangesByPath={projectUnsavedChangesByPath}
           bundleComparisonState={bundleComparisonState}
           editorInstanceId={editorInstanceRef.current}
+          historyPreview={historyPreview}
+          dirtyProjectIds={dirtyProjectIds}
+          onOpenHistoryProject={openHistoryArtifact}
+          onExitHistoryPreview={exitHistoryPreview}
           onOpenProject={handleOpenProject}
           onRefreshOpenProjectFromDisk={handleRefreshOpenProjectFromDisk}
           onOpenRecording={handleOpenRecording}

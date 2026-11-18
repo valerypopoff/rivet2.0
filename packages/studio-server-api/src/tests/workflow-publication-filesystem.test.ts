@@ -524,19 +524,6 @@ test('HTTP publishing rejects missing and stale revisions and accepts a delibera
       }),
     });
     assert.equal(disagreeingLegacyRevision.status, 400);
-    const restoreWithoutReviewedDraft = await fetch(`${baseUrl}/projects/published-versions/restore`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        relativePath: 'ConcurrentPublish.rivet-project',
-        versionId: 'not-a-version',
-        preconditions: {
-          expectedProjectId: original.projectMetadataId,
-          expectedPublicationVersion: original.settings.publicationVersion,
-        },
-      }),
-    });
-    assert.equal(restoreWithoutReviewedDraft.status, 400);
     // Dataset-only edits are changes too; the project bytes are unchanged.
     await fs.writeFile(workflowFs.getWorkflowDatasetPath(projectPath), '[]', 'utf8');
     const conflict = await publish(original.revisionId);

@@ -405,6 +405,17 @@ try {
   assert.equal(repair.updated, 1);
   assert.deepEqual(repair.coverage, { total: 323, complete: 323 });
   assert.equal((await backfillProjectReferences({ pool, blobStore, signal, maxRevisions: 100 })).attempted, 0);
+  // Repair a damaged current-format summary without touching a newer format.
+  await pool.query(
+    "UPDATE workflow_revisions SET reference_summary = reference_summary - 'graphCalls' WHERE revision_id = $1",
+    [draft.revision_id],
+  );
+  partial = await readIndexedProjectReferences(pool, { expectedProjectId: 'target', graphIds: ['main'], signal });
+  assert.deepEqual(partial.incompleteReasons, ['invalid-summary']);
+  const repairedCurrent = await backfillProjectReferences({ pool, blobStore, signal, maxRevisions: 1 });
+  assert.equal(repairedCurrent.updated, 1);
+  assert.equal(repairedCurrent.coverage.complete, repairedCurrent.coverage.total);
+
   // Compare the original PostgreSQL JSONB value without lossy JavaScript conversion.
   for (const stale of ['null', '{"version":0,"counter":9007199254740993}']) {
     await pool.query('UPDATE workflow_revisions SET reference_summary = $1::jsonb WHERE revision_id = $2', [

@@ -2,7 +2,11 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { HostedRouteConfig, WorkflowProjectItem } from '../dashboard/types';
 import { getPublishedItems } from '../dashboard/publishedItems';
-import { getWorkflowProjectPublicationStatus } from '../dashboard/workflowProjectPublicationStatus';
+import {
+  buildWorkflowPublicationReferences,
+  getWorkflowProjectEndpointStatus,
+  getWorkflowProjectPublicationStatus,
+} from '../dashboard/workflowProjectPublicationStatus';
 
 const routeConfig: HostedRouteConfig = {
   executorWsUrl: '',
@@ -26,6 +30,56 @@ function project(id: string, name: string, settings: WorkflowProjectItem['settin
     settings,
   };
 }
+
+
+test('projects share saved dependency status without changing their catalog records or web app status', () => {
+  const caller = {
+    ...project('caller-path', 'Caller', {
+      status: 'published',
+      publicationStatus: 'published',
+      endpointName: 'caller',
+      publishedWebApps: [{ uiGraphId: 'app', uiGraphName: 'Console', slug: 'console', publishedAt: '' }],
+    }),
+    projectMetadataId: 'caller-id',
+  };
+  const peer = project('peer', 'Peer', {
+    status: 'unpublished_changes',
+    endpointName: 'peer',
+    publishedWebApps: [],
+  });
+  const dependency = { projectId: 'shared', name: 'Shared', relativePath: 'shared.rivet-project', unavailable: false };
+  const overview = {
+    complete: true,
+    bundles: [],
+    endpoints: [
+      {
+        projectId: 'caller-id',
+        coverage: 'complete' as const,
+        dependencies: [{ ...dependency, changed: true }],
+      },
+      {
+        projectId: 'peer',
+        coverage: 'complete' as const,
+        dependencies: [
+          { ...dependency, changed: false },
+          { ...dependency, projectId: 'unchanged', changed: false },
+        ],
+      },
+    ],
+  };
+  const projects = [caller, peer];
+  const references = buildWorkflowPublicationReferences(projects, overview, false);
+
+  assert.equal(getWorkflowProjectEndpointStatus(caller, references), 'unpublished_changes');
+  assert.equal(getWorkflowProjectPublicationStatus(caller, references), 'unpublished_changes');
+  assert.equal(references.markerByProject.get('shared'), 'changed');
+  assert.equal(references.markerByProject.get('unchanged'), 'published');
+  assert.deepEqual(
+    getPublishedItems([caller], routeConfig, references).map((item) => [item.kind, item.status]),
+    [['endpoint', 'unpublished_changes'], ['web-app', 'published']],
+  );
+  assert.equal(caller.settings.status, 'published');
+});
 
 test('lists every published endpoint and web app with its owning project and route', () => {
   const endpointAndApp = project('alpha', 'Alpha', {

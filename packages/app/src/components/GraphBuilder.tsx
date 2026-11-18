@@ -30,6 +30,7 @@ import { useDatasets } from '../hooks/useDatasets';
 import { overlayOpenState } from '../state/ui';
 import { GraphExecutionSelectorBar } from './GraphExecutionSelectorBar';
 import { HistoricalGraphNotice } from './HistoricalGraphNotice';
+import { isPublishedHistoryInspection } from '../utils/projectComparisonDocument.js';
 import { NodeChangesModalRenderer } from './NodeChangesModal';
 import { ProjectComparisonNodeChangesModalRenderer } from './ProjectComparisonNodeChangesModal.js';
 import { AiGraphCreatorInput } from './AiGraphCreatorInput';
@@ -229,7 +230,7 @@ export const GraphBuilder: FC<{ runGraph: EditorGraphRun }> = ({ runGraph }) => 
   const activeComparisonLabels = resolveProjectCompareSideLabels(activeComparison?.labels);
 
   const overlay = useAtomValue(overlayOpenState);
-  const isReadOnly = useAtomValue(isReadOnlyGraphState);
+  const showReadOnlyChrome = useAtomValue(isReadOnlyGraphState) && !isPublishedHistoryInspection(project.metadata.id);
 
   return (
     <Container onMouseDown={containerMouseDown}>
@@ -251,7 +252,7 @@ export const GraphBuilder: FC<{ runGraph: EditorGraphRun }> = ({ runGraph }) => 
             style={{ '--recording-color': recordingPresentation.color } as React.CSSProperties}
           />
         )}
-        {isReadOnly && <div className="read-only-border" />}
+        {showReadOnlyChrome && <div className="read-only-border" />}
         {overlay === undefined && <NodeEditorRenderer />}
         {firstNodeQuestions && firstNodeQuestions.length > 0 && (
           <Button onClick={handleOpenUserInputModal} className="user-input-modal-open" appearance="primary">
@@ -290,7 +291,7 @@ export const GraphBuilder: FC<{ runGraph: EditorGraphRun }> = ({ runGraph }) => 
           </div>
         )}
         <GraphExecutionSelectorBar />
-        <HistoricalGraphNotice />
+        {showReadOnlyChrome && <HistoricalGraphNotice />}
         <UserInputModal
           key={firstNodeQuestions?.[1]?.at(-1)?.latestPrompt?.promptId ?? 'ordinary-input'}
           open={isUserInputModalOpen && questions.length > 0}

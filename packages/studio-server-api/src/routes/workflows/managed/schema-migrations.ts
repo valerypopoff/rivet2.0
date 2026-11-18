@@ -9,15 +9,16 @@ import { MANAGED_NAMESPACE_SCHEMA_SQL } from './namespace-schema.js';
 import { RECORDING_EVIDENCE_SCHEMA_SQL } from './recording-evidence-schema.js';
 import { SCHEDULE_SCHEMA_SQL } from '../../../scheduled-runs/schema.js';
 import { RESOURCE_MONITORING_SCHEMA_SQL } from './resource-monitoring-schema.js';
+import { ENDPOINT_RELEASE_SCHEMA_SQL } from './endpoint-release-schema.js';
 
 export const MANAGED_WORKFLOW_SCHEMA_MIGRATIONS_TABLE = 'managed_workflow_schema_migrations';
-export const CURRENT_MANAGED_WORKFLOW_SCHEMA_VERSION = 21;
+export const CURRENT_MANAGED_WORKFLOW_SCHEMA_VERSION = 22;
 // Minimum predecessor schema whose reader can safely serve data produced by
 // this release. Deployment consumes this explicit rollback floor; additive DDL
 // alone does not establish compatibility when stored representations change.
-// Schema 17 corrects the move function and existing folder parents. Older
-// images verify a different function fingerprint and cannot safely restart.
-export const MINIMUM_ROLLBACK_COMPATIBLE_MANAGED_WORKFLOW_SCHEMA_VERSION = 17;
+// Schema 22 adds executable release bindings. An older image can verify
+// additive DDL but would ignore a frozen binding and serve floating revisions.
+export const MINIMUM_ROLLBACK_COMPATIBLE_MANAGED_WORKFLOW_SCHEMA_VERSION = 22;
 
 const MANAGED_WORKFLOW_SCHEMA_LOCK = {
   classId: 8_071,
@@ -475,6 +476,13 @@ export const MANAGED_WORKFLOW_SCHEMA_MIGRATIONS: readonly ManagedWorkflowSchemaM
     sql: RESOURCE_MONITORING_SCHEMA_SQL,
     checksum: 'bd11857d89fa0bb76ed5970556f7bc81c5d815e9497943100a0b31fe9a442db4',
   },
+  {
+    version: 22,
+    rollingSafe: true,
+    name: 'frozen-endpoint-releases',
+    sql: ENDPOINT_RELEASE_SCHEMA_SQL,
+    checksum: 'c8cf2e02d2da42fd73fe977d382ef53618764077b84ea50a6d2baa29ae77b1da',
+  },
 ];
 
 function assertMigrationDefinitions(): void {
@@ -520,6 +528,8 @@ export const MANAGED_WORKFLOW_SCHEMA_REQUIRED_TABLES = [
   'workflows',
   'workflow_revisions',
   'workflow_published_versions',
+  'workflow_endpoint_releases',
+  'workflow_endpoint_release_projects',
   'workflow_endpoints',
   'workflow_web_apps',
   'workflow_recordings',
@@ -539,6 +549,16 @@ export const MANAGED_WORKFLOW_SCHEMA_REQUIRED_TABLES = [
 ] as const;
 
 export const MANAGED_WORKFLOW_SCHEMA_REQUIRED_COLUMNS = [
+  ['workflow_published_versions', 'release_id', 'text', 'YES'],
+  ['workflow_published_versions', 'restored_from', 'text', 'YES'],
+  ['workflow_endpoint_releases', 'release_id', 'text', 'NO'],
+  ['workflow_endpoint_releases', 'workflow_id', 'text', 'NO'],
+  ['workflow_endpoint_releases', 'manifest', 'jsonb', 'NO'],
+  ['workflow_endpoint_releases', 'captured_at', 'timestamptz', 'NO'],
+  ['workflow_endpoint_release_projects', 'release_id', 'text', 'NO'],
+  ['workflow_endpoint_release_projects', 'revision_id', 'text', 'NO'],
+  ['workflow_endpoint_release_projects', 'project_blob_key', 'text', 'NO'],
+  ['workflow_endpoint_release_projects', 'dataset_blob_key', 'text', 'YES'],
   ['resource_monitoring_instances', 'installation', 'text', 'NO'],
   ['resource_monitoring_instances', 'incarnation', 'text', 'NO'],
   ['resource_monitoring_instances', 'role', 'text', 'NO'],
@@ -879,6 +899,8 @@ export const MANAGED_WORKFLOW_SCHEMA_REQUIRED_COLUMN_DEFAULTS = [
 ] as const;
 
 export const MANAGED_WORKFLOW_SCHEMA_REQUIRED_INDEXES = [
+  ['workflow_endpoint_releases', 'workflow_endpoint_releases_owner_idx', ['workflow_id'], null, [0]],
+  ['workflow_published_versions', 'workflow_published_versions_release_idx', ['release_id'], null, [0]],
   [
     'resource_monitoring_instances',
     'resource_monitoring_instances_recent_idx',
@@ -1051,6 +1073,11 @@ export const MANAGED_WORKFLOW_SCHEMA_REQUIRED_INDEXES = [
 ] as const;
 
 export const MANAGED_WORKFLOW_SCHEMA_REQUIRED_CONSTRAINTS = [
+  ['workflow_endpoint_releases', 'p', 'PRIMARY KEY (release_id)'],
+  ['workflow_endpoint_releases', 'f', 'FOREIGN KEY (workflow_id) REFERENCES workflows(workflow_id) ON DELETE CASCADE'],
+  ['workflow_endpoint_release_projects', 'p', 'PRIMARY KEY (release_id, revision_id)'],
+  ['workflow_endpoint_release_projects', 'f', 'FOREIGN KEY (release_id) REFERENCES workflow_endpoint_releases(release_id) ON DELETE CASCADE'],
+  ['workflow_published_versions', 'f', 'FOREIGN KEY (release_id) REFERENCES workflow_endpoint_releases(release_id) ON DELETE CASCADE'],
   ['resource_monitoring_instances', 'p', 'PRIMARY KEY (installation, incarnation)'],
   ['resource_monitoring_minutes', 'p', 'PRIMARY KEY (installation, incarnation, bucket_at)'],
   ['workflow_run_evidence', 'p', 'PRIMARY KEY (run_id)'],

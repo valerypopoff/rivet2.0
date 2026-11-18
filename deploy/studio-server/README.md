@@ -60,6 +60,13 @@ PostgreSQL, MinIO and internal API/executor ports remain private.
 Retired file/SQLite, bare-host and tunnel launch commands fail with guidance;
 they do not redirect to a Kubernetes deployment or migrate data.
 
+Local development with Docker PostgreSQL and MinIO captures endpoint
+dependencies by default. Set `RIVET_ENABLE_FROZEN_ENDPOINT_RELEASES=0` in the
+shared `.env` to exercise the legacy publishing path on uncaptured endpoints.
+When an existing endpoint
+offers **Update this endpoint to track dependencies**, use **Update** in its
+Project Settings to start capturing the saved dependency revisions.
+
 ## Production Docker
 
 Durable recording is enabled by default for managed PostgreSQL/object storage.
@@ -67,6 +74,14 @@ Set `RIVET_RECORDING_DURABILITY_ENABLED=false` in the shared `.env` to opt out.
 For an upgrade from older recording/garbage-collection binaries, keep it false
 until schema 20 is installed and all serving and maintenance owners are updated.
 The equivalent Helm value is `env.RIVET_RECORDING_DURABILITY_ENABLED`.
+
+For frozen endpoint releases, install schema 22 and verify compatible readers
+on all control and execution replicas before setting
+`RIVET_ENABLE_FROZEN_ENDPOINT_RELEASES=1` in the shared `.env` for managed Docker.
+The Helm equivalent is `env.RIVET_ENABLE_FROZEN_ENDPOINT_RELEASES: "1"`.
+Once captures exist, use a schema-22-aware release for rollback. See
+[Workflow Publication](../../developer-docs/studio-server/workflow-publication.md#frozen-endpoint-releases)
+for activation, backup and recovery requirements.
 
 Staging requires immutable candidate/promoted image evidence. Both production
 storage choices require promoted release evidence, matching clean source,

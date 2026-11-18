@@ -1,4 +1,5 @@
 import type { HostedRouteConfig, WorkflowProjectItem, WorkflowProjectStatus } from './types';
+import { getWorkflowProjectEndpointStatus, type WorkflowPublicationReferenceChanges } from './workflowProjectPublicationStatus';
 
 export type PublishedItemStatus = Exclude<WorkflowProjectStatus, 'unpublished'>;
 
@@ -18,13 +19,15 @@ function buildPublishedRoute(basePath: string, slug: string): string {
 export function getPublishedItems(
   projects: readonly WorkflowProjectItem[],
   routeConfig: HostedRouteConfig,
+  references?: WorkflowPublicationReferenceChanges,
 ): PublishedItem[] {
   return projects
     .flatMap((project): PublishedItem[] => {
       const items: PublishedItem[] = [];
       const endpointName = (project.settings.publishedEndpointName || project.settings.endpointName).trim();
 
-      if (endpointName && project.settings.status !== 'unpublished') {
+      const endpointStatus = getWorkflowProjectEndpointStatus(project, references);
+      if (endpointName && endpointStatus !== 'unpublished') {
         items.push({
           id: `endpoint:${project.id}:${endpointName}`,
           kind: 'endpoint',
@@ -36,7 +39,7 @@ export function getPublishedItems(
               : routeConfig.publishedWorkflowsBasePath,
             endpointName,
           ),
-          status: project.settings.status,
+          status: endpointStatus,
         });
       }
 

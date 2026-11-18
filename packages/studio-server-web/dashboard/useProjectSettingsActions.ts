@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
 import { toast } from 'react-toastify';
 import { namespaceIdentity, MutationOutcomeUnknownError } from './workflowNamespaceMutations';
 import { useWorkflowLibraryActionLifetime } from './useWorkflowLibraryActionLifetime';
@@ -6,6 +6,7 @@ import {
   deleteWorkflowProject,
   fetchWorkflowProjectWebApps,
   publishWorkflowProject,
+  reviewEndpointRelease,
   publishWorkflowProjectWebApps,
   unpublishWorkflowProject,
   updateWorkflowEndpointAccess,
@@ -14,7 +15,7 @@ import {
 } from './workflowApi';
 import { WORKFLOW_ENDPOINT_MAIN_GRAPH_REQUIRED_MESSAGE } from '../../studio-server-shared/workflow-types';
 import { ENDPOINT_NAME_PATTERN, validateEndpointName } from './projectSettingsForm';
-import { isNextPublicationVersion, isPublicationVersion } from './publicationVersion';
+import { isNextPublicationVersion, isPublicationVersion, isUnconfirmedPublication } from './publicationVersion';
 import type {
   WorkflowPublicationPreconditions,
   WorkflowProjectItem,
@@ -29,6 +30,7 @@ import type {
 type UseProjectSettingsActionsOptions = {
   activeProject: WorkflowProjectItem;
   allProjects: WorkflowProjectItem[];
+  dirtyProjectIds: readonly string[];
   isOpen: boolean;
   onClose: () => void;
   onDeleteProject: (path: string, projectId?: string | null) => void;
@@ -127,7 +129,11 @@ function publicationSnapshotFromProject(project: WorkflowProjectItem): WorkflowP
 }
 
 export function useProjectSettingsActions(options: UseProjectSettingsActionsOptions) {
-  const { activeProject, allProjects, isOpen, onClose, onDeleteProject, onRefresh } = options;
+  const { activeProject, allProjects, dirtyProjectIds, isOpen, onClose, onDeleteProject, onRefresh } = options;
+  const latestDirtyProjectIds = useRef(dirtyProjectIds);
+  useLayoutEffect(() => {
+    latestDirtyProjectIds.current = dirtyProjectIds;
+  }, [dirtyProjectIds]);
   const captureDelete = useWorkflowLibraryActionLifetime(
     isOpen ? activeProject.projectMetadataId ?? activeProject.absolutePath : null,
   );
@@ -139,7 +145,7 @@ export function useProjectSettingsActions(options: UseProjectSettingsActionsOpti
   // updates must not silently approve a newer draft for publication.
   const [reviewedPublication, setReviewedPublication] = useState<WorkflowPublicationPreconditions | null>(null);
   const [snapshotProject, setSnapshotProject] = useState<WorkflowProjectItem | null>(null);
-  const [publicationConflict, setPublicationConflict] = useState(false);
+  const [publicationConflict, setPublicationConflict] = useState<'changed' | 'unconfirmed' | null>(null);
   const [savingSettings, setSavingSettings] = useState(false);
   const [savingEndpointAccess, setSavingEndpointAccess] = useState(false);
   const [webApps, setWebApps] = useState<WorkflowProjectWebAppSummary[]>([]);
@@ -169,13 +175,14 @@ export function useProjectSettingsActions(options: UseProjectSettingsActionsOpti
     ) => {
       const consistentProject =
         response.project?.relativePath === activeProject.relativePath &&
+        (activeProject.projectMetadataId == null || response.projectId === activeProject.projectMetadataId) &&
         response.project.projectMetadataId === response.projectId &&
         response.project.revisionId === response.draftRevisionId &&
         response.project.settings.publicationVersion === response.publicationVersion &&
         isPublicationVersion(response.publicationVersion);
       if (!consistentProject) {
         setReviewedPublication(null);
-        setPublicationConflict(true);
+        setPublicationConflict('changed');
         toast.error('Publication state is inconsistent. Review the latest project before publishing.');
         return;
       }
@@ -194,10 +201,10 @@ export function useProjectSettingsActions(options: UseProjectSettingsActionsOpti
           expectedDraftRevisionId: response.draftRevisionId,
           expectedPublicationVersion: response.publicationVersion,
         });
-        setPublicationConflict(false);
+        setPublicationConflict(null);
       } else {
         setReviewedPublication(null);
-        setPublicationConflict(Boolean(expectedAfterMutation));
+        setPublicationConflict(expectedAfterMutation ? 'changed' : null);
         if (!expectedAfterMutation)
           toast.error('Publication state is unavailable. Refresh the project before publishing.');
       }
@@ -212,7 +219,7 @@ export function useProjectSettingsActions(options: UseProjectSettingsActionsOpti
         preserveDrafts ? carryEditedWebAppDrafts(drafts, previousEmails, emails) : emails,
       );
     },
-    [activeProject.relativePath],
+    [activeProject.relativePath, activeProject.projectMetadataId],
   );
 
   const reloadWebApps = useCallback(
@@ -225,7 +232,7 @@ export function useProjectSettingsActions(options: UseProjectSettingsActionsOpti
         !isNextPublicationVersion(previous.expectedPublicationVersion, expectedAfterMutation.expectedPublicationVersion)
       ) {
         setReviewedPublication(null);
-        setPublicationConflict(true);
+        setPublicationConflict('changed');
         toast.error(
           'The change succeeded, but publication state could not be verified. Review the latest state before trying again.',
         );
@@ -241,7 +248,7 @@ export function useProjectSettingsActions(options: UseProjectSettingsActionsOpti
           'The change succeeded, but publication state could not refresh. Review the latest state before trying again.',
         );
         setReviewedPublication(null);
-        setPublicationConflict(true);
+        setPublicationConflict('changed');
       } finally {
         setLoadingWebApps(false);
       }
@@ -258,7 +265,7 @@ export function useProjectSettingsActions(options: UseProjectSettingsActionsOpti
     serverWebAppSlugs.current = {};
     serverWebAppAllowedEmails.current = {};
     setReviewedPublication(null);
-    setPublicationConflict(false);
+    setPublicationConflict(null);
 
     if (!isOpen) {
       setLoadingWebApps(false);
@@ -403,10 +410,24 @@ export function useProjectSettingsActions(options: UseProjectSettingsActionsOpti
     return null;
   };
 
-  const handlePublicationError = (error: { status?: number; code?: string; message?: string }, fallback: string) => {
+  const refreshUnconfirmedPublication = async () => {
+    setReviewedPublication(null);
+    setPublicationConflict('unconfirmed');
+    await onRefresh().catch(() => null);
+  };
+
+  const handlePublicationError = async (
+    error: { status?: number; code?: string; message?: string },
+    fallback: string,
+    submitted = true,
+  ) => {
+    if (submitted && isUnconfirmedPublication(error)) {
+      await refreshUnconfirmedPublication();
+      return;
+    }
     if (error.status === 409 && error.code?.startsWith('publication_')) {
       setReviewedPublication(null);
-      setPublicationConflict(true);
+      setPublicationConflict('changed');
     }
     toast.error(error.message || fallback);
   };
@@ -444,7 +465,7 @@ export function useProjectSettingsActions(options: UseProjectSettingsActionsOpti
       !isNextPublicationVersion(previous.expectedPublicationVersion, next.expectedPublicationVersion)
     ) {
       setReviewedPublication(null);
-      setPublicationConflict(true);
+      setPublicationConflict('changed');
       toast.error(
         'The change succeeded, but publication state could not be verified. Review the latest state before trying again.',
       );
@@ -453,7 +474,7 @@ export function useProjectSettingsActions(options: UseProjectSettingsActionsOpti
     setSnapshotProject(project);
     if (next.expectedDraftRevisionId !== previous.expectedDraftRevisionId) {
       setReviewedPublication(null);
-      setPublicationConflict(true);
+      setPublicationConflict('changed');
       toast.error('The change succeeded, but the project draft changed. Review the latest state before publishing.');
       return;
     }
@@ -470,19 +491,34 @@ export function useProjectSettingsActions(options: UseProjectSettingsActionsOpti
     if (!preconditions?.expectedDraftRevisionId) return;
 
     setSavingSettings(true);
+    let submitting = false;
 
     try {
+      const release = await reviewEndpointRelease(activeProject.relativePath, preconditions);
+      const dirtyIds = new Set(latestDirtyProjectIds.current);
+      if (
+        dirtyIds.has(preconditions.expectedProjectId) ||
+        release?.projects.some((project) => project.fromDraft && dirtyIds.has(project.projectId))
+      ) {
+        toast.error('Save the edited projects before publishing this endpoint.');
+        return;
+      }
+      if (release?.missingRollback && !window.confirm('The currently served revision cannot be captured for rollback. Publish the reviewed replacement?')) return;
+      submitting = true;
       const project = await publishWorkflowProject(
         activeProject.relativePath,
         {
           endpointName: settingsDraft.endpointName,
+          releaseReviewToken: release?.token,
+          acknowledgeMissingRollback: release?.missingRollback,
         },
         preconditions,
       );
+      submitting = false;
       acceptReturnedPublication(project, preconditions);
       await refreshTreeAfterSuccess();
     } catch (err: any) {
-      handlePublicationError(err, 'Failed to update project publication state');
+      await handlePublicationError(err, 'Failed to update project publication state', submitting);
     } finally {
       setSavingSettings(false);
     }
@@ -503,7 +539,7 @@ export function useProjectSettingsActions(options: UseProjectSettingsActionsOpti
       acceptReturnedPublication(project, preconditions);
       await refreshTreeAfterSuccess();
     } catch (err: any) {
-      handlePublicationError(err, 'Failed to update project publication state');
+      await handlePublicationError(err, 'Failed to update project publication state');
     } finally {
       setSavingSettings(false);
     }
@@ -524,7 +560,7 @@ export function useProjectSettingsActions(options: UseProjectSettingsActionsOpti
       acceptReturnedPublication(project, preconditions);
       await refreshTreeAfterSuccess();
     } catch (err: any) {
-      handlePublicationError(err, 'Failed to update endpoint access');
+      await handlePublicationError(err, 'Failed to update endpoint access');
     } finally {
       setSavingEndpointAccess(false);
     }
@@ -608,7 +644,7 @@ export function useProjectSettingsActions(options: UseProjectSettingsActionsOpti
       await reloadWebApps(project, preconditions);
       await refreshTreeAfterSuccess();
     } catch (err: any) {
-      handlePublicationError(err, 'Failed to publish web app');
+      await handlePublicationError(err, 'Failed to publish web app');
     } finally {
       setSavingWebApps(false);
     }
@@ -639,7 +675,7 @@ export function useProjectSettingsActions(options: UseProjectSettingsActionsOpti
       await reloadWebApps(project, preconditions);
       await refreshTreeAfterSuccess();
     } catch (err: any) {
-      handlePublicationError(err, 'Failed to update web app access');
+      await handlePublicationError(err, 'Failed to update web app access');
     } finally {
       setSavingWebApps(false);
     }
@@ -660,7 +696,7 @@ export function useProjectSettingsActions(options: UseProjectSettingsActionsOpti
       await reloadWebApps(project, preconditions);
       await refreshTreeAfterSuccess();
     } catch (err: any) {
-      handlePublicationError(err, 'Failed to unpublish web app');
+      await handlePublicationError(err, 'Failed to unpublish web app');
     } finally {
       setSavingWebApps(false);
     }
@@ -679,6 +715,7 @@ export function useProjectSettingsActions(options: UseProjectSettingsActionsOpti
     loadingWebApps,
     reviewedPublication,
     publicationConflict,
+    refreshUnconfirmedPublication,
     reviewLatestPublication,
     savingWebApps,
     deletingProject,

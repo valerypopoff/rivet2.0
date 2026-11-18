@@ -9,11 +9,14 @@ import { DatasetList } from './DatasetList';
 import { DatasetDisplay } from './DatasetDisplay';
 import { useAtom, useAtomValue } from 'jotai';
 import { handleError } from '../../utils/errorHandling.js';
+import { isPublishedHistoryInspection } from '../../utils/projectComparisonDocument.js';
 
 export const DataStudioRenderer: FC = () => {
   const openOverlay = useAtomValue(overlayOpenState);
+  const project = useAtomValue(projectState);
 
   if (openOverlay !== 'dataStudio') return null;
+  if (isPublishedHistoryInspection(project.metadata.id)) return <div role="status">Published revision datasets are read-only.</div>;
 
   return (
     <ErrorBoundary

@@ -1,5 +1,15 @@
 # Project bundles
 
+The project tree shows an external reference count for a bundle with saved
+references outside it. The count groups by target project. The details show
+the referring projects, graph calls and source revision save times.
+**Open project** uses the normal editable editor tab.
+
+[Published revision history](workflow-publication.md#published-revision-history)
+opens a history tree with the root and captured dependencies, including
+outside projects. It keeps their recorded folder paths and opens the frozen
+revisions.
+
 `useWorkflowBundleActions.ts` owns the project-tree bundle action state,
 conversion and duplication requests, modal initiation and completion callbacks.
 `useWorkflowLibraryController.ts` supplies tree reconciliation, selection and

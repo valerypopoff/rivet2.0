@@ -1,4 +1,4 @@
-import type { FC } from 'react';
+import type { ComponentPropsWithoutRef, FC, ReactNode } from 'react';
 import ChevronDownIcon from 'majesticons/line/chevron-down-line.svg?react';
 import ChevronRightIcon from 'majesticons/line/chevron-right-line.svg?react';
 import type { WorkflowFolderItem, WorkflowProjectItem } from './types';
@@ -6,8 +6,70 @@ import { WorkflowInlineRenameInput } from './WorkflowInlineRenameInput';
 import type { DraggedWorkflowItem } from './workflowLibraryHelpers';
 import { countProjectsInFolder, normalizeWorkflowPath } from './workflowLibraryHelpers';
 import { WorkflowProjectRow } from './WorkflowProjectRow';
+import { useWorkflowPublicationReferences } from './WorkflowPublicationReferences';
 import { WorkflowBundleIcon } from './WorkflowBundleIcon';
 import { namespaceIdentity } from './workflowNamespaceMutations';
+
+export function WorkflowFolderRow({
+  name,
+  expanded,
+  projectCount,
+  isBundle,
+  renaming,
+  renameInput,
+  className = 'folder-row',
+  ...events
+}: Omit<ComponentPropsWithoutRef<'div'>, 'children'> & {
+  name: string;
+  expanded: boolean;
+  projectCount: number;
+  isBundle?: boolean;
+  renaming?: boolean;
+  renameInput?: ReactNode;
+}) {
+  const editing = renameInput != null;
+  const busy = editing || renaming;
+  return (
+    <div
+      className={className}
+      role={busy ? undefined : 'button'}
+      tabIndex={busy ? undefined : 0}
+      aria-busy={renaming || undefined}
+      aria-expanded={busy ? undefined : expanded}
+      aria-label={busy ? `Renaming ${name}` : `${expanded ? 'Collapse' : 'Expand'} ${name}${isBundle ? ' bundle' : ''}`}
+      {...events}
+    >
+      <span className="folder-toggle" aria-hidden="true">
+        {expanded ? <ChevronDownIcon /> : <ChevronRightIcon />}
+      </span>
+      <div className="folder-content">
+        <div className="folder-name-button" title={editing ? undefined : name}>
+          <div className="folder-main">
+            {editing ? (
+              renameInput
+            ) : (
+              <div className="folder-label-wrap">
+                {renaming ? <span className="folder-rename-spinner" aria-hidden="true" /> : null}
+                <div className="label">
+                  {isBundle ? (
+                    <WorkflowBundleIcon aria-label="Bundle" role="img" className="folder-bundle-icon" />
+                  ) : null}
+                  {name}
+                </div>
+              </div>
+            )}
+            <div
+              className="folder-project-count"
+              aria-label={`${projectCount} project${projectCount === 1 ? '' : 's'} in ${name}`}
+            >
+              {projectCount}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 type WorkflowFolderTreeProps = {
   folders: WorkflowFolderItem[];
@@ -72,6 +134,7 @@ export const WorkflowFolderTree: FC<WorkflowFolderTreeProps> = ({
   onFolderDragLeave,
   getParentRelativePath,
 }) => {
+  const references = useWorkflowPublicationReferences();
   const normalizedActivePath = normalizeWorkflowPath(activePath);
   const renderFolderRenameInput = (folder: WorkflowFolderItem) => (
     <FolderRenameInput folder={folder} onSubmit={onFolderRenameSubmit} onCancel={onFolderRenameCancel} />
@@ -105,6 +168,7 @@ export const WorkflowFolderTree: FC<WorkflowFolderTreeProps> = ({
     const isRenaming = renamingFolderId === folder.id;
     const rowIsBusy = isEditing || isRenaming;
     const projectCount = countProjectsInFolder(folder);
+    const external = folder.bundleId ? references?.byBundle.get(folder.bundleId) : undefined;
     const rowClassName = [
       'folder-row',
       // Closed ancestors do not render their children, so only the outermost
@@ -122,65 +186,43 @@ export const WorkflowFolderTree: FC<WorkflowFolderTreeProps> = ({
 
     return (
       <div className="folder" key={folder.id}>
-        <div
-          className={rowClassName}
-          draggable={editorReady && !rowIsBusy}
-          role={rowIsBusy ? undefined : 'button'}
-          tabIndex={rowIsBusy ? undefined : 0}
-          aria-busy={isRenaming ? true : undefined}
-          aria-expanded={rowIsBusy ? undefined : expanded}
-          aria-label={
-            isEditing || isRenaming
-              ? `Renaming ${folder.name}`
-              : `${expanded ? 'Collapse' : 'Expand'} ${folder.name}${folder.bundleId ? ' bundle' : ''}`
-          }
-          onClick={rowIsBusy ? undefined : onFolderClick(folder)}
-          onKeyDown={rowIsBusy ? undefined : onFolderKeyDown(folder)}
-          onContextMenu={rowIsBusy ? undefined : (event) => onFolderContextMenu(folder, event)}
-          onDragStart={onDragStart({
-            itemType: 'folder',
-            expectedSource: namespaceIdentity(folder),
-            absolutePath: folder.absolutePath,
-            relativePath: folder.relativePath,
-            parentRelativePath: getParentRelativePath(folder.relativePath),
-          })}
-          onDragEnd={onDragEnd}
-          onDragOver={onFolderDragOver(folder)}
-          onDragLeave={() => onFolderDragLeave(folder)}
-          onDrop={onFolderDrop(folder)}
-        >
-          <span className="folder-toggle" aria-hidden="true">
-            {expanded ? <ChevronDownIcon /> : <ChevronRightIcon />}
-          </span>
-          <div className="folder-content">
-            <div className="folder-name-button" title={isEditing ? undefined : folder.name}>
-              <div className="folder-main">
-                {isEditing ? (
-                  renderFolderRenameInput(folder)
-                ) : (
-                  <div className="folder-label-wrap">
-                    {isRenaming ? <span className="folder-rename-spinner" aria-hidden="true" /> : null}
-                    <div className="label">
-                      {folder.bundleId ? (
-                        <WorkflowBundleIcon
-                          aria-label="Bundle"
-                          role="img"
-                          style={{ verticalAlign: 'text-bottom', marginRight: 5 }}
-                        />
-                      ) : null}
-                      {folder.name}
-                    </div>
-                  </div>
-                )}
-                <div
-                  className="folder-project-count"
-                  aria-label={`${projectCount} project${projectCount === 1 ? '' : 's'} in ${folder.name}`}
-                >
-                  {projectCount}
-                </div>
-              </div>
-            </div>
-          </div>
+        <div className="folder-row-with-references">
+          <WorkflowFolderRow
+            name={folder.name}
+            expanded={expanded}
+            isBundle={!!folder.bundleId}
+            projectCount={projectCount}
+            renaming={isRenaming}
+            renameInput={isEditing ? renderFolderRenameInput(folder) : undefined}
+            className={rowClassName}
+            draggable={editorReady && !rowIsBusy}
+            onClick={rowIsBusy ? undefined : onFolderClick(folder)}
+            onKeyDown={rowIsBusy ? undefined : onFolderKeyDown(folder)}
+            onContextMenu={rowIsBusy ? undefined : (event) => onFolderContextMenu(folder, event)}
+            onDragStart={onDragStart({
+              itemType: 'folder',
+              expectedSource: namespaceIdentity(folder),
+              absolutePath: folder.absolutePath,
+              relativePath: folder.relativePath,
+              parentRelativePath: getParentRelativePath(folder.relativePath),
+            })}
+            onDragEnd={onDragEnd}
+            onDragOver={onFolderDragOver(folder)}
+            onDragLeave={() => onFolderDragLeave(folder)}
+            onDrop={onFolderDrop(folder)}
+          />
+
+          {external && (external.count > 0 || !external.complete) && !rowIsBusy ? (
+            <button
+              className="bundle-external-references"
+              type="button"
+              onClick={() => references?.open({ bundle: folder })}
+            >
+              {external.count > 0
+                ? `${external.count}${external.complete ? '' : '+'} external reference${external.count === 1 ? '' : 's'}`
+                : 'External references pending'}
+            </button>
+          ) : null}
         </div>
 
         {expanded ? (

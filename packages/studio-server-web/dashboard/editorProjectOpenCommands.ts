@@ -55,6 +55,12 @@ export async function handleOpenProjectCommand(
   command: Extract<SerializedEditorCommand, { type: 'open-project' }>,
   options?: { signal?: AbortSignal },
 ): Promise<boolean> {
+  const reportCancelled = () => {
+    if (command.requestId) postMessageToDashboard({ type: 'project-open-cancelled', requestId: command.requestId });
+    return false;
+  };
+  if (options?.signal?.aborted) return reportCancelled();
+
   let openingTabId: string | undefined;
   try {
     const existingOpenedProject = findOpenedProjectByPath(context, command.path);
@@ -116,7 +122,7 @@ export async function handleOpenProjectCommand(
           console.warn('Failed to cancel project opening tab after skipped open:', cancelError);
         }
       }
-      return false;
+      return reportCancelled();
     }
 
     if (openResult.projectId && command.bundleId !== undefined) {
@@ -162,6 +168,7 @@ export async function handleOpenProjectCommand(
         console.warn('Failed to cancel project opening tab after open failure:', cancelError);
       }
     }
+    if (options?.signal?.aborted) return reportCancelled();
     const message = getError(error).message;
     console.error('Failed to open workflow project:', error);
     postMessageToDashboard({

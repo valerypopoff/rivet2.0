@@ -19,6 +19,7 @@ export type HostedRuntimeDependencies = {
 export type HostedRuntimeInput = {
   projectPath: string;
   datasetProvider: DatasetProvider;
+  frozenReferences?: { projectReferenceLoader: ProjectReferenceLoader; subgraphProjectLoader: SubgraphProjectLoader };
   abortSignal?: AbortSignal;
   telemetry?: ManagedCodeRunnerTelemetry | null;
   remoteDebugger?: NodeCreateProcessorOptions['remoteDebugger'];
@@ -36,7 +37,7 @@ export async function createHostedRuntimeOptions(
   signal?.throwIfAborted();
   const executionEnvironment = { ...(await (dependencies.readEnvironment ?? readExecutionEnvironmentVariables)()) };
   signal?.throwIfAborted();
-  const projectReferenceLoader = await dependencies.createProjectReferenceLoader(input.projectPath);
+  const projectReferenceLoader = input.frozenReferences?.projectReferenceLoader ?? await dependencies.createProjectReferenceLoader(input.projectPath);
   signal?.throwIfAborted();
   const llmProfileHealthStore = await dependencies.getProfileHealth();
   signal?.throwIfAborted();
@@ -51,7 +52,7 @@ export async function createHostedRuntimeOptions(
     datasetProvider: input.datasetProvider,
     nativeApi: createLocalCatalogNativeApi(),
     projectReferenceLoader,
-    subgraphProjectLoader: dependencies.createSubgraphProjectLoader?.(),
+    subgraphProjectLoader: input.frozenReferences?.subgraphProjectLoader ?? dependencies.createSubgraphProjectLoader?.(),
     llmProfileHealthStore,
     llmProfileHealthExecutionCorrelationId: input.correlationId,
     remoteDebugger: input.remoteDebugger,

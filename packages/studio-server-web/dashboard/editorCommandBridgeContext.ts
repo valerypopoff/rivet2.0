@@ -23,6 +23,7 @@ export type SerializedEditorCommand = Extract<
       | 'delete-workflow-project'
       | 'open-recording'
       | 'open-published-version-preview'
+      | 'close-history-preview'
       | 'refresh-open-project-from-disk'
       | 'compare-open-project-with'
       | 'bundle-comparison'

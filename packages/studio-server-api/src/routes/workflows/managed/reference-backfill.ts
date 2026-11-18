@@ -2,6 +2,8 @@ import type { Pool } from 'pg';
 import type { ManagedWorkflowBlobStore } from './blob-store.js';
 import { getWorkflowProjectIndexDataFromContents } from '../project-index.js';
 import { PROJECT_REFERENCE_SUMMARY_VERSION } from '../project-reference-summary.js';
+import { MANAGED_WORKFLOW_EXECUTION_INVALIDATION_CHANNEL } from './execution-invalidation.js';
+import type { ManagedExecutionInvalidationEvent } from './execution-types.js';
 import { ACTIVE_REFERENCE_REVISIONS_SQL } from './reference-index.js';
 import { queryReferences } from './reference-query.js';
 
@@ -12,12 +14,23 @@ type Candidate = {
   expected_summary: string | null;
 };
 const ACTIVE = `WITH active AS (${ACTIVE_REFERENCE_REVISIONS_SQL})`;
-// Future extractor results belong to a newer writer. Never downgrade them.
-const NEEDS_SUMMARY = `(r.reference_summary IS NULL OR (
-  r.reference_summary->'version' IS DISTINCT FROM to_jsonb($1::int)
-  AND NOT CASE WHEN jsonb_typeof(r.reference_summary->'version') = 'number'
-    THEN (r.reference_summary->>'version')::numeric > $1 ELSE false END
-))`;
+// Future results and explicit extractor failures are already classified.
+// A damaged current-format summary can still be rebuilt from the saved artifact.
+const NEEDS_SUMMARY = `(
+  r.reference_summary IS NULL OR (
+    r.reference_summary->'version' IS DISTINCT FROM to_jsonb($1::int)
+    AND NOT CASE WHEN jsonb_typeof(r.reference_summary->'version') = 'number'
+      THEN (r.reference_summary->>'version')::numeric > $1 ELSE false END
+  ) OR (
+    r.reference_summary->'version' = to_jsonb($1::int)
+    AND r.reference_summary->>'state' = 'complete'
+    AND (
+      r.reference_summary->>'projectId' IS DISTINCT FROM r.workflow_id
+      OR COALESCE(jsonb_typeof(r.reference_summary->'graphCalls'), '') NOT IN ('array', 'null')
+      OR COALESCE(jsonb_typeof(r.reference_summary->'projectTargets'), '') NOT IN ('array', 'null')
+    )
+  )
+)`;
 
 export async function backfillProjectReferences(options: {
   pool: Pool;
@@ -103,5 +116,21 @@ export async function backfillProjectReferences(options: {
     [PROJECT_REFERENCE_SUMMARY_VERSION],
     signal,
   );
+  if (updated) {
+    const event: ManagedExecutionInvalidationEvent = {
+      eventType: 'catalog-changed',
+      sourceInstanceId: 'project-reference-backfill',
+    };
+    // A completed backfill refreshes the tree without evicting execution data.
+    await queryReferences(
+      pool,
+      'SELECT pg_notify($1, $2)',
+      [MANAGED_WORKFLOW_EXECUTION_INVALIDATION_CHANNEL, JSON.stringify(event)],
+      signal,
+      { write: true },
+    ).catch(() => {
+      console.warn('[reference-backfill] Reference summaries were saved, but the tree refresh notification failed.');
+    });
+  }
   return { attempted: attempted.length, updated, failures, coverage };
 }

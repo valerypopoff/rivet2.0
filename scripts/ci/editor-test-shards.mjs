@@ -38,6 +38,8 @@ const weightedSpecs = [
   ['ha-recording-selection.spec.ts', 15],
   ['recording-playback-history.spec.ts', 65],
   ['graph-deletion-references.spec.ts', 75],
+  // Local work estimate for release review, Restore and frozen tree navigation.
+  ['published-revision-history.spec.ts', 70],
   ['node-editor-ownership.spec.ts', 95],
   ['node-editor-lifecycle.spec.ts', 195],
   ['llm-temperature.spec.ts', 60],

@@ -96,6 +96,10 @@ export type WorkflowExecutionDefinition = {
   projectVirtualPath: string;
   revisionKey: string;
   endpointAccess?: WorkflowEndpointAccess;
+  frozenReferences?: {
+    projectReferenceLoader: ProjectReferenceLoader;
+    subgraphProjectLoader: import('@valerypopoff/rivet2-node').SubgraphProjectLoader;
+  };
   webAppUiGraphId?: string;
   webAppAllowedEmails?: string[];
   /** Immutable published binding identity, independent of the executable revision. */
@@ -164,14 +168,25 @@ export interface WorkflowProjectRepository {
   deleteWorkflowProjectItem(relativePath: string): Promise<string | null>;
 }
 export interface WorkflowPublicationRepository {
+  readWorkflowReferenceOverview?(): Promise<import('../../../../studio-server-shared/workflow-types.js').WorkflowReferenceOverview>;
+  readWorkflowBundleReferenceDetails?(bundleId: string): Promise<import('../../../../studio-server-shared/workflow-types.js').WorkflowBundleReferenceDetails>;
   listWorkflowPublishedVersions(relativePath: string): Promise<WorkflowPublishedVersionsResponse>;
+  reviewEndpointRelease?(
+    relativePath: string,
+    preconditions: WorkflowDraftPublicationPreconditions,
+  ): Promise<import('../../../../studio-server-shared/workflow-types.js').WorkflowEndpointReleaseReview | null>;
+  readWorkflowHistoryPreview?(
+    relativePath: string, versionId: string, ownerId?: string,
+  ): Promise<import('../../../../studio-server-shared/workflow-types.js').WorkflowHistoryPreview>;
   readWorkflowPublishedVersionDownload(
     relativePath: string,
     versionId: string,
-  ): Promise<{ contents: string; fileName: string }>;
+  ): Promise<{ contents: string | Buffer; fileName: string }>;
   readWorkflowPublishedVersionPreview(
     relativePath: string,
     versionId: string,
+    artifactId?: string,
+    ownerId?: string,
   ): Promise<{ contents: string; datasetsContents: string | null }>;
   setWorkflowPublishedVersionStar(
     relativePath: string,
@@ -186,7 +201,7 @@ export interface WorkflowPublicationRepository {
   restoreWorkflowPublishedVersion(
     relativePath: string,
     versionId: string,
-    preconditions: WorkflowDraftPublicationPreconditions,
+    preconditions: WorkflowPublicationPreconditions,
   ): Promise<WorkflowPublishedVersionRestoreResponse>;
   publishWorkflowProjectItem(
     relativePath: string,

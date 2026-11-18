@@ -5,6 +5,161 @@
 @import './ProjectSettingsModal.css';
 @import './WorkflowLibraryOverlays.css';
 
+.folder-row-with-references {
+  --workflow-bundle-label-inset: calc(
+    var(--workflow-library-row-padding) + var(--workflow-button-height-s) + var(--workflow-library-row-gap)
+  );
+}
+
+.folder-bundle-icon {
+  width: var(--workflow-bundle-icon-size);
+  height: var(--workflow-bundle-icon-size);
+  margin-inline-end: var(--workflow-bundle-icon-gap);
+  vertical-align: text-bottom;
+}
+
+.bundle-external-references {
+  display: block;
+  max-width: calc(100% - var(--workflow-bundle-label-inset));
+  margin: 0 0 4px;
+  margin-inline-start: var(--workflow-bundle-label-inset);
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--grey-light);
+  font-size: var(--workflow-library-font-size-xs);
+  text-align: start;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+
+.bundle-external-references:hover,
+.bundle-external-references:focus-visible {
+  color: var(--grey-lightest);
+  text-decoration: underline;
+}
+
+.reference-change-badge {
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--workflow-status-unpublished-changes-color);
+  padding: 2px 6px;
+  line-height: 0;
+  cursor: pointer;
+}
+
+.reference-change-badge svg {
+  width: 14px;
+  height: 14px;
+}
+
+.reference-project-marker {
+  box-sizing: border-box;
+  flex: 0 0 var(--workflow-library-project-marker-width);
+  height: var(--workflow-library-project-marker-width);
+  border: 1.5px solid currentColor;
+  border-radius: 50%;
+}
+
+.reference-project-marker.changed,
+.reference-project-marker.changed + .project-label-wrap .label {
+  color: var(--workflow-status-unpublished-changes-color);
+}
+
+.reference-project-marker.published,
+.reference-project-marker.published + .project-label-wrap .label {
+  color: var(--workflow-status-published-color);
+}
+
+.reference-coverage-note {
+  font-size: 11px;
+  opacity: 0.8;
+}
+
+.workflow-reference-project-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.workflow-reference-project-heading > div {
+  flex: 1 1 250px;
+  min-width: 0;
+}
+
+.workflow-reference-use {
+  padding-inline-start: 12px;
+  border-inline-start: 1px solid rgba(255, 255, 255, 0.16);
+  overflow-wrap: anywhere;
+}
+
+.workflow-changed-reference-group,
+.workflow-external-reference-source,
+.workflow-external-reference-site,
+.workflow-external-reference-targets {
+  display: grid;
+  gap: 12px;
+}
+
+.workflow-external-reference-source + .workflow-external-reference-source {
+  border-top: 1px solid rgba(255, 255, 255, 0.12);
+  padding-top: 18px;
+}
+
+.workflow-changed-reference-group > h3,
+.workflow-changed-reference-group .workflow-reference-project-heading h4,
+.workflow-external-reference-source h3,
+.workflow-external-reference-source h4 {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.workflow-changed-reference-group > h3,
+.workflow-changed-reference-group .workflow-reference-project-heading h4,
+.workflow-external-reference-source h3 {
+  font-size: 18px;
+}
+
+.workflow-external-reference-source h4 {
+  font-size: 16px;
+}
+
+.workflow-external-reference-targets .workflow-reference-project-heading {
+  display: grid;
+  justify-content: stretch;
+  justify-items: start;
+  gap: 8px;
+}
+
+.history-preview-heading {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 6px;
+  padding: var(--workflow-library-row-padding);
+}
+
+.history-preview-heading p {
+  margin: 0;
+}
+
+.history-preview-heading button {
+  justify-self: start;
+}
+
+.history-preview-project-details {
+  min-width: 0;
+  max-width: 65%;
+  overflow: hidden;
+  color: var(--grey-light);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .workflow-bundle-drag-preview {
   position: fixed;
   z-index: 20001;
@@ -64,6 +219,8 @@
   --workflow-library-body-inset: 8px;
   --workflow-library-project-indent: 15px;
   --workflow-library-folder-indent: 24px;
+  --workflow-bundle-icon-size: 16px;
+  --workflow-bundle-icon-gap: 5px;
   --workflow-library-project-marker-width: 8px;
   --workflow-library-row-gap: 8px;
   --workflow-library-row-padding: 6px;
@@ -160,6 +317,7 @@
 [data-testid='workflow-bundle-delete-modal--blanket'],
 [data-testid='workflow-bundle-merge-modal--blanket'],
 [data-testid='workflow-bundle-compare-modal--blanket'],
+[data-testid='workflow-reference-details-modal--blanket'],
 [data-testid='workflow-published-version-history-modal--blanket'],
 [data-testid='app-settings-modal--blanket'] {
   background: rgba(0, 0, 0, 0.56) !important;
@@ -179,6 +337,7 @@
 [data-testid='workflow-bundle-delete-modal'],
 [data-testid='workflow-bundle-merge-modal'],
 [data-testid='workflow-bundle-compare-modal'],
+[data-testid='workflow-reference-details-modal'],
 [data-testid='workflow-published-version-history-modal'],
 [data-testid='app-settings-modal'] {
   background: #1f1f22 !important;
@@ -229,6 +388,7 @@
 [data-testid='workflow-bundle-conversion-error-modal--body'],
 [data-testid='workflow-bundle-delete-modal--body'],
 [data-testid='workflow-bundle-compare-modal--body'],
+[data-testid='workflow-reference-details-modal--body'],
 [data-testid='workflow-published-version-history-modal--body'],
 [data-testid='app-settings-modal--body'] {
   padding: 0 !important;

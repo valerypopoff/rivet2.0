@@ -164,7 +164,7 @@ export function createLegacyWorkflowCommands(hooks: {
     async restoreWorkflowPublishedVersion(
       relativePath: string,
       versionId: string,
-      preconditions: WorkflowDraftPublicationPreconditions,
+      preconditions: WorkflowPublicationPreconditions,
     ) {
       return withFilesystemWorkflowStorageWrite(async () => {
         const root = await ensureWorkflowsRoot();

@@ -22,6 +22,7 @@ export const defaultApiTestFiles = [
   'src/tests/docker-launcher.test.ts',
   'src/tests/duplicate-project-repair.test.ts',
   'src/tests/editor-bridge.test.ts',
+  'src/tests/endpoint-release-graphs.test.ts',
   'src/tests/env-security.test.ts',
   'src/tests/evaluation-library-events.test.ts',
   'src/tests/evaluation-recording-maintenance.test.ts',

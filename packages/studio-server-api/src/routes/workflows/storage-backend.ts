@@ -587,10 +587,42 @@ export async function readWorkflowPublishedVersionDownloadWithBackend(relativePa
   );
 }
 
-export async function readWorkflowPublishedVersionPreviewWithBackend(relativePath: string, versionId: string) {
+export async function readWorkflowPublishedVersionPreviewWithBackend(
+  relativePath: string, versionId: string, artifactId?: string, ownerId?: string,
+) {
   return withWorkflowPublicationRepository((backend) =>
-    backend.readWorkflowPublishedVersionPreview(relativePath, versionId),
+    backend.readWorkflowPublishedVersionPreview(relativePath, versionId, artifactId, ownerId),
   );
+}
+
+export async function readWorkflowReferenceOverviewWithBackend() {
+  return withWorkflowPublicationRepository(async (backend) => backend.readWorkflowReferenceOverview?.() ?? null);
+}
+
+export async function readWorkflowBundleReferenceDetailsWithBackend(bundleId: string) {
+  return withWorkflowPublicationRepository(async (backend) => backend.readWorkflowBundleReferenceDetails?.(bundleId) ?? null);
+}
+
+export async function readWorkflowHistoryPreviewWithBackend(relativePath: string, versionId: string, ownerId?: string) {
+  return withWorkflowPublicationRepository(async (backend) => {
+    if (backend.readWorkflowHistoryPreview) return backend.readWorkflowHistoryPreview(relativePath, versionId, ownerId);
+    const { versions } = await backend.listWorkflowPublishedVersions(relativePath);
+    const selected = versions.find((row) => row.id === versionId && (!ownerId || row.projectId === ownerId));
+    if (!selected) throw createHttpError(404, 'Published revision not found.');
+    return {
+      coverage: 'project-only' as const,
+      rootArtifactId: versionId, endpointName: selected.endpointName, publishedAt: selected.publishedAt,
+      projects: [{ artifactId: versionId, projectId: selected.projectId, name: selected.projectName,
+        relativePath, savedAt: selected.publishedAt }],
+      references: [],
+    };
+  });
+}
+
+export async function reviewEndpointReleaseWithBackend(
+  relativePath: string, preconditions: Extract<WorkflowPublicationCommand, { kind: 'publish-endpoint' }>['preconditions'],
+) {
+  return withWorkflowPublicationRepository(async (backend) => backend.reviewEndpointRelease?.(relativePath, preconditions) ?? null);
 }
 
 export async function setWorkflowPublishedVersionStarWithBackend(
@@ -639,7 +671,8 @@ export async function executeWorkflowPublicationCommandWithBackend(
       return withWorkflowPublicationRepository((backend) =>
         backend.publishWorkflowProjectItem(
           command.relativePath,
-          { endpointName: command.endpointName },
+          { endpointName: command.endpointName, releaseReviewToken: command.releaseReviewToken,
+            acknowledgeMissingRollback: command.acknowledgeMissingRollback },
           command.preconditions,
         ),
       );
