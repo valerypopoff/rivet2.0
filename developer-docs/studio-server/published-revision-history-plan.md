@@ -538,4 +538,5 @@ covers read-only navigation for saved latest and published
 revisions of the same dependency, reference indicators and details, legacy
 history, and Publish and Restore review. The navigation test keeps the same
 dashboard session and verifies that live selection, a newer history selection,
-and Exit cancel the specific pending request.
+and Exit cancel the specific pending request. The dashboard and modal-sizing
+browser specs also check the Project Settings tab order and history label.

@@ -266,7 +266,7 @@ test('hosted dialogs render the shared theme and project health uses the metadat
     'Web apps',
     'LLM profile suspension',
     'Decision AI profile suspension',
-    'Published version history',
+    'Published revision history',
     'Danger zone',
   ]);
   await settings.getByRole('tab', { name: 'LLM profile suspension' }).click();
@@ -281,9 +281,9 @@ test('hosted dialogs render the shared theme and project health uses the metadat
   await expect.poll(() => healthRequests.length).toBeGreaterThanOrEqual(2);
   expect(new Set(healthRequests)).toEqual(new Set([project.projectMetadataId]));
   await settings.getByRole('tab', { name: 'Endpoint', exact: true }).click();
-  await settings.getByRole('tab', { name: 'Published version history' }).click();
-  await expect(settings.getByRole('tabpanel', { name: 'Published version history' })).toContainText(
-    'No published versions',
+  await settings.getByRole('tab', { name: 'Published revision history' }).click();
+  await expect(settings.getByRole('tabpanel', { name: 'Published revision history' })).toContainText(
+    'No published revisions have been saved for this project yet.',
   );
   await expect(page.getByRole('dialog')).toHaveCount(1);
   await settings.getByRole('tab', { name: 'Danger zone' }).click();
@@ -295,7 +295,7 @@ test('hosted dialogs render the shared theme and project health uses the metadat
   await page.setViewportSize({ width: 390, height: 844 });
   const tablist = settings.getByRole('tablist');
   expect(await tablist.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
-  await expect(settings.getByRole('tab', { name: 'Published version history' })).toBeVisible();
+  await expect(settings.getByRole('tab', { name: 'Published revision history' })).toBeVisible();
   await close(settings);
   await row.click({ button: 'right' });
   await page.getByRole('menuitem', { name: 'Download project', exact: true }).click();

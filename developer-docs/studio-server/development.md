@@ -208,6 +208,11 @@ selector warnings from the project-tab divider. That selector uses
 `:first-of-type` for the sibling tab wrappers. The reload lifecycle suite covers
 durable unsaved edits. Run these against a fixed production preview
 when validating bootstrap changes, not a provider module changed mid-HMR session.
+Isolated recordings fixtures provide an empty reference overview during dashboard
+startup so the idle test can still reject unexpected API calls. The persisted
+bundle-move test opens the reloaded folders using their current expanded state,
+then checks the moved bundle inside its destination folder.
+
 Isolated focus fixtures use `openHostedDashboardFixture` only before their scenario
 starts. It permits one reload when a same-origin main-frame script request fails
 with Chromium `ERR_NETWORK_CHANGED` or `ERR_CONNECTION_RESET` and the real frontend

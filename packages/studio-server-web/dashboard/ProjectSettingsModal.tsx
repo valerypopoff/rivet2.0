@@ -372,7 +372,7 @@ export const ProjectSettingsModal: FC<ProjectSettingsModalProps> = ({
     >
       <h3>Delete project</h3>
       <p className="project-settings-help">
-        Deleting this project is permanent and cannot be undone. Its saved datasets, published version history, and run
+        Deleting this project is permanent and cannot be undone. Its saved datasets, published revision history, and run
         recordings are also deleted. Other projects and scheduled runs that use it may stop working. Download a backup
         before deleting it.
       </p>

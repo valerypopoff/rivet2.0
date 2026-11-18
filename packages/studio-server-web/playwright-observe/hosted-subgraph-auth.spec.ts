@@ -2,6 +2,7 @@ import { expect, test } from '@playwright/test';
 import { startHostedSubgraphRuntime } from '../../studio-server-api/src/tests/helpers/hosted-subgraph-runtime';
 import type { WorkflowTreeResponse } from '../../studio-server-shared/workflow-types';
 import { openBundleActions, mockHostedEditorBootstrap, waitForDashboardReady } from './helpers/hostedEditorObserve';
+import { ensureFolderExpanded } from './helpers/workflowLibraryObserve';
 import { projectBundleFixture } from '../../studio-server-api/src/tests/helpers/project-bundle-fixture';
 import { collectProjectBundle } from '../../studio-server-api/src/routes/workflows/project-bundle';
 import { zipSync, strToU8 } from 'fflate';
@@ -587,12 +588,11 @@ test('moving a bundle reparents the persisted PostgreSQL tree and survives a das
     expect(save.status()).toBe(200);
     await page.reload({ waitUntil: 'domcontentloaded' });
     await waitForDashboardReady(page);
-    const trashRow = page.getByRole('button', { name: 'Expand Trash', exact: true });
-    if (await trashRow.count()) await trashRow.click();
-    const testRow = page.getByRole('button', { name: 'Expand Test', exact: true });
-    if (await testRow.count()) await testRow.click();
+    await ensureFolderExpanded(page, 'Trash');
+    await ensureFolderExpanded(page, 'Test');
     const destination = page.locator('.folder').filter({
-      has: page.locator(':scope > .folder-row[aria-label="Collapse Test"]'),
+      has: page.locator(':scope > .folder-row-with-references')
+        .getByRole('button', { name: 'Collapse Test', exact: true }),
     });
     await expect(destination.getByRole('button', { name: /Hosted Subgraph fixture bundle$/ })).toBeVisible();
     await expect(page.getByRole('button', { name: /Hosted Subgraph fixture bundle$/ })).toHaveCount(1);

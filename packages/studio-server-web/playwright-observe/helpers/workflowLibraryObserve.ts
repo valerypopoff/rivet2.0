@@ -212,9 +212,9 @@ export async function ensureFolderExpanded(page: Page, folderName: string, proje
   const folderRow = page.locator('.folder-row', { hasText: folderName });
   await expect(folderRow).toBeVisible({ timeout: 30_000 });
 
-  if ((await folderRow.getAttribute('aria-expanded')) !== 'true') {
-    await folderRow.click();
-  }
+  await folderRow.evaluate((row) => {
+    if (row instanceof HTMLElement && row.getAttribute('aria-expanded') === 'false') row.click();
+  });
 
   await expect(folderRow).toHaveAttribute('aria-expanded', 'true', { timeout: 30_000 });
 

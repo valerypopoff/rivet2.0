@@ -150,7 +150,7 @@ export const WorkflowPublishedVersionHistoryPanel: FC<WorkflowPublishedVersionHi
       .catch((err: any) => {
         if (!cancelled) {
           setReview(null);
-          setError(err.message || 'Failed to load published version history');
+          setError(err.message || 'Failed to load published revision history');
         }
       })
       .finally(() => {
