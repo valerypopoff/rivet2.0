@@ -111,7 +111,7 @@ function fixture() {
               name: 'Install native provider test tools',
               'timeout-minutes': 2,
               env: { KUBECTL_VERSION: 'v1.36.6', HELM_VERSION: 'v3.22.1' },
-              run: 'sha256sum -c -',
+              run: 'sha256sum -c -\necho "RIVET_K8S_HELM_BIN=$tools/helm" >> "$GITHUB_ENV"',
             },
             {
               name: 'Verify packaged provider preparation and cleanup before expensive work',
@@ -166,10 +166,13 @@ test('native preparation checks cannot be removed, skipped or allowed to fail', 
       steps.at(-1)['continue-on-error'] = true;
     },
     (steps) => {
-      steps.at(-2).env.KUBECTL_VERSION = 'latest';
+      steps.find((s) => s.name === 'Install native provider test tools').env.KUBECTL_VERSION = 'latest';
     },
     (steps) => {
-      steps.at(-2).run = 'download without checksums';
+      steps.find((s) => s.name === 'Install native provider test tools').run = 'download without checksums';
+    },
+    (steps) => {
+      steps.find((s) => s.name === 'Install native provider test tools').run = 'sha256sum -c -';
     },
   ]) {
     const f = fixture();

@@ -393,6 +393,16 @@ cloud authentication or Docker requirement to hosted CI. These upstream CLI
 versions match the actor's upstream sources; the actor additionally rebuilds
 them with its patched Go/dependency graph and retains its final-image tool check.
 Local proof used the actual patched Linux tools with Docker networking disabled.
+
+The native Helm-status case belongs to `provider-tool-contracts.test.mjs` in
+this pinned native step. Keeping it in the general source suite instead used
+the runner's unreviewed Helm 4 and exposed the native process to the whole source
+suite's startup load. A local full-suite run reproduced its 10-second timeout
+before any loopback request even with pinned Helm; both versions passed in
+isolation. Moving this integration case preserves the assertion and deadline
+without serializing the source suite or changing production timeouts. Its Helm
+storage/plugin settings are fixture-owned, failures include the request trace,
+and the workflow explicitly exports the pinned Helm path before native tests.
 The new native cases took about eight seconds together. This is measured local
 test time, not a promise about hosted checkout, downloads or total workflow time.
 See [the preparation contract audit](automated-runtime-qualification.md#local-provider-preparation-contracts).

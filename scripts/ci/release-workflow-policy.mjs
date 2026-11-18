@@ -81,6 +81,7 @@ export function assertFastReleasePolicy({ images, verify, publisher, source, bui
   assert.equal(nativeTools.env.KUBECTL_VERSION, 'v1.36.6');
   assert.equal(nativeTools.env.HELM_VERSION, 'v3.22.1');
   assert.match(nativeTools.run, /sha256sum -c -/);
+  assert.match(nativeTools.run, /RIVET_K8S_HELM_BIN=.*\$GITHUB_ENV/);
   const native = source.jobs.source.steps.find(
     (s) => s.name === 'Verify packaged provider preparation and cleanup before expensive work',
   );
