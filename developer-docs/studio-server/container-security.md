@@ -16,6 +16,11 @@ API and executor images therefore omit the reviewed unused `picomatch` and
 enforces that the SDK, CLI, App Executor and execution-server dependency graph
 does not depend on them. Builders retain their complete dependency tree.
 Managed Code-node library releases are separate and are not pruned.
+The qualification actor also omits the installed copies after its final web
+build, including workspace-local modules. Its source, committed dependency
+archives and exact-source verification remain intact. The dependency-scope
+gate also follows Evaluations and the locked Playwright runner; offline actor
+preflight continues to exercise the actual browser journey and retained video.
 
 `remove-runtime-build-globs.mjs` checks exact package names/versions, validates
 the owned copy before removal, never follows workspace/dependency links and

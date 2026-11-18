@@ -1106,6 +1106,13 @@ assert.ok(janitorBases.length && janitorBases.every((match) => match[1] === runt
 assert.match(janitorDockerfile, /USER 10001:10001/);
 assert.match(janitorDockerfile, /ws@8\.21\.0/);
 const actorDockerfile = read('deploy/studio-server/images/qualification/Dockerfile');
+const actorGlobPruning = actorDockerfile.indexOf('node /tmp/remove-runtime-build-globs.mjs /app/node_modules');
+assert.ok(
+  actorGlobPruning > actorDockerfile.indexOf('yarn workspace @valerypopoff/rivet-studio-server-web run build'),
+  'Qualification must retain build globs through its final compilation, then omit them from the runtime.',
+);
+assert.match(actorDockerfile, /for modules in \/app\/packages\/\*\/node_modules/);
+assert.match(actorDockerfile, /node \/tmp\/remove-runtime-build-globs\.mjs "\$modules" \|\| exit 1/);
 const apiRuntimeStart = apiDockerfile.lastIndexOf('\nFROM ');
 for (const [label, stage] of [
   ['API dependencies', apiDockerfile.slice(0, apiRuntimeStart)],

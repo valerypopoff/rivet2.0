@@ -11,6 +11,7 @@ const pending = [
   'core',
   'node',
   'cli',
+  'evaluations',
   'app-executor',
   'studio-server-api',
   'studio-server-shared',
@@ -20,6 +21,10 @@ const pending = [
   locator: pnp.findPackageLocator(fileURLToPath(new URL(`../../packages/${workspace}/package.json`, import.meta.url))),
   chain: [],
 }));
+// Qualification runs prepared source probes and the locked browser test runner.
+// Its full workspace build graph remains available only during image building.
+const web = createRequire(new URL('../../packages/studio-server-web/package.json', import.meta.url));
+pending.push({ locator: pnp.findPackageLocator(web.resolve('@playwright/test')), chain: [] });
 const visited = new Set();
 while (pending.length) {
   const { locator, chain } = pending.pop();
@@ -47,4 +52,4 @@ while (pending.length) {
     });
   }
 }
-console.log('Build glob packages remain outside SDK and execution dependencies.');
+console.log('Build glob packages remain outside SDK, execution and qualification dependencies.');
