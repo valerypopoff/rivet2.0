@@ -25,6 +25,27 @@ selected shard must report a nonzero passing count, zero failures and exit zero,
 without invoking the intentionally broken global Yarn shim. A reporter-prefix
 difference alone must not fail this check.
 
+The JavaScript security audit must also run before pushes even when manifests
+and the lockfile are unchanged: registry advisories can change independently of
+the source. `test:style`, an immutable install and Rust audit do not query npm's
+current findings. A failed security gate also blocks exact-commit desktop
+publication after successful compilation; that downstream refusal is expected.
+
+The 2026-11-18 review for `picomatch` advisory `1247710`
+([GHSA-fc5q-39xc-vjpf](https://github.com/advisories/GHSA-fc5q-39xc-vjpf))
+is limited to the locked micromatch and optional bundle-visualizer callers and
+expires on **2026-11-30**. No patched version is published; this is a reachability
+review, not a dependency repair. `security:audit` also runs
+`scripts/checks/check-runtime-glob-scope.mjs`, covered by the regression suite.
+This static owner check traverses the actual Yarn
+execution dependency graph, following production/optional/peer edges while
+excluding workspace development tools, and rejects either glob package in the
+SDK, CLI, App Executor or Studio Server execution paths. The web production
+server uses Node built-ins and compiled assets; its Vite/ESLint build dependencies
+are not request handlers. Critical, other high-severity and new direct-consumer
+findings remain blocking. Re-review when dependency ownership changes and remove
+this exception after validating an upstream fix; never automatically extend it.
+
 ## Schema and browser fixture contracts
 
 The shared Docker launcher dotenv contract keeps a closed inventory of documented

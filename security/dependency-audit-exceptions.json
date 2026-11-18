@@ -1,4 +1,14 @@
 {
   "version": 1,
-  "exceptions": []
+  "exceptions": [
+    {
+      "advisoryIds": [1247710],
+      "packages": ["picomatch"],
+      "dependents": ["micromatch@npm:4.0.8", "rollup-plugin-visualizer@npm:7.0.1"],
+      "scope": "Build and lint tooling with repository-controlled glob patterns; not the SDK, CLI, App Executor or Studio Server execution dependency paths.",
+      "reason": "GHSA-fc5q-39xc-vjpf has no published patched release as of 2026-11-18; npm latest is 4.0.7 and the advisory covers <=4.0.7. The locked 2.3.2 and 4.0.5 copies are reached by micromatch in lint/build tooling and the optional desktop bundle visualizer. The production web server serves compiled assets using Node built-ins rather than Vite or ESLint. The execution dependency closure is checked by dependency-security-regressions.test.mjs, excluding workspace devDependencies but following production dependencies, optional dependencies and peers. This is a temporary reachability review, not a patched package. Replace it when upstream publishes a verified fix; do not extend it automatically.",
+      "owner": "Rivet maintainers",
+      "expires": "2026-11-30"
+    }
+  ]
 }
