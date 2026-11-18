@@ -1141,6 +1141,16 @@ assert.match(
 assert.match(actorDockerfile, /npm install -g npm@11\.21\.1/);
 assert.match(actorDockerfile, /--prefix \/tmp\/rivet-npm-security[^\n]+undici@6\.29\.1/);
 assert.match(actorDockerfile, /node \/opt\/rivet\/harden-package-manager-caches\.mjs npm/);
+for (const [label, dockerfile, managers] of [
+  ['API', apiDockerfile, 'npm pnpm'],
+  ['executor', read('deploy/studio-server/images/executor/Dockerfile'), 'npm'],
+  ['qualification', actorDockerfile, 'npm'],
+]) {
+  assert.ok(
+    dockerfile.includes(`node /opt/rivet/remove-package-manager-windows-globs.mjs ${managers}`),
+    `${label}: omit the reviewed Windows-only native-build glob packages from Linux image copies.`,
+  );
+}
 assert.match(actorDockerfile, /node \/tmp\/verify-runtime-dependencies\.mjs npm/);
 assert.ok(actorDockerfile.includes(`FROM --platform=$BUILDPLATFORM ${esbuildCompilerImage} AS helm-security`));
 assert.match(actorDockerfile, /sh \/rebuild-helm\.sh "\$TARGETARCH"/);

@@ -85,6 +85,7 @@ RUN mkdir /runtime && node deploy/studio-server/images/lib/prepare-runtime-packa
 
 FROM node:24.22.1-alpine@sha256:06d7adf3e0ef61a13f1d28682726366f97a15aa1888c934d3ecec86c33918b53
 COPY deploy/studio-server/images/lib/harden-package-manager-caches.mjs /opt/rivet/harden-package-manager-caches.mjs
+COPY deploy/studio-server/images/lib/remove-package-manager-windows-globs.mjs /opt/rivet/remove-package-manager-windows-globs.mjs
 
 ARG HTTP_PROXY
 ARG HTTPS_PROXY
@@ -110,6 +111,7 @@ RUN npm install -g npm@11.21.1 && \
     mv /tmp/rivet-npm-security/node_modules/undici /usr/local/lib/node_modules/npm/node_modules/undici && \
     rm -rf /tmp/rivet-npm-security /root/.npm && \
     node /opt/rivet/harden-package-manager-caches.mjs npm && \
+    node /opt/rivet/remove-package-manager-windows-globs.mjs npm && \
     addgroup -g 10001 -S rivet && \
     adduser -u 10001 -S -D -h /home/rivet -G rivet rivet && \
     mkdir -p /home/rivet/.local/share/com.valerypopoff.rivet2/plugins /data/runtime-libraries /opt/rivet/lib /app && \

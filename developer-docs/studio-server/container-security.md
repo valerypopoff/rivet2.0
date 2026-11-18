@@ -33,6 +33,36 @@ other dependencies, source copies, hardlinks and external links and reject chang
 versions before deletion. Final exact-image functional probes and unchanged
 High/Critical scans remain required before publication.
 
+The complete-image scan additionally found `picomatch` 4.0.4 inside npm's
+`tinyglobby` and 4.0.7 inside pnpm's bundled modules. These global package-manager
+trees are separate from workspace dependencies and must be inventoried too.
+Both come from node-gyp's Windows-only `.sln`/`.mk` discovery. Linux native builds
+take its unchanged make path. `remove-package-manager-windows-globs.mjs` checks
+the pinned npm/pnpm/node-gyp versions and exact source hashes, makes that Windows
+import lazy, removes its Linux-copy dependency declaration and deletes the whole
+unused parser packages. It preserves package versions and writes a source-patch
+receipt under `/opt/rivet`; it never runs against managed Code-library releases.
+Changed versions, source bytes or escaped paths reject the image build.
+
+API, executor and the qualification toolchain apply this specialization after
+installing their global managers. The final-image probe loads each native-build
+module without the removed parser and still performs offline npm/pnpm installs.
+Validate real Linux addon builds and complete final-image scans before release;
+a scan of only the workspace lockfile or selected package fixtures is insufficient.
+
+This addresses the installed node-gyp copies reported by the scanner. pnpm's
+standalone CLI also embeds older glob code inside its JavaScript bundle, which
+is not inventoried as a separate package. It handles administrator-selected
+installation/workspace configuration rather than Rivet workflow inputs, and is
+not rewritten by this platform omission. Reassess that bundle when upstream
+provides a fix; a green package inventory does not certify all embedded code.
+
+Local patched copies of the exact failed API/executor candidates and the rebuilt
+qualification-toolchain target passed the unchanged pinned High/Critical scan.
+Offline installs passed; npm and pnpm also installed, compiled and loaded a real
+Linux native addon in a test-only compiler image. These checks do not replace
+the complete source-bound actor and final candidate image gates in main CI.
+
 ## Git package floor: November 12, 2026
 
 [Build Images 43113173680](https://github.com/valerypopoff/rivet2.0/actions/runs/43113173680)

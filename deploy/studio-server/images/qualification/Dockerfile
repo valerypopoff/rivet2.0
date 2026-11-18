@@ -19,6 +19,7 @@ RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache
 FROM node:24.22.1-alpine@sha256:06d7adf3e0ef61a13f1d28682726366f97a15aa1888c934d3ecec86c33918b53 AS qualification-toolchain
 ARG TARGETARCH=amd64
 COPY source/deploy/studio-server/images/lib/harden-package-manager-caches.mjs /opt/rivet/harden-package-manager-caches.mjs
+COPY source/deploy/studio-server/images/lib/remove-package-manager-windows-globs.mjs /opt/rivet/remove-package-manager-windows-globs.mjs
 # Refresh cached Git/init templates and Chromium's libxslt security dependencies.
 RUN apk add --no-cache 'git>=2.54.1-r0' 'git-init-template>=2.54.1-r0' chromium ffmpeg openssl util-linux curl ca-certificates bash 'libxslt>=1.1.43-r4' && corepack enable && \
     npm install -g npm@11.21.1 && \
@@ -26,7 +27,8 @@ RUN apk add --no-cache 'git>=2.54.1-r0' 'git-init-template>=2.54.1-r0' chromium 
     rm -rf /usr/local/lib/node_modules/npm/node_modules/undici && \
     mv /tmp/rivet-npm-security/node_modules/undici /usr/local/lib/node_modules/npm/node_modules/undici && \
     rm -rf /tmp/rivet-npm-security /root/.npm && \
-    node /opt/rivet/harden-package-manager-caches.mjs npm
+    node /opt/rivet/harden-package-manager-caches.mjs npm && \
+    node /opt/rivet/remove-package-manager-windows-globs.mjs npm
 COPY --from=helm-security /out/helm /usr/local/bin/helm
 COPY --from=helm-security /out/helm-build.txt /out/helm-LICENSE /opt/rivet/toolchain/
 COPY --from=kubectl-security /out/kubectl /usr/local/bin/kubectl

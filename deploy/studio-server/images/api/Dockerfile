@@ -94,6 +94,7 @@ RUN node deploy/studio-server/images/lib/prepare-autoscaler-runtime.mjs /runtime
 
 FROM node:24.22.1-alpine@sha256:06d7adf3e0ef61a13f1d28682726366f97a15aa1888c934d3ecec86c33918b53
 COPY deploy/studio-server/images/lib/harden-package-manager-caches.mjs /opt/rivet/harden-package-manager-caches.mjs
+COPY deploy/studio-server/images/lib/remove-package-manager-windows-globs.mjs /opt/rivet/remove-package-manager-windows-globs.mjs
 
 ARG HTTP_PROXY
 ARG HTTPS_PROXY
@@ -120,6 +121,7 @@ RUN apk add --no-cache 'git>=2.54.1-r0' 'git-init-template>=2.54.1-r0' 'libexpat
     mv /tmp/rivet-npm-security/node_modules/undici /usr/local/lib/node_modules/npm/node_modules/undici && \
     rm -rf /tmp/rivet-npm-security /root/.npm && \
     node /opt/rivet/harden-package-manager-caches.mjs npm pnpm && \
+    node /opt/rivet/remove-package-manager-windows-globs.mjs npm pnpm && \
     addgroup -g 10001 -S rivet && \
     adduser -u 10001 -S -D -h /home/rivet -G rivet rivet && \
     mkdir -p /workspace /workflows /data/rivet-app/plugins /data/rivet-app/logs /data/runtime-libraries /home/rivet/.local/share/com.valerypopoff.rivet2/plugins /opt/rivet/lib /app && \

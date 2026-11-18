@@ -6,6 +6,7 @@ import test from 'node:test';
 import { createRequire } from 'node:module';
 import { prepareRuntimePackages } from './prepare-runtime-packages.mjs';
 import { removeRuntimeBuildGlobs } from './remove-runtime-build-globs.mjs';
+import { removePackageManagerWindowsGlobs } from './remove-package-manager-windows-globs.mjs';
 
 // test-style: fixture-read: verifies only generated container staging fixtures.
 
@@ -173,6 +174,30 @@ test('runtime glob pruning checks versions, handles nested copies and preserves 
     await packageAt('micromatch', 'micromatch', '4.0.8');
     await assert.rejects(removeRuntimeBuildGlobs(modules), /Review changed/);
     await fs.stat(path.join(modules, 'micromatch/index.cjs')); // No partial deletion on failed validation.
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test('Linux package-manager specialization rejects changed versions and source before modifying its copy', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-manager-globs-'));
+  try {
+    const gyp = path.join(root, 'node_modules/node-gyp');
+    const tiny = path.join(root, 'node_modules/tinyglobby');
+    await fs.mkdir(path.join(gyp, 'lib'), { recursive: true });
+    await fs.mkdir(tiny);
+    await fs.writeFile(path.join(root, 'package.json'), JSON.stringify({ name: 'npm', version: '11.21.1' }));
+    const metadata = JSON.stringify({ name: 'node-gyp', version: '12.4.0', dependencies: { tinyglobby: '^0.2.12' } });
+    await fs.writeFile(path.join(gyp, 'package.json'), metadata);
+    await fs.writeFile(path.join(gyp, 'lib/build.js'), 'unreviewed source');
+    await fs.writeFile(path.join(tiny, 'keep.txt'), 'untouched');
+    await assert.rejects(removePackageManagerWindowsGlobs(root, 'npm'), /Review changed node-gyp/);
+    assert.equal(await fs.readFile(path.join(gyp, 'lib/build.js'), 'utf8'), 'unreviewed source');
+    assert.equal(await fs.readFile(path.join(gyp, 'package.json'), 'utf8'), metadata);
+    assert.equal(await fs.readFile(path.join(tiny, 'keep.txt'), 'utf8'), 'untouched');
+    await fs.writeFile(path.join(root, 'package.json'), JSON.stringify({ name: 'npm', version: '12.0.0' }));
+    await assert.rejects(removePackageManagerWindowsGlobs(root, 'npm'), /Review changed package-manager/);
+    await assert.rejects(removePackageManagerWindowsGlobs(root, 'unreviewed'), /Unknown package manager/);
   } finally {
     await fs.rm(root, { recursive: true, force: true });
   }
