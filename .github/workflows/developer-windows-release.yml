@@ -28,6 +28,7 @@ on:
       - 'scripts/ci/ci-change-policy.mjs'
       - 'scripts/checks/check-graph-builder*'
       - 'scripts/sync-desktop-version.mjs'
+      - 'security/dependency-audit-exceptions.json'
       - 'yarn.lock'
   workflow_dispatch:
 

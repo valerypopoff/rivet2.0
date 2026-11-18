@@ -1889,6 +1889,12 @@ for (const workflowPath of [
 ]) {
   const caller = parseWorkflow(workflowPath);
   assert.ok(caller.workflow.on.push.paths.length > 0, `${workflowPath} must be path-gated.`);
+  if (workflowPath.includes('developer-')) {
+    assert.ok(
+      caller.workflow.on.push.paths.includes('security/dependency-audit-exceptions.json'),
+      'Developer Desktop Release must run after a JavaScript audit exception repair.',
+    );
+  }
   assert.match(
     String(caller.workflow.concurrency['cancel-in-progress']),
     /github\.event_name == 'push'/,
