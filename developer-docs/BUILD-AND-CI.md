@@ -2140,6 +2140,25 @@ version. It checks npm before publishing each package and skips package versions
 that are already present in the registry, so re-running the same main-branch
 workflow does not turn an already-published package into a hard failure.
 
+### Prepared release versions (2026-11-18)
+
+Review since `3105c6eaf`, through `bef3bd9c6` and the pending settings/monitoring
+changes, prepares App `2.38.1`, the five private Studio Server packages `1.41.0`
+and Docs `2.31.0`. App fixes tab ownership of fullscreen recording output;
+Server adds live concurrency settings, resource monitoring and UI refinements.
+Docs covers these capabilities. Core/Node/CLI/Evaluations remain `2.32.0`, and
+App Executor remains `2.24.0`, because those tracks have no changes requiring a
+release. The [package matrix](PACKAGES.md#version-update-2026-11-18--live-deployment-controls-and-resource-monitoring)
+records package-local changes and the private lockstep companions.
+
+Run `yarn sync:desktop-version` to align Tauri/Cargo with App, a fresh immutable
+Yarn install, `yarn verify:desktop-version`, `yarn check:npm-publish-versions`,
+`yarn check:pnp:fresh`, `yarn studio-server:verify:repo-structure` and the
+documentation-link check. Dependency ranges, public-family versions and the CLI
+Docker fallback stay unchanged. Schema 21 belongs to the implemented resource
+monitoring feature; this metadata update adds no migration or Helm version
+change and does not publish or deploy anything.
+
 ### Prepared release versions (2026-11-16)
 
 Review from the last version-changing commit `4a43b4745` through `80d0f48c2`

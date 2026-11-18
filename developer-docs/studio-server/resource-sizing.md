@@ -5,7 +5,7 @@ and ceiling: the compact production baseline is five application Pods plus one c
 execution maximum must fit the real DB/node/provider budgets. Local protocol
 tests are not representative-load or GKE capacity measurements.
 
-Settings → Deployment now provides [built-in CPU/RAM history](resource-monitoring.md)
+Settings → CPU and RAM monitoring provides [built-in CPU/RAM history](resource-monitoring.md)
 for reporting execution and control containers. Use its duration-weighted
 averages, approximate p95 and observed peaks alongside workload-specific
 acceptance tests. Five-second samples can miss shorter spikes; process-only

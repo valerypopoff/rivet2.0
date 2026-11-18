@@ -112,8 +112,24 @@ try {
   archived.buckets[0]!.samples[0]!.cpuMillicores = null;
   archived.buckets[0]!.samples[0]!.memoryBytes = 10_000_000;
   await store.write([archived]);
-  const summarized = (await store.history('1h', now)).instances.find((i) => i.identity.incarnation === 'archived')!;
+  const archivedHistory = await store.history('1h', now);
+  const summarized = archivedHistory.instances.find((i) => i.identity.incarnation === 'archived')!;
   assert.equal(summarized.memory.peak, 10_000_000, 'An initial gauge can be a peak without known time coverage');
+  const controlTotal = archivedHistory.pools.find((p) => p.role === 'control' && p.scope === 'container')!;
+  const mixedInterval = controlTotal.points.find((p) => p.at === minute - 120000)!;
+  assert.equal(mixedInterval.complete, false, 'The interval includes an incomplete initial observation');
+  assert.equal(mixedInterval.cpuMillicores, 250, 'Valid complete-slot averages must survive partial coverage');
+  assert.equal(mixedInterval.memoryBytes, 250 * 1024);
+  assert.equal(controlTotal.cpu.average, summarized.cpu.average, 'One-session totals can match individual statistics');
+  assert.equal(controlTotal.memory.average, summarized.memory.average);
+  const invalidOnly = make('invalid-only', [999]);
+  invalidOnly.identity.installation = 'test/invalid-only';
+  invalidOnly.buckets[0]!.samples[0]!.durationMs = 0;
+  invalidOnly.buckets[0]!.samples[0]!.cpuMillicores = null;
+  const invalidStore = new ResourceMonitoringStore(pool, invalidOnly.identity.installation);
+  await invalidStore.write([invalidOnly]);
+  const invalidHistory = await invalidStore.history('1h', now);
+  assert.ok(invalidHistory.pools[0]!.points.every((p) => p.cpuMillicores === null && p.memoryBytes === null));
   await pool.query("UPDATE resource_monitoring_minutes SET summary='{}' WHERE incarnation='archived'");
   const fromSamples = (await store.history('1h', now)).instances.find((i) => i.identity.incarnation === 'archived')!;
   for (const field of ['cpu', 'memory', 'workingSet'] as const) {

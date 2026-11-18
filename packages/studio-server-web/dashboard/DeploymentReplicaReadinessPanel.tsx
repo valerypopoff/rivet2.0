@@ -36,7 +36,7 @@ function formatAge(nowMs: number, iso: string): string {
 }
 
 function formatTierLabel(tier: RuntimeLibraryReplicaTierState['tier']): string {
-  return tier === 'endpoint' ? 'Published endpoint replicas' : 'Editor and dashboard replicas';
+  return tier === 'endpoint' ? 'Execution replicas' : 'Editor and dashboard replicas';
 }
 
 function formatReleaseShortId(releaseId: string | null): string | null {
@@ -68,9 +68,13 @@ function getReplicaTone(replica: RuntimeLibraryReplicaStatus): 'ready' | 'warnin
 }
 
 function formatReplicaSyncState(syncState: RuntimeLibraryReplicaStatus['syncState']): string {
-  return syncState === 'starting' ? 'Starting' :
-    syncState === 'syncing' ? 'Syncing' :
-      syncState === 'ready' ? 'Ready' : 'Error';
+  return syncState === 'starting'
+    ? 'Starting'
+    : syncState === 'syncing'
+      ? 'Syncing'
+      : syncState === 'ready'
+        ? 'Ready'
+        : 'Error';
 }
 
 export const DeploymentReplicaReadinessPanel: FC<DeploymentReplicaReadinessPanelProps> = ({
@@ -85,9 +89,10 @@ export const DeploymentReplicaReadinessPanel: FC<DeploymentReplicaReadinessPanel
   const renderTier = (tier: RuntimeLibraryReplicaTierState) => {
     const tone = getSummaryTone(tier);
     const isExpanded = expanded[tier.tier];
-    const summary = tier.liveReplicaCount > 0
-      ? `${tier.readyReplicaCount} / ${tier.liveReplicaCount} synchronized`
-      : 'No live replicas reported';
+    const summary =
+      tier.liveReplicaCount > 0
+        ? `${tier.readyReplicaCount} / ${tier.liveReplicaCount} synchronized`
+        : 'No live replicas reported';
 
     return (
       <section key={tier.tier} className={`deployment-status-replica-tier ${tone}`}>
@@ -122,7 +127,9 @@ export const DeploymentReplicaReadinessPanel: FC<DeploymentReplicaReadinessPanel
                       {formatReplicaSyncState(replica.syncState)}
                     </span>
                   </div>
-                  <div className="deployment-status-replica-detail">Last synchronization heartbeat: {formatAge(nowMs, replica.lastHeartbeatAt)}</div>
+                  <div className="deployment-status-replica-detail">
+                    Last synchronization heartbeat: {formatAge(nowMs, replica.lastHeartbeatAt)}
+                  </div>
                   {!replica.isReadyForActiveRelease && syncedReleaseShortId ? (
                     <div className="deployment-status-replica-detail">Synced release: {syncedReleaseShortId}</div>
                   ) : null}
@@ -144,7 +151,9 @@ export const DeploymentReplicaReadinessPanel: FC<DeploymentReplicaReadinessPanel
         <div>
           <div className="app-settings-section-title">Code runtime synchronization</div>
           <div className="app-settings-field-help">
-            The list shows replicas that reported within the last {Math.round(readiness.heartbeatTtlMs / 1_000)} seconds and synchronized the active Code-node library release. It is not a Kubernetes pod-health or autoscaling view.
+            The list shows replicas that reported within the last {Math.round(readiness.heartbeatTtlMs / 1_000)} seconds
+            and synchronized the active Code-node library release. It is not a Kubernetes pod-health or autoscaling
+            view.
           </div>
         </div>
         {totalStaleReplicaCount > 0 ? (

@@ -57,6 +57,7 @@ export interface ResourceHistoryPoint {
   activeRuns: number | null;
   runLimit: number | null;
   reporters: number;
+  /** Coverage of the whole interval. Chart averages can still be valid when only some raw slots are complete. */
   complete: boolean;
 }
 

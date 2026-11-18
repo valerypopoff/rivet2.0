@@ -210,8 +210,14 @@ test('execution policy API requires auth and a current revision, persists overri
       const initial = await get();
       assert.equal((await initial.json()).effectiveMaxActiveRunsPerPod, 32);
       assert.equal((await put(48)).status, 428);
-      for (const invalid of [0, -1, 1.5, 10001, '32', true])
-        assert.equal((await put(invalid, initial.headers.get('etag')!)).status, 400);
+      for (const invalid of [0, -1, 1.5, 10001, '32', true]) {
+        const response = await put(invalid, initial.headers.get('etag')!);
+        assert.equal(response.status, 400);
+        assert.equal(
+          (await response.json()).error,
+          'Concurrent runs per execution replica must be an integer from 1 to 10000.',
+        );
+      }
       const saved = await put(48, initial.headers.get('etag')!);
       assert.equal(saved.status, 200);
       assert.equal((await saved.json()).effectiveMaxActiveRunsPerPod, 48);

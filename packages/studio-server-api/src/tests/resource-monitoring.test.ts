@@ -137,8 +137,8 @@ test('v1 counters retain precision after long CPU lifetimes; non-container fallb
   assert.equal((await fallback.read()).workingSetBytes, null);
 });
 
-test('sampler uses real elapsed time, resets CPU baselines and bounds outage buffers and reporting', async () => {
-  let at = Date.now(),
+test('sampler uses real elapsed time, resets CPU baselines and bounds outage buffers and reporting', async (t) => {
+  let at = Math.floor(Date.now() / 60000) * 60000 + 1000,
     cpu = 1000,
     active = 3,
     mode: 'enforce' | 'observe' | 'disabled' = 'enforce',
@@ -170,15 +170,24 @@ test('sampler uses real elapsed time, resets CPU baselines and bounds outage buf
       });
     },
   });
+  t.after(() => {
+    sampler.stop();
+    finish?.();
+  });
   await sampler.sample();
-  at += 5000;
-  cpu += 5000000;
+  // An early timer can sample the same wall-clock slot twice.
+  at += 1;
+  cpu += 1000;
+  await sampler.sample();
+  at += 4999;
+  cpu += 4999000;
   await sampler.sample();
   const first = sampler.flush(true);
   await setImmediate();
   assert.equal(sampler.flush(true), first);
   assert.equal(calls, 1);
   assert.equal(sent[0]!.buckets.flatMap((b) => b.samples).at(-1)!.cpuMillicores, 1000);
+  assert.equal(sampler.diagnostics().droppedSamples, 0, 'A duplicate timer tick is not a lost observation');
   assert.equal(sent[0]!.buckets.flatMap((b) => b.samples).at(-1)!.runLimit, 32);
   at += 5000;
   cpu = 1;

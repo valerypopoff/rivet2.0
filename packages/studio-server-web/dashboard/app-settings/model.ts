@@ -22,6 +22,7 @@ export type AppSettingsTab =
   | 'vm-migration'
   | 'local-upgrade'
   | 'deployment-status'
+  | 'resource-monitoring'
   | 'node-executor-proxy'
   | 'environment-variables'
   | 'run-recordings'

@@ -2,6 +2,28 @@
 
 > Detailed package-by-package reference for the current monorepo.
 
+## Version update: 2026-11-18 — live deployment controls and resource monitoring
+
+Every track's last actual version-changing commit is `3105c6eaf`. This review
+includes committed changes through `bef3bd9c6` and the pending settings and
+monitoring fixes.
+
+| Packages | Version | Changes since the last bump |
+| --- | --- | --- |
+| App | `2.38.0` → `2.38.1` | Compatible fixes keep fullscreen node outputs owned by their project/recording tab and prevent stale navigation or close callbacks from affecting another tab. The desktop audit-policy renewal adds no app feature. |
+| All five Studio Server packages | `1.40.0` → `1.41.0` | Adds live published-execution concurrency and built-in CPU/RAM monitoring; includes recording/statistics layout improvements, settings navigation and terminology, scoped monitoring charts/cards, the resource-view switcher and CPU baseline fixes. API, shared and web change locally; bootstrap and executor follow product lockstep. |
+| Docs | `2.30.0` → `2.31.0` | Adds guidance for live concurrency, resource monitoring and the revised recording/statistics controls. |
+| Core, Node, CLI, Evaluations | Remain `2.32.0` | No package-local changes or public-family dependency changes since the last bump. |
+| App Executor | Remains `2.24.0` | No local implementation changes or new Core/Node release to bundle. |
+
+App is a patch release; the new Server capabilities and documentation warrant
+minor releases. Desktop Tauri/Cargo metadata follows App. Existing `workspace:^`
+dependencies, public-family versions, CLI Docker fallback and Yarn resolutions
+remain unchanged. Schema 21 is part of the implemented monitoring feature;
+versioning itself adds no migration or Helm metadata change. These versions are
+prepared locally, not published or deployed. See
+[release preparation](BUILD-AND-CI.md#prepared-release-versions-2026-11-18).
+
 ## Version update: 2026-11-16 — Data Bus ordering and recording statistics
 
 The last actual version-changing commit for every package is `4a43b4745`.

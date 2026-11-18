@@ -53,11 +53,13 @@ export function createResourceSampler(options: {
       if (stopped) return;
       const tick = monotonic(),
         at = now();
-      if (Math.floor(at / sampleMs) <= Math.floor(lastAt / sampleMs)) {
+      if (at < lastAt) {
         previous = undefined;
         droppedSamples++;
         return;
       }
+      // An early timer can revisit the same slot; keep the last accepted CPU baseline.
+      if (Math.floor(at / sampleMs) === Math.floor(lastAt / sampleMs)) return;
       lastAt = at;
       const elapsed = previous ? tick - previous.monotonic : 0;
       const continuous = elapsed > 0 && elapsed <= sampleMs * 2.5;

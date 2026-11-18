@@ -6,10 +6,15 @@ this feature. The requirements below are retained as the implementation contract
 
 ## Goal and scope
 
-Add **Concurrent runs per execution Pod** to **Settings -> Deployment**. Saving
+Add **Concurrent runs per execution replica** to **Settings -> Deployment**. Saving
 changes the admission limit on existing execution processes without restarting
 them, changing Helm values or deploying images. The feature itself needs one
 normal application release before those live adjustments become available.
+
+The UI calls each running execution-plane API instance an **execution replica**.
+Supported Kubernetes deployments run one such instance per execution Pod; the
+internal Code workers are not additional replicas. API/configuration field names
+such as `maxActiveRunsPerPod` stay unchanged.
 
 At the latest verified rollout on November 17, 2026, production had two ready
 execution workers with a 32-run limit and 2 CPU / 4 GiB requests each; retained
@@ -212,12 +217,13 @@ Use the existing settings section, number-input, Save/Revert feedback and
 `useSettingsFormResource` patterns in `DeploymentStatusSettingsTab.tsx`. Keep the
 existing topology/library information intact.
 
-Show **Concurrent runs per execution Pod**, its effective value, whether it uses
-the deployment default or a custom value, and an explicit **Use deployment default**
-action. Suggested explanatory text:
+Show **Concurrent runs per execution replica** and its effective numeric value after
+deployment topology and Code runtime synchronization. The form saves explicit
+values without a default/custom status line or a reset-to-deployment-default
+button. The API's nullable reset contract remains supported. Explanatory text:
 
 > Applies to new published endpoint, web-app and scheduled runs on each execution
-> Pod. Running work finishes normally. Changes reach workers automatically.
+> replica. Running work finishes normally. Changes reach replicas automatically.
 
 Save feedback means **Saved**, not **Applied to every Pod**. The current library
 registry cannot prove the latter. Do not add a new per-worker registry or a
@@ -242,7 +248,7 @@ Use a compact set of behavior tests rather than duplicate transport scaffolds.
 | Real PostgreSQL multi-process test | Two independent workers receive a saved change; lost notification converges through polling; restart reads saved policy before readiness; listener disconnect/recovery; database outage never cancels active work or restores a stale default.                 |
 | Controller tests                   | Mixed valid revisions permit conservative growth and block new shrink; convergence restarts stabilization; active above limit is valid; unknown/legacy mixed limits still fail; paired handoff and in-flight retirement preserve identity and capacity guards. |
 | Local rollout fixtures             | Save, then upgrade; save during handoff; runtime override of one; staging four/production 32 remain independent; immutable bootstrap drift still fails; old/new worker compatibility and rollback preserve data.                                               |
-| Playwright                         | Open Deployment, edit/save/reset/reopen, invalid input, stale save, failed save/readback and background refresh while typing. No modal disappearance or focus loss.                                                                                            |
+| Playwright                         | Open Deployment, edit/save/revert/reopen, invalid input, stale save, failed save/readback and background refresh while typing. Switching to the separate monitoring tab preserves unsaved concurrency input. No modal disappearance or focus loss.             |
 | Performance                        | No per-admission persistence/refresh calls; bounded counters/subscriptions; matched warm endpoint and published web-app fixtures at tiny and larger request sizes, recording p50/p95/p99 and errors.                                                           |
 
 Treat no extra execution-path I/O as a hard architectural condition. Use paired
@@ -347,12 +353,12 @@ Final Windows/Node 22 measurements used 1,200 measured requests per mode/case,
 150 warmups, and eight alternating batches. All 9,600 measured requests succeeded.
 Values below are milliseconds (`p50 / p95 / p99`):
 
-| Route and input | Fixed admission | Live policy |
-| --- | --- | --- |
-| Endpoint, 32 bytes | 1.512 / 2.460 / 3.005 | 1.406 / 2.258 / 2.864 |
-| Web-app action, 32 bytes | 2.456 / 3.445 / 4.305 | 2.232 / 3.206 / 4.018 |
-| Endpoint, 64 KiB | 1.630 / 2.734 / 15.109 | 1.627 / 2.730 / 11.358 |
-| Web-app action, 64 KiB | 2.896 / 5.303 / 25.620 | 2.998 / 5.755 / 23.621 |
+| Route and input          | Fixed admission        | Live policy            |
+| ------------------------ | ---------------------- | ---------------------- |
+| Endpoint, 32 bytes       | 1.512 / 2.460 / 3.005  | 1.406 / 2.258 / 2.864  |
+| Web-app action, 32 bytes | 2.456 / 3.445 / 4.305  | 2.232 / 3.206 / 4.018  |
+| Endpoint, 64 KiB         | 1.630 / 2.734 / 15.109 | 1.627 / 2.730 / 11.358 |
+| Web-app action, 64 KiB   | 2.896 / 5.303 / 25.620 | 2.998 / 5.755 / 23.621 |
 
 These are local measurements, not a claim of faster execution. The larger
 web-app case has a higher aggregate p95 and lower p99, with garbage-collection

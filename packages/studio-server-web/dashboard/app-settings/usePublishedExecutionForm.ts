@@ -26,13 +26,5 @@ export function usePublishedExecutionForm(enabled: boolean) {
     valid,
     controlsDisabled: !resource.loaded || resource.loading || resource.saving || !resource.form.settings?.editable,
     save: () => (valid ? resource.save({ maxActiveRunsPerPod: resource.form.useDefault ? null : value }) : undefined),
-    useDefault() {
-      resource.setForm((form) => ({
-        ...form,
-        useDefault: true,
-        value: String(form.settings?.deploymentDefault ?? ''),
-      }));
-      resource.clearFeedback();
-    },
   };
 }

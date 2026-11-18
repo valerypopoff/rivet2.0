@@ -35,7 +35,7 @@ for (const session of [
     await waitForDashboardReady(page);
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
     const modal = page.getByTestId('app-settings-modal');
-    await modal.getByRole('tab', { name: 'Server UI access' }).click();
+    await modal.getByRole('tab', { name: 'Rivet Server UI access' }).click();
     const panel = modal.locator('.app-settings-server-ui-access-panel');
     await expect(panel.getByText('Checking sign-in status…')).toHaveCount(0);
     await expect(panel.getByLabel('Server UI admin emails')).toBeEnabled();
@@ -891,11 +891,8 @@ test.describe('Workflow library layout', () => {
     await expect(appSettingsModal.getByLabel('Environment variable 1 value')).toHaveAttribute('type', 'text');
     await expect(appSettingsModal.getByLabel('Environment variable 1 value')).toHaveValue('replacement-value');
 
-    await appSettingsModal.getByRole('tab', { name: 'Workflow endpoints' }).click();
-    await expect(appSettingsModal.getByRole('tab', { name: 'Workflow endpoints' })).toHaveAttribute(
-      'aria-selected',
-      'true',
-    );
+    await appSettingsModal.getByRole('tab', { name: 'Endpoints' }).click();
+    await expect(appSettingsModal.getByRole('tab', { name: 'Endpoints' })).toHaveAttribute('aria-selected', 'true');
     await expect(
       appSettingsModal.locator('.app-settings-workflow-endpoints-panel .app-settings-section-title'),
     ).toContainText(['Routes', 'Access control', 'HTTP request timeout']);
@@ -1160,8 +1157,8 @@ test.describe('Workflow library layout', () => {
     await appSettingsActions.getByRole('button', { name: 'Save' }).click();
     await expect(appSettingsActions.locator('.project-settings-success')).toHaveText('Saved.');
 
-    await appSettingsModal.getByRole('tab', { name: 'Server UI access' }).click();
-    await expect(appSettingsModal.getByRole('tab', { name: 'Server UI access' })).toHaveAttribute(
+    await appSettingsModal.getByRole('tab', { name: 'Rivet Server UI access' }).click();
+    await expect(appSettingsModal.getByRole('tab', { name: 'Rivet Server UI access' })).toHaveAttribute(
       'aria-selected',
       'true',
     );

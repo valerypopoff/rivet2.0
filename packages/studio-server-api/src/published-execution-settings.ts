@@ -25,7 +25,7 @@ type StoredPolicy = {
 
 function limit(value: unknown): number {
   if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 1 || value > 10_000) {
-    throw badRequest('Concurrent runs per execution Pod must be an integer from 1 to 10000.');
+    throw badRequest('Concurrent runs per execution replica must be an integer from 1 to 10000.');
   }
   return value;
 }

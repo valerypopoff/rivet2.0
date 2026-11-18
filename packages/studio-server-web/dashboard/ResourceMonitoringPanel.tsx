@@ -4,11 +4,16 @@ import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YA
 import type {
   ResourceHistory,
   ResourceHistoryPoint,
+  ResourceIdentity,
   ResourcePeriod,
+  ResourcePoolHistory,
+  ResourceRole,
+  ResourceSource,
   ResourceStatistics,
 } from '../../studio-server-shared/resource-monitoring-types';
 import { RIVET_API_BASE_URL } from '../../studio-server-shared/hosted-env';
 import { parseJsonResponse } from './apiRequest';
+import { SegmentedControl, SegmentedControlButton } from './SegmentedControl';
 import './ResourceMonitoringPanel.css';
 
 const cpu = (value: number | null | undefined) =>
@@ -19,11 +24,20 @@ const ram = (value: number | null | undefined) =>
     : value >= 1024 ** 3
       ? `${(value / 1024 ** 3).toFixed(2)} GiB`
       : `${(value / 1024 ** 2).toFixed(1)} MiB`;
-const allocation = (value: number | null, format: typeof cpu) => (value === null ? 'Not configured' : format(value));
+const allocation = (value: number | null, format: typeof cpu) => (value === null ? 'Not reported' : format(value));
 const when = (value: number) => new Date(value).toLocaleString();
 const elapsed = (value: number) => `${Math.round(value / 60000).toLocaleString()} min`;
-const scope = (source: string) =>
-  source === 'node-process' ? 'Process only (Node RSS)' : 'Container (charged memory)';
+const scope = (source: ResourceSource) => (source === 'node-process' ? 'Server process only (RSS)' : 'Whole container');
+const roleLabel: Record<ResourceRole, string> = {
+  execution: 'Execution replica',
+  control: 'Editor and dashboard replica',
+  combined: 'Combined server',
+};
+const viewKey = (view: Pick<ResourcePoolHistory, 'scope' | 'role'>) => `pool:${view.scope}:${view.role}`;
+const sessionView = (identity: ResourceIdentity): Pick<ResourcePoolHistory, 'scope' | 'role'> => ({
+  scope: identity.source === 'node-process' ? 'process' : 'container',
+  role: identity.role === 'control' ? 'control' : 'execution',
+});
 
 function Statistics({
   label,
@@ -43,7 +57,7 @@ function Statistics({
       <span>Approx. p95 {format(value.p95)}</span>
       <span>Highest observed {format(value.peak)}</span>
       <small>
-        Coverage: {elapsed(value.coverageMs)} / {elapsed(periodMs)}
+        Sampled time: {elapsed(value.coverageMs)} / {elapsed(periodMs)}
       </small>
     </div>
   );
@@ -63,10 +77,7 @@ function ResourceChart({
     <div className="resource-chart" aria-label={title}>
       <h4>{title}</h4>
       <ResponsiveContainer width="100%" height={180}>
-        <LineChart
-          data={points.map((p) => (p.complete ? p : { ...p, [metric]: null }))}
-          margin={{ top: 5, right: 20, bottom: 5, left: 12 }}
-        >
+        <LineChart data={points} margin={{ top: 5, right: 20, bottom: 5, left: 12 }}>
           <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color, #444)" />
           <XAxis
             dataKey="at"
@@ -93,7 +104,7 @@ function ResourceChart({
             dataKey={metric}
             name={title}
             stroke={metric === 'cpuMillicores' ? '#64b5f6' : '#c5a0ff'}
-            dot={false}
+            dot={points.filter((p) => p[metric] != null).length === 1 ? { r: 3 } : false}
             isAnimationActive={false}
             connectNulls={false}
           />
@@ -156,20 +167,19 @@ export function ResourceMonitoringPanel() {
     };
   }, [period]);
 
-  const pool = data?.pools.find((p) => `pool:${p.scope}:${p.role}` === selected);
-  const instance = data?.instances.find((i) => i.identity.incarnation === selected);
-  const effective = pool ?? instance ?? data?.pools[0] ?? data?.instances[0];
-  const chosen =
-    effective && 'identity' in effective
-      ? effective.identity.incarnation
-      : effective
-        ? `pool:${effective.scope}:${effective.role}`
-        : '';
-  const processOnly =
-    effective &&
-    ('identity' in effective ? effective.identity.source === 'node-process' : effective.scope === 'process');
+  const views = new Map(
+    [...(data?.pools ?? []), ...(data?.instances.map((i) => sessionView(i.identity)) ?? [])].map((view) => [
+      viewKey(view),
+      view,
+    ]),
+  );
+  const chosen = views.has(selected) ? selected : views.keys().next().value ?? '';
+  const effective = data?.pools.find((p) => viewKey(p) === chosen);
+  const processOnly = views.get(chosen)?.scope === 'process';
   const latest = effective?.latest;
-  const latestComplete = latest && (!('complete' in latest) || latest.complete);
+  const latestComplete = latest?.complete;
+  const visibleInstances = data?.instances.filter((i) => viewKey(sessionView(i.identity)) === chosen) ?? [];
+  const recentSessionCount = data ? data.instances.filter((i) => now - i.lastSampleAt <= data.staleAfterMs).length : 0;
   return (
     <section
       className="app-settings-section deployment-status-section resource-monitoring"
@@ -187,7 +197,7 @@ export function ResourceMonitoringPanel() {
       </div>
       <p className="app-settings-field-help">
         Collected in the background every 5 seconds. History is retained for 7 days. Peaks are the highest observed
-        samples and can miss shorter spikes.
+        samples and can miss shorter spikes. CPU is shown in millicores: 1000m = 1 CPU core.
       </p>
       {error || data?.error ? (
         <div className="project-settings-error" role="status">
@@ -199,48 +209,45 @@ export function ResourceMonitoringPanel() {
       {data && (
         <>
           <p className="app-settings-field-help">
-            {data.omittedInstances > 0 ? 'At least ' : ''}
-            {data.instances.filter((i) => now - i.lastSampleAt <= data.staleAfterMs).length} currently reporting
-            instances · {data.instances.length} histories in this period. Reporting counts are not Kubernetes Pod
-            counts.
+            Across all views: {data.omittedInstances > 0 ? 'At least ' : ''}
+            {recentSessionCount} monitoring session{recentSessionCount === 1 ? '' : 's'} reported within the last{' '}
+            {Math.round(data.staleAfterMs / 1000)} seconds · {data.instances.length} session
+            {data.instances.length === 1 ? '' : 's'} available for this period.
+          </p>
+          <p className="app-settings-field-help">
+            Each start of a monitored server process creates a new monitoring session. Data covers execution and
+            editor/dashboard replicas. Session counts are not live replica or Kubernetes Pod counts.
           </p>
           {data.omittedInstances > 0 ? (
             <p role="status">
-              At least {data.omittedInstances} additional instance histories are outside this bounded view. Pool totals
-              cover the listed histories.
+              At least {data.omittedInstances} additional monitoring{' '}
+              {data.omittedInstances === 1 ? 'session is' : 'sessions are'} not shown. Totals cover only the sessions
+              included in this view.
             </p>
           ) : null}
           {!data.instances.length ? <p>No resource samples have arrived yet.</p> : null}
-          {!!effective && (
+          {views.size > 0 ? (
+            <div className="app-settings-field">
+              <span className="app-settings-field-label">Resource view</span>
+              <SegmentedControl className="resource-views" label="Resource view">
+                {[...views].map(([key, view]) => (
+                  <SegmentedControlButton key={key} selected={chosen === key} onClick={() => setSelected(key)}>
+                    {view.role === 'execution' ? 'Execution replicas' : 'Editor and dashboard replicas'}
+                    {view.scope === 'process' ? ' — server process only (RSS)' : ''}
+                  </SegmentedControlButton>
+                ))}
+              </SegmentedControl>
+            </div>
+          ) : null}
+          {effective ? (
             <>
-              <label className="app-settings-field">
-                <span className="app-settings-field-label">History</span>
-                <select
-                  value={chosen}
-                  onChange={(event) => setSelected(event.currentTarget.value)}
-                  aria-label="Resource history instance"
-                >
-                  {data.pools.map((p) => (
-                    <option key={`pool:${p.scope}:${p.role}`} value={`pool:${p.scope}:${p.role}`}>
-                      {p.role === 'execution' ? 'Execution' : 'Control'} pool —{' '}
-                      {p.scope === 'container' ? 'container totals' : 'process-only totals'} (
-                      {p.latest ? `${p.latest.reporters} in latest observation` : 'no observations'})
-                    </option>
-                  ))}
-                  {data.instances.map((i) => (
-                    <option key={i.identity.incarnation} value={i.identity.incarnation}>
-                      {i.identity.name} · {i.identity.role} · {scope(i.identity.source)} ·{' '}
-                      {i.identity.incarnation.slice(0, 8)}
-                    </option>
-                  ))}
-                </select>
-              </label>
               {latest ? (
                 <p className="app-settings-field-help">
-                  Latest observation: {when(latest.at)} ·{' '}
-                  {now - latest.at > data.staleAfterMs ? 'Stale / unavailable' : 'Reporting'}
+                  Latest sample: {when(latest.at)} · {latest.reporters} session{latest.reporters === 1 ? '' : 's'} ·{' '}
+                  {now - latest.at > data.staleAfterMs ? 'No recent samples' : 'Recent samples'}
                   <br />
-                  CPU {cpu(latestComplete ? latest.cpuMillicores : null)} · {processOnly ? 'Node RSS' : 'Container RAM'}{' '}
+                  CPU {cpu(latestComplete ? latest.cpuMillicores : null)} ·{' '}
+                  {processOnly ? 'Server process RAM (RSS)' : 'Container RAM'}{' '}
                   {ram(latestComplete ? latest.memoryBytes : null)} · Active published runs{' '}
                   {latest.activeRuns ?? 'Unavailable'} / {latest.runLimit ?? 'Unavailable'}
                   {!latestComplete ? ' · Incomplete reporting coverage' : null}
@@ -249,40 +256,50 @@ export function ResourceMonitoringPanel() {
               <div className="resource-stats">
                 <Statistics label="CPU" value={effective.cpu} format={cpu} periodMs={data.to - data.from} />
                 <Statistics
-                  label={processOnly ? 'Node RSS' : 'Container RAM'}
+                  label={processOnly ? 'Server process RAM (RSS)' : 'Container RAM'}
                   value={effective.memory}
                   format={ram}
                   periodMs={data.to - data.from}
                 />
               </div>
               <p className="app-settings-field-help">
-                Approximate p95 uses duration-weighted distributions (up to 5% bucket rounding). Gaps remain gaps. Pool
-                peaks use aligned reporting samples. Chart points are{' '}
+                Approximate p95 is the usage level that measurements stayed at or below for about 95% of sampled time.
+                Gaps remain gaps. Totals use samples taken at the same time. Chart points are{' '}
                 {data.period === '1h' ? '1-minute' : data.period === '24h' ? '5-minute' : '30-minute'} averages; highest
-                observed samples are shown above.
+                observed samples are shown above. Partial intervals use only complete samples.
+              </p>
+              <p className="app-settings-field-help">
+                Totals use samples from the same role and measurement scope. Session details below cover this resource
+                view.
+              </p>
+              <p className="app-settings-field-help">
+                Container RAM includes child processes and filesystem cache. Server process RAM (RSS, or resident
+                memory) excludes child processes.
               </p>
               <ResourceChart points={effective.points} metric="cpuMillicores" title="CPU usage (millicores)" />
               <ResourceChart
                 points={effective.points}
                 metric="memoryBytes"
-                title={processOnly ? 'Node process RSS' : 'Container charged memory'}
+                title={processOnly ? 'Server process RAM (RSS)' : 'Container RAM usage'}
               />
             </>
-          )}
+          ) : views.size > 0 ? (
+            <p role="status">Historical totals are not available yet. Latest session readings are shown below.</p>
+          ) : null}
           <div className="resource-instances">
-            {data.instances.map((i) => (
+            {visibleInstances.map((i) => (
               <article className="resource-instance" key={i.identity.incarnation}>
                 <div className="resource-header">
                   <strong>
-                    {i.identity.name} · {i.identity.role}
+                    {i.identity.name} · {roleLabel[i.identity.role]}
                   </strong>
                   <span className={now - i.lastSampleAt > data.staleAfterMs ? 'resource-stale' : 'resource-fresh'}>
-                    {now - i.lastSampleAt > data.staleAfterMs ? 'Stale / unavailable' : 'Reporting'}
+                    {now - i.lastSampleAt > data.staleAfterMs ? 'No recent samples' : 'Recent samples'}
                   </span>
                 </div>
                 <small>
-                  {scope(i.identity.source)} · {i.identity.source} · {i.identity.incarnation.slice(0, 8)} · Last sample{' '}
-                  {when(i.lastSampleAt)}
+                  {scope(i.identity.source)} · {i.identity.source} · Monitoring session{' '}
+                  {i.identity.incarnation.slice(0, 8)} · Last sample {when(i.lastSampleAt)}
                 </small>
                 <dl className="resource-values">
                   <div>
@@ -306,7 +323,7 @@ export function ResourceMonitoringPanel() {
                     </dd>
                   </div>
                   <div>
-                    <dt>Active published runs / limit</dt>
+                    <dt>Active published runs / replica limit</dt>
                     <dd>
                       {i.latest.activeRuns === null
                         ? 'Unavailable'
@@ -321,8 +338,12 @@ export function ResourceMonitoringPanel() {
                   ) : null}
                   {i.latest.lifetimeMemoryPeakBytes !== null ? (
                     <div>
-                      <dt>Cgroup lifetime memory high-water</dt>
-                      <dd>{ram(i.latest.lifetimeMemoryPeakBytes)}</dd>
+                      <dt>Container lifetime RAM peak</dt>
+                      <dd>
+                        {ram(i.latest.lifetimeMemoryPeakBytes)}
+                        <br />
+                        <small>Across the container lifetime, not just the selected period.</small>
+                      </dd>
                     </div>
                   ) : null}
                 </dl>
@@ -333,8 +354,8 @@ export function ResourceMonitoringPanel() {
             ))}
           </div>
           <p className="app-settings-field-help">
-            Restart and OOM counts are unavailable without authoritative platform data. Process-only measurements
-            exclude child executors. Monitoring does not change reservations or concurrency.
+            Restart counts and out-of-memory (OOM) kills are unavailable without platform data. Monitoring does not
+            change resource requests, limits or execution concurrency.
           </p>
         </>
       )}

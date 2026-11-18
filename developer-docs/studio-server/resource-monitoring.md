@@ -1,14 +1,19 @@
 # Built-in resource monitoring
 
-Implemented in Settings → Deployment. Cloud deployment is not part of this work.
+Implemented in Settings → CPU and RAM monitoring. Cloud deployment is not part of this work.
 
 ## Contract
 
-Settings → Deployment observes execution workers and control backends without
+Settings → CPU and RAM monitoring observes execution and editor/dashboard replicas without
 changing resource reservations, replica counts or admission limits. Supported
 launchers enable one API-owned sampler per container. Child executors do not
 start another sampler. PostgreSQL stores seven days of minute buckets; MinIO,
 external agents, Docker socket access and cloud credentials are not involved.
+
+This read-only tab sits immediately after Deployment. It fetches history only
+while selected and cancels its browser polling and pending request when the user
+leaves it. It does not depend on loading deployment topology or concurrency
+settings. Background collection continues when the tab or settings modal is closed.
 
 Container counters come from the process's own cgroup v1/v2 membership and mount
 mapping. Bare processes and containers without readable counters use explicitly
@@ -25,6 +30,42 @@ observations, duration-weighted sums and mergeable distributions. Period p95 is
 derived from the merged distribution, never an average of percentiles. Pool
 peaks use contemporaneous samples, never sums of individual historical maxima.
 Pool totals describe reporting instances, not an authoritative Pod inventory.
+
+### UI terminology
+
+- A **monitoring session** is one monitored server-process lifetime, identified
+  internally by its incarnation UUID. A process restart creates a new session
+  even if its replica/Pod name is reused; earlier sessions remain in history.
+- The summary counts sessions with samples within the freshness threshold and
+  histories available across all views for the requested period. It does not claim current liveness or
+  a complete replica/Pod inventory. Omitted sessions remain an explicit warning.
+- **Execution replicas** and **Editor and dashboard replicas** identify the
+  roles represented by totals. **Resource view** uses the shared segmented
+  switcher with one button per role and measurement scope, normally these two
+  choices. It supports keyboard activation, indicates the selected button and
+  wraps within narrow panels. Individual sessions and
+  restarts do not add duplicate buttons; their detail cards appear
+  below the selected role's charts and statistics. Container and process-only
+  scopes remain separate; process-only choices explicitly say **Server process
+  only (RSS)**. Combined servers belong to execution totals, matching the history
+  query, and remain labelled as combined servers on their detail cards.
+  The latest total identifies how many sessions contributed to that observation.
+  If live session readings have arrived before historical totals are available,
+  the group remains selectable with its detail cards and an explicit status;
+  the UI does not invent aggregate statistics or chart values. A selection that
+  disappears after a period change falls back to an available group.
+- Missing requests/limits say **Not reported**, not **Not configured**. The
+  telemetry schema cannot distinguish an unset allocation from missing metadata.
+  Older observations say **No recent samples** while their history remains usable.
+- **Container RAM usage** is cgroup charged memory, including child processes
+  and filesystem cache. **Server process RAM (RSS)** is resident memory for the
+  reporting process and excludes its children. **Container lifetime RAM peak**
+  is explicitly separate from the selected period's highest observed sample.
+- CPU help defines `1000m = 1 CPU core`. Approximate p95 is explained in terms
+  of sampled time; its duration weighting and histogram approximation are unchanged.
+
+Presentation labels do not alter report identities, retention, statistics, API
+field names or workflow execution behavior.
 
 ## Automatic startup and ownership
 
@@ -61,6 +102,9 @@ reservations. A readable kernel quota/limit may supply a limit, never a request.
 
 - Sample on shared five-second wall-clock boundaries, with monotonic elapsed time
   for CPU. Missed ticks do not queue. At most one sample per five-second slot.
+  Redundant ticks in the same slot leave the last accepted CPU baseline intact
+  and do not count as dropped observations. Backward wall-clock movement and read
+  failures still invalidate the baseline.
 - Report approximately every 30 seconds with one request in flight, a five-second
   HTTP deadline and failure backoff capped at two minutes. Keep at most six minute
   buckets per collector; evictions increment a dropped-observation count.
@@ -99,11 +143,18 @@ reservations. A readable kernel quota/limit may supply a limit, never a request.
 Charts separate container totals from process-only totals, and control from
 execution pools. Chart averages use 1-minute / 5-minute / 30-minute bins for
 1h / 24h / 7d; period statistics retain the individual observed peaks. Missing
-chart intervals are null. Pool statistics require all
+chart intervals are null. A lone numeric chart point is drawn as a dot. Pool statistics require all
 known participating incarnations in the same slot, sample timestamps within one
 second, and normal 4.5–5.5 second intervals. Partial slots remain incomplete;
 independent historical maxima are never summed. A reporting count is not a
 desired/ready Pod count. More than 64 histories can require a narrower time range.
+
+Pool chart bins average only complete raw slots. A bin's `complete: false` means
+some slots were incomplete, not that its numeric averages are invalid. The UI
+plots those valid averages and preserves null gaps when no complete slot exists.
+The latest pool observation is a raw slot: its incomplete CPU/RAM totals remain
+unavailable. Neither chart rendering nor same-slot timer handling relaxes the
+membership, timestamp or interval checks on raw pool observations.
 
 Current values include their last sample time; after 90 seconds they are stale.
 The browser refreshes every 30 seconds and aborts a read after ten seconds;

@@ -165,7 +165,7 @@ archives; it is not a general PostgreSQL/S3 backup restore.
 Environment variables entered in Rivet's Settings remain supported and are
 restored from compatible legacy backups.
 
-In **Settings → Deployment**, **Concurrent runs per execution Pod** controls how
+In **Settings → Deployment**, **Concurrent runs per execution replica** controls how
 many published endpoint, web-app and scheduled runs each execution worker can
 accept. Save an integer from 1 to 10,000; workers pick it up automatically without
 a restart. Running work finishes normally when you lower it. While full, workers
@@ -173,10 +173,18 @@ use the usual overload response. This changes concurrency, not CPU, memory or th
 number of workers, so a higher number does not guarantee faster processing.
 
 The setting persists through upgrades and is separate for each installation.
-**Use deployment default**, then **Save**, restores the installed default. **Saved**
-confirms the setting was stored; synchronization across workers can take a few
+**Saved** confirms the setting was stored; synchronization across workers can take a few
 seconds and longer during an outage. This control is available only on supported
 replicated deployments with enforced admission.
+
+**Settings → CPU and RAM monitoring** shows background resource observations
+for execution and editor/dashboard replicas. Use the **Resource view** switcher
+to choose a role and the period buttons to inspect up to seven days of history.
+Charts show CPU and RAM usage; detail cards show the selected role's monitoring
+sessions and any reported reservations or limits. A server-process restart starts
+a new session, so session counts are not live replica or Kubernetes Pod counts.
+Process-only RSS readings are labelled separately from whole-container memory.
+Monitoring does not change resources or execution concurrency.
 
 ### Move an existing installation
 

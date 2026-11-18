@@ -30,13 +30,16 @@
 .resource-monitoring .resource-chart h4 {
   margin: 0 0 8px;
 }
-.resource-monitoring select {
-  width: 100%;
-  padding: 8px;
-  background: var(--background-color, #24282f);
-  color: inherit;
-  border: 1px solid var(--border-color, #555);
-  border-radius: 6px;
+.resource-monitoring .resource-views {
+  display: flex;
+  flex-wrap: wrap;
+  width: fit-content;
+}
+.resource-monitoring .resource-views .segmented-control-button {
+  height: auto;
+  min-height: 28px;
+  line-height: 1.4;
+  white-space: normal;
 }
 .resource-monitoring .resource-instances {
   display: flex;
