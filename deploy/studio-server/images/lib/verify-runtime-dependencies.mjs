@@ -67,6 +67,11 @@ try {
   assert.ok(managers.length);
   for (const manager of managers) {
     assert.ok(['npm', 'pnpm'].includes(manager));
+    const modules = `/usr/local/lib/node_modules/${manager}/${manager === 'pnpm' ? 'dist/' : ''}node_modules`;
+    const gyp = createRequire(path.join(modules, 'node-gyp/package.json'));
+    assert.equal(typeof gyp('./lib/build.js'), 'function', 'Linux native builds must load without Windows globs');
+    for (const name of ['tinyglobby', 'picomatch'])
+      assert.throws(() => gyp.resolve(name), { code: 'MODULE_NOT_FOUND' }, 'Omit the entire unused Windows parser');
     const project = path.join(directory, manager);
     await fs.mkdir(project);
     await fs.writeFile(path.join(project, 'package.json'), '{"private":true}');

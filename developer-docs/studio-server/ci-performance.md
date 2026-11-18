@@ -48,6 +48,9 @@ copies, including workspace-local nested modules. Builders and managed library
 releases remain intact; see [container policy](container-security.md#runtime-glob-packages-november-18-2026).
 The main-only qualification actor applies the same omission after compilation;
 its prepared probes and Playwright runner are covered by the dependency-scope gate.
+Inventory global npm/pnpm bundles too: the workspace lock does not describe them.
+Their Linux images omit only the hash-reviewed Windows node-gyp discovery parser,
+while final-image installation/native-build probes preserve Linux functionality.
 Critical, other high-severity and new direct-consumer
 findings remain blocking. Re-review when dependency ownership changes and remove
 this exception after validating an upstream fix; never automatically extend it.
