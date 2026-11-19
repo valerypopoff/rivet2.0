@@ -621,14 +621,10 @@ test('release manifest CLI binds and rechecks the production predecessor before 
   }
 });
 
-test('production deployment verifies a clean manifest source checkout before rendering values', () => {
+test('production deployment selects the release before preparing secrets or local services', () => {
   const deployer = fs.readFileSync(
     path.join(rootDir, 'deploy', 'studio-server', 'scripts', 'deploy-kubernetes-release.mjs'),
     'utf8',
-  );
-  assert.match(
-    deployer,
-    /await verifyCheckout\(adoptionCertificate \?\? manifest\);\s+await verifyClean\(\);\s+assertReleaseManifestMatchesCurrentChart\(manifest, rootDir\);/,
   );
   const selectionOffset = deployer.search(/await resolveDeploymentRelease\s*\(\s*options,\s*artifactsDir,?\s*\)/u);
   assert.ok(selectionOffset >= 0, 'The deployment entry point must resolve its release before mutation');
@@ -999,6 +995,11 @@ test('automatic deployment selection equals an explicit release pin and retains 
 test('release selection rejects untrusted releases and checkout drift before returning deployable values', async () => {
   const directory = fs.mkdtempSync(path.join(rootDir, 'artifacts', 'release-selection-rejected-'));
   try {
+    const driftErrors = {
+      source: /does not match release manifest source/,
+      chart: /does not match release manifest chart/,
+      dirty: /Tracked checkout is dirty/,
+    };
     for (const scenario of ['candidate', 'malformed', 'source', 'chart', 'dirty', 'missing', 'auth', 'network']) {
       const release = scenario === 'candidate' ? candidate() : promoted();
       if (scenario === 'chart') release.chart.contentDigest = digest('e');
@@ -1019,6 +1020,7 @@ test('release selection rejects untrusted releases and checkout drift before ret
             if (scenario === 'dirty') throw new Error('Tracked checkout is dirty');
           },
         }),
+        driftErrors[scenario],
       );
       assert.deepEqual(fs.readdirSync(output), [], 'No validated deployment artifacts or temporary extraction remain');
       if (pullFailures[scenario]) assert.deepEqual(docker.calls, [['pull', PRODUCTION_RELEASE_MANIFEST_REFERENCE]]);
