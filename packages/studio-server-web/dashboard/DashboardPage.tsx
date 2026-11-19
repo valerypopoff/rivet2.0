@@ -102,7 +102,8 @@ export const DashboardPage: FC = () => {
   const [openedProjectPath, setOpenedProjectPath] = useState('');
   const [activeWorkflowProjectPath, setActiveWorkflowProjectPath] = useState('');
   const [projectUnsavedChangesByPath, setProjectUnsavedChangesByPath] = useState<Record<string, boolean>>({});
-  const [dirtyProjectIds, setDirtyProjectIds] = useState<string[]>([]);
+  const dirtyProjectIds = useRef<readonly string[]>([]);
+  const getDirtyProjectIds = useCallback(() => dirtyProjectIds.current, []);
   const [editorReady, setEditorReady] = useState(false);
   const [editorInitializationFailed, setEditorInitializationFailed] = useState(false);
   const [openProjectCount, setOpenProjectCount] = useState(0);
@@ -576,13 +577,13 @@ export const DashboardPage: FC = () => {
       });
     },
     onEditableDirtyProjects: (id, projectIds) => {
-      if (id === editorInstanceRef.current) setDirtyProjectIds(projectIds);
+      if (id === editorInstanceRef.current) dirtyProjectIds.current = projectIds;
     },
     onEditorReady: (editorInstanceId) => {
       setEditorInitializationFailed(false);
       if (editorInstanceRef.current !== editorInstanceId) {
         setBundleComparisonState({ owner: null, projectId: null });
-        setDirtyProjectIds([]);
+        dirtyProjectIds.current = [];
         exitHistoryPreview();
         resetEditorReconciliation();
         editorInstanceRef.current = editorInstanceId;
@@ -663,7 +664,7 @@ export const DashboardPage: FC = () => {
           bundleComparisonState={bundleComparisonState}
           editorInstanceId={editorInstanceRef.current}
           historyPreview={historyPreview}
-          dirtyProjectIds={dirtyProjectIds}
+          getDirtyProjectIds={getDirtyProjectIds}
           onOpenHistoryProject={openHistoryArtifact}
           onExitHistoryPreview={exitHistoryPreview}
           onOpenProject={handleOpenProject}

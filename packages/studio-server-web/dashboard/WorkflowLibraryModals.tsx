@@ -36,12 +36,12 @@ function getProjectVersionActionLabel(mode: WorkflowLibraryController['projectMo
 
 export const WorkflowLibraryModals: FC<{
   controller: WorkflowLibraryController;
-  dirtyProjectIds: readonly string[];
+  getDirtyProjectIds(): readonly string[];
   scheduledRunsOpen?: boolean;
   comparison?: ReturnType<typeof useWorkflowBundleComparison>;
   routeConfig: HostedRouteConfig;
   onRouteConfigChange?: Dispatch<SetStateAction<HostedRouteConfig>>;
-}> = ({ controller, dirtyProjectIds, routeConfig, onRouteConfigChange, scheduledRunsOpen, comparison }) => {
+}> = ({ controller, getDirtyProjectIds, routeConfig, onRouteConfigChange, scheduledRunsOpen, comparison }) => {
   const [upgradeTabRequested, setUpgradeTabRequested] = useState(false);
   const {
     settingsModalOpen,
@@ -155,7 +155,7 @@ export const WorkflowLibraryModals: FC<{
           key={settingsModalProject.id}
           activeProject={settingsModalProject}
           allProjects={allProjects}
-          dirtyProjectIds={dirtyProjectIds}
+          getDirtyProjectIds={getDirtyProjectIds}
           isOpen={settingsModalOpen}
           initialTab={settingsModalInitialTab}
           onClose={closeSettingsModal}

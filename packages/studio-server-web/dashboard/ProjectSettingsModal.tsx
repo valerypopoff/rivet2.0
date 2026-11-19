@@ -124,7 +124,7 @@ type ProjectSettingsTab = 'workflow' | 'web-apps' | 'llm-health' | 'classifier-h
 type ProjectSettingsModalProps = {
   activeProject: WorkflowProjectItem;
   allProjects: WorkflowProjectItem[];
-  dirtyProjectIds: readonly string[];
+  getDirtyProjectIds(): readonly string[];
   isOpen: boolean;
   initialTab?: ProjectSettingsTab;
   onClose: () => void;
@@ -140,7 +140,7 @@ type ProjectSettingsModalProps = {
 export const ProjectSettingsModal: FC<ProjectSettingsModalProps> = ({
   activeProject,
   allProjects,
-  dirtyProjectIds,
+  getDirtyProjectIds,
   isOpen,
   initialTab = 'workflow',
   onClose,
@@ -190,7 +190,7 @@ export const ProjectSettingsModal: FC<ProjectSettingsModalProps> = ({
   } = useProjectSettingsActions({
     activeProject,
     allProjects,
-    dirtyProjectIds,
+    getDirtyProjectIds,
     isOpen,
     onClose,
     onDeleteProject,

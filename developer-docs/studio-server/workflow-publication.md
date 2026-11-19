@@ -915,8 +915,10 @@ graph calls, configured tool handlers and Run Thread callbacks. For graph
 targets selected at runtime, it visits each possible local target once per
 captured project revision. The server revalidates saved selections in a short
 transaction. The browser checks that a release review includes the selected
-draft and the source of each captured revision. It then checks the latest
-reported unsaved edits and asks the developer to save before publishing.
+draft and the source of each captured revision. The dashboard records dirty
+project reports as they arrive from the active editor. When review completes,
+Publish reads that snapshot directly and asks the developer to save any edited
+project whose draft would be published.
 **Update** can protect an existing legacy endpoint even when its draft is
 unchanged. A conflicting save or move requires another review. The first
 protected update attempts to capture the currently live legacy endpoint for

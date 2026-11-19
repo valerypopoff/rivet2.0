@@ -292,23 +292,38 @@ test.describe('Published revision history', () => {
     });
 
     const { modal } = await openProjectSettingsModal(page, root);
-    const editor = await page.locator('iframe.dashboard-editor-frame').elementHandle().then((frame) => frame?.contentFrame());
+    const editorDocument = page.frameLocator('iframe.dashboard-editor-frame').locator('html');
     const editorInstanceId = await page.locator('html').getAttribute('data-editor-instance');
     expect(editorInstanceId).toBeTruthy();
-    const reportDirty = (projectIds: string[]) =>
-      editor!.evaluate(
-        ({ editorInstanceId, projectIds }) => {
-          parent.postMessage({ type: 'editable-dirty-projects', editorInstanceId, projectIds }, location.origin);
-        },
-        { editorInstanceId, projectIds },
-      );
     await modal.locator('#workflow-project-endpoint-name').fill('release-review-next');
     try {
       await Promise.all([
         page.waitForRequest('**/api/workflows/projects/endpoint-release-review', { timeout: 10_000 }),
         modal.getByRole('button', { name: 'Update', exact: true }).click(),
       ]);
-      await reportDirty([target.projectMetadataId!]);
+      await editorDocument.evaluate(
+        (_, { editorInstanceId, projectId }) =>
+          new Promise<void>((resolve) => {
+            const received = (event: MessageEvent) => {
+              if (
+                event.source === window &&
+                event.origin === location.origin &&
+                event.data?.type === 'editable-dirty-projects' &&
+                event.data.editorInstanceId === editorInstanceId &&
+                event.data.projectIds.includes(projectId)
+              ) {
+                parent.removeEventListener('message', received);
+                resolve();
+              }
+            };
+            parent.addEventListener('message', received);
+            parent.postMessage(
+              { type: 'editable-dirty-projects', editorInstanceId, projectIds: [projectId] },
+              location.origin,
+            );
+          }),
+        { editorInstanceId, projectId: target.projectMetadataId! },
+      );
     } finally {
       review.resolve();
     }
