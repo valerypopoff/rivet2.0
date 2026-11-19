@@ -244,8 +244,9 @@ node deploy/studio-server/scripts/verify-proxy-dns.mjs
 
 The TLS fixture requires OpenSSL on PATH (Git for Windows supplies it under
 `C:/Program Files/Git/usr/bin`). DNS verification invokes the repository's
-`studio-server:ui:observe` runner headlessly through the test proxy; preserve its
-outage, address replacement and active-WebSocket checks. These tests do not
+`studio-server:ui:observe` runner headlessly through the test proxy. The DNS
+fixture closes each control connection after responding. The proxy exercises
+pooled application requests, address replacement and active WebSockets. These tests do not
 reload the running local app or production. Local validation is not a production
 deployment or provider qualification, and this dependency update requires no
 database schema or object-storage migration.
