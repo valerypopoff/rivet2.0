@@ -16,7 +16,11 @@ export function stagingJanitorObjects(settings, { image, code, driverDigest, goo
   assert.equal(googleServiceAccount.split('@')[1].split('.')[0], settings.projectId);
   const namespace = settings.controlNamespace,
     name = 'rivet-qualification-janitor';
-  const codeName = `${name}-${driverDigest.slice(0, 12)}`;
+  const data = {
+    'janitor.mjs': code,
+    'settings.json': JSON.stringify({ ...settings, approvedDriverDigest: driverDigest }),
+  };
+  const codeName = `${name}-${createHash('sha256').update(JSON.stringify(data)).digest('hex').slice(0, 16)}`;
   const metadata = { name, namespace };
   return [
     {
@@ -30,10 +34,7 @@ export function stagingJanitorObjects(settings, { image, code, driverDigest, goo
       kind: 'ConfigMap',
       metadata: { ...metadata, name: codeName },
       immutable: true,
-      data: {
-        'janitor.mjs': code,
-        'settings.json': JSON.stringify({ ...settings, approvedDriverDigest: driverDigest }),
-      },
+      data,
     },
     {
       apiVersion: 'rbac.authorization.k8s.io/v1',

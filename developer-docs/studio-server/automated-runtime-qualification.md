@@ -1324,8 +1324,12 @@ Roles, including denied Pod GET and actor exec/cleanup permissions. Unresolved,
 malformed or incomplete operation inventories fail before taking a new lock;
 the inventory is rechecked under the lock to cover concurrent admission.
 
-Preparation then acquires an exclusive generation-bound lock in private GCS
-and updates only the janitor's versioned immutable code ConfigMap and Deployment.
+Preparation then acquires an exclusive generation-bound lock in private GCS.
+It creates the janitor's immutable ConfigMap or verifies the exact existing
+content before applying the Deployment. The ConfigMap name includes a hash of
+its code and settings. Use create for this ConfigMap because client-side apply
+copies the code into the 256 KiB annotations budget. If creation fails, setup
+closure checks that the Deployment still matches the healthy baseline.
 The acknowledged Deployment must retain its UID and use the exact published
 image and packaged code ConfigMap mounted by the named janitor container before
 rollout waiting or success export. Container order and an unused code volume
@@ -1701,8 +1705,9 @@ It also needs read-only access to the exact shared Gateway, the selected
 The independent janitor does not gain those additional runner capabilities.
 
 Install the driver read-only outside checkout and pin its returned digest in the
-protected workflow configuration. Install matching janitor code/settings first;
-armExpiry refuses an older janitor digest. Preserve its operation registries
+protected workflow configuration. Create the immutable code/settings ConfigMap
+without `--save-config` and verify it before applying the Deployment.
+`armExpiry` refuses an older janitor digest. Preserve its operation registries
 across janitor replacement. Replacing janitor code/its immutable ConfigMap requires
 an explicit idle, reviewed installation update—not an operation cleanup action.
 

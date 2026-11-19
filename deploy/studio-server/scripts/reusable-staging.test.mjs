@@ -7,7 +7,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL, fileURLToPath } from 'node:url';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { parseAllDocuments } from 'yaml';
 import { reusableStagingSettings, stagingHostname } from './lib/reusable-staging-state.mjs';
@@ -1855,7 +1855,9 @@ test('actual package has a closed hash manifest, import-safe CLI boundaries and 
   const deployment = objects.find((o) => o.kind === 'Deployment');
   const janitorRole = objects.find((o) => o.kind === 'ClusterRole');
   const code = objects.find((o) => o.kind === 'ConfigMap' && o.immutable === true);
-  assert.equal(code.metadata.name, `rivet-qualification-janitor-${result.driverDigest.slice(0, 12)}`);
+  const codeDigest = createHash('sha256').update(JSON.stringify(code.data)).digest('hex');
+  assert.equal(code.metadata.name, `rivet-qualification-janitor-${codeDigest.slice(0, 16)}`);
+  assert.equal(JSON.parse(code.data['settings.json']).approvedDriverDigest, result.driverDigest);
   assert.equal(deployment.spec.template.spec.volumes[0].configMap.name, code.metadata.name);
   assert.deepEqual(
     janitorRole.rules.find((rule) => rule.apiGroups.includes('networking.k8s.io')),
