@@ -1063,23 +1063,32 @@ export class ReusableProviderGate extends RuntimeControlLocalGate {
       return status.zones?.length >= 2 && Object.keys(status.network_endpoint_groups ?? {}).length > 0;
     });
   }
-  async loadWorkflowKey({ webAppSession = false } = {}) {
+  async loadWorkflowKey({ webAppSession = false, waitForRoute = false } = {}) {
     const secret = JSON.parse((await this.kube(['get', 'secret', 'rivet-release-gate-auth', '-o', 'json'])).stdout);
-    this.secrets = { rivetKey: Buffer.from(secret.data.RIVET_KEY, 'base64').toString('utf8') };
-    const response = await fetch(`${this.config.baseUrl}/__rivet_auth`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ key: this.secrets.rivetKey }),
-      redirect: 'manual',
-      signal: AbortSignal.timeout(15000),
-    });
-    assert.equal(response.status, 204);
-    this.uiCookie = response.headers
-      .getSetCookie()
-      .find((v) => v.startsWith('rivet_ui_token='))
-      ?.split(';')[0];
-    assert.ok(this.uiCookie);
-    await response.body?.cancel();
+    const rivetKey = Buffer.from(secret.data.RIVET_KEY, 'base64').toString('utf8');
+    const signIn = async () => {
+      const response = await fetch(`${this.config.baseUrl}/__rivet_auth`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ key: rivetKey }),
+        redirect: 'manual',
+        signal: AbortSignal.timeout(15000),
+      });
+      try {
+        if (waitForRoute && [404, 502, 503, 504].includes(response.status)) return;
+        assert.equal(response.status, 204, `Public staging sign-in returned HTTP ${response.status}`);
+        const cookie = response.headers
+          .getSetCookie()
+          .find((value) => value.startsWith('rivet_ui_token='))
+          ?.split(';')[0];
+        assert.ok(cookie, 'Public staging sign-in returned no session cookie');
+        return cookie;
+      } finally {
+        await response.body?.cancel();
+      }
+    };
+    this.uiCookie = waitForRoute ? await until('public staging sign-in', signIn, 60000) : await signIn();
+    this.secrets = { rivetKey };
     if (webAppSession) {
       await this.verifyClientProvenance();
       this.publicAppCookie = await createReleaseGateWebAppOAuthSession(
@@ -1151,7 +1160,8 @@ export class ReusableProviderGate extends RuntimeControlLocalGate {
   }
   async readyPublic() {
     await waitForGkeFrontendAvailability(this);
-    await this.loadWorkflowKey();
+    // Healthy load-balancer backends can precede public hostname routing.
+    await this.loadWorkflowKey({ waitForRoute: true });
     await this.waitForDeveloperRoute(this.config.baseUrl);
     await this.verifyClientProvenance();
   }

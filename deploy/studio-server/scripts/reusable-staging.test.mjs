@@ -1743,6 +1743,37 @@ test('OAuth setup rejects foreign login/callback redirects before another reques
   }
 });
 
+test('initial public sign-in tolerates routing propagation only before qualification traffic', async (t) => {
+  const responses = [404, 503, 204, 404, 401];
+  const seen = [];
+  const server = http.createServer((req, res) => {
+    const status = responses.shift() ?? 400;
+    seen.push([req.method, req.url, status]);
+    req.resume();
+    if (status === 204) res.setHeader('set-cookie', 'rivet_ui_token=fixture-only');
+    res.writeHead(status).end();
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => {
+    server.closeAllConnections();
+    server.close();
+  });
+  const gate = Object.create(ReusableProviderGate.prototype);
+  gate.config = { baseUrl: `http://127.0.0.1:${server.address().port}` };
+  gate.kube = async () => ({
+    stdout: JSON.stringify({ data: { RIVET_KEY: Buffer.from('staging-only').toString('base64') } }),
+  });
+
+  await gate.loadWorkflowKey({ waitForRoute: true });
+  assert.equal(gate.uiCookie, 'rivet_ui_token=fixture-only');
+  await assert.rejects(gate.loadWorkflowKey(), /404/);
+  await assert.rejects(gate.loadWorkflowKey({ waitForRoute: true }), /401/);
+  assert.deepEqual(
+    seen,
+    [404, 503, 204, 404, 401].map((status) => ['POST', '/__rivet_auth', status]),
+  );
+});
+
 test('shared persistence seed carries real UI/Bearer authentication through every HTTP and WebSocket path', async (t) => {
   const headers = { authorization: 'Bearer staging-only', cookie: 'rivet_ui_token=fixture-only' };
   const { relativePath, requests, failures, origin } = await persistenceFixture(t, { headers });
