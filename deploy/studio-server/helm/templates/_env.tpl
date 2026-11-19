@@ -232,8 +232,10 @@
 - name: RIVET_API_PROFILE
   value: {{ .profile | quote }}
 {{- if $root.Values.ha.enabled }}
+{{- /* A paired pool retains its published schedule scope and pod template
+      while the editor changes to overlap. */}}
 - name: RIVET_HA_CONTROL_PLANE_MODE
-  value: {{ $root.Values.ha.controlPlane.mode | quote }}
+  value: {{ ternary "singleton" $root.Values.ha.controlPlane.mode (and (eq .profile "execution") $root.Values.ha.executionPools.enabled (eq $root.Values.ha.controlPlane.mode "singleton-overlap")) | quote }}
 {{- end }}
 {{ include "rivet.env.deploymentStorageBootstrap" (dict "root" $root "profile" .profile) }}
 {{- if eq .profile "control" }}

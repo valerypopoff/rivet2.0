@@ -8,11 +8,7 @@ import { createHttpError } from '../../../utils/httpError.js';
 import { PROJECT_REFERENCE_SUMMARY_VERSION } from '../project-reference-summary.js';
 import type { ManagedWorkflowContext } from './context.js';
 import { indexEndpointReleaseTargets, parseEndpointReleaseManifest } from './endpoint-release-manifest.js';
-import {
-  endpointReleaseWritesEnabled,
-  readDependencyPointers,
-  selectDependencyRevision,
-} from './endpoint-release-selection.js';
+import { readDependencyPointers, selectDependencyRevision } from './endpoint-release-selection.js';
 import { isSubgraphReferenceInScope } from './subgraph-access.js';
 
 const BUNDLE_REFERENCES_SQL = `
@@ -107,7 +103,6 @@ export async function readWorkflowReferenceOverview(
     }
     const pointers = await readDependencyPointers(client, [...targets]);
     const endpoints: WorkflowReferenceOverview['endpoints'] = [];
-    const captureEnabled = endpointReleaseWritesEnabled();
     let dependencyCount = 0;
     for (const entry of scoped) {
       const dependencies = new Map<string, WorkflowReleaseDependencyStatus>();
@@ -142,7 +137,7 @@ export async function readWorkflowReferenceOverview(
       endpoints.push({
         projectId: entry.workflow_id,
         coverage: release || (entry.uncaptured && entry.standalone) ? 'complete' : 'project-only',
-        ...(captureEnabled && entry.uncaptured ? { canCaptureRelease: true } : {}),
+        ...(entry.uncaptured ? { canCaptureRelease: true } : {}),
         dependencies: [...dependencies.values()],
       });
     }

@@ -107,6 +107,7 @@ function reconcile(resource, templateChanged = false) {
       spec: { ...clone(resource.spec.template.spec), nodeName: 'fixture-node' },
       status: { phase: 'Running', conditions: [{ type: 'Ready', status: 'True' }] },
     };
+    touch(pod);
     state.pods.push(pod);
     state.retirements[name] = { protocol: 1, withdrawalProtocol: 1, incarnation: randomUUID(), state: 'serving' };
     if (
@@ -407,7 +408,7 @@ function kubectl() {
         spec: {},
         status: {
           conditions: [{ type: 'Ready', status: 'True' }],
-          allocatable: { cpu: '1000', memory: '1Ti', pods: '1000' },
+          allocatable: { cpu: '1000', memory: '1Ti', 'ephemeral-storage': '10Ti', pods: '1000' },
         },
       };
     if (type === 'pods') {
@@ -424,7 +425,30 @@ function kubectl() {
       };
     }
     if (type === 'pv') return state.volume;
-    if (['endpointslice', 'volumeattachments'].includes(type)) return { items: [] };
+    if (type === 'volumeattachments') return { items: [] };
+    if (type === 'endpointslice') {
+      return {
+        items: state.resources
+          .filter((resource) => resource.kind === 'Service' && Object.keys(resource.spec.selector ?? {}).length)
+          .map((service) => ({
+            metadata: { labels: { 'kubernetes.io/service-name': service.metadata.name } },
+            endpoints: state.pods
+              .filter((pod) =>
+                Object.entries(service.spec.selector).every(([key, value]) => pod.metadata.labels?.[key] === value),
+              )
+              .map((pod) => ({
+                targetRef: { ...reference(pod), namespace: state.namespace },
+                conditions: {
+                  ready:
+                    service.spec.publishNotReadyAddresses === true ||
+                    pod.status.conditions.some(
+                      (condition) => condition.type === 'Ready' && condition.status === 'True',
+                    ),
+                },
+              })),
+          })),
+      };
+    }
     const types = type.split(',').map((t) => kinds[t]);
     if (types.some((t) => !t)) fail(`Unsupported fixture get: ${type}`);
     let items = state.resources.filter((r) => types.includes(r.kind));
@@ -485,6 +509,8 @@ function kubectl() {
       if (args.at(-2) !== status.incarnation) fail('Incarnation changed');
       status.operationId = args.at(-3);
       status.state = args.includes('--begin-only') ? 'drained' : 'withdrawing';
+      pod.status.conditions.find((condition) => condition.type === 'Ready').status = 'False';
+      touch(pod);
       if (state.fault === 'lostBegin' && args.includes('--begin-only') && !state.injected) {
         state.injected = true;
         fail('fixture lost begin acknowledgement');
@@ -539,6 +565,11 @@ function kubectl() {
     if (args[2].includes('/pods/')) {
       const pod = state.pods.find((p) => p.metadata.name === name);
       if (pod?.metadata.uid !== deletion.preconditions.uid) fail('Conflict: fixture deletion UID');
+      if (
+        deletion.preconditions.resourceVersion &&
+        pod.metadata.resourceVersion !== deletion.preconditions.resourceVersion
+      )
+        fail('Conflict: fixture deletion resourceVersion');
       state.pods = state.pods.filter((p) => p !== pod);
       const owner = state.resources.find(
         (r) => r.kind === 'StatefulSet' && pod.metadata.ownerReferences.some((o) => o.uid === r.metadata.uid),

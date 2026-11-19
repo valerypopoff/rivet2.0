@@ -132,7 +132,7 @@ function createPublicationHarness(
     revisionContents?: Record<string, string>;
     forbidDatasetReads?: boolean;
     beforeArtifactRead?: () => void;
-    beforeWorkflowRead?: () => void;
+    beforeWorkflowRead?: (forUpdate: boolean) => void;
   } = {},
 ) {
   const workflow = options.workflow ?? createWorkflow();
@@ -155,9 +155,18 @@ function createPublicationHarness(
   let mutated = false;
   let inTransaction = false;
 
+  const dependencyPointerQuery = 'b.relative_path AS bundle_relative_path';
+  const readPointers = (ids: unknown) => {
+    assert.ok(Array.isArray(ids));
+    return {
+      rows: ids.includes(workflow.workflow_id) ? [{ ...workflow, bundle_id: null, bundle_relative_path: null }] : [],
+    };
+  };
+
   const client = {
     async query(sql: string, params: unknown[] = []) {
       clientQueries.push({ sql, params });
+      if (sql.includes(dependencyPointerQuery)) return readPointers(params[0]);
       if (normalizeSql(sql).startsWith('UPDATE workflows')) mutated = true;
       if (normalizeSql(sql).startsWith('UPDATE workflows SET publication_version = publication_version + 1')) {
         workflow.publication_version = (BigInt(workflow.publication_version ?? '0') + 1n).toString();
@@ -166,6 +175,8 @@ function createPublicationHarness(
       if (normalizeSql(sql).startsWith('INSERT INTO workflow_published_versions')) {
         latestInsertedPublishedVersionId = String(params[0]);
       }
+      if (normalizeSql(sql).startsWith('UPDATE workflow_published_versions SET release_id'))
+        return { rows: [], rowCount: 1 };
       return { rows: [] };
     },
   } as unknown as PoolClient;
@@ -226,8 +237,33 @@ function createPublicationHarness(
     return null;
   }
 
+  const readRevisionContents = async (revision: RevisionRow) => {
+    assert.equal(inTransaction, false, 'publication artifacts must be prepared before acquiring a transaction');
+    options.beforeArtifactRead?.();
+    if (options.forbidDatasetReads) throw new Error('Settings must not read datasets');
+    return {
+      contents: revisionContents[revision.revision_id] ?? createManagedWebAppProjectContents([]),
+      datasetsContents: revision.dataset_blob_key ? `dataset:${revision.revision_id}` : null,
+    };
+  };
+
   const context = {
-    pool: {} as Pool,
+    pool: {
+      async query(sql: string, params: unknown[]) {
+        assert.ok(sql.includes(dependencyPointerQuery), sql);
+        return readPointers(params[0]);
+      },
+    } as unknown as Pool,
+    blobStore: {
+      async getText(key: string) {
+        const revision = [...revisions.values()].find(
+          (row) => row.project_blob_key === key || row.dataset_blob_key === key,
+        );
+        assert.ok(revision, `Unexpected artifact read: ${key}`);
+        const { contents, datasetsContents } = await readRevisionContents(revision);
+        return revision.project_blob_key === key ? contents : datasetsContents;
+      },
+    },
     initialize: async () => {},
     withTransaction: async <T>(
       run: (transactionClient: PoolClient, transactionHooks: TransactionHooks) => Promise<T>,
@@ -261,7 +297,7 @@ function createPublicationHarness(
         relativePath: string,
         lookupOptions: { forUpdate?: boolean } = {},
       ) => {
-        options.beforeWorkflowRead?.();
+        options.beforeWorkflowRead?.(lookupOptions.forUpdate === true);
         workflowLookups.push({
           relativePath,
           forUpdate: lookupOptions.forUpdate === true,
@@ -282,15 +318,7 @@ function createPublicationHarness(
       },
     },
     revisions: {
-      readRevisionContents: async (revision: RevisionRow) => {
-        assert.equal(inTransaction, false, 'publication artifacts must be prepared before acquiring a transaction');
-        options.beforeArtifactRead?.();
-        if (options.forbidDatasetReads) throw new Error('Settings must not read datasets');
-        return {
-          contents: revisionContents[revision.revision_id] ?? createManagedWebAppProjectContents([]),
-          datasetsContents: revision.dataset_blob_key ? `dataset:${revision.revision_id}` : null,
-        };
-      },
+      readRevisionContents,
       readRevisionProjectContents: async (revision: RevisionRow) =>
         revisionContents[revision.revision_id] ?? `project:${revision.revision_id}`,
     },
@@ -555,7 +583,7 @@ test('managed publication backfills legacy current versions before new publishes
     workflowAfterMutation,
     revisions: [
       createRevision({ revision_id: 'draft-revision' }),
-      createRevision({ revision_id: 'legacy-published-revision' }),
+      createRevision({ revision_id: 'legacy-published-revision', project_blob_key: 'legacy-project-blob' }),
     ],
   });
 
@@ -581,6 +609,16 @@ test('managed publication backfills legacy current versions before new publishes
   assert.equal(publishedVersionInserts[1]?.params[1], 'workflow-a');
   assert.equal(publishedVersionInserts[1]?.params[2], 'draft-revision');
   assert.equal(publishedVersionInserts[1]?.params[3], 'new-endpoint');
+  const [baselineId, nextId] = clientQueries
+    .filter(({ sql }) => sql.startsWith('INSERT INTO workflow_endpoint_releases'))
+    .map(({ params }) => params[0]);
+  assert.ok(baselineId && nextId && baselineId !== nextId);
+  assert.deepEqual(
+    clientQueries.find(({ sql }) => normalizeSql(sql).startsWith('UPDATE workflow_published_versions SET release_id'))
+      ?.params,
+    [baselineId, 'workflow-a', 'legacy-published-revision', 'legacy-published-revision'],
+  );
+  assert.equal(publishedVersionInserts[1]?.params[4], nextId);
   assert.deepEqual(endpointSyncCalls, [
     {
       workflowId: 'workflow-a',
@@ -660,8 +698,8 @@ test('publication rechecks identity, draft and publication under lock after arti
       const harness = createPublicationHarness({
         workflow,
         revisionContents: { 'draft-revision': createManagedWebAppProjectContents([['ui-current', 'Current']]) },
-        beforeArtifactRead: () => {
-          Object.assign(workflow, change);
+        beforeWorkflowRead: (forUpdate) => {
+          if (forUpdate) Object.assign(workflow, change);
         },
       });
       const pending = webApp
@@ -680,7 +718,7 @@ test('publication rechecks identity, draft and publication under lock after arti
         harness.workflowLookups.map((lookup) => lookup.forUpdate),
         [false, true],
       );
-      assert.deepEqual(harness.clientQueries, []);
+      assert.ok(harness.clientQueries.every(({ sql }) => normalizeSql(sql).startsWith('SELECT ')));
       assert.deepEqual(harness.invalidationRequests, []);
     }
   }
@@ -694,8 +732,8 @@ test('publication owns reviewed preconditions across asynchronous artifact prepa
       workflow,
       revisionContents: { 'draft-revision': createManagedWebAppProjectContents([['ui-current', 'Current']]) },
       beforeArtifactRead: () => {
-        workflow.current_draft_revision_id = 'new-draft';
-        expected.expectedDraftRevisionId = 'new-draft';
+        workflow.publication_version = '1';
+        expected.expectedPublicationVersion = '1';
       },
     });
     expected = harness.reviewedPreconditions;
@@ -707,7 +745,7 @@ test('publication owns reviewed preconditions across asynchronous artifact prepa
         )
       : harness.service.publishWorkflowProjectItem('Main.rivet-project', { endpointName: 'current' }, expected);
     await assert.rejects(pending, { status: 409 });
-    assert.deepEqual(harness.clientQueries, []);
+    assert.ok(harness.clientQueries.every(({ sql }) => normalizeSql(sql).startsWith('SELECT ')));
     assert.deepEqual(harness.invalidationRequests, []);
   }
 });

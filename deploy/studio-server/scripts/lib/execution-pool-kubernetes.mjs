@@ -18,6 +18,7 @@ export function createExecutionPoolKubernetes({
   namespace,
   timeoutMs,
   observePod,
+  readRoutedPeers,
   status,
   beforeRetirement,
   afterRoutingWithdrawal = async () => {},
@@ -74,6 +75,8 @@ export function createExecutionPoolKubernetes({
     let settling = controller.status?.observedGeneration < controller.metadata.generation,
       serving = 0;
     if (settling && !minimumServing) return null;
+    const routed = await readRoutedPeers(plan.candidate.name);
+    assert.ok(routed instanceof Set, 'Candidate execution Service routing is unconfirmed');
     for (let index = 0; index < count; index++) {
       const name = `${plan.candidate.name}-${index}`;
       const raw = observation?.pods.find((pod) => pod.metadata.name === name);
@@ -88,7 +91,12 @@ export function createExecutionPoolKubernetes({
           }
         : await observePod(name);
       if (raw) assert.equal(raw.metadata.labels?.['app.kubernetes.io/instance'], release);
-      if (!pod?.ready || pod.terminating || !(await isCurrent(pod, controller.status?.updateRevision))) {
+      if (
+        !pod?.ready ||
+        pod.terminating ||
+        !routed.has(pod.uid) ||
+        !(await isCurrent(pod, controller.status?.updateRevision))
+      ) {
         if (!minimumServing) return null;
         settling = true;
         continue;

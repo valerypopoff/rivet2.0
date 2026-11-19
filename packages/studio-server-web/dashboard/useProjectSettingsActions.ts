@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
 import { toast } from 'react-toastify';
 import { namespaceIdentity, MutationOutcomeUnknownError } from './workflowNamespaceMutations';
 import { useWorkflowLibraryActionLifetime } from './useWorkflowLibraryActionLifetime';
@@ -30,7 +30,7 @@ import type {
 type UseProjectSettingsActionsOptions = {
   activeProject: WorkflowProjectItem;
   allProjects: WorkflowProjectItem[];
-  dirtyProjectIds: readonly string[];
+  getDirtyProjectIds(): readonly string[];
   isOpen: boolean;
   onClose: () => void;
   onDeleteProject: (path: string, projectId?: string | null) => void;
@@ -129,11 +129,7 @@ function publicationSnapshotFromProject(project: WorkflowProjectItem): WorkflowP
 }
 
 export function useProjectSettingsActions(options: UseProjectSettingsActionsOptions) {
-  const { activeProject, allProjects, dirtyProjectIds, isOpen, onClose, onDeleteProject, onRefresh } = options;
-  const latestDirtyProjectIds = useRef(dirtyProjectIds);
-  useLayoutEffect(() => {
-    latestDirtyProjectIds.current = dirtyProjectIds;
-  }, [dirtyProjectIds]);
+  const { activeProject, allProjects, getDirtyProjectIds, isOpen, onClose, onDeleteProject, onRefresh } = options;
   const captureDelete = useWorkflowLibraryActionLifetime(
     isOpen ? activeProject.projectMetadataId ?? activeProject.absolutePath : null,
   );
@@ -495,7 +491,7 @@ export function useProjectSettingsActions(options: UseProjectSettingsActionsOpti
 
     try {
       const release = await reviewEndpointRelease(activeProject.relativePath, preconditions);
-      const dirtyIds = new Set(latestDirtyProjectIds.current);
+      const dirtyIds = new Set(getDirtyProjectIds());
       if (
         dirtyIds.has(preconditions.expectedProjectId) ||
         release?.projects.some((project) => project.fromDraft && dirtyIds.has(project.projectId))

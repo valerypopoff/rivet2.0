@@ -3,7 +3,7 @@
 The implementation covers published workflow endpoints and their project
 dependencies. It uses the existing project tree, Project Settings and editor.
 [Workflow Publication](workflow-publication.md#frozen-endpoint-releases)
-documents the schema 22 activation and rollback requirements.
+documents the schema 22 upgrade and rollback requirements.
 
 ## 1. Product behavior
 
@@ -380,7 +380,8 @@ capture, both selectors for one project, an unavailable artifact, history
 metadata, the release archive and retention after draft deletion. It also
 interrupts a publication after release preparation, checks stale Restore
 preconditions, verifies captured dataset isolation, and observes the catalog
-refresh after reference backfill. Run
+refresh after reference backfill. It imports legacy publications to exercise
+Update while new Publish operations capture dependencies automatically. Run
 `yarn workspace @valerypopoff/rivet-studio-server-api test:endpoint-releases-managed`.
 It starts disposable local Docker storage. Both
 `RIVET_TEST_HISTORY_DATABASE_URL` and `RIVET_TEST_HISTORY_OBJECT_URL` can be set

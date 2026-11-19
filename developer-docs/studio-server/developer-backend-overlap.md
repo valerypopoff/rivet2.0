@@ -8,6 +8,10 @@ Pool preparation is separate from ownership transfer and uses the original
 singleton procedure; it is not a developer-continuity claim. Certificate and
 stage are bound into backup, admission and recovery. No old manifest is rewritten.
 See the first-activation procedure in the qualification guide below.
+The [online first-adoption route](online-editor-overlap-plan.md) covers
+installations with paired execution pools. It admits a verified replacement
+before withdrawing the singleton editor and keeps the original application
+images and schema. That route requires its own live provider evidence.
 The maintained provider runner now has an opt-in overlap suite; see
 [automated qualification](automated-runtime-qualification.md). Local runner/Helm
 regressions do not replace the outstanding exact-image GKE qualification.
@@ -141,8 +145,8 @@ that the idle autoscaler may have advanced during read-only preflight. It never
 retries a failed ownership write. The topology bridge preserves the independent
 autoscaler template and capacity instead of treating it as a frontend.
 
-First adoption requires a same-image bridge with `housekeepingOverlapProtocol=1`
-and `maintenanceIdle=true`, and a separate recorded topology transition. Idle
+The serial first-adoption route requires a same-image bridge with
+`housekeepingOverlapProtocol=1` and `maintenanceIdle=true`. Idle
 inspection is read-only: unknown, corrupt or nonterminal bundle journals and
 unfinished restore operations block adoption rather than initializing recovery,
 deleting scratch or discarding work. Old ownership-unaware images must

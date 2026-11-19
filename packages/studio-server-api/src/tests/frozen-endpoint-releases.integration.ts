@@ -127,16 +127,24 @@ const dataset = (owner: Project, value: string) =>
       data: { id: datasetId, rows: [{ id: 'row', data: [value] }] },
     },
   ]);
-const put = (value: Project, relativePath: string, datasetsContents: string | null = null) =>
-  writer.importWorkflow({
+const put = (
+  value: Project,
+  relativePath: string,
+  datasetsContents: string | null = null,
+  legacyEndpointName = '',
+) => {
+  const contents = serializeProject(value) as string;
+  return writer.importWorkflow({
     workflowId: value.metadata.id,
     relativePath,
     name: value.metadata.title!,
-    contents: serializeProject(value) as string,
+    contents,
     datasetsContents,
-    endpointName: '',
-    publishedEndpointName: '',
+    endpointName: legacyEndpointName,
+    publishedEndpointName: legacyEndpointName,
+    ...(legacyEndpointName && { publishedContents: contents, publishedDatasetsContents: datasetsContents }),
   });
+};
 const save = async (previous: WorkflowProjectItem, value: Project, datasetsContents: string | null = null) =>
   (
     await writer.saveHostedProject({
@@ -212,31 +220,19 @@ try {
   let c = await put(c1, 'Library/shared.rivet-project', dataset(c1, 'C1'));
   const helper = await put(inner, 'Experiment/deep/helper.rivet-project');
   await put(project('unrelated', 'unused'), 'Experiment/unused/unrelated.rivet-project');
-  let a = await put(a1, 'Experiment/a.rivet-project');
+  // Import the live snapshots a pre-capture server would have left behind.
+  let a = await put(a1, 'Experiment/a.rivet-project', null, 'endpoint-a');
   let b = await put(b1, 'b.rivet-project');
-  let standalone = await put(project('standalone', 'standalone'), 'standalone.rivet-project');
-  let legacy = await put(project('legacy', c1), 'legacy.rivet-project');
+  let standalone = await put(project('standalone', 'standalone'), 'standalone.rivet-project', null, 'standalone-endpoint');
+  let legacy = await put(project('legacy', c1), 'legacy.rivet-project', null, 'legacy-endpoint');
   const bundleId = randomUUID();
   await fresh.query("UPDATE workflow_folders SET bundle_id = $1 WHERE relative_path = 'Experiment'", [bundleId]);
-  process.env.RIVET_ENABLE_FROZEN_ENDPOINT_RELEASES = '0';
-  legacy = await publish(legacy, 'legacy-endpoint');
-  a = await publish(a, 'endpoint-a');
-  standalone = await publish(standalone, 'standalone-endpoint');
   const floatingStandalone = await profileEndpoint('standalone-endpoint', false);
   const floatingBundle = await profileEndpoint('endpoint-a', false);
-  const beforeActivation = await writer.readWorkflowReferenceOverview();
-  assert.ok(!beforeActivation.endpoints.some((item) => item.canCaptureRelease));
-  assert.equal(
-    beforeActivation.endpoints.find((item) => item.projectId === a.projectMetadataId)?.coverage,
-    'project-only',
-  );
-
-  process.env.RIVET_ENABLE_FROZEN_ENDPOINT_RELEASES = '1';
   const readyToCapture = await writer.readWorkflowReferenceOverview();
-  assert.equal(
-    readyToCapture.endpoints.find((item) => item.projectId === a.projectMetadataId)?.canCaptureRelease,
-    true,
-  );
+  const legacyBundle = readyToCapture.endpoints.find((item) => item.projectId === a.projectMetadataId);
+  assert.equal(legacyBundle?.coverage, 'project-only');
+  assert.equal(legacyBundle?.canCaptureRelease, true);
   assert.ok(
     readyToCapture.endpoints.find((item) => item.projectId === standalone.projectMetadataId)?.canCaptureRelease,
   );
@@ -280,6 +276,14 @@ try {
       .find((item) => item.projectId === standalone.projectMetadataId);
     assert.equal(entry?.coverage, 'project-only', 'A missing active version must not be treated as legacy history.');
     assert.equal(entry?.canCaptureRelease, undefined);
+    const history = await writer.listWorkflowPublishedVersions(standalone.relativePath);
+    const review = await writer.reviewEndpointRelease(standalone.relativePath, reviewed(standalone));
+    assert.equal(review.missingRollback, true);
+    await assert.rejects(publish(standalone, 'standalone-endpoint', review.token), {
+      status: 409,
+      message: /cannot be captured for rollback/i,
+    });
+    assert.deepEqual(await writer.listWorkflowPublishedVersions(standalone.relativePath), history);
   } finally {
     await setStandaloneHistory(standaloneHistory.id);
   }
@@ -475,14 +479,12 @@ try {
   // A known bad legacy artifact must not prevent publishing a repaired draft.
   const repairPath = 'repair-legacy.rivet-project';
   const legacyDataProject = project('repair-legacy', 'old revision');
-  process.env.RIVET_ENABLE_FROZEN_ENDPOINT_RELEASES = '0';
-  const oldLegacyData = await publish(await put(legacyDataProject, repairPath, '{invalid dataset'), 'repair-legacy');
+  const oldLegacyData = await put(legacyDataProject, repairPath, '{invalid dataset', 'repair-legacy');
   const beforeRepair = await writer.listWorkflowPublishedVersions(repairPath);
   await assert.rejects(reader.loadPublishedExecutionProject('repair-legacy', true));
   const safeDraft = await save(oldLegacyData, project('repair-legacy', 'repaired revision'), serializeDatasets([]));
-  process.env.RIVET_ENABLE_FROZEN_ENDPOINT_RELEASES = '1';
   const repairReview = await writer.reviewEndpointRelease(repairPath, reviewed(safeDraft));
-  assert.ok(repairReview?.missingRollback);
+  assert.ok(repairReview.missingRollback);
   await assert.rejects(publish(safeDraft, 'repair-legacy', repairReview.token), {
     status: 409,
     message: /cannot be captured for rollback/i,

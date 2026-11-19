@@ -127,6 +127,30 @@ export function createLegacyExecutionHttpHandoff({
           ),
       ),
     );
+  const candidateRefs = (slices, owners, allowOriginal = false) => {
+    const candidates = new Map();
+    for (const slice of slices) {
+      if (slice.metadata?.labels?.['kubernetes.io/service-name'] !== service.metadata.name) continue;
+      for (const endpoint of slice.endpoints ?? []) {
+        if (endpoint.conditions?.ready === false || endpoint.conditions?.terminating) continue;
+        const ref = endpoint.targetRef;
+        if (owners.some((owner) => owner.uid === ref?.uid)) {
+          if (!allowOriginal) return [];
+          continue;
+        }
+        assert.ok(
+          ref?.uid &&
+            ref.kind === 'Pod' &&
+            ref.namespace === namespace &&
+            ref.name?.startsWith(plan.candidate.name + '-') &&
+            /^[0-9]+$/.test(ref.name.slice(plan.candidate.name.length + 1)),
+          'Foreign execution handoff endpoint',
+        );
+        if (endpoint.conditions?.ready === true) candidates.set(ref.uid, ref);
+      }
+    }
+    return [...candidates.values()];
+  };
   const confirmConnectionReferences = async (operation, state) => {
     // Establish the extra reference BEFORE removing the public one. The later
     // response barrier cannot repair a backend mapping already deleted by Cilium.
@@ -278,6 +302,19 @@ export function createLegacyExecutionHttpHandoff({
         await ownedService(state, state.original);
         await confirmConnectionReferences(operation, state);
         const confirmed = await ownedService(state, state.original);
+        const slices = JSON.parse((await kube(['get', 'endpointslice', '-o', 'json'])).stdout).items;
+        const owners = operation.record.executionPool.owners;
+        assert.ok(referencesPresent(slices, owners), 'Execution connection reference lost before the selector change');
+        const candidatePods = await Promise.all(
+          candidateRefs(slices, owners, true).map(async (ref) => {
+            const pod = await observePod(ref.name);
+            return pod?.uid === ref.uid && pod.ready && !pod.terminating && pod.matchesSelector(state.selected);
+          }),
+        );
+        assert.ok(
+          candidatePods.filter(Boolean).length >= plan.previous.replicas,
+          'Ready candidate execution endpoints no longer match the handoff selector; original route retained.',
+        );
         state = { ...state, routeIssued: true };
         await save(operation, state);
         await patch(operation, confirmed, state.selected);
@@ -311,27 +348,7 @@ export function createLegacyExecutionHttpHandoff({
           assert.ok(referencesPresent(slices, owners), 'Execution connection reference lost during response drain');
           return slices;
         },
-        routingReady: (slices) => {
-          const endpoints = slices
-            .filter((slice) => slice.metadata?.labels?.['kubernetes.io/service-name'] === service.metadata.name)
-            .flatMap((slice) => slice.endpoints ?? [])
-            .filter((endpoint) => endpoint.conditions?.ready !== false);
-          const uids = new Set();
-          for (const endpoint of endpoints) {
-            const ref = endpoint.targetRef;
-            if (owners.some((owner) => owner.uid === ref?.uid)) return false;
-            assert.ok(
-              ref?.uid &&
-                ref.kind === 'Pod' &&
-                ref.namespace === namespace &&
-                ref.name?.startsWith(plan.candidate.name + '-') &&
-                /^[0-9]+$/.test(ref.name.slice(plan.candidate.name.length + 1)),
-              'Foreign execution handoff endpoint',
-            );
-            uids.add(ref.uid);
-          }
-          return uids.size >= plan.previous.replicas;
-        },
+        routingReady: (slices) => candidateRefs(slices, owners).length >= plan.previous.replicas,
       });
       await assertCapacity();
       await verifyProxies(operation);

@@ -700,6 +700,50 @@ function fixture() {
   };
 }
 
+test('paired templates and pool handoff precede an editor surge', async () => {
+  const f = fixture();
+  f.options.workloads[0].replicas = 1;
+  f.pods.delete('fixture-backend-1');
+  const pool = {
+    name: 'fixture-execution',
+    role: 'execution',
+    replicas: 2,
+    updateStrategy: 'OnDelete',
+    image: f.options.workloads[0].image,
+  };
+  f.options.workloads.push(pool);
+  const editor = f.pods.get('fixture-backend-0');
+  editor.housekeeping = { protocol: 1, state: 'owner', podUid: editor.uid };
+  for (const ordinal of [0, 1]) {
+    const name = `${pool.name}-${ordinal}`;
+    f.pods.set(name, { ...editor, name, uid: randomUUID(), incarnation: randomUUID() });
+  }
+  f.options.identity.controlPlaneMode = 'singleton-overlap';
+  const stop = Error('stop at the editor surge');
+  await assert.rejects(
+    runHaRollingUpgrade({
+      ...f.options,
+      handoverHousekeeping: async () => {},
+      executionPool: {
+        workload: pool.name,
+        run: async (operation) => {
+          f.operations.push('pool-settled');
+          await operation.checkpoint({ executionPool: { phase: 'complete' } });
+        },
+      },
+      prepareSurge: async (workload) => {
+        f.operations.push('guard:' + workload.role);
+        if (workload.role === 'backend') throw stop;
+      },
+    }),
+    stop,
+  );
+  assert.deepEqual(
+    f.operations.filter((event) => event !== 'capacity'),
+    ['guard:execution', 'templates', 'guard:execution', 'pool-settled', 'guard:backend'],
+  );
+});
+
 test('a fresh rollout does not create a surge for a fully current, ready and serving workload', async () => {
   const f = fixture();
   for (const pod of f.pods.values()) pod.image = f.options.workloads[0].image;
@@ -1118,6 +1162,36 @@ test('peer failure during routing propagation blocks admission fencing and resum
   f.advance(1);
   assert.equal((await runHaRollingUpgrade({ ...f.options, resumeToken: f.journal.token })).phase, 'complete');
   assert.equal(f.operations.filter((operation) => operation === 'withdraw-command:fixture-backend-0').length, 1);
+});
+
+test('owner removal rechecks the drain and serving routes after the final withdrawal observation', async () => {
+  for (const fault of ['unrouted-peer', 'restarted-owner', 'restarted-surge']) {
+    const f = fixture();
+    const wait = f.options.waitForWithdrawal;
+    const departing = fault === 'restarted-surge' ? 'fixture-backend-2' : 'fixture-backend-0';
+    let offline = false;
+    f.options.readRoutedPeers = async () =>
+      new Set(
+        [...f.pods.values()]
+          .filter((pod) => pod.ready && (!offline || pod.name !== 'fixture-backend-1'))
+          .map((pod) => pod.uid),
+      );
+    f.options.waitForWithdrawal = async (pod) => {
+      await wait(pod);
+      if (pod.name !== departing) return;
+      if (fault === 'unrouted-peer') offline = true;
+      else f.pods.get(departing).incarnation = randomUUID();
+    };
+    await assert.rejects(runHaRollingUpgrade(f.options), /ready, serving owners|retirement owner\/protocol/);
+    assert.equal(f.operations.includes(`delete:${departing}`), false);
+    assert.equal(f.operations.includes('scale:2'), false);
+    if (fault === 'unrouted-peer') {
+      offline = false;
+      f.options.waitForWithdrawal = wait;
+      await runHaRollingUpgrade({ ...f.options, resumeToken: f.journal.token });
+      assert.equal(f.operations.filter((op) => op === `begin:${departing}`).length, 1);
+    }
+  }
 });
 
 test('a completed owner replaced during the final status read cannot seal a successful journal', async () => {
@@ -1577,6 +1651,7 @@ for (const fault of [
   'changed-uid',
   'missing-readiness',
   'null-readiness',
+  'unrouted-executor-peer',
   'template-capacity-race',
   'template-resource-version-race',
   'recreated-statefulset',
@@ -1594,6 +1669,12 @@ for (const fault of [
     const f = fixture(),
       calls = [];
     const name = f.options.workloads[0].name;
+    const backendLabels = { 'app.kubernetes.io/instance': 'fixture', 'app.kubernetes.io/component': 'backend' };
+    const service = ['public', 'executor'].map((name) => ({
+      kind: 'Service',
+      metadata: { name },
+      spec: { selector: backendLabels },
+    }));
     const candidate = {
       kind: 'StatefulSet',
       metadata: { name, labels: { 'app.kubernetes.io/component': 'backend' } },
@@ -1601,6 +1682,7 @@ for (const fault of [
         replicas: 2,
         updateStrategy: { type: 'OnDelete' },
         template: {
+          metadata: { labels: backendLabels },
           spec: {
             containers: [
               { name: 'backend', image: f.options.workloads[0].image, env: [{ name: 'RIVET_KEY', value: 'fixture' }] },
@@ -1689,27 +1771,34 @@ for (const fault of [
       }
       if (args[0] === 'get' && args[1] === 'service')
         return result({
-          items: [
-            {
-              kind: 'Service',
-              metadata: { name: 'public' },
-              spec: fault === 'service-routing-change' ? { ports: [{ port: 81 }] } : {},
-            },
-          ],
+          items:
+            fault === 'service-routing-change'
+              ? [{ ...service[0], spec: { ...service[0].spec, ports: [{ port: 81 }] } }, service[1]]
+              : service,
         });
       if (args[0] === 'get' && args[1] === 'endpointslice')
         return result({
-          items: [
-            {
-              metadata: { labels: { 'kubernetes.io/service-name': 'public' } },
-              endpoints: [...f.pods.values()].map((pod) => ({
-                targetRef: { uid: pod.uid },
-                ...(fault === 'missing-readiness'
-                  ? {}
-                  : { conditions: { ready: fault === 'null-readiness' ? null : pod.ready } }),
-              })),
-            },
-          ],
+          items: service.map(({ metadata }) => ({
+            metadata: { labels: { 'kubernetes.io/service-name': metadata.name } },
+            endpoints: [...f.pods.values()].map((pod) => ({
+              targetRef: { uid: pod.uid },
+              ...(!pod.ready && fault === 'missing-readiness'
+                ? {}
+                : {
+                    conditions: {
+                      ready:
+                        !pod.ready && fault === 'null-readiness'
+                          ? null
+                          : pod.ready &&
+                            !(
+                              fault === 'unrouted-executor-peer' &&
+                              metadata.name === 'executor' &&
+                              pod.name.endsWith('-1')
+                            ),
+                    },
+                  }),
+            })),
+          })),
         });
       if (args[0] === 'get' && args[1] === 'pod') {
         const pod = f.pods.get(args[2]);
@@ -1718,6 +1807,7 @@ for (const fault of [
           metadata: {
             name: pod.name,
             uid: pod.uid,
+            resourceVersion: 'pod-version',
             ownerReferences: [
               {
                 kind: 'StatefulSet',
@@ -1757,7 +1847,10 @@ for (const fault of [
       }
       if (args[0] === 'delete') {
         const podName = args[2].split('/').at(-1);
-        assert.equal(JSON.parse(extra.input).preconditions.uid, f.pods.get(podName).uid);
+        assert.deepEqual(JSON.parse(extra.input).preconditions, {
+          uid: f.pods.get(podName).uid,
+          resourceVersion: 'pod-version',
+        });
         await f.options.removePod(f.pods.get(podName));
         return result({});
       }
@@ -1784,7 +1877,7 @@ for (const fault of [
       release: 'fixture',
       namespace: 'fixture',
       manifestDigest: 'candidate',
-      resources: [candidate, { kind: 'Service', metadata: { name: 'public' }, spec: {} }],
+      resources: [candidate, ...service],
       // Removal deliberately needs a second poll. Leave room for that interval;
       // the fake-clock observation test separately rejects late success.
       timeoutMs: fault === 'slow-checkpoint-artifact' ? 1_200_000 : 3000,
@@ -1877,6 +1970,11 @@ for (const fault of [
         0,
       );
       assert.equal(restored, false);
+      return;
+    }
+    if (fault === 'unrouted-executor-peer') {
+      await assert.rejects(runHaKubernetesRollout(options), /ready, serving owners on the required routes/);
+      assert.equal(calls.filter((a) => a.includes('--withdraw-only') || a[0] === 'delete').length, 0);
       return;
     }
     if (fault === 'missing-readiness' || fault === 'null-readiness') {

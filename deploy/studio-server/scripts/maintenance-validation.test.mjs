@@ -169,7 +169,7 @@ test('schema 22 maintenance keeps both execution pool owners while traffic and r
         maintenance: false,
         overrides: [...configuration.overrides, 'autoscaling.executionController.enabled=false'],
       }),
-    /Execution pools require singleton HA with the execution controller/,
+    /Execution pools require .+ with the execution controller/,
   );
 
   const staging = render({

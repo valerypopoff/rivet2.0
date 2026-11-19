@@ -244,9 +244,9 @@ async function fixture(t, mode, fault, schemaChange = false) {
     base.replicaCount.backend = 1;
     base.replicaCount.execution = 1;
   }
-  if (mode === 'overlap') {
+  if (mode === 'overlap' || mode === 'singleton') {
     merge(base, await read('deploy/studio-server/helm/overlays/gke-runtime-ha.yaml'));
-    base.ha.controlPlane.mode = 'singleton-overlap';
+    base.ha.controlPlane.mode = mode === 'overlap' ? 'singleton-overlap' : 'singleton';
     base.ha.namespaceUid = '11111111-1111-4111-8111-111111111111';
     base.resources.backendOverlap = clone(base.resources.backend);
     base.resourceLimitAcknowledgements.backendOverlap = clone(base.resourceLimitAcknowledgements.backend);
@@ -606,6 +606,27 @@ const clone = structuredClone;
 // Bound overlap rather than serialize all real CLI recovery journeys into one
 // CI timeout. Operations inside an individual journey remain strictly ordered.
 describe('isolated deployment command journeys', { concurrency: 3 }, () => {
+  test('the online rollout guard refuses a singleton before backup or workload changes', async (t) => {
+    const f = await fixture(t, 'singleton');
+    const preview = await f.invoke(['--require-online', '--plan-only']);
+    assert.equal(preview.code, 0, preview.stdout + preview.stderr);
+    assert.match(preview.stdout, /continuity-required; 0 qualified hop/);
+    const plan = JSON.parse(await fs.readFile(path.join(f.directory, 'artifacts/result/upgrade-plan.json'), 'utf8'));
+    assert.equal(plan.status, 'continuity-required');
+    assert.deepEqual(plan.steps, []);
+
+    const blocked = await f.invoke(['--require-online', '--preflight-only']);
+    assert.equal(blocked.code, 1, blocked.stdout + blocked.stderr);
+    assert.match(blocked.stderr, /qualify online editor adoption on the installed images first/i);
+    const transition = await f.invoke(['--require-online', '--ha-control-plane-transition']);
+    assert.equal(transition.code, 1, transition.stdout + transition.stderr);
+    assert.match(transition.stderr, /--require-online applies to an installed rolling release/);
+    await assert.rejects(fs.stat(path.join(f.directory, 'adapters.ndjson')), { code: 'ENOENT' });
+    assert.ok(
+      (await f.calls()).every((c) => !['upgrade', 'create', 'replace', 'patch', 'scale', 'delete'].includes(c.args[0])),
+    );
+  });
+
   test(
     'acceptance-only can finish the original bound observer without another deployment or backup',
     { timeout: 330000 },

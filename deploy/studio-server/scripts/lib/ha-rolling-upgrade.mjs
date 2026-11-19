@@ -92,7 +92,9 @@ export async function runHaRollingUpgrade({
   isCurrentPod = (pod, workload) => pod.image === workload.image,
   prepareRetirement = async () => {},
   prepareAdmissionFence = async () => {},
+  readRoutedPeers,
   checkHeadroom = async () => {},
+  prepareSurge = async () => {},
   settle,
   handoverHousekeeping,
   verifyPoolPreparationTemplates,
@@ -253,6 +255,7 @@ export async function runHaRollingUpgrade({
       const checkRetirementCapacity = async (pod, workload) => {
         if (workload.role !== 'execution' && !(workload.role === 'backend' && controlPlaneMode !== 'singleton')) return;
         let survivors = 0;
+        const routed = await readRoutedPeers?.(workload.name);
         const maximumOrdinal =
           identity.cooperativeScaling?.workload === workload.name
             ? identity.cooperativeScaling.maxReplicas - 1
@@ -263,7 +266,7 @@ export async function runHaRollingUpgrade({
           const name = `${workload.name}-${i}`;
           if (name === pod.name) continue;
           const peer = await observePod(name);
-          if (!peer?.ready) continue;
+          if (!peer?.ready || (routed && !routed.has(peer.uid))) continue;
           const state = assertHaRetirement(await status(peer));
           if (state.state !== 'serving' || state.operationId) continue;
           const confirmed = await observePod(name);
@@ -271,8 +274,19 @@ export async function runHaRollingUpgrade({
         }
         if (survivors < required)
           throw new Error(
-            'HA replacement capacity requires two other ready, serving owners before routing withdrawal or admission fencing; resume after peers recover.',
+            `HA replacement capacity requires ${required === 1 ? 'one' : 'two'} other ready, serving owners on the required routes; resume after peers recover.`,
           );
+      };
+      const confirmRemoval = async (pod, workload, owner) => {
+        await waitForWithdrawal(pod);
+        await proxyContinuity?.verify(operation);
+        await checkRetirementCapacity(pod, workload);
+        const current = await observePod(owner.name);
+        if (current?.uid !== owner.uid || current.terminating) throw Error('HA owner changed before removal.');
+        if (assertHaRetirement(await status(current), owner.incarnation, owner.operationId).state !== 'drained')
+          throw Error('HA owner is no longer drained.');
+        assertLease();
+        return current;
       };
       const startRetirement = async (pod, workload) => {
         await proxyContinuity?.verify(operation);
@@ -280,6 +294,7 @@ export async function runHaRollingUpgrade({
         if (workload.role === 'backend' && controlPlaneMode === 'singleton-overlap' && !owner.withdrawIssued) {
           const target = await observePod(`${workload.name}-${pod.name.endsWith('-0') ? 1 : 0}`);
           if (!target?.ready) throw Error('Replacement developer backend is unavailable; old backend retained.');
+          await checkRetirementCapacity(pod, workload);
           await handoverHousekeeping({ source: pod, target, operation });
         }
         if (owner.beginIssued && !owner.withdrawIssued)
@@ -316,8 +331,17 @@ export async function runHaRollingUpgrade({
         }
       };
 
+      // Applying paired templates starts the candidate pool. Finish that
+      // handoff before allowing a temporary editor to start during the roll.
+      const pairedOwner =
+        controlPlaneMode === 'singleton-overlap' &&
+        workloads.find((workload) => workload.name === executionPool?.workload);
+      const orderedWorkloads = pairedOwner
+        ? [pairedOwner, ...workloads.filter((workload) => workload !== pairedOwner)]
+        : workloads;
       if (operation.record.phase === 'preflight') {
         await safety.checkOwnedBaseline(operation.record, runner, now);
+        if (pairedOwner) await prepareSurge(pairedOwner);
         await measure('handoff:bridge', () => proxyContinuity?.prepare(operation));
         await safety.checkOwnedBaseline(operation.record, runner, now);
         await checkHeadroom({ stage: 'preflight' });
@@ -339,9 +363,10 @@ export async function runHaRollingUpgrade({
       if (waitForTemplatesReady) await measure('templates:prerequisites', () => waitForTemplatesReady(operation));
       assertLease();
       await proxyContinuity?.verify(operation);
-      for (const workload of workloads) {
+      for (const workload of orderedWorkloads) {
         const w = workload;
         if (executionPool?.workload === w.name) {
+          if (operation.record.executionPool?.phase !== 'complete') await prepareSurge(w);
           await measure('execution:pool', () => executionPool.run(operation));
           if (!operation.record.completed.includes(w.name))
             await checkpoint({ completed: [...operation.record.completed, w.name] });
@@ -378,6 +403,7 @@ export async function runHaRollingUpgrade({
             continue;
           }
         }
+        if (!serial) await prepareSurge(w);
         if (!serial && operation.record.owner?.name !== surgeName) {
           assertLease();
           const target = elastic ? Math.min(w.replicas + 1, identity.cooperativeScaling.maxReplicas) : w.replicas + 1;
@@ -436,10 +462,8 @@ export async function runHaRollingUpgrade({
               await wait();
             }
           });
-          await waitForWithdrawal(pod);
-          assertLease();
-          // The adapter must use a Kubernetes UID precondition, not kubectl delete --force.
-          await removePod(pod);
+          const drained = await confirmRemoval(pod, w, owner);
+          await removePod(drained);
           await measure(`ready:${name}`, () => waitForReady(name, w.image));
           await checkpoint({ owner: null });
         }
@@ -470,7 +494,7 @@ export async function runHaRollingUpgrade({
                 await wait();
               }
             });
-            await waitForWithdrawal(pod);
+            await confirmRemoval(pod, w, owner);
             await checkpoint({ owner: { ...operation.record.owner, scaleDownIssued: true } });
             assertLease();
             await scale(w.name, w.replicas, w.replicas + 1, owner);

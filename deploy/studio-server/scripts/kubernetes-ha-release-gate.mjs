@@ -104,10 +104,11 @@ export class HaReleaseGate extends ManagedReleaseGate {
       ),
     };
   }
-  async apply(values, name = 'ha-values.json', { waitForReady = true } = {}) {
+  async apply(values, name = 'ha-values.json', { waitForReady = true, beforeWrite } = {}) {
     const file = path.join(this.config.artifactsDir, name);
     await fs.mkdir(this.config.artifactsDir, { recursive: true });
     await fs.writeFile(file, JSON.stringify(values));
+    await beforeWrite?.();
     await run(this.helmBin, [
       '--kube-context',
       this.config.context,

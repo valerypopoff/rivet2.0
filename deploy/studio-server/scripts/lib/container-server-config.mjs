@@ -69,10 +69,6 @@ export function containerServerConfig(env, stage, storage, root = process.cwd())
   const recordingDurability = value(env, 'RIVET_RECORDING_DURABILITY_ENABLED') || 'true';
   if (!['true', 'false', '1', '0'].includes(recordingDurability))
     throw new Error('RIVET_RECORDING_DURABILITY_ENABLED must be true or false.');
-  const frozenEndpointReleases =
-    value(env, 'RIVET_ENABLE_FROZEN_ENDPOINT_RELEASES') || (stage === 'dev' && local ? '1' : '0');
-  if (!['0', '1'].includes(frozenEndpointReleases))
-    throw new Error('RIVET_ENABLE_FROZEN_ENDPOINT_RELEASES must be 0 or 1.');
   const external = (name, fallback) =>
     requireValue(env, prefix + name, stage === 'prod' ? value(env, `RIVET_K8S_${name}`, fallback) : fallback);
   const localCredentials = Object.fromEntries(containerCredentialDefaults(stage, storage, env));
@@ -184,7 +180,6 @@ export function containerServerConfig(env, stage, storage, root = process.cwd())
     port: Number(port),
     uiAuthMode,
     recordingDurabilityEnabled: recordingDurability === 'true' || recordingDurability === '1',
-    frozenEndpointReleases,
     password,
     database,
     sslMode,
@@ -324,7 +319,6 @@ export function createManagedCompose(
     healthcheck: health(21890),
     environment: {
       ...services.backend.environment,
-      RIVET_ENABLE_FROZEN_ENDPOINT_RELEASES: config.frozenEndpointReleases,
       RIVET_BACKEND_API_PORT: '8080',
       RIVET_BACKEND_EXECUTOR_PORT: '21889',
       RIVET_BACKEND_HEALTH_PORT: '21890',

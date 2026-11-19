@@ -43,7 +43,7 @@ interface WorkflowLibraryPanelProps {
   sendBundleComparison: BundleComparisonSend;
   bundleComparisonState: BundleComparisonEditorState;
   historyPreview: HistoryPreviewSession | null;
-  dirtyProjectIds: string[];
+  getDirtyProjectIds(): readonly string[];
   onOpenHistoryProject(artifactId: string): void;
   onExitHistoryPreview(): void;
   editorInstanceId?: string | null;
@@ -104,7 +104,7 @@ export const WorkflowLibraryPanel: FC<WorkflowLibraryPanelProps> = ({
   sendBundleComparison,
   bundleComparisonState,
   historyPreview,
-  dirtyProjectIds,
+  getDirtyProjectIds,
   onOpenHistoryProject,
   onExitHistoryPreview,
   editorInstanceId,
@@ -548,7 +548,7 @@ export const WorkflowLibraryPanel: FC<WorkflowLibraryPanelProps> = ({
           comparison={comparison}
           scheduledRunsOpen={scheduledRunsOpen}
           controller={controller}
-          dirtyProjectIds={dirtyProjectIds}
+          getDirtyProjectIds={getDirtyProjectIds}
           routeConfig={routeConfig}
           onRouteConfigChange={onRouteConfigChange}
         />

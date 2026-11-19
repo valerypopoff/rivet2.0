@@ -481,13 +481,26 @@ export class ReusableProviderGate extends RuntimeControlLocalGate {
       JSON.stringify({ uid: current.metadata.uid, minimumReady: minimum }),
     );
   }
-  async verifyDeveloperAcceptance(pod) {
+  async verifyDeveloperAcceptance(pod, projectPath) {
     const source = await fs.readFile(
       path.join(root, 'deploy/studio-server/scripts/fixtures/ha-developer-acceptance.mjs'),
       'utf8',
     );
     const result = await this.kube(
-      ['exec', '-i', pod.name, '-c', 'backend', '--', 'node', '--input-type=module', '-', pod.uid, pod.incarnation],
+      [
+        'exec',
+        '-i',
+        pod.name,
+        '-c',
+        'backend',
+        '--',
+        'node',
+        '--input-type=module',
+        '-',
+        pod.uid,
+        pod.incarnation,
+        ...(projectPath ? [projectPath] : []),
+      ],
       { input: source },
     );
     const receipt = JSON.parse(result.stdout);
@@ -496,6 +509,7 @@ export class ReusableProviderGate extends RuntimeControlLocalGate {
     assert.equal(receipt.incarnation, pod.incarnation);
     assert.equal(receipt.developerApi, true);
     assert.equal(receipt.editorSession, true);
+    if (projectPath) assert.equal(receipt.projectSave, true);
     return receipt;
   }
   async apply(values, label = 'provider-values.json', options) {

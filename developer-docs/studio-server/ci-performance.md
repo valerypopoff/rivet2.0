@@ -54,6 +54,16 @@ Their Linux images omit only the hash-reviewed Windows node-gyp discovery parser
 while final-image installation/native-build probes preserve Linux functionality.
 Review dependency ownership again when the execution graph changes.
 
+## Rollout and chart contracts
+
+Changes to release selection, editor topology or chart validation need both
+`yarn studio-server:verify:production-cutover` and
+`yarn studio-server:verify:kubernetes` with pinned Helm. The rollout source
+suite covers a smaller set of tests. These commands use local fixtures and Helm
+renders. Release selection tests verify that source, chart or checkout drift is
+rejected before publishing deployment artifacts. Helm rejection tests check the
+required controller without hard-coding the list of supported topologies.
+
 ## Schema and browser fixture contracts
 
 The shared Docker launcher dotenv contract keeps a closed inventory of documented

@@ -81,7 +81,10 @@ export function prepareExecutionPoolResources({
   const sets = resources.filter((resource) => resource.kind === 'StatefulSet' && role(resource) === 'execution');
   if (!sets.some(slot)) return null;
   assert.equal(typeof allowTransition, 'boolean');
-  assert.equal(controlPlaneMode, 'singleton');
+  assert.ok(
+    ['singleton', 'singleton-overlap'].includes(controlPlaneMode),
+    'Paired execution requires singleton control',
+  );
   assert.equal(sets.length, 2);
   assert.deepEqual(new Set(sets.map(slot)), new Set(['a', 'b']));
   assert.ok(

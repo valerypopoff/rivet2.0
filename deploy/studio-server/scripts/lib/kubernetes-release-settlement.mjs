@@ -186,6 +186,7 @@ export function inspectReleaseSettlement({
   release,
   namespace,
   retainedExecution = [],
+  retainedEditor,
   candidateProxyHpa,
 }) {
   if (!Array.isArray(resources) || !Array.isArray(items) || !release || !namespace)
@@ -257,8 +258,29 @@ export function inspectReleaseSettlement({
     )
   )
     throw Error('Retained topology execution identity is incomplete or outside this release.');
-  const retained = (controller) =>
-    retainedExecution.find((r) => controller.kind === 'StatefulSet' && r.name === controller.metadata.name);
+  const retained = (controller) => {
+    if (controller.kind !== 'StatefulSet') return;
+    if (
+      retainedEditor?.name === controller.metadata.name &&
+      retainedEditor.uid === controller.metadata.uid &&
+      retainedEditor.replicas === 1 &&
+      controller.spec?.replicas === 1 &&
+      controller.spec.updateStrategy?.type === 'OnDelete' &&
+      controller.metadata.labels?.[componentLabel] === 'backend' &&
+      retainedEditor.pods?.length === 1 &&
+      items.some(
+        (pod) =>
+          pod.kind === 'Pod' &&
+          pod.metadata.namespace === namespace &&
+          pod.metadata.name === `${retainedEditor.name}-0` &&
+          pod.metadata.uid === retainedEditor.pods[0] &&
+          pod.metadata.labels?.['controller-revision-hash'] === retainedEditor.revision &&
+          sameOwner(pod, controller),
+      )
+    )
+      return retainedEditor;
+    return retainedExecution.find((r) => r.name === controller.metadata.name);
+  };
   const pending = new Set();
   const note = (resource, reason) => pending.add(`${key(resource)}: ${reason}`);
   const inNamespace = (resource) => resource.metadata?.namespace === namespace;
@@ -561,6 +583,7 @@ export async function waitForReleaseSettlement({
   timeoutMs,
   stableMs = 30_000,
   retainedExecution = [],
+  retainedEditor,
   candidateProxyHpa,
   clock = { now: Date.now, sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)) },
   artifact = async () => {},
@@ -641,6 +664,7 @@ export async function waitForReleaseSettlement({
       release,
       namespace,
       retainedExecution,
+      retainedEditor,
       candidateProxyHpa,
     });
     const now = clock.now();

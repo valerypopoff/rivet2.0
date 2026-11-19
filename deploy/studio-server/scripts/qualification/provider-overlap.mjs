@@ -1,7 +1,16 @@
 import assert from 'node:assert/strict';
 import { isDeepStrictEqual } from 'node:util';
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import { randomUUID } from 'node:crypto';
+import { parse, stringify } from 'yaml';
+import { rootStructuralMutation } from '../lib/structural-fixture-admission.mjs';
 import { startHaBrowserProbe } from '../lib/ha-browser-probe.mjs';
 import { runHaKubernetesControlTopology } from '../lib/ha-kubernetes-control-topology.mjs';
+import { onlineEditorSettlementValues, runKubernetesOnlineEditorAdoption } from '../lib/online-editor-kubernetes.mjs';
+import { openOnlineEditorRestoreGuard } from '../lib/online-editor-restore-guard.mjs';
+import { assertOnlineAdoptionObservations, onlineAdoptionEvents } from '../lib/online-editor-adoption-receipt.mjs';
+import { ProviderRequestContinuity } from './provider-request-continuity.mjs';
 import { mergeRuntimeControlGuards } from '../kubernetes-runtime-control-local.mjs';
 import { getStudioServerReleaseManifestDigest } from '../lib/studio-server-release-manifest.mjs';
 import { overlapProfileDigest } from '../lib/qualification-overlap-profile.mjs';
@@ -39,13 +48,149 @@ const maintenanceDisk = async (gate, pod) => {
   };
 };
 
-/** Adoption is a separate same-image preparation step, outside the protected
- * mixed-image window. It makes no initial developer-availability promise. */
-export async function adoptProviderOverlap(gate) {
+async function qualifyPairedEditorAdoption(gate, values, checkpoint) {
+  assert.equal(
+    values.postgres.poolMaxPerApiPod,
+    gate.operation.developerOverlapProfile.poolMaxPerApiPod,
+    'The online handoff must retain the installed database pool size',
+  );
+  assert.equal(values.requestContinuity?.maxProtectedRequestSeconds, 300);
+  const previous = gate.operation.previous;
+  const digest = getStudioServerReleaseManifestDigest(previous, { requirePromoted: true });
+  const source = await gate.resources(values, 'online-editor-source');
+  gate.overlap = true;
+  gate.overlapProfilePrepared = true;
+  const target = gate.values(previous.images);
+  target.workflowSchema.migrationJob.enabled = false;
+  const desired = await gate.resources(target, 'online-editor-target');
+  const base = gate.config.baseUrl;
+  assert.ok(
+    gate.continuityProbes?.proxySettingsPrepared,
+    'The protected source proxy settings must already be verified',
+  );
+  const seed = JSON.parse(await fs.readFile(path.join(gate.config.artifactsDir, 'ha-persisted-state.json'), 'utf8'));
+  const template = await gate.requestWorkflow(base, '/api/workflows/projects/download', {
+    method: 'POST',
+    body: JSON.stringify({ relativePath: seed.relativePath, version: 'live' }),
+  });
+  const saveProject = parse(template);
+  saveProject.data.metadata.id = randomUUID();
+  const { project: saveFixture } = await gate.requestWorkflow(base, '/api/workflows/projects/upload', {
+    method: 'POST',
+    headers: { 'X-Rivet-Namespace-Intent': '1' },
+    body: JSON.stringify({
+      folderRelativePath: '',
+      fileName: `online-editor-save-${saveProject.data.metadata.id}.rivet-project`,
+      contents: stringify(saveProject),
+      mutation: rootStructuralMutation(),
+    }),
+  });
+  const before = await gate.pods();
+  const continuity = new ProviderRequestContinuity(gate, { hpaOnly: true });
+  continuity.proxySettingsPrepared = true;
+  let browser, editor;
+  try {
+    await continuity.prepare(template);
+    browser = await startHaBrowserProbe(gate, base, root, { template, label: 'online-control-adoption' });
+    editor = startHaDeveloperTraffic(gate, base);
+    const observed = {},
+      startingSamples = {};
+    const verify = () => {
+      const publicSamples = checkpoint();
+      assert.deepEqual(editor.report.failures, []);
+      assert.deepEqual(continuity.failures, []);
+      return { ...publicSamples, editor: editor.report.samples };
+    };
+    await until('authenticated editor traffic before adoption', () => {
+      const samples = verify();
+      return [samples.editor, samples.workflow, samples.webApp].every((count) => count > 0);
+    });
+    await runKubernetesOnlineEditorAdoption({
+      kube: (...args) => gate.kube(...args),
+      release: gate.config.release,
+      namespace: gate.config.namespace,
+      manifestDigest: digest,
+      installed: source,
+      desired,
+      safety: gate.deploymentSafety('topology', digest),
+      timeoutMs: 1_200_000,
+      openRestoreGuard: async (pod) => {
+        await gate.assertProofContext();
+        return openOnlineEditorRestoreGuard({
+          kubectl: gate.kubectlBin,
+          context: gate.config.context,
+          namespace: gate.config.namespace,
+          pod,
+          schema: previous.database.managedWorkflowSchema.version,
+          postgres: values.postgres,
+          cwd: root,
+        });
+      },
+      verifyDeveloperReady: (pod) => gate.verifyDeveloperAcceptance(pod, saveFixture.absolutePath),
+      verifyTraffic: async (phase) => {
+        verify();
+        for (const [start, end, name] of onlineAdoptionEvents) {
+          if (start === phase) {
+            await continuity.startCohort(name);
+            startingSamples[name] = { startedAt: new Date().toISOString(), before: verify() };
+          }
+          if (end === phase && !observed[name]) {
+            const at = new Date().toISOString();
+            const { startedAt, before } = startingSamples[name];
+            const after = await until(`routed samples after ${name}`, () => {
+              const current = verify();
+              return Object.keys(current).every((route) => current[route] > before[route]) && current;
+            });
+            await gate.loadWorkflowKey();
+            observed[name] = { startedAt, at, before, after, freshLogin: true };
+          }
+        }
+        if (phase === 'source-withdrawn') await browser.resumeAfterFrontendReplacement([]);
+      },
+      settle: async (_operation, beforeWrite) => {
+        const { stdout } = await gate.kube([
+          'get',
+          'statefulset,deployment',
+          '-l',
+          `app.kubernetes.io/instance=${gate.config.release}`,
+          '-o',
+          'json',
+        ]);
+        const guards = onlineEditorSettlementValues(JSON.parse(stdout).items, desired);
+        await gate.apply(mergeRuntimeControlGuards(target, guards), 'online-editor-settle.json', { beforeWrite });
+      },
+    });
+    const browserResult = await browser.finish(before, { frontendReplacement: false });
+    for (const [, , name] of onlineAdoptionEvents) await continuity.settleCohort(name);
+    await continuity.verifyRecordings();
+    const traffic = await editor.stop();
+    verify();
+    const evidence = {
+      installedManifestDigest: digest,
+      observed,
+      protectedRequests: continuity.requests,
+      traffic,
+      browser: browserResult,
+    };
+    assertOnlineAdoptionObservations(evidence, digest);
+    await gate.artifact('online-editor-adoption-observations.json', JSON.stringify(evidence, null, 2));
+    return evidence;
+  } finally {
+    await Promise.all([browser?.close(), editor?.stop(), continuity.close()]);
+  }
+}
+
+/** Paired first adoption is online. Older serial fixtures retain the
+ * separately qualified ownership bridge. */
+export async function adoptProviderOverlap(gate, checkpoint = () => {}) {
   const values = gate.values(gate.operation.previous.images);
   const sourcePool = values.postgres.poolMaxPerApiPod;
   if (values.ha.controlPlane.mode === 'singleton-overlap')
     return { sourceMode: 'singleton-overlap', sourcePool, preparationComplete: true };
+  if (values.ha.executionPools?.enabled) {
+    const onlineAdoption = await qualifyPairedEditorAdoption(gate, values, checkpoint);
+    return { sourceMode: 'singleton', sourcePool, preparationComplete: true, onlineAdoption };
+  }
   gate.overlapProfilePrepared = true;
   // Pool sizing is a separate same-image singleton rollout. Ownership transfer
   // must not leave old execution owners using a larger pool than its budget.

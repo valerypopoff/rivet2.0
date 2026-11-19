@@ -637,9 +637,24 @@ an additional manual build. Staging branches ignore the repository pin. Setting
 this digest does not start qualification or deployment; their fresh installed-state
 and immutable-artifact checks remain required.
 
-First production activation uses the existing deployment command in three
-separately journaled steps, with normal policy, backup, ownership and acceptance
-checks. Obtain approval for the initial developer interruption first.
+For a singleton with paired execution pools, use the
+[online first-adoption route](online-editor-overlap-plan.md#operator-inputs-and-recovery).
+The provider runner observes that same-image transition before the separate
+mixed-image rollout. It records fresh authentication, a retained browser
+session and full protected responses across both withdrawals and the
+housekeeping transfer in `online-editor-adoption-observations.json`. Those
+observations also travel with the ordinary upgrade report. A paired singleton
+qualification needs them bound to the exact predecessor and report window.
+Each cohort starts before its routing change or the original editor's deletion,
+and must finish after the corresponding handoff. At least one pooled HTTP/1
+request must show actual connection reuse. The withdrawal checkpoints follow
+the EndpointSlice propagation window. The browser resumes its accepted run
+after the original editor starts draining. Admission checks the installed
+database pool size and request protection before the provider run starts.
+
+The serial activation route uses the existing deployment command in three
+separately journaled steps with its policy, backup, ownership and acceptance
+checks. It requires approval for the initial developer interruption.
 
 1. Pin `--manifest` to the exact installed predecessor; use the qualified candidate
    as `--overlap-adoption-certificate`, and `--overlap-adoption-stage sizing`.

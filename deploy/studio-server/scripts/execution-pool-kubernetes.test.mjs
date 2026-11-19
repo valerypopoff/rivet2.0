@@ -17,6 +17,7 @@ function fixture({ timeoutMs = 5000, read = () => {} } = {}) {
     status: { observedGeneration: 2, updateRevision: 'revision' },
   };
   const pending = new Set(),
+    unrouted = new Set(),
     calls = [];
   let verified = 0,
     candidateReads = 0;
@@ -52,6 +53,12 @@ function fixture({ timeoutMs = 5000, read = () => {} } = {}) {
       name.startsWith('execution-next-')
         ? { name, uid: name, image, revision: 'revision', ready: !pending.has(name), terminating: false }
         : null,
+    readRoutedPeers: async () =>
+      new Set(
+        Array.from({ length: candidate.spec.replicas }, (_, ordinal) => `execution-next-${ordinal}`).filter(
+          (name) => !unrouted.has(name),
+        ),
+      ),
     status: async () => ({ state: 'serving', operationId: null }),
     bindCandidate: (uid) => assert.equal(uid, 'candidate', 'Candidate identity changed'),
     isCurrent: (pod, revision) => haCandidateReady(pod.name, pod, image, revision),
@@ -61,7 +68,7 @@ function fixture({ timeoutMs = 5000, read = () => {} } = {}) {
     service: { metadata: { name: 'execution' }, spec: { selector: { role: 'execution' } } },
     candidateTemplate: { metadata: { labels: { 'rivet.dev/execution-pool': 'b' } } },
   });
-  return { pool, operation, pending, calls, candidate, previous, verified: () => verified };
+  return { pool, operation, pending, unrouted, calls, candidate, previous, verified: () => verified };
 }
 
 test('pool completion waits for permitted candidate growth without repeating workload commands', async () => {
@@ -133,7 +140,8 @@ test('pool completion cannot pass indefinitely unready capacity', async () => {
 
 test('pool completion never waits away a lost serving floor', async () => {
   const f = fixture({ timeoutMs: 30 });
-  f.pending.add('execution-next-0').add('execution-next-1');
+  f.pending.add('execution-next-0');
+  f.unrouted.add('execution-next-1');
   await assert.rejects(f.pool.verify(f.operation), /serving floor was lost/);
   assert.equal(f.verified(), 0);
   assert.equal(f.calls.filter((args) => args[2] === 'execution-next').length, 1);

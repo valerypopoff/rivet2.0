@@ -269,6 +269,34 @@ export async function captureHaFrontendCapacity(kube, resources, release) {
   };
 }
 
+/** Include terminating Pods because database connections can outlive a scale write. */
+export function assertSeparatedEditorExecutionSurges({ role, controllers, pods, active }) {
+  const component = (r) => r.metadata.labels?.['app.kubernetes.io/component'];
+  const ownedBy = (pod, workload) =>
+    pod.metadata.ownerReferences?.some((owner) => owner.controller === true && owner.uid === workload.metadata.uid);
+  const editor = controllers.find((r) => component(r) === 'backend');
+  const execution = controllers.filter((r) => component(r) === 'execution');
+  const activePool = execution.find((r) => r.metadata.name === active);
+  if (role === 'execution') {
+    const editors = pods.filter((r) => component(r) === 'backend');
+    if (
+      editor?.spec.replicas !== 1 ||
+      editors.length !== 1 ||
+      editors[0].metadata.deletionTimestamp ||
+      !ownedBy(editors[0], editor) ||
+      editors[0].metadata.name !== `${editor.metadata.name}-0`
+    )
+      throw Error('Wait for the extra editor and its database connections to settle before surging execution.');
+  } else if (
+    !activePool ||
+    execution.length !== 2 ||
+    execution.some((r) => r !== activePool && r.spec.replicas !== 0) ||
+    pods.some((p) => component(p) === 'execution' && !ownedBy(p, activePool))
+  ) {
+    throw Error('Wait for the retiring execution pool to settle before surging the editor.');
+  }
+}
+
 /** Kubernetes plumbing only; retirement policy stays independently testable. */
 export async function runHaKubernetesRollout({
   kube,
@@ -511,6 +539,9 @@ export async function runHaKubernetesRollout({
     return {
       name: podName,
       uid: pod.metadata.uid,
+      resourceVersion: pod.metadata.resourceVersion,
+      matchesSelector: (selector) =>
+        Object.entries(selector).every(([key, value]) => pod.metadata.labels?.[key] === value),
       nodeName: pod.spec.nodeName,
       container: container.name,
       image: container.image,
@@ -526,6 +557,32 @@ export async function runHaKubernetesRollout({
       (await kube(['exec', pod.name, '-c', pod.container, '--', 'node', '/opt/rivet/retire-backend.mjs', ...args]))
         .stdout,
     );
+  const readSlices = async () => JSON.parse((await kube(['get', 'endpointslice', '-o', 'json'])).stdout).items;
+  const readRoutedPeers = async (workloadName) => {
+    const labels = resources.find((r) => r.kind === 'StatefulSet' && r.metadata.name === workloadName)?.spec.template
+      .metadata?.labels;
+    const services = resources.filter(
+      (r) =>
+        r.kind === 'Service' &&
+        publicServices.has(r.metadata.name) &&
+        labels &&
+        Object.keys(r.spec.selector ?? {}).length &&
+        Object.entries(r.spec.selector).every(([key, value]) => labels[key] === value),
+    );
+    if (!services.length) return;
+    const slices = await readSlices();
+    const members = services.map(
+      ({ metadata }) =>
+        new Set(
+          slices
+            .filter((slice) => slice.metadata?.labels?.['kubernetes.io/service-name'] === metadata.name)
+            .flatMap((slice) => slice.endpoints ?? [])
+            .filter((endpoint) => endpoint.conditions?.ready === true && !endpoint.conditions.terminating)
+            .map((endpoint) => endpoint.targetRef?.uid),
+        ),
+    );
+    return new Set([...members[0]].filter((uid) => uid && members.every((service) => service.has(uid))));
+  };
   const waitForRoutingWithdrawal = (pod) =>
     waitForHaRoutingWithdrawal({
       pod,
@@ -533,7 +590,7 @@ export async function runHaKubernetesRollout({
       observePod,
       timeoutMs,
       clock: routingWithdrawalClock,
-      readSlices: async () => JSON.parse((await kube(['get', 'endpointslice', '-o', 'json'])).stdout).items,
+      readSlices,
     });
   const guardedTemplateValues = async (continuityValues = {}) => {
     const versions = {};
@@ -628,12 +685,7 @@ export async function runHaKubernetesRollout({
     : undefined;
   const waitForOwnerWithdrawal = async (pod) => {
     await deadlineWait(
-      async () =>
-        !hasHaPublicEndpoint(
-          JSON.parse((await kube(['get', 'endpointslice', '-o', 'json'])).stdout).items,
-          publicServices,
-          pod.uid,
-        ),
+      async () => !hasHaPublicEndpoint(await readSlices(), publicServices, pod.uid),
       `endpoint withdrawal for ${pod.name}`,
     );
     await afterWithdrawal(pod);
@@ -651,6 +703,7 @@ export async function runHaKubernetesRollout({
         candidateTemplate: paired.other.spec.template,
         routingWithdrawalClock,
         observePod,
+        readRoutedPeers,
         status: async (pod) => assertHaRetirement(await exec(pod)),
         beforeRetirement,
         afterRoutingWithdrawal,
@@ -769,8 +822,23 @@ export async function runHaKubernetesRollout({
       const revision = await desiredRevision(workload.name);
       return !!revision && pod.image === workload.image && pod.revision === revision;
     },
+    prepareSurge: async (workload) => {
+      if (!overlapBackend || !paired || !['execution', 'backend'].includes(workload.role)) return;
+      const [controllers, pods, routing] = await Promise.all([
+        kube(['get', 'statefulset', '-l', selector, '-o', 'json']),
+        kube(['get', 'pods', '-l', selector, '-o', 'json']),
+        kube(['get', 'service', paired.config.service, '-o', 'json']),
+      ]);
+      assertSeparatedEditorExecutionSurges({
+        role: workload.role,
+        controllers: JSON.parse(controllers.stdout).items,
+        pods: JSON.parse(pods.stdout).items,
+        active: JSON.parse(routing.stdout).metadata.annotations?.['rivet.dev/active-execution-workload'],
+      });
+    },
     prepareRetirement: beforeRetirement,
     prepareAdmissionFence: afterRoutingWithdrawal,
+    readRoutedPeers,
     checkHeadroom: async ({ stage, departing, workload }) => {
       const sample = `${stage}${departing ? ':' + departing.name : ''}`;
       await waitForHaHeadroom(
@@ -790,10 +858,13 @@ export async function runHaKubernetesRollout({
     begin: (pod, op, inc) => exec(pod, [op, inc, '--begin-only']),
     waitForRoutingWithdrawal,
     removePod: async (pod) => {
-      const current = await observePod(pod.name);
-      if (current?.uid !== pod.uid) throw new Error('HA pod UID changed before deletion.');
+      if (!pod.uid || !pod.resourceVersion) throw Error('HA Pod UID or resourceVersion is missing before deletion.');
       await kube(['delete', '--raw', `/api/v1/namespaces/${namespace}/pods/${pod.name}`, '-f', '-'], {
-        input: JSON.stringify({ apiVersion: 'v1', kind: 'DeleteOptions', preconditions: { uid: pod.uid } }),
+        input: JSON.stringify({
+          apiVersion: 'v1',
+          kind: 'DeleteOptions',
+          preconditions: { uid: pod.uid, resourceVersion: pod.resourceVersion },
+        }),
       });
     },
     scale: async (workload, replicas, expectedReplicas, owner) => {
@@ -803,8 +874,12 @@ export async function runHaKubernetesRollout({
       if (current.spec.replicas === replicas) return;
       if (workload === elastic?.name && replicas > expectedReplicas && current.spec.replicas > replicas) return;
       if (current.spec.replicas !== expectedReplicas) throw new Error('HA capacity changed before scaling.');
-      if (owner && (await observePod(owner.name))?.uid !== owner.uid)
-        throw new Error('HA surge identity changed before scaling.');
+      if (owner) {
+        const pod = await observePod(owner.name);
+        if (pod?.uid !== owner.uid || pod.terminating) throw Error('HA surge identity changed before scaling.');
+        if (assertHaRetirement(await exec(pod), owner.incarnation, owner.operationId).state !== 'drained')
+          throw Error('HA surge is no longer drained before scaling.');
+      }
       await kube([
         'scale',
         `statefulset/${workload}`,
@@ -918,8 +993,10 @@ export async function runHaKubernetesRollout({
     waitForReady: (podName, image) =>
       deadlineWait(async () => {
         const pod = await observePod(podName);
-        const revision = await desiredRevision(podName.slice(0, podName.lastIndexOf('-')));
-        return haCandidateReady(podName, pod, image, revision);
+        const name = podName.slice(0, podName.lastIndexOf('-'));
+        const revision = await desiredRevision(name);
+        if (!haCandidateReady(podName, pod, image, revision)) return false;
+        return (await readRoutedPeers(name))?.has(pod.uid) ?? true;
       }, `candidate owner ${podName}`),
     waitForWithdrawal: waitForOwnerWithdrawal,
   });

@@ -30,6 +30,9 @@ export function fixture({ safe = false } = {}) {
   connectionService.spec.publishNotReadyAddresses = true;
   const owners = [0, 1].map((i) => ({ name: 'old-' + i, uid: 'old-uid-' + i }));
   const pods = new Map(owners.map((pod) => [pod.name, pod]));
+  const candidates = new Map(
+    [0, 1].map((i) => [`candidate-${i}`, { uid: `candidate-uid-${i}`, ready: true, matchesSelector: () => true }]),
+  );
   const operation = {
     record: { phase: 'owners', executionPool: { owners } },
     assertLease() {},
@@ -43,7 +46,7 @@ export function fixture({ safe = false } = {}) {
     namespace: 'default',
     plan: { previous: { replicas: 2 }, candidate: { name: 'candidate' } },
     candidateTemplate: { metadata: { labels: { ...labels, 'rivet.dev/execution-pool': 'b' } } },
-    observePod: async (name) => pods.get(name),
+    observePod: async (name) => pods.get(name) ?? candidates.get(name),
     assertCapacity: async () => {
       calls.push('capacity');
     },
@@ -101,6 +104,7 @@ export function fixture({ safe = false } = {}) {
     connectionService,
     referencePresent: true,
     pods,
+    candidates,
     calls,
     extraProxies: [],
     proxyConfiguration:
@@ -184,6 +188,17 @@ for (const issue of ['headless', 'readiness', 'selector', 'port', 'endpoints'])
     assert.deepEqual(f.live().spec.selector, f.options.service.spec.selector);
     assert.equal(f.operation.record.executionPool.legacyHttp?.routeIssued, undefined);
   });
+
+test('the legacy Service stays open when live candidate pods no longer match the handoff selector', async () => {
+  const f = fixture();
+  f.onTick = (time) => {
+    if (time === 60_000) f.candidates.get('candidate-0').matchesSelector = () => false;
+  };
+  await assert.rejects(f.create().prepare(f.operation), /candidate execution endpoints.*selector/i);
+  assert.equal(f.patchCount(), 0);
+  assert.equal(f.operation.record.executionPool.legacyHttp.routeIssued, undefined);
+  assert.deepEqual(f.live().spec.selector, f.options.service.spec.selector);
+});
 
 test('backend references must propagate continuously before the selector changes', async () => {
   const f = fixture();

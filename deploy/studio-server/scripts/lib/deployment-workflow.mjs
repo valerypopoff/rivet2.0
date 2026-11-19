@@ -110,7 +110,16 @@ export async function runDeploymentStage(
   { artifactsDir, timeoutMs, runAdapter = executeMaintenanceBackupAdapter, now = Date.now } = {},
 ) {
   if (
-    !['preflight', 'backup', 'before', 'after', 'backend', 'abort-preparation', 'long-probe-cutoff'].includes(stage) ||
+    ![
+      'preflight',
+      'backup',
+      'before',
+      'after',
+      'backend',
+      'abort-preparation',
+      'long-probe-cutoff',
+      'online-overlap',
+    ].includes(stage) ||
     context.namespaceUid !== approval.policy.namespaceUid ||
     context.release !== approval.policy.release ||
     context.namespace !== approval.policy.namespace ||
@@ -188,6 +197,7 @@ export async function runDeploymentStage(
     receipt.installedManifestDigest !== context.installedManifestDigest ||
     receipt.authorizationManifestDigest !== context.authorizationManifestDigest ||
     receipt.adoptionStage !== context.adoptionStage ||
+    receipt.handoffPhase !== context.handoffPhase ||
     receipt.operationPlanDigest !== approval.digest
   )
     throw Error('Deployment adapter receipt belongs to another attempt or installation.');
@@ -220,10 +230,12 @@ export async function runDeploymentStage(
         : stage === 'abort-preparation'
           ? ['observerStopped', 'acceptedWorkSettled', 'fixtureCleaned']
           : stage === 'backend'
-            ? ['developerApi', 'editorSession']
-            : ['workflow', 'webApp', 'remoteDebugger'];
+            ? ['developerApi', 'editorSession', ...(context.adoptionStage === 'online' ? ['projectSave'] : [])]
+            : stage === 'online-overlap'
+              ? ['workflow', 'webApp', 'developerApi', 'editorSession']
+              : ['workflow', 'webApp', 'remoteDebugger'];
     if (
-      stage === 'backend' &&
+      (stage === 'backend' || (stage === 'online-overlap' && context.backendCandidate)) &&
       (!context.backendCandidate?.uid ||
         !context.backendCandidate?.incarnation ||
         receipt.backendCandidate?.uid !== context.backendCandidate.uid ||
