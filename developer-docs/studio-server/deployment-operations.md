@@ -1366,6 +1366,14 @@ with a real isolated PostgreSQL dump/restore that preserves a nonempty reference
 summary, all owned-table row counts and unrelated sentinel data. Keep production
 capture read-only and retain the existing scoped tables and object protections.
 
+After a maintenance schema cutover, refresh the adapter used by ordinary
+rollouts from the newly installed source. Schema 21 adds the two resource
+monitoring tables. Schema 22 adds endpoint releases and their captured project
+rows. The object inventory must include project and dataset blobs referenced
+only by frozen releases. Exercise a streamed checkpoint above the former 100 MiB
+buffer limit and restore it using the exact installed schema. Verify the
+published pointer with the hosted production preflight before the next rollout.
+
 For a repair confined to this private adapter, retain the successful application
 qualification and immutable images. Preserve the failed preparation receipts,
 verify observer cleanup and unchanged live workloads, then publish one new
