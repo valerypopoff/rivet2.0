@@ -80,13 +80,14 @@ function getNextInputSearchProgress(
 
 export function useRunRecordingsController(
   sessionActive: boolean,
-  resetToken: number | string = 0,
+  resetToken = 0,
   initialProject: WorkflowProjectItem | null = null,
 ) {
   const initialProjectId = initialProject?.id ?? '';
   const sessionKey = JSON.stringify([resetToken, initialProjectId]);
   const [initializedSessionKey, setInitializedSessionKey] = useState<string | null>(null);
   const sessionReady = initializedSessionKey === sessionKey;
+  const [refreshToken, setRefreshToken] = useState(0);
   const [workflowsResponse, setWorkflowsResponse] = useState<WorkflowRecordingWorkflowListResponse | null>(null);
   const [workflowsLoading, setWorkflowsLoading] = useState(true);
   const [catalogError, setCatalogError] = useState<string | null>(null);
@@ -174,12 +175,11 @@ export function useRunRecordingsController(
     inputSearchAbortControllerRef.current = null;
   }, []);
 
-  const resetSessionState = useCallback(() => {
+  const resetReadState = useCallback(() => {
     abortInputSearch();
     abortCatalog();
     runsRequestVersionRef.current++;
     deletionRequestRef.current = null;
-    setSelectedWorkflowId(initialProjectId);
     setRunsPage(null);
     setRelatedCounts(null);
     setError(null);
@@ -197,22 +197,28 @@ export function useRunRecordingsController(
     setInputSearchProgress(null);
     setInputFilterError(null);
     setRunsLoading(false);
-    setWorkflowsResponse(null);
-    workflowsRef.current = null;
     setWorkflowsLoading(true);
     setDeletingRecordingId(null);
-    setInitializedSessionKey(sessionKey);
-  }, [abortInputSearch, abortCatalog, initialProjectId, sessionKey]);
+  }, [abortInputSearch, abortCatalog]);
 
   useEffect(() => {
-    resetSessionState();
-  }, [resetSessionState]);
+    resetReadState();
+    setSelectedWorkflowId(initialProjectId);
+    setWorkflowsResponse(null);
+    workflowsRef.current = null;
+    setInitializedSessionKey(sessionKey);
+  }, [initialProjectId, resetReadState, sessionKey]);
+
+  const refresh = useCallback(() => {
+    resetReadState();
+    setRefreshToken((current) => current + 1);
+  }, [resetReadState]);
 
   useEffect(() => {
     if (!sessionActive || !sessionReady) return;
     void loadWorkflowRecordingWorkflows().catch(() => {});
     return abortCatalog;
-  }, [sessionActive, sessionReady, sessionKey, loadWorkflowRecordingWorkflows, abortCatalog]);
+  }, [sessionActive, sessionReady, sessionKey, refreshToken, loadWorkflowRecordingWorkflows, abortCatalog]);
 
   const workflows = useMemo(() => {
     const catalog = sessionReady ? workflowsResponse?.workflows ?? [] : [];
@@ -394,6 +400,7 @@ export function useRunRecordingsController(
     sessionActive,
     sessionReady,
     sessionKey,
+    refreshToken,
   ]);
 
   const allWorkflowsRunsCount = getAvailableInputSearchRuns(workflowsResponse, '', 'all');
@@ -748,6 +755,8 @@ export function useRunRecordingsController(
   );
 
   return {
+    refresh,
+    refreshToken,
     workflows,
     workflowsLoading: !sessionReady || workflowsLoading,
     catalogError: sessionReady ? catalogError : null,

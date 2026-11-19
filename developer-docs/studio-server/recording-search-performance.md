@@ -306,15 +306,17 @@ The Windows run needed its remaining preview processes stopped after all browser
 assertions finished; the test command then exited successfully. Hosted Linux CI
 remains the release gate for the committed revision.
 
-The icon-only **Refresh run recordings** button follows the modal title. It starts
-a new controller reset generation: Any for an ordinary footer session, or the
-inspected project for a project-context session; All outcomes, page 1, 20 top-level
-families per page, no input filter and collapsed families. Explicit close clears
-the inspected project, so a subsequent ordinary opening uses Any. The dialog and
-backdrop remain mounted, so refresh does
-not restart their opening animations or lose focus. Resetting cancels the old
-catalog/run/search/child requests and fences late results, including a refresh
-during initial loading; the catalog effect depends explicitly on this generation.
+### Refresh and session lifecycle
+
+The icon-only **Refresh run recordings** button follows the modal title. It
+reloads the catalog and the current Project selection, including Any. **Inspect
+recordings** seeds the project when opening a fresh session. During refresh,
+the picker uses the available catalog options while their replacements load.
+Refresh resets to All outcomes, page 1, 20 top-level families per page, a cleared
+input filter and collapsed families. Explicit close clears the inspected project,
+so a subsequent ordinary opening uses Any. The dialog and backdrop stay mounted
+and Refresh keeps focus. Both query effects use the refresh token to replace old
+reads and fence late catalog, run, search and child results.
 It does not reload the editor or replay writes. Dismissing via the backdrop still
 retains the existing session as before. Persistent input-path history is untouched.
 Refresh is disabled while opening or deleting a recording; it remains available

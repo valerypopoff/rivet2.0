@@ -85,3 +85,17 @@ production build with the CI configuration, all 275 web package tests and the
 root style checks. The normal editor CI shards now include this modal suite;
 fixture startup rejects unexpected API traffic instead of using an ambient
 server.
+
+## Project selection on refresh (2026-11-20)
+
+- [x] Use **Inspect recordings** to seed the project when starting a session.
+- [x] Reload the current project's runs and catalog on **Refresh**, keeping the
+      selected project visible while the catalog response is pending.
+- [x] Preserve the refresh defaults for filters and page size, and restore Any
+      on explicit close.
+
+The context-menu regression reproduced the selection reset on the old frontend.
+It checks the selected project during and after catalog loading and verifies
+the refreshed runs request uses that project ID. All seven focused browser
+tests passed against a fresh local build. See
+[the refresh lifecycle](recording-search-performance.md#refresh-and-session-lifecycle).

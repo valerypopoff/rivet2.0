@@ -1381,7 +1381,56 @@ test.describe('Run recordings modal', () => {
     });
   }
 
-  test('refresh starts a fresh recordings session and replaces an in-flight input search', async ({
+  test('refresh keeps the changed project after Inspect recordings', async ({ page }) => {
+    const { runFetches } = await installRunRecordingRoutes(page);
+    const { workflows } = createRunRecordingsFixture();
+    const inspected = workflows[0]!.project;
+    const selected = workflows[1]!.project;
+    await page.route('**/api/workflows/tree', (route) =>
+      route.fulfill({ json: { root: '/workflows', folders: [], projects: [inspected] } }),
+    );
+    const catalog = responseGate();
+    let holdCatalog = false;
+    await page.route(recordingCatalogRoute, async (route) => {
+      if (holdCatalog) await catalog.promise;
+      await route.fallback();
+    });
+
+    await page.goto('/');
+    await authenticateIfNeeded(page);
+    await waitForDashboardReady(page);
+    await page.locator('.project-row', { hasText: inspected.name }).click({ button: 'right' });
+    await page.getByRole('menuitem', { name: 'Inspect recordings', exact: true }).click();
+    const modal = page.getByTestId('run-recordings-modal');
+    const projectName = modal.locator('.run-recordings-select__single-value');
+    await expect(projectName).toHaveText(inspected.name);
+    await modal.locator('.run-recordings-select__control').click();
+    await page.locator('.run-recordings-select__option', { hasText: selected.name }).click();
+    await expect(modal.locator('.run-recordings-runs-title')).toHaveText('12 Runs');
+    const selectedRunsPath = `/api/workflows/recordings/workflows/${selected.id}/runs`;
+    await expect.poll(() => runFetches.at(-1) ?? '').toContain(`${selectedRunsPath}?`);
+
+    const requestsBeforeRefresh = runFetches.length;
+    holdCatalog = true;
+    try {
+      const catalogStarted = page.waitForRequest(recordingCatalogRoute);
+      await modal.getByRole('button', { name: 'Refresh run recordings', exact: true }).click();
+      await catalogStarted;
+      await expect(projectName).toHaveText(selected.name, { timeout: 5_000 });
+      const catalogFinished = page.waitForResponse(recordingCatalogRoute);
+      catalog.release();
+      await catalogFinished;
+      await expect(modal.locator('.run-recordings-runs-title')).toHaveText('12 Runs');
+      await expect(projectName).toHaveText(selected.name);
+      await expect
+        .poll(() => runFetches.slice(requestsBeforeRefresh).map((url) => new URL(url).pathname))
+        .toEqual([selectedRunsPath]);
+    } finally {
+      catalog.release();
+    }
+  });
+
+  test('refresh resets filters and replaces an in-flight input search in the current project', async ({
     page,
   }, testInfo) => {
     const search = responseGate();
@@ -1423,15 +1472,15 @@ test.describe('Run recordings modal', () => {
       expect(await dialogElement!.evaluate((element) => element.isConnected)).toBe(true);
       expect(await backdropElement!.evaluate((element) => element.isConnected)).toBe(true);
       await expect(refresh).toBeFocused();
-      await expect(modal.locator('.run-recordings-select__single-value')).toHaveText('Any');
+      await expect(modal.locator('.run-recordings-select__single-value')).toHaveText('Latest Flow');
       await expect(modal.getByRole('button', { name: '20', exact: true })).toHaveAttribute('aria-pressed', 'true');
       await expect(modal.getByRole('button', { name: /^All/ })).toHaveAttribute('aria-pressed', 'true');
       await expect(modal.locator('.run-recordings-page-status')).toHaveCount(0);
-      await expect(modal.locator('.run-recordings-runs-title')).toHaveText('14 Runs');
+      await expect(modal.locator('.run-recordings-runs-title')).toHaveText('12 Runs');
       await expect(modal.getByRole('combobox', { name: 'Input JSON path' })).toHaveCount(0);
       search.release();
       await expect(modal.locator('.run-recordings-input-search-status')).toHaveCount(0);
-      await expect(modal.locator('.run-recordings-runs-title')).toHaveText('14 Runs');
+      await expect(modal.locator('.run-recordings-runs-title')).toHaveText('12 Runs');
       await page.screenshot({ path: testInfo.outputPath('refreshed.png') });
     } finally {
       search.release();
