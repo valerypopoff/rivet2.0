@@ -1018,6 +1018,13 @@ final installed images and public health, then records retained application
 identity/health and releases ownership. The empty transient deletion inventory
 does not mean the application was deleted. Legacy disposable tests still require
 namespace/NEG/CSI absence.
+Initial staging readiness checks the public sign-in route after GKE reports
+healthy backends. It gives `404`, `502`, `503` and `504` responses one minute
+to clear while routing propagates. The fixture requires a valid session cookie
+and authenticated developer access before creating projects or starting traffic.
+Credential errors fail immediately. Sign-in during the qualification itself
+still requires an immediate successful response.
+
 An expired/failed attempt quarantines the retained application and preserves
 data; the independent janitor never deletes it. Busy/quarantined state or staging
 ahead of production requires explicit recovery/reseed. A failed acquisition can
