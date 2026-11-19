@@ -887,11 +887,11 @@ Normal updates use the application Pods themselves:
   readiness and regional proxy endpoint health. Kubernetes
   [rolling updates](https://kubernetes.io/docs/concepts/workloads/controllers/deployment/#rolling-update-deployment)
   manage the replacement Pods.
-- Replicated owners wait for the actual candidate surge to become ready before
-  retiring an original owner, within the approved replica ceiling. Execution
-  retirement still requires two other ready, serving owners and fresh measured
-  headroom, including when the execution pool is already at its ceiling.
-- Routing withdrawal, accepted-work drain, exact Pod UID deletion and
+- Replicated owners wait for the candidate to become ready and appear on the
+  required Services before retiring an original owner, within the approved
+  replica ceiling. Execution retirement requires two other routed, serving
+  owners and fresh measured headroom even at the replica ceiling.
+- Routing withdrawal, accepted-work drain, conditional Pod deletion and
   current-image/revision readiness remain serial. A pending or image-pull-failing
   surge leaves the original workers serving and retains exact-token recovery.
 - Singleton backend and maintenance owners retain their serial ownership rules.
@@ -924,8 +924,13 @@ attach another source's proof to a manifest.
 During a rolling operation, the owned journal serializes replica changes. Fresh
 execution slot/CPU and proxy CPU measurements must show adequate headroom before
 template freeze and each retirement. Metrics/ownership failures are not zero
-load. Surviving owners are checked again after routing withdrawal, immediately
-before admission is fenced. A changing non-terminating proxy Pod inventory
+load. Check surviving owners and their Service endpoints after withdrawal and
+again before deletion or scale-down. Confirm the departing process still reports
+the original drained operation. Pod deletion uses both UID and resourceVersion.
+For older execution images, recheck live candidate labels and readiness against
+the proposed Service selector after the connection-reference wait and before
+narrowing the selector. Paired execution capacity counts candidate workers
+that are ready and routed. A changing non-terminating proxy Pod inventory
 invalidates the sample rather than counting an unmeasured new owner as spare
 capacity; an already-terminating Pod may finish with its measured demand retained.
 Execution checks also reconfirm the entire Pod inventory and StatefulSet after
@@ -1613,6 +1618,28 @@ Scale-up during deployment adds provider requirements: autoscaling evidence v2
 includes `upgrade-scale-up-only` and `paused-upgrade-scale-up` alongside the v1
 checks. Historical v1 receipts remain readable but do not authorize the new
 coordination. Local regression success is not v2 provider qualification.
+
+### Online rollout planning
+
+Add `--require-online` when both the editor and published endpoints must stay
+available. An ordinary image rollout requires settled developer overlap and
+provider evidence for both editor handover and protected published requests on
+the exact image pair. With `--plan-only`, an ordinary rollout reports
+`continuity-required` for an installed singleton.
+
+For a singleton with paired published execution pools, select the separate
+`--require-online --online-editor-adoption <receipt.json>` route. It retains
+the installed application and schema while transferring editor ownership to
+the overlapping topology. Use `--plan-only` to bind the exact qualification
+and render, then `--preflight-only` before the approved handoff. Resume with
+the existing journal token. Recovery rechecks a replacement's identity,
+authenticated editor access and routing before continuing a retirement.
+[Online first adoption](online-editor-overlap-plan.md#operator-inputs-and-recovery)
+
+Keep the same flag and inputs for an owned rolling recovery. Temporary proxy
+floors from recovery are recognized only for the exact configuration and token.
+[Developer backend overlap](developer-backend-overlap.md) ·
+[Provider qualification](automated-runtime-qualification.md)
 
 ## Explicit maintenance route, including forward schema changes
 

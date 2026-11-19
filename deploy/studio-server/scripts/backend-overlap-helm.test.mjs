@@ -58,6 +58,8 @@ test('overlap renders one backend, existing RWO storage and backend-only same-no
     (r) => r.kind === 'StatefulSet' && r.metadata.labels['app.kubernetes.io/component'] === 'execution',
   );
   assert.ok(execution.spec.template.spec.affinity.podAntiAffinity);
+  const runtime = execution.spec.template.spec.containers.find((c) => c.name === 'api');
+  assert.equal(runtime.env.find((entry) => entry.name === 'RIVET_HA_CONTROL_PLANE_MODE').value, 'singleton-overlap');
   assert.equal(
     resources.some((r) => r.metadata.labels?.['app.kubernetes.io/component'] === 'maintenance'),
     false,

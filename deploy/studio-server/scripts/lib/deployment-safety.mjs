@@ -112,7 +112,8 @@ export function createDeploymentSafety({
   const production = scope === 'production';
   if (
     context?.authorizationManifestDigest &&
-    (!digest.test(context.authorizationManifestDigest) || !['sizing', 'ownership'].includes(context.adoptionStage))
+    (!digest.test(context.authorizationManifestDigest) ||
+      !['sizing', 'ownership', 'online'].includes(context.adoptionStage))
   )
     throw Error('Adoption safety requires an exact authorization manifest and stage.');
   if (!production && context)

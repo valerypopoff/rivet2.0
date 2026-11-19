@@ -117,6 +117,28 @@ function fixture({ kind = 'StatefulSet', replicas = 2, rendered = 2, name = 'exe
 }
 const inspect = (state) => inspectReleaseSettlement(state);
 
+test('online adoption preflight accepts only the exact retained editor after an abort', () => {
+  const state = fixture({ name: 'backend', replicas: 1, rendered: 1 });
+  const pod = state.pods[0];
+  const revision = 'reviewed-bootstrap';
+  pod.metadata.labels['controller-revision-hash'] = revision;
+  state.controller.status.updatedReplicas = 0;
+  const retainedEditor = {
+    name: 'backend',
+    uid: state.controller.metadata.uid,
+    revision,
+    replicas: 1,
+    pods: [pod.metadata.uid],
+  };
+  assert.equal(inspect(state).settled, false);
+  assert.equal(inspect({ ...state, retainedEditor }).settled, true);
+  pod.metadata.uid = 'another-pod';
+  assert.equal(inspect({ ...state, retainedEditor }).settled, false);
+  pod.metadata.labels['controller-revision-hash'] = state.controller.status.updateRevision;
+  state.controller.status.updatedReplicas = 1;
+  assert.equal(inspect({ ...state, retainedEditor }).settled, true);
+});
+
 test('installed preflight accepts an already-applied qualified proxy policy without accepting other drift', async () => {
   const state = fixture({ name: 'proxy', kind: 'Deployment', automatic: true, replicas: 1 });
   state.liveHpa.spec.minReplicas = 1;

@@ -281,9 +281,12 @@ export async function runOrdinaryRuntimeUpgrade({
     report.outcomes.initialAutoscaler = await gate.assertAutoscalerActive(Date.now());
     checkpoint();
     // Keep customer observers and two-owner floors active through the optional
-    // bridge too. Developer continuity starts only after that explicit adoption.
+    // bridge. Online first adoption starts its own retained editor observer.
     if (prepareDeveloperOverlap) {
-      report.outcomes.overlapPreparation = await prepareDeveloperOverlap();
+      report.outcomes.overlapPreparation = await prepareDeveloperOverlap(() => {
+        checkpoint();
+        return { workflow: workflow.report.samples, webApp: web.report.samples };
+      });
       checkpoint();
     }
     await probes.prepare({

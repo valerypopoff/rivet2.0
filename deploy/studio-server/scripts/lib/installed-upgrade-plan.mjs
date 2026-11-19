@@ -20,6 +20,7 @@ export async function planInstalledUpgrade({
   maximumHops = 16,
   autoscalingPolicyDigest,
   haRequested = false,
+  requireOnline = false,
 }) {
   candidate = assertStudioServerReleaseManifest(candidate, { requirePromoted: true });
   const installedDigest = installed?.release?.production?.manifestDigest;
@@ -55,6 +56,21 @@ export async function planInstalledUpgrade({
       steps: [],
       reason: 'First HA adoption requires explicit maintenance.',
     };
+  if (requireOnline && (!installed.ha?.enabled || installed.ha.controlPlane?.mode !== 'singleton-overlap'))
+    return {
+      formatVersion: 1,
+      status: 'continuity-required',
+      installedDigest,
+      targetDigest,
+      steps: [],
+      reason:
+        'An online upgrade requires settled editor overlap. For a singleton with paired execution pools, qualify online editor adoption on the installed images first.',
+    };
+  const assertOnlineProof = (release) => {
+    const proof = release.evidence.runtimeControl;
+    if (requireOnline && (proof?.protocol !== 3 || !proof.requestContinuity))
+      throw Error('Online upgrades require exact-image editor handover and protected published-request evidence.');
+  };
   const pending = [],
     seen = new Set();
   let release = candidate;
@@ -83,6 +99,7 @@ export async function planInstalledUpgrade({
   let current = installed;
   for (const next of pending) {
     try {
+      assertOnlineProof(next);
       if (current.ha?.enabled) {
         assertHaUpgradeEvidence(next, current);
         if (next.evidence.runtimeControl?.protocol === 3 && current.ha.controlPlane?.mode === 'singleton')
@@ -147,6 +164,7 @@ export async function planInstalledUpgrade({
   }
   if (!steps.length && current.ha?.enabled) {
     try {
+      assertOnlineProof(candidate);
       assertHaUpgradeEvidence(candidate, installed);
       if (candidate.evidence.runtimeControl?.protocol === 3 && installed.ha.controlPlane?.mode === 'singleton')
         return {

@@ -202,7 +202,7 @@ export async function executeProviderPhase({
             until: wait,
             ...(operation.developerOverlapProfile
               ? {
-                  prepareDeveloperOverlap: () => adoptProviderOverlap(gate),
+                  prepareDeveloperOverlap: (checkpoint) => adoptProviderOverlap(gate, checkpoint),
                   startDeveloperOverlap: (ownedProbes) =>
                     startProviderOverlapProbe(gate, ownedProbes, operation.previous, operation.candidate, { wait }),
                 }

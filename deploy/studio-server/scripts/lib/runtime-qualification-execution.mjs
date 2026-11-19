@@ -21,6 +21,7 @@ import { sizingRequests, assertSizingReport } from './resource-sizing.mjs';
 import { retainedApplicationSettings } from './retained-staging-application.mjs';
 import { executionProfile } from './execution-profile.mjs';
 import { compileExecutionPoolEvidence } from './execution-pool-evidence.mjs';
+import { assertOnlineAdoptionObservations } from './online-editor-adoption-receipt.mjs';
 
 // The hosted workflow reserves another hour for cleanup and 30 minutes for setup.
 export const ACTIONS_QUALIFICATION_MAX_SECONDS = 4 * 60 * 60;
@@ -31,6 +32,9 @@ export function assertActionsQualificationWindow(seconds) {
   );
   return seconds;
 }
+
+const requiresOnlineEditorAdoption = (installed) =>
+  installed.controlPlaneMode === 'singleton' && installed.qualificationValues?.ha?.executionPools?.enabled === true;
 
 export const qualificationHash = (value) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const time = (value) => {
@@ -164,6 +168,18 @@ export function qualificationOperation({
       Number.isSafeInteger(sourcePool) && sourcePool >= approval.developerOverlapProfile.poolMaxPerApiPod,
       'Overlap adoption must record its original pool and cannot increase it',
     );
+    if (requiresOnlineEditorAdoption(installed)) {
+      assert.equal(
+        sourcePool,
+        approval.developerOverlapProfile.poolMaxPerApiPod,
+        'Online editor adoption must retain the installed database pool size',
+      );
+      assert.equal(
+        adoptedContinuity?.maxProtectedRequestSeconds,
+        300,
+        'Online editor adoption requires installed protected routing',
+      );
+    }
   }
   assert.equal(installed.policyDigest, autoscalerPolicyDigest(normalized));
   assert.ok([1, 2].includes(installed.baseline?.proxy));
@@ -396,11 +412,16 @@ export function assertOrdinaryProviderReport(report, operation) {
   }
   assert.equal(report.outcomes.maintenanceArchivePreserved, true);
   if (operation.developerOverlapProfile) {
-    assert.deepEqual(report.outcomes.overlapPreparation, {
+    const { onlineAdoption, ...preparation } = report.outcomes.overlapPreparation;
+    assert.deepEqual(preparation, {
       sourceMode: operation.installed.controlPlaneMode,
       sourcePool: operation.installed.qualificationValues.postgres.poolMaxPerApiPod,
       preparationComplete: true,
     });
+    if (requiresOnlineEditorAdoption(operation.installed)) {
+      assert.ok(onlineAdoption, 'Paired singleton qualification requires first-adoption observations');
+      assertOnlineAdoptionObservations(onlineAdoption, operation.predecessorManifestDigest, report);
+    } else assert.equal(onlineAdoption, undefined);
     const observed = report.outcomes.developerOverlap;
     assert.equal(observed.profileDigest, overlapProfileDigest(operation.developerOverlapProfile));
     assert.equal(observed.adoptionOrAlreadyEnabled, true);

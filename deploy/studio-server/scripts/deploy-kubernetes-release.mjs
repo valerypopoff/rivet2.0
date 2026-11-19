@@ -41,6 +41,19 @@ import { createHaProofTiming } from './lib/ha-proof-timing.mjs';
 import { installedSettingsDigest } from './lib/runtime-qualification-installation.mjs';
 import { privateCloudEvidence, persistDeploymentArtifact } from './lib/private-cloud-evidence.mjs';
 import { runHaKubernetesControlTopology } from './lib/ha-kubernetes-control-topology.mjs';
+import {
+  assertOnlineEditorResources,
+  onlineEditorSettlementValues,
+  readRetainedOnlineEditor,
+  runKubernetesOnlineEditorAdoption,
+} from './lib/online-editor-kubernetes.mjs';
+import {
+  assertOnlineAdoptionRender,
+  assertOnlineEditorHelmSettlement,
+  onlineEditorHelmDescription,
+  readOnlineAdoptionReceipt,
+} from './lib/online-editor-adoption-receipt.mjs';
+import { openOnlineEditorRestoreGuard } from './lib/online-editor-restore-guard.mjs';
 import { releaseOperationJournalName } from './lib/release-operation-journal.mjs';
 import { alignSettledExecutionPoolResources } from './lib/execution-pool-resources.mjs';
 import {
@@ -123,6 +136,7 @@ const supportedOptions = new Set([
   '--acceptance-only',
   '--acceptance-request',
   '--preflight-only',
+  '--require-online',
   '--verify-only',
   '--resume-cutover',
   '--single-machine',
@@ -132,6 +146,8 @@ const supportedOptions = new Set([
   '--ha-control-plane-transition',
   '--overlap-adoption-certificate',
   '--overlap-adoption-stage',
+  '--online-editor-adoption',
+  '--abort-online-adoption',
 ]);
 
 export function parseArgs(argv) {
@@ -153,10 +169,12 @@ export function parseArgs(argv) {
       key === '--plan-only' ||
       key === '--acceptance-only' ||
       key === '--preflight-only' ||
+      key === '--require-online' ||
       key === '--verify-only' ||
       key === '--maintenance-cutover' ||
       key === '--single-machine' ||
-      key === '--ha-control-plane-transition'
+      key === '--ha-control-plane-transition' ||
+      key === '--abort-online-adoption'
     ) {
       options.set(key, true);
       continue;
@@ -432,16 +450,32 @@ export async function resolveDeploymentRelease(
       throw Error(
         'Overlap adoption requires an explicit installed manifest, candidate certificate and matching same-image stage only.',
       );
-    await verifyCheckout(adoptionCertificate ?? manifest);
+    const onlineAdoption = options.has('--online-editor-adoption')
+      ? await readOnlineAdoptionReceipt(
+          insideRepository(required(options, '--online-editor-adoption'), '--online-editor-adoption'),
+          {
+            root: rootDir,
+            installedManifestDigest: manifestDigest,
+            schema: manifest.database.managedWorkflowSchema.version,
+          },
+        )
+      : null;
+    if (onlineAdoption) {
+      const head = await run('git', ['--no-replace-objects', 'rev-parse', '--verify', 'HEAD'], { capture: true });
+      assert.equal(head.stdout.trim(), onlineAdoption.operatorSource, 'Use the qualified online adoption source');
+    } else {
+      await verifyCheckout(adoptionCertificate ?? manifest);
+      assertReleaseManifestMatchesCurrentChart(manifest, rootDir);
+    }
     await verifyClean();
-    assertReleaseManifestMatchesCurrentChart(manifest, rootDir);
     const generatedValues = rollbackManifestPath
       ? createForwardRollbackHelmValues({
           failedRelease: manifest,
           rollbackRelease: await readManifest(rollbackManifestPath, { requirePromoted: true }),
         })
       : createProductionHelmValues(manifest);
-    if (adoption?.stage === 'sizing') generatedValues.workflowSchema.migrationJob.enabled = false;
+    if (adoption?.stage === 'sizing' || onlineAdoption) generatedValues.workflowSchema.migrationJob.enabled = false;
+    if (onlineAdoption) generatedValues.release.production.chart = onlineAdoption.chart;
     // An explicit pin may itself be the retained diagnostic file. Do not rewrite it.
     const inputIsArtifact = (fileName) =>
       options.has('--manifest') && path.relative(manifestPath, path.join(artifactsDir, fileName)) === '';
@@ -460,7 +494,15 @@ export async function resolveDeploymentRelease(
         2,
       )}\n`,
     );
-    return { manifest, manifestPath, rollbackManifestPath, generatedValues, adoption, adoptionCertificate };
+    return {
+      manifest,
+      manifestPath,
+      rollbackManifestPath,
+      generatedValues,
+      adoption,
+      adoptionCertificate,
+      onlineAdoption,
+    };
   } finally {
     if (temporaryDirectory) await fs.rm(temporaryDirectory, { recursive: true, force: true });
   }
@@ -508,6 +550,34 @@ async function main() {
       '--rollback-to requires an explicit --manifest for the failed release; the production pointer cannot identify it.',
     );
   const singleMachine = options.get('--single-machine') === true;
+  const requireOnline = options.has('--require-online');
+  if (
+    (options.has('--online-editor-adoption') &&
+      (!requireOnline ||
+        !options.has('--manifest') ||
+        !options.has('--deployment-policy') ||
+        !options.has('--values'))) ||
+    (options.has('--abort-online-adoption') &&
+      (!options.has('--online-editor-adoption') || !options.has('--resume-ha') || options.has('--plan-only')))
+  )
+    throw Error(
+      'Online editor adoption requires --require-online, a pinned manifest, values and the reviewed deployment policy. Abort requires the original --resume-ha token.',
+    );
+  if (
+    requireOnline &&
+    [
+      '--dry-run',
+      ...(!options.has('--online-editor-adoption') ? ['--acceptance-only'] : []),
+      '--single-machine',
+      '--rollback-to',
+      '--maintenance-cutover',
+      '--resume-cutover',
+      '--ha-control-plane-transition',
+      '--overlap-adoption-certificate',
+      '--overlap-adoption-stage',
+    ].some((key) => options.has(key))
+  )
+    throw Error('--require-online applies to an installed rolling release, including its plan, preflight or recovery.');
   if (
     options.has('--verify-only') &&
     (!options.has('--resume-cutover') ||
@@ -578,8 +648,15 @@ async function main() {
   // A forward rollback is still a production operation. Its failed release
   // must have passed the same CI gates as an ordinary deployment; only the
   // image set and migration-Job behavior differ.
-  const { manifest, manifestPath, rollbackManifestPath, generatedValues, adoption, adoptionCertificate } =
-    await resolveDeploymentRelease(options, artifactsDir);
+  const {
+    manifest,
+    manifestPath,
+    rollbackManifestPath,
+    generatedValues,
+    adoption,
+    adoptionCertificate,
+    onlineAdoption,
+  } = await resolveDeploymentRelease(options, artifactsDir);
   const candidateDigest = getStudioServerReleaseManifestDigest(manifest, { requirePromoted: true });
   const qualificationManifest = adoptionCertificate ?? manifest;
   const deploymentPolicy = options.has('--deployment-policy')
@@ -589,6 +666,8 @@ async function main() {
         context: selectedContext,
       })
     : null;
+  if (onlineAdoption && deploymentPolicy?.policy.onlineEditorAdoption?.receiptSha256 !== onlineAdoption.digest)
+    throw Error('The reviewed deployment policy must authorize this exact online adoption receipt.');
   const maintenance = options.has('--maintenance-plan')
     ? await readMaintenancePlan(required(options, '--maintenance-plan'), rootDir, {
         release,
@@ -673,22 +752,15 @@ async function main() {
         return document.toJSON();
       })
       .filter(Boolean);
-    const haRequested = renderedResources.some(
-      (resource) =>
-        resource.kind === 'StatefulSet' &&
-        resource.metadata.labels?.['app.kubernetes.io/component'] === 'backend' &&
-        resource.spec.updateStrategy.type === 'OnDelete',
+    const backend = renderedResources.find(
+      (r) => r.kind === 'StatefulSet' && r.metadata.labels?.['app.kubernetes.io/component'] === 'backend',
     );
-    const singletonControlRequested = renderedResources.some(
-      (resource) =>
-        resource.kind === 'StatefulSet' &&
-        resource.metadata.labels?.['app.kubernetes.io/component'] === 'backend' &&
-        resource.spec.template.spec.containers.some((c) =>
-          c.env?.some(
-            (e) => e.name === 'RIVET_HA_CONTROL_PLANE_MODE' && ['singleton', 'singleton-overlap'].includes(e.value),
-          ),
-        ),
-    );
+    const haRequested = backend?.spec.updateStrategy.type === 'OnDelete';
+    const targetControlMode =
+      backend?.spec.template.spec.containers
+        .find((c) => c.name === 'backend')
+        ?.env?.find((e) => e.name === 'RIVET_HA_CONTROL_PLANE_MODE')?.value ?? 'replicated';
+    const singletonControlRequested = ['singleton', 'singleton-overlap'].includes(targetControlMode);
     const edgeProfile =
       renderedResources.find(
         (resource) =>
@@ -696,6 +768,7 @@ async function main() {
       )?.metadata.annotations?.['rivet.studio/gke-edge-profile'] ?? 'regional';
     if (
       !maintenance &&
+      !onlineAdoption &&
       !options.has('--plan-only') &&
       !options.has('--acceptance-only') &&
       (singletonControlRequested || options.has('--ha-control-plane-transition') || edgeProfile === 'compact')
@@ -704,25 +777,26 @@ async function main() {
         qualificationManifest.evidence.runtimeControl,
         qualificationManifest,
         edgeProfile,
-        renderedResources.some(
-          (r) =>
-            r.kind === 'StatefulSet' &&
-            r.spec.template.spec.containers.some((c) =>
-              c.env?.some((e) => e.name === 'RIVET_HA_CONTROL_PLANE_MODE' && e.value === 'singleton-overlap'),
-            ),
-        ),
+        targetControlMode === 'singleton-overlap',
       );
     if (haRequested && rollbackManifestPath)
       throw new Error(
         'HA reverse-image replacement is not certified by a forward mixed-version certificate. Repair forward; no automatic image/schema rollback was attempted.',
       );
-    if (haRequested && !maintenance && !options.has('--plan-only') && !options.has('--acceptance-only'))
+    if (
+      haRequested &&
+      !onlineAdoption &&
+      !maintenance &&
+      !options.has('--plan-only') &&
+      !options.has('--acceptance-only')
+    )
       assertHaUpgradeEvidence(qualificationManifest, null);
     const autoscalerResource = renderedResources.find(
       (r) => r.kind === 'Deployment' && r.metadata.labels?.['app.kubernetes.io/component'] === 'autoscaler',
     );
     if (adoption) assertOverlapAdoptionResources(adoption, renderedResources, adoptionCertificate);
-    else if (!maintenance) assertOrdinaryRuntimeResources(manifest.evidence.runtimeControl, renderedResources);
+    else if (!maintenance && !onlineAdoption)
+      assertOrdinaryRuntimeResources(manifest.evidence.runtimeControl, renderedResources);
     let deploymentAutoscalingPolicyDigest;
     if (autoscalerResource) {
       if (options.has('--ha-control-plane-transition') && adoption?.stage !== 'ownership')
@@ -733,7 +807,7 @@ async function main() {
         autoscalerResource.spec.template.spec.containers[0].env.find((e) => e.name === 'RIVET_AUTOSCALER_CONFIG').value,
       );
       deploymentAutoscalingPolicyDigest = autoscalerPolicyDigest(config.policy);
-      if (!maintenance && !options.has('--plan-only') && !options.has('--acceptance-only'))
+      if (!maintenance && !onlineAdoption && !options.has('--plan-only') && !options.has('--acceptance-only'))
         assertCooperativeAutoscalingEvidence(
           qualificationManifest.evidence.runtimeAutoscaling,
           qualificationManifest,
@@ -779,6 +853,8 @@ async function main() {
           ).stdout,
         )
       : null;
+    if (requireOnline && !installed) throw Error('--require-online requires an installed release.');
+    const continuityTarget = continuityFromResources(renderedResources);
     if (options.has('--expected-installed-settings-digest')) {
       const expected = required(options, '--expected-installed-settings-digest');
       if (!/^sha256:[a-f0-9]{64}$/.test(expected))
@@ -808,13 +884,78 @@ async function main() {
       if (!options.has('--resume-cutover')) assertOrdinaryReleaseAllowed(pendingJournal, { release, namespace });
     }
     const installedDigest = installed?.release?.production?.manifestDigest;
+    let adoptionSourceResources, onlineAdoptionOperationId;
+    const readLatestHelmHistory = async () =>
+      JSON.parse(
+        (
+          await run(helmBin, ['history', release, '--namespace', namespace, '--max', '1', '--output', 'json'], {
+            capture: true,
+          })
+        ).stdout,
+      );
+    if (onlineAdoption) {
+      const recovering =
+        pendingJournal?.onlineEditorAdoption === 1 &&
+        pendingJournal.phase !== 'complete' &&
+        pendingJournal.token === options.get('--resume-ha');
+      assert.equal(installedDigest, candidateDigest, 'Online editor adoption must retain the installed application');
+      assert.equal(targetControlMode, 'singleton-overlap');
+      assert.ok(
+        haRequested && continuityTarget && requestContinuityProfile(installed)?.maxProtectedRequestSeconds === 300,
+        'Online editor adoption requires installed protected published routing',
+      );
+      if (options.has('--acceptance-only')) {
+        onlineAdoptionOperationId = assertOnlineEditorHelmSettlement(
+          await readLatestHelmHistory(),
+          onlineAdoption,
+          deploymentPolicy.digest,
+        );
+        assert.equal(installed.ha.controlPlane.mode, 'singleton-overlap');
+        assert.deepEqual(installed.release.production.chart, onlineAdoption.chart);
+      } else if (!recovering) {
+        assert.equal(Number(JSON.parse(installedResult.stdout)[0].revision), onlineAdoption.installedRevision);
+        assert.equal(installedSettingsDigest(installed), onlineAdoption.installedSettingsDigest);
+      }
+      assertContinuityConfiguration(installed, continuityTarget);
+      adoptionSourceResources = parseReleaseResources(
+        (
+          await run(
+            helmBin,
+            [
+              'get',
+              'manifest',
+              release,
+              '--namespace',
+              namespace,
+              '--revision',
+              String(onlineAdoption.installedRevision),
+            ],
+            { capture: true },
+          )
+        ).stdout,
+      );
+      assertOnlineAdoptionRender(onlineAdoption, adoptionSourceResources, renderedResources, valuesDigest);
+      assertOnlineEditorResources(adoptionSourceResources, renderedResources);
+    }
+    const authority = onlineAdoption
+      ? { authorizationManifestDigest: onlineAdoption.digest, stage: 'online' }
+      : adoption;
+    const admissionInstalled = continuityRecoveryLayout(installed, continuityTarget, {
+      journal: pendingJournal,
+      resumeToken: options.get('--resume-ha'),
+      configurationDigest: options.has('--resume-ha') ? getHaConfigurationDigest(renderedResources) : undefined,
+      manifestDigest: candidateDigest,
+      release,
+      namespace,
+    });
     let workflowContext;
     if (
       !maintenance &&
-      !adoption &&
+      !authority &&
       !options.has('--acceptance-only') &&
       exists &&
-      (deploymentPolicy ||
+      (requireOnline ||
+        deploymentPolicy ||
         options.has('--plan-only') ||
         (installedDigest &&
           installedDigest !== candidateDigest &&
@@ -822,8 +963,9 @@ async function main() {
     ) {
       const plan = await planInstalledUpgrade({
         candidate: manifest,
-        installed,
+        installed: admissionInstalled,
         haRequested,
+        requireOnline,
         autoscalingPolicyDigest: deploymentAutoscalingPolicyDigest,
         fetchManifest: async (digest) => {
           const output = path.join(artifactsDir, `predecessor-${digest.slice(7)}.json`);
@@ -834,6 +976,12 @@ async function main() {
           return readManifest(output, { requirePromoted: true });
         },
       });
+      const qualified = ['qualified-route', 'already-installed'].includes(plan.status);
+      if (requireOnline && qualified) {
+        if (!haRequested || targetControlMode !== 'singleton-overlap' || !continuityTarget)
+          throw Error('--require-online requires the rendered editor overlap and published-request protection.');
+        assertContinuityUpgrade(qualificationManifest, installed, continuityTarget);
+      }
       await writeArtifact(artifactsDir, 'upgrade-plan.json', JSON.stringify(plan, null, 2));
       if (options.has('--plan-only')) {
         console.log(
@@ -841,7 +989,8 @@ async function main() {
         );
         return;
       }
-      if (!maintenance && (!['qualified-route', 'already-installed'].includes(plan.status) || plan.steps.length > 1))
+      if (requireOnline && !qualified) throw Error(`Online rollout blocked. ${plan.reason}`);
+      if (!qualified || plan.steps.length > 1)
         throw Error(
           'The installed version needs a qualified multi-hop route. Review upgrade-plan.json and use each pinned source/chart in order; no workloads were changed.',
         );
@@ -853,6 +1002,9 @@ async function main() {
       });
       await writeArtifact(artifactsDir, 'overlap-adoption.json', JSON.stringify(adoption, null, 2));
       if (options.has('--plan-only')) return;
+    } else if (onlineAdoption && options.has('--plan-only')) {
+      console.log(`[${runnerName}] Exact online editor adoption inputs verified. No workload changes made.`);
+      return;
     } else if (options.has('--plan-only')) throw Error('An installed release is required for --plan-only.');
     if (exists && !singleMachine && !deploymentPolicy)
       throw Error(
@@ -867,11 +1019,11 @@ async function main() {
         resumeToken: options.get('--resume-ha') ?? options.get('--resume-cutover'),
         policyDigest: deploymentPolicy.digest,
         valuesDigest,
-        authorizationManifestDigest: adoption?.authorizationManifestDigest,
-        adoptionStage: adoption?.stage,
+        authorizationManifestDigest: authority?.authorizationManifestDigest,
+        adoptionStage: authority?.stage,
       });
       workflowContext = {
-        operationId: recovery?.operationId ?? randomUUID(),
+        operationId: recovery?.operationId ?? onlineAdoptionOperationId ?? randomUUID(),
         recovering: Boolean(recovery),
         release,
         namespace,
@@ -880,8 +1032,8 @@ async function main() {
         installedManifestDigest: recovery?.installedManifestDigest ?? installedDigest,
         candidateManifestDigest: candidateDigest,
         valuesDigest,
-        ...(adoption
-          ? { authorizationManifestDigest: adoption.authorizationManifestDigest, adoptionStage: adoption.stage }
+        ...(authority
+          ? { authorizationManifestDigest: authority.authorizationManifestDigest, adoptionStage: authority.stage }
           : {}),
       };
       if (ns.metadata.uid !== deploymentPolicy.policy.namespaceUid)
@@ -897,7 +1049,6 @@ async function main() {
       await fs.writeFile(file, JSON.stringify(document), { flag: 'wx', mode: 0o600 });
       return kubeForRelease([...args, '-f', file]);
     };
-    const continuityTarget = continuityFromResources(renderedResources);
     const inspectContinuity = async (stage) => {
       if (!continuityTarget) return;
       const continuity = createKubernetesProxyContinuity({
@@ -944,6 +1095,13 @@ async function main() {
       assertNoExecutionStartupFences(
         items.filter((item) => item.metadata.labels?.['app.kubernetes.io/instance'] === release),
       );
+      if (settlement && onlineAdoption)
+        assertOnlineEditorHelmSettlement(
+          await readLatestHelmHistory(),
+          onlineAdoption,
+          deploymentPolicy.digest,
+          onlineAdoptionOperationId,
+        );
       if (settlement)
         assertReleaseSettlementCurrent({
           settlement,
@@ -978,6 +1136,12 @@ async function main() {
           rootDir,
           workflowContext,
           deploymentPolicy.digest,
+        );
+      if (onlineAdoption)
+        assert.equal(
+          workflowContext.operationId,
+          onlineAdoptionOperationId,
+          'Acceptance request is for a different editor handoff',
         );
       const retainedExecution = retainedTopologyExecution(pendingJournal, workflowContext, deploymentPolicy.digest);
       await executeDeploymentWorkflow({
@@ -1077,12 +1241,12 @@ async function main() {
     const cutover = options.has('--maintenance-cutover') || options.has('--resume-cutover');
     const haRollout = haRequested && exists && installed?.ha?.enabled && !cutover;
     const controlTransition = options.has('--ha-control-plane-transition');
-    const targetControlMode =
-      renderedResources
-        .find((r) => r.kind === 'StatefulSet' && r.metadata.labels?.['app.kubernetes.io/component'] === 'backend')
-        ?.spec.template.spec.containers.find((c) => c.name === 'backend')
-        ?.env?.find((e) => e.name === 'RIVET_HA_CONTROL_PLANE_MODE')?.value ?? 'replicated';
-    if (haRollout && !controlTransition && (installed.ha.controlPlane?.mode ?? 'replicated') !== targetControlMode)
+    if (
+      haRollout &&
+      !controlTransition &&
+      !onlineAdoption &&
+      (installed.ha.controlPlane?.mode ?? 'replicated') !== targetControlMode
+    )
       throw Error(
         'Control topology changed: finish the separately certified same-image adoption before an ordinary image upgrade.',
       );
@@ -1096,21 +1260,10 @@ async function main() {
       const configuration = assertContinuityConfiguration(installed, continuityTarget ?? {});
       if (configuration.profile && !configuration.sourceProfile)
         throw Error('First request continuity adoption requires its qualified ordinary HA transition.');
-    } else assertContinuityUpgrade(qualificationManifest, installed, continuityTarget ?? {});
+    } else if (!requireOnline) assertContinuityUpgrade(qualificationManifest, installed, continuityTarget ?? {});
     if (continuityTarget && !haRollout && !cutover)
       throw Error('Request continuity activation requires the ordinary installed HA rolling path.');
-    if (haRequested && !cutover)
-      assertHaUpgradeEvidence(
-        qualificationManifest,
-        continuityRecoveryLayout(installed, continuityTarget, {
-          journal: pendingJournal,
-          resumeToken: options.get('--resume-ha'),
-          configurationDigest: getHaConfigurationDigest(renderedResources),
-          manifestDigest: candidateDigest,
-          release,
-          namespace,
-        }),
-      );
+    if (haRequested && !cutover && !onlineAdoption) assertHaUpgradeEvidence(qualificationManifest, admissionInstalled);
     if (continuityTarget && !options.has('--resume-ha') && !workflowContext?.recovering)
       await inspectContinuity('preflight');
     if (installed?.ha?.enabled && !haRequested && !cutover)
@@ -1139,7 +1292,15 @@ async function main() {
           namespace,
           candidateManifestDigest: candidateDigest,
           installedManifestDigest: installedDigest ?? null,
-          route: cutover ? 'maintenance' : haRollout ? 'rolling' : exists ? 'direct' : 'bootstrap',
+          route: onlineAdoption
+            ? 'online-editor-adoption'
+            : cutover
+              ? 'maintenance'
+              : haRollout
+                ? 'rolling'
+                : exists
+                  ? 'direct'
+                  : 'bootstrap',
           qualification: maintenance ? 'waived' : 'required',
           installedSchemaVersion: installed?.release?.production?.database?.managedWorkflowSchemaVersion ?? null,
           targetSchemaVersion: manifest.database.managedWorkflowSchema.version,
@@ -1173,6 +1334,12 @@ async function main() {
         current,
         liveNamespace,
       );
+      if (onlineAdoption && !workflowContext?.recovering)
+        assert.equal(
+          installedSettingsDigest(current),
+          onlineAdoption.installedSettingsDigest,
+          'Installed settings changed after online editor adoption preflight',
+        );
     };
     if (options.has('--verify-only') && !workflowContext)
       throw Error('Verification-only cutover recovery requires the original production deployment policy.');
@@ -1196,6 +1363,13 @@ async function main() {
       await waitForReleaseSettlement({
         kube: kubeForRelease,
         resources: currentResources,
+        retainedEditor: onlineAdoption
+          ? await readRetainedOnlineEditor({
+              kube: kubeForRelease,
+              installed: adoptionSourceResources,
+              desired: renderedResources,
+            })
+          : undefined,
         candidateProxyHpa: renderedResources.find(
           (resource) =>
             resource.kind === 'HorizontalPodAutoscaler' &&
@@ -1291,7 +1465,13 @@ async function main() {
       artifact: (name, value) => writeArtifact(artifactsDir, name, value),
       prepareSafety: ({ before, backup }) =>
         createDeploymentSafety({
-          mode: cutover ? 'maintenance' : controlTransition ? 'topology' : haRollout ? 'rolling' : 'direct',
+          mode: cutover
+            ? 'maintenance'
+            : controlTransition || onlineAdoption
+              ? 'topology'
+              : haRollout
+                ? 'rolling'
+                : 'direct',
           scope: workflowContext ? 'production' : singleMachine ? 'local' : 'bootstrap',
           context: workflowContext,
           localIdentity: { release, namespace, context: selectedContext, candidateManifestDigest: candidateDigest },
@@ -1383,6 +1563,123 @@ async function main() {
             artifact: (name, value) => writeArtifact(artifactsDir, name, value),
           });
         try {
+          if (onlineAdoption) {
+            const guardsFile = path.join(generatedValuesDir, 'online-editor-guards.json');
+            const verifyTraffic = (handoffPhase, backendCandidate) =>
+              runDeploymentStage(
+                deploymentPolicy,
+                'online-overlap',
+                { ...workflowContext, handoffPhase, ...(backendCandidate ? { backendCandidate } : {}) },
+                { artifactsDir, timeoutMs },
+              );
+            return await runKubernetesOnlineEditorAdoption({
+              kube: kubeForRelease,
+              release,
+              namespace,
+              manifestDigest: candidateDigest,
+              installed: adoptionSourceResources,
+              desired: renderedResources,
+              safety,
+              timeoutMs,
+              resumeToken: options.get('--resume-ha'),
+              abort: options.has('--abort-online-adoption'),
+              openRestoreGuard: (pod) =>
+                openOnlineEditorRestoreGuard({
+                  kubectl,
+                  context: selectedContext,
+                  namespace,
+                  pod,
+                  schema: onlineAdoption.schema,
+                  postgres: installed.postgres,
+                  cwd: rootDir,
+                }),
+              verifyDeveloperReady: (backendCandidate) =>
+                runDeploymentStage(
+                  deploymentPolicy,
+                  'backend',
+                  { ...workflowContext, backendCandidate },
+                  { artifactsDir, timeoutMs },
+                ),
+              verifyTraffic,
+              settle: async (operation, beforeWrite) => {
+                const readValues = async () =>
+                  JSON.parse(
+                    (
+                      await run(
+                        helmBin,
+                        ['get', 'values', release, '--namespace', namespace, '--all', '--output', 'json'],
+                        { capture: true },
+                      )
+                    ).stdout,
+                  );
+                if (!operation.record.helmMetadataIssued) {
+                  const status = await readLatestHelmHistory();
+                  assert.ok(
+                    status.length === 1 &&
+                      status[0].status === 'deployed' &&
+                      Number(status[0].revision) === onlineAdoption.installedRevision &&
+                      installedSettingsDigest(await readValues()) === onlineAdoption.installedSettingsDigest,
+                    'Installed Helm baseline changed before online editor settlement',
+                  );
+                  // A final Helm revision records the new chart. Every serving
+                  // controller retains its live replica count, UID and template.
+                  const live = JSON.parse(
+                    (
+                      await kubeForRelease([
+                        'get',
+                        'statefulset,deployment',
+                        '-l',
+                        `app.kubernetes.io/instance=${release}`,
+                        '-o',
+                        'json',
+                      ])
+                    ).stdout,
+                  ).items;
+                  await fs.writeFile(guardsFile, JSON.stringify(onlineEditorSettlementValues(live, renderedResources)));
+                  await operation.checkpoint({ helmMetadataIssued: true });
+                  try {
+                    await beforeWrite();
+                  } catch (error) {
+                    // This invocation has not called Helm. Leave a resumable
+                    // journal only if we can still confirm our lease's write.
+                    try {
+                      await operation.checkpoint({ helmMetadataIssued: false });
+                    } catch (journalError) {
+                      throw preserveDeploymentFailure(error, journalError);
+                    }
+                    throw error;
+                  }
+                  const description = onlineEditorHelmDescription(
+                    workflowContext.operationId,
+                    onlineAdoption,
+                    deploymentPolicy.digest,
+                  );
+                  await upgrade(['--values', guardsFile, '--description', description], { waitForReady: false });
+                }
+                assertOnlineEditorHelmSettlement(
+                  await readLatestHelmHistory(),
+                  onlineAdoption,
+                  deploymentPolicy.digest,
+                  workflowContext.operationId,
+                );
+                const values = await readValues();
+                assert.ok(
+                  values.ha.controlPlane.mode === 'singleton-overlap' &&
+                    values.workflowSchema.migrationJob.enabled === false &&
+                    values.release.production.manifestDigest === candidateDigest,
+                );
+                assert.deepEqual(values.release.production.chart, onlineAdoption.chart);
+                const stored = parseReleaseResources(
+                  (await run(helmBin, ['get', 'manifest', release, '--namespace', namespace], { capture: true }))
+                    .stdout,
+                );
+                const expected = structuredClone(renderedResources);
+                alignSettledExecutionPoolResources(expected, stored);
+                assertInstalledReleaseManifest(expected, stored, { release, namespace });
+                return settle();
+              },
+            });
+          }
           if (haRollout) {
             const kube = kubeForRelease;
             const preservePath = path.join(generatedValuesDir, 'ha-preserved-capacity.json');

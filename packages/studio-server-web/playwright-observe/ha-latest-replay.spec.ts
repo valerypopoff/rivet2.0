@@ -11,7 +11,7 @@ import {
   type PortId,
 } from '@valerypopoff/rivet2-core';
 import { createProcessor } from '../../node/src/api.js';
-import { mockHostedEditorBootstrap } from './helpers/hostedEditorObserve';
+import { authenticateIfNeeded, mockHostedEditorBootstrap } from './helpers/hostedEditorObserve';
 import { seedHostedEditorProject } from './helpers/hostedEditorStorage';
 import { createLatestDebuggerFixture } from './latestDebuggerFixture';
 
@@ -97,6 +97,7 @@ for (const ha of [true, false])
       );
       await mockHostedEditorBootstrap(page);
       await page.goto('/?editor', { waitUntil: 'domcontentloaded' });
+      await authenticateIfNeeded(page);
       await expect(page.locator('.node-canvas').first()).toBeVisible();
       const connect = async () => {
         await page.locator('button.more-menu').click();

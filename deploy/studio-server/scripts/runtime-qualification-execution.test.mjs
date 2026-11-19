@@ -48,6 +48,7 @@ import { prepareQualificationReadinessPolicy } from './lib/runtime-qualification
 import { readDeploymentPolicy } from './lib/deployment-workflow.mjs';
 import { deployQualifiedRelease } from './lib/deploy-qualified-release.mjs';
 import { continuityProviderFacts, focusedContinuityProviderFacts } from './fixtures/continuity-provider-facts.mjs';
+import { onlineEditorAdoptionEvidence } from './fixtures/online-editor-adoption-evidence.mjs';
 import { continuityStages, assertContinuityUpgrade } from './lib/request-continuity.mjs';
 const root = fileURLToPath(new URL('../../../', import.meta.url));
 const sha = 'a'.repeat(40),
@@ -581,6 +582,39 @@ test('initial overlap readiness is an adoption preflight, never permission for a
   ])
     assert.throws(() => assertQualificationPreflight({ ...receipt, ...patch }, operation, qualified, options));
   assert.throws(() => assertQualificationPreflight(receipt, operation, qualified));
+});
+
+test('a paired singleton qualification rejects incompatible pool size or missing installed routing protection up front', () => {
+  const f = fixture(true);
+  const input = structuredClone(f.input);
+  input.installed.qualificationValues.ha = { executionPools: { enabled: true } };
+  assert.throws(() => qualificationOperation(input), /retain the installed database pool size/);
+  input.approval.developerOverlapProfile.poolMaxPerApiPod =
+    input.installed.qualificationValues.postgres.poolMaxPerApiPod;
+  assert.throws(() => qualificationOperation(input), /requires installed protected routing/);
+});
+
+test('a paired singleton upgrade requires first-adoption observations bound to the predecessor and observed window', () => {
+  const { facts, operation: frozen } = fixture(true);
+  const operation = structuredClone(frozen);
+  operation.installed.qualificationValues.ha = { executionPools: { enabled: true } };
+  operation.executionPools = true;
+  const report = facts.upgrade;
+  report.outcomes.executionPools = true;
+  const start = Date.now() - 901_000;
+  operation.startedAt = new Date(start - 1_000).toISOString();
+  report.startedAt = new Date(start).toISOString();
+  report.finishedAt = new Date(start + 900_000).toISOString();
+  for (const sample of ['initialAutoscaler', 'autoscaler', 'finalAutoscaler'])
+    report.outcomes[sample].sampleAt = start + 10_000;
+  assert.throws(() => assertOrdinaryProviderReport(report, operation), /first-adoption observations/);
+  const preparation = report.outcomes.overlapPreparation;
+  preparation.onlineAdoption = onlineEditorAdoptionEvidence(operation.predecessorManifestDigest, start);
+  assert.doesNotThrow(() => assertOrdinaryProviderReport(report, operation));
+  preparation.onlineAdoption = onlineEditorAdoptionEvidence('another-release', start);
+  assert.throws(() => assertOrdinaryProviderReport(report, operation));
+  preparation.onlineAdoption = onlineEditorAdoptionEvidence(operation.predecessorManifestDigest, start - 3_000);
+  assert.throws(() => assertOrdinaryProviderReport(report, operation), /Invalid handoff window/);
 });
 
 test('overlap facts compile a distinct exact-profile certificate, and missing continuity fails after cleanup', async () => {

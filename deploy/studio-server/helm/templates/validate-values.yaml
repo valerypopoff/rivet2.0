@@ -536,6 +536,7 @@
 {{- if or .Values.autoscaling.execution.enabled .Values.autoscaling.executionController.enabled -}}
 {{- $executionReplicas = int .Values.autoscaling.execution.maxReplicas -}}
 {{- end -}}
+{{- $regularExecutionReplicas := $executionReplicas -}}
 {{- if .Values.ha.executionPools.enabled -}}
 {{- $executionReplicas = add $executionReplicas (int .Values.ha.executionPools.maxSurgeReplicas) -}}
 {{- end -}}
@@ -569,11 +570,19 @@
 {{- if .Values.ha.enabled -}}
 {{- $schedulerPods = add $schedulerPods $executionReplicas 1 -}}
 {{- end -}}
+{{- $serializedOverlap := and .Values.ha.executionPools.enabled (eq .Values.ha.controlPlane.mode "singleton-overlap") -}}
+{{- if $serializedOverlap -}}
+{{- /* The operator verifies the other surge has fully stopped before starting
+      either surge. Only the serving editors and execution API schedule runs. */ -}}
+{{- $schedulerPods = max (add $regularExecutionReplicas 2) (add $executionReplicas 1) -}}
+{{- $apiPods = add $schedulerPods $evaluationReplicas 1 -}}
+{{- $requiredPostgresConnections = add $postgresReservedConnections (mul $apiPods $apiPodConnections) -}}
+{{- end -}}
 {{- $schedulerConnections := mul $schedulerPods 2 -}}
 {{- $requiredPostgresConnections = add $requiredPostgresConnections $schedulerConnections -}}
 {{- $restoreConnections := 0 -}}
 {{- if and .Values.legacyRestore.enabled (eq .Values.workflowStorage.backend "managed") (not .Values.compatibility.legacyStartupSettingsFiles) -}}
-{{- $restoreConnections = add (mul $apiPods 2) 3 -}}
+{{- $restoreConnections = add (mul $apiPods 2) 3 (ternary 1 0 $serializedOverlap) -}}
 {{- $requiredPostgresConnections = add $requiredPostgresConnections $restoreConnections -}}
 {{- end -}}
 {{- if gt $requiredPostgresConnections $postgresMaxConnections -}}
@@ -725,8 +734,11 @@
 {{- end -}}
 {{- if .Values.ha.executionPools.enabled -}}
 {{- /* Fenced validation keeps both pool identities with the replica writer paused. */ -}}
-{{- if or (not .Values.ha.enabled) (ne .Values.ha.controlPlane.mode "singleton") (not .Values.requestContinuity.enabled) (and (not .Values.workflowSchema.maintenanceValidation) (not .Values.autoscaling.executionController.enabled)) -}}
-{{- fail "Execution pools require singleton HA with the execution controller" -}}
+{{- if or (not .Values.ha.enabled) (not (has .Values.ha.controlPlane.mode (list "singleton" "singleton-overlap"))) (not .Values.requestContinuity.enabled) (and (not .Values.workflowSchema.maintenanceValidation) (not .Values.autoscaling.executionController.enabled)) -}}
+{{- fail "Execution pools require singleton or singleton-overlap HA with the execution controller" -}}
+{{- end -}}
+{{- if and $serializedOverlap (gt (int .Values.replicaCount.backend) 1) (gt (int .Values.ha.executionPools.retiringReplicas) 0) -}}
+{{- fail "Editor and paired execution surges must be separate" -}}
 {{- end -}}
 {{- if not (has .Values.ha.executionPools.active (list "a" "b")) -}}
 {{- fail "Execution pool active slot must be a or b" -}}

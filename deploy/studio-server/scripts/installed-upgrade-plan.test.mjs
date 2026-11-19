@@ -10,6 +10,8 @@ import {
   HA_PROVIDER_OVERLAP_CHECKS,
 } from './lib/ha-release-evidence.mjs';
 import { overlapProfileDigest } from './lib/qualification-overlap-profile.mjs';
+import { continuityFixtureProfile } from './fixtures/continuity-provider-facts.mjs';
+import { continuityChecks, continuityProfileDigest } from './lib/request-continuity.mjs';
 import {
   createStudioServerReleaseManifest,
   promoteStudioServerReleaseManifest,
@@ -235,6 +237,60 @@ test('ordinary installed-to-candidate planning cannot require or authorize histo
   assert.equal((await planInstalledUpgrade({ candidate: b, installed })).status, 'adoption-required');
   const already = { ...installed, ...createProductionHelmValues(b) };
   assert.equal((await planInstalledUpgrade({ candidate: b, installed: already })).status, 'adoption-required');
+
+  const blocked = await planInstalledUpgrade({ candidate: b, installed, requireOnline: true });
+  assert.equal(blocked.status, 'continuity-required');
+  assert.match(blocked.reason, /qualify online editor adoption on the installed images first/i);
+  assert.deepEqual(blocked.steps, []);
+  const onlineInstalled = structuredClone(installed);
+  onlineInstalled.ha.controlPlane.mode = 'singleton-overlap';
+  onlineInstalled.postgres = {
+    maxConnections: profile.maxConnections,
+    reservedConnections: profile.reservedConnections,
+    poolMaxPerApiPod: profile.poolMaxPerApiPod,
+  };
+  onlineInstalled.resources = { backendOverlap: profile.backendResources };
+  const planOnline = () => planInstalledUpgrade({ candidate: b, installed: onlineInstalled, requireOnline: true });
+  assert.equal((await planOnline()).status, 'qualification-required', 'Editor evidence alone cannot protect requests.');
+
+  const continuity = continuityFixtureProfile;
+  onlineInstalled.requestContinuity = {
+    enabled: true,
+    maxProtectedRequestSeconds: continuity.maxProtectedRequestSeconds,
+    backendServiceDrainSeconds: continuity.backendServiceDrainSeconds,
+    propagationSeconds: continuity.propagationSeconds,
+  };
+  onlineInstalled.lifecycle = {
+    shutdownGraceSeconds: 120,
+    proxy: {
+      preStopDelaySeconds: continuity.proxyPreStopDelaySeconds,
+      terminationGracePeriodSeconds: continuity.proxyTerminationGracePeriodSeconds,
+    },
+  };
+  Object.assign(b.evidence.runtimeControl.developerOverlap, {
+    sourceMode: 'singleton-overlap',
+    sourcePool: profile.poolMaxPerApiPod,
+  });
+  b.evidence.runtimeControl.requestContinuity = {
+    ...common,
+    protocol: 2,
+    provider: 'gke',
+    gatewayClass: 'gke-l7-regional-external-managed',
+    predecessorManifestDigest: digest(a),
+    profile: continuity,
+    profileDigest: continuityProfileDigest(continuity),
+    bootstrap: 'already-protected',
+    completedRequests: 21,
+    maximumCompletedDurationMs: 300_000,
+    reportSha256: 'b'.repeat(64),
+    checks: continuityChecks(true),
+  };
+  assert.equal((await planOnline()).status, 'qualified-route');
+  const wrongPredecessor = digest(b);
+  b.evidence.runtimeControl.requestContinuity.predecessorManifestDigest = wrongPredecessor;
+  await assert.rejects(planOnline(), { actual: wrongPredecessor, expected: digest(a) });
+  delete b.evidence.runtimeControl.requestContinuity;
+
   delete b.evidence.runtimeAutoscaling;
   assert.equal((await planInstalledUpgrade({ candidate: b, installed })).status, 'qualification-required');
 });

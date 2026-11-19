@@ -693,21 +693,7 @@ return {output:{type:'string',value:body},delay:{type:'number',value:p.delayMs}}
       }
       assert.ok(this.bridgeCleaned, 'Temporary bridge settlement was not observed');
     }
-    const page = await this.gate.requestWorkflow(
-      this.gate.config.baseUrl,
-      `/api/workflows/recordings/workflows/${encodeURIComponent(this.workflowId)}/runs?page=1&pageSize=100&status=all`,
-    );
-    assert.equal(page.hasMore, false);
-    assert.equal(page.totalRuns, this.requests.length, 'Duplicate or unaccounted fixture invocations');
-    for (const receipt of this.requests) {
-      const matches = page.runs.filter(
-        (r) => r.workflowId === this.workflowId && r.executionIdentity?.correlationId === receipt.correlationId,
-      );
-      assert.equal(matches.length, 1);
-      assert.equal(matches[0].status, 'succeeded');
-      receipt.recordingId = matches[0].id;
-    }
-    assert.equal(this.failures.length, 0);
+    await this.verifyRecordings();
     return {
       protocol: focused ? 5 : 2,
       profile: this.gate.operation.requestContinuityProfile,
@@ -723,6 +709,23 @@ return {output:{type:'string',value:body},delay:{type:'number',value:p.delayMs}}
       ...(this.executionHandoff ? { executionHandoff: this.executionHandoff } : {}),
       failures: this.failures,
     };
+  }
+  async verifyRecordings() {
+    const page = await this.gate.requestWorkflow(
+      this.gate.config.baseUrl,
+      `/api/workflows/recordings/workflows/${encodeURIComponent(this.workflowId)}/runs?page=1&pageSize=100&status=all`,
+    );
+    assert.equal(page.hasMore, false);
+    assert.equal(page.totalRuns, this.requests.length, 'Duplicate or unaccounted fixture invocations');
+    for (const receipt of this.requests) {
+      const matches = page.runs.filter(
+        (r) => r.workflowId === this.workflowId && r.executionIdentity?.correlationId === receipt.correlationId,
+      );
+      assert.equal(matches.length, 1);
+      assert.equal(matches[0].status, 'succeeded');
+      receipt.recordingId = matches[0].id;
+    }
+    assert.equal(this.failures.length, 0);
   }
   recordFailure(stage, error, requestId) {
     this.failures.push({

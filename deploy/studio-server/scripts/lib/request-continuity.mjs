@@ -21,6 +21,8 @@ export const CONTINUITY_DURATION_STAGES = {
 export const FOCUSED_CONTINUITY_WORK_MS = 295000;
 export const FOCUSED_CONTINUITY_DEADLINE_MS = 300000;
 export function continuityRequestTiming(stage, tier = 'full') {
+  if (['editor-source-withdrawal', 'editor-housekeeping-transfer', 'editor-standby-withdrawal'].includes(stage))
+    return { durationMs: FOCUSED_CONTINUITY_WORK_MS, timeoutMs: FOCUSED_CONTINUITY_DEADLINE_MS };
   const durationMs = tier === 'focused' ? FOCUSED_CONTINUITY_WORK_MS : CONTINUITY_DURATION_STAGES[stage] ?? 300000;
   return { durationMs, timeoutMs: tier === 'focused' ? FOCUSED_CONTINUITY_DEADLINE_MS : durationMs + 30000 };
 }

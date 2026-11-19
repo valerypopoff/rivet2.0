@@ -1,5 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { assertOnlineEditorResources, onlineEditorTemplates } from './lib/online-editor-kubernetes.mjs';
+import { exerciseOnlineEditorKubernetes } from './test-fixtures/online-editor-cluster.mjs';
 import { createServer } from 'node:http';
 import { execFileSync } from 'node:child_process';
 import { once } from 'node:events';
@@ -84,6 +86,43 @@ const protectedValues = [
   'lifecycle.proxy.preStopDelaySeconds=420',
   'lifecycle.proxy.terminationGracePeriodSeconds=600',
 ];
+
+test('paired editor overlap preserves the published layout within the installed database allowance', async () => {
+  const common = [
+    ...protectedValues,
+    'ha.executionPools.enabled=true,ha.executionPools.maxSurgeReplicas=7',
+    'autoscaling.execution.maxReplicas=7',
+    'postgres.maxConnections=305,postgres.reservedConnections=30,postgres.poolMaxPerApiPod=10',
+    'workflowSchema.migrationJob.enabled=false',
+  ];
+  const overlap = [
+    'ha.controlPlane.mode=singleton-overlap',
+    'ha.namespaceUid=f70a25bb-0c5f-44e4-9da4-3b347f87331d',
+    'resources.backendOverlap.limits.memory=3Gi,resources.backendOverlap.limits.ephemeral-storage=2Gi',
+  ];
+  const singleton = render(...common, 'ha.controlPlane.mode=singleton');
+  const desired = render(...common, ...overlap);
+  const { source, backend, active, inactive } = assertOnlineEditorResources(singleton, desired);
+  assert.equal(active.spec.replicas, 2);
+  assert.equal(inactive.spec.replicas, 0);
+  const templates = onlineEditorTemplates(source, backend);
+  assert.match(templates.bootstrap.spec.containers[0].args[0], /-0\) export RIVET_HA_CONTROL_PLANE_MODE=singleton/);
+  assert.ok(
+    templates.fenced.spec.containers[0].env.some(
+      (entry) => entry.name === 'RIVET_EXECUTION_STARTUP_FENCE' && entry.value === `${backend.metadata.name}-0`,
+    ),
+  );
+  assert.throws(() => render(...common, ...overlap, 'postgres.maxConnections=303'), /requires 304 connections/);
+  assert.throws(
+    () => render(...common, ...overlap, 'replicaCount.backend=2,ha.executionPools.retiringReplicas=2'),
+    /Editor and paired execution surges must be separate/,
+  );
+  await exerciseOnlineEditorKubernetes(singleton, desired);
+  await exerciseOnlineEditorKubernetes(singleton, desired, { loseAdmission: true });
+  await exerciseOnlineEditorKubernetes(singleton, desired, { abortAfterFence: true });
+  active.spec.template.spec.containers[0].image = 'changed';
+  assert.throws(() => assertOnlineEditorResources(singleton, desired), /changes a non-editor resource/);
+});
 
 test('monitoring receives admitted reservations without inventing omitted limits or requiring cluster credentials', () => {
   const resources = render();

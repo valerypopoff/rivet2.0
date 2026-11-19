@@ -241,6 +241,7 @@ async function main() {
       'deploy/studio-server/scripts/ha-routing-withdrawal.test.mjs',
       'deploy/studio-server/scripts/ha-control-topology.test.mjs',
       'deploy/studio-server/scripts/ha-kubernetes-control-topology.test.mjs',
+      'deploy/studio-server/scripts/online-editor-adoption.test.mjs',
       'deploy/studio-server/scripts/runtime-control-local.test.mjs',
       'deploy/studio-server/scripts/runtime-upgrade-qualification.test.mjs',
       'deploy/studio-server/scripts/runtime-qualification-execution.test.mjs',

@@ -74,7 +74,8 @@ export async function inspectBackendOverlap({
       ])
     ).stdout,
   ).items.filter((p) => p.spec.nodeName === pod.spec.nodeName && !['Succeeded', 'Failed'].includes(p.status?.phase));
-  for (const resource of ['cpu', 'memory']) {
+  for (const resource of ['cpu', 'memory', 'ephemeral-storage']) {
+    if (!request(backend.spec.template.spec, resource)) continue;
     const parse = (value) => resourceQuantity(value, resource);
     const available =
       parse(node.status.allocatable[resource]) - pods.reduce((sum, p) => sum + request(p.spec, resource), 0);
