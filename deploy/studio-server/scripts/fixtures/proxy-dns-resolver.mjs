@@ -58,6 +58,8 @@ async function listen() {
 await listen();
 http
   .createServer(async (req, res) => {
+    // DNS fault injection uses a fresh connection for each control request.
+    res.setHeader('Connection', 'close');
     if (req.method === 'POST') {
       let body = '';
       for await (const chunk of req) body += chunk;

@@ -1,8 +1,7 @@
 # syntax=docker/dockerfile:1.7
-FROM nginx:1.30.6-alpine@sha256:47928bf67eb62a1863cb08d9ecb52d3e704304ba614eaee17884204677702951
+FROM nginx:1.30.7-alpine@sha256:bef154735288bc38d99fac41ae63730684bcc661503673a04a0f9bc526ba8598
 
 # Raising security floors invalidates cached APK layers and refuses vulnerable packages.
-# The pinned upstream image predates these curl, Brotli, Expat and libxslt fixes.
 RUN apk add --no-cache 'curl>=8.23.0-r0' 'libcurl>=8.23.0-r0' 'brotli-libs>=1.2.1-r0' 'libexpat>=2.10.0-r0' 'libxslt>=1.1.43-r4' && \
     addgroup -g 10001 -S rivet && \
     adduser -u 10001 -S -D -h /home/rivet -G rivet rivet && \

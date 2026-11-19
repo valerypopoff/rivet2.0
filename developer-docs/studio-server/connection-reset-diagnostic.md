@@ -3,7 +3,7 @@
 This is an investigation of the incomplete response seen on November 7, not a
 release gate or a production update. It does not access the retained Rivet
 installation, reset its baseline, remove its quarantine, or reuse its lock.
-It uses a new disposable namespace and the pinned Node 24.22.1 and Nginx 1.30.6
+It uses a new disposable namespace and the pinned Node 24.22.1 and Nginx 1.30.7
 runtime images. No application image build, database, external load balancer,
 certificate issuance, persistent disk, or new cluster is needed.
 

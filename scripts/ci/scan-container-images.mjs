@@ -8,13 +8,13 @@ import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { assertStudioServerReleaseManifest } from '../../deploy/studio-server/scripts/lib/studio-server-release-manifest.mjs';
 
-export const nginxImage = 'nginx:1.30.6-alpine@sha256:47928bf67eb62a1863cb08d9ecb52d3e704304ba614eaee17884204677702951';
+export const nginxImage = 'nginx:1.30.7-alpine@sha256:bef154735288bc38d99fac41ae63730684bcc661503673a04a0f9bc526ba8598';
 export const scannerImage =
   'ghcr.io/aquasecurity/trivy:0.76.1@sha256:790fd66d1697395d8693d1acaa1ea702406a20f109b6fc7bac8db623eca6c06c';
 export const runtimeNodeImage =
   'node:24.22.1-alpine@sha256:06d7adf3e0ef61a13f1d28682726366f97a15aa1888c934d3ecec86c33918b53';
 export const esbuildCompilerImage =
-  'golang:1.27.3-alpine@sha256:b8c9b82affbbb82a020bbcf998dad2ba9516944ac7e883524642a481a9505e9c';
+  'golang:1.27.4-alpine@sha256:70bd7ddea8b6cbe5d6943cde279d6b67feb10cc924fb9100d1d8757c1575b280';
 export const imagePlatforms = Object.freeze({
   proxy: ['linux/amd64', 'linux/arm64'],
   web: ['linux/amd64', 'linux/arm64'],

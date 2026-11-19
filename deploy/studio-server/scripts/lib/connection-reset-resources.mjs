@@ -4,7 +4,7 @@ import { diagnosticLabel, diagnosticNamespace } from './connection-reset-diagnos
 export const diagnosticNodeImage =
   'node:24.22.1-alpine@sha256:06d7adf3e0ef61a13f1d28682726366f97a15aa1888c934d3ecec86c33918b53';
 export const diagnosticProxyImage =
-  'nginx:1.30.6-alpine@sha256:47928bf67eb62a1863cb08d9ecb52d3e704304ba614eaee17884204677702951';
+  'nginx:1.30.7-alpine@sha256:bef154735288bc38d99fac41ae63730684bcc661503673a04a0f9bc526ba8598';
 export const diagnosticNginx = `worker_processes 1;
 pid /tmp/nginx.pid;
 error_log /dev/stderr info;

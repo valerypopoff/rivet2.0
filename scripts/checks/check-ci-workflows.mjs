@@ -1024,6 +1024,7 @@ for (const file of [
   'deploy/studio-server/compose/docker-compose.dev.yml',
   'deploy/studio-server/scripts/verify-proxy-dns.mjs',
   'deploy/studio-server/scripts/verify-trusted-client-proxy.mjs',
+  'deploy/studio-server/scripts/lib/connection-reset-resources.mjs',
 ]) {
   const refs = read(file).match(/nginx:[\w.-]+(?:@sha256:[a-f0-9]{64})?/g) ?? [];
   assert.ok(refs.length && refs.every((reference) => reference === nginxImage), `${file}: NGINX reference drift`);

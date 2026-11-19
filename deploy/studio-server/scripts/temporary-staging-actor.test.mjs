@@ -16,7 +16,7 @@ import { temporaryHash } from './lib/temporary-staging-contract.mjs';
 const fixture = fileURLToPath(new URL('./fixtures/temporary-actor-preflight-tool.mjs', import.meta.url));
 
 test('actor admission rejects unsupported kubectl skew and malformed version claims', () => {
-  for (const version of ['v1.35.9', 'v1.36.6+rivet.go1.27.3', 'v1.37.0'])
+  for (const version of ['v1.35.9', 'v1.36.6+rivet.go1.27.4', 'v1.37.0'])
     assertKubectlVersionSkew(version, '1.36.4-gke.2046003');
   for (const version of ['v1.34.13', 'v1.38.0', 'v2.36.0', '1.36', 'v1.36.6 trailing', null])
     assert.throws(() => assertKubectlVersionSkew(version, '1.36.4-gke.2046003'));

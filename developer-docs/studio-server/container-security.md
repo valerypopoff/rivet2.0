@@ -5,6 +5,21 @@ those audits does not certify NGINX, Alpine libraries or binaries copied into a
 container. Build Images now requires `scan-images` before promotion, alongside
 the existing functional, migration and HA gates. Scanning does not deploy anything.
 
+## Go and NGINX security updates: November 19, 2026
+
+Build Images reported [CVE-2026-97054](https://pkg.go.dev/vuln/GO-2026-6859)
+in the Go standard library linked into esbuild, Helm and kubectl. API, executor
+and qualification actor builds now use the same digest-pinned Go 1.27.4
+compiler. The esbuild JavaScript API, Helm and kubectl upstream versions and
+locked module graphs retain their existing compatibility. Verify both esbuild
+entry points and the actor's reported Go versions before scanning the final
+images.
+
+The proxy scan also reported six NGINX findings on amd64 and arm64. The proxy
+and its local and regression images now use NGINX 1.30.7 Alpine, which includes
+the fixes listed in the [NGINX advisories](https://nginx.org/en/security_advisories.html).
+Scan the final proxy on both architectures. Existing APK floors still apply.
+
 ## Runtime glob packages: November 18, 2026
 
 The November 18 pinned image scan reported CVE-2026-112366 for the installed
@@ -98,16 +113,16 @@ application data or schema and deploys nothing.
 ## Pinned NGINX and October 2026 update
 
 The production Dockerfile, development Compose proxy and real proxy regression
-fixtures use NGINX **1.30.6 Alpine**, pinned to the official multi-platform digest
-`sha256:47928bf67eb62a1863cb08d9ecb52d3e704304ba614eaee17884204677702951`.
+fixtures use NGINX **1.30.7 Alpine**, pinned to the official multi-platform digest
+`sha256:bef154735288bc38d99fac41ae63730684bcc661503673a04a0f9bc526ba8598`.
 The former 1.27.5 pin predates the October 14 fixes for CVE-2026-15176,
 CVE-2026-93479, CVE-2026-95101, CVE-2026-97629 and CVE-2026-97205, as well as
 earlier fixes. Configuration prerequisites still matter; do not equate a version
 match with a demonstrated exploit. See the [upstream advisories](https://nginx.org/en/security_advisories.html).
 
-The final Rivet proxy additionally installs `brotli-libs>=1.2.1-r0`: the pinned
-upstream image contains 1.2.0-r1, which the current scanner reports vulnerable to
-CVE-2026-111497. Installing a patched NGINX alone does not fix that library.
+The final Rivet proxy requires `brotli-libs>=1.2.1-r0`. An earlier proxy scan
+found 1.2.0-r1 affected by CVE-2026-111497. The APK floor applies independently
+of the NGINX patch version.
 The stock development/test image reference is not a release qualification;
 scan the final production image, including its added packages. Version/digest
 consistency is guarded by the workflow-policy check in `test:style`.
@@ -199,8 +214,8 @@ cannot be reused after a command fails.
 
 ```powershell
 node .yarn/releases/yarn-4.17.1.cjs test:container-security
-docker build --pull --platform linux/amd64 -f deploy/studio-server/images/proxy/Dockerfile -t rivet-security-local/proxy:nginx-1.30.6 .
-docker image save --output artifacts/container-security/proxy.tar rivet-security-local/proxy:nginx-1.30.6
+docker build --pull --platform linux/amd64 -f deploy/studio-server/images/proxy/Dockerfile -t rivet-security-local/proxy:nginx-1.30.7 .
+docker image save --output artifacts/container-security/proxy.tar rivet-security-local/proxy:nginx-1.30.7
 node scripts/ci/scan-container-images.mjs --archive artifacts/container-security/proxy.tar --platform linux/amd64 --output artifacts/container-security/proxy-scan
 ```
 
@@ -229,8 +244,9 @@ node deploy/studio-server/scripts/verify-proxy-dns.mjs
 
 The TLS fixture requires OpenSSL on PATH (Git for Windows supplies it under
 `C:/Program Files/Git/usr/bin`). DNS verification invokes the repository's
-`studio-server:ui:observe` runner headlessly through the test proxy; preserve its
-outage, address replacement and active-WebSocket checks. These tests do not
+`studio-server:ui:observe` runner headlessly through the test proxy. The DNS
+fixture closes each control connection after responding. The proxy exercises
+pooled application requests, address replacement and active WebSockets. These tests do not
 reload the running local app or production. Local validation is not a production
 deployment or provider qualification, and this dependency update requires no
 database schema or object-storage migration.
@@ -306,7 +322,7 @@ candidate. The follow-up keeps the strict scanner policy unchanged:
   **6.29.1** (which has no dependencies), retaining the rest of npm's installation.
   Do not reinstall npm's entire development dependency tree to accomplish this.
 - The six esbuild platform packages retain **0.25.12**, its source and JavaScript
-  API. Their Go runtime is rebuilt with digest-pinned **Go 1.27.3**, using Go's
+  API. Their Go runtime is rebuilt with digest-pinned **Go 1.27.4**, using Go's
   module checksum database. Both the platform binary and npm's executable copy
   are replaced. The compiler/source-version policy is checked against the root
   resolution. This avoids combining a security fix with an esbuild API migration
@@ -519,7 +535,7 @@ The qualification actor is a separate final-image security boundary, not covered
 by passing API/executor scans. Its Dockerfile must use the same pinned Node and
 Go/esbuild remediation as the graph-capable images. It retains esbuild 0.25.12's
 JavaScript API and all six platform packages, replacing their binaries with the
-existing Go 1.27.3 build. Both executable resolution paths are tested. npm stays
+existing Go 1.27.4 build. Both executable resolution paths are tested. npm stays
 available, with npm 11.21.1, its dependency-only Undici 6.29.1 update and the
 existing cache-policy source/behavior guard. The final UID-10001 image runs the
 same transform/plugin, converter and offline npm installation checks.
@@ -530,13 +546,13 @@ security evidence. Do not switch Helm majors or use an incompatible kubectl
 minor merely to reduce findings. Kubernetes documents the supported
 [kubectl version skew](https://kubernetes.io/releases/version-skew-policy/#kubectl).
 Helm 3.22.1 is rebuilt from its checksum-verified upstream module using the pinned
-Go 1.27.3 compiler and a locked build-only dependency policy (`-mod=readonly`).
+Go 1.27.4 compiler and a locked build-only dependency policy (`-mod=readonly`).
 Building the actual upstream command as a dependency preserves its real
 main-module version/checksum in Go's build inventory; a `(devel)` main module is
 rejected, not relabeled or ignored.
 This preserves future advisory matching in addition to fixing today's findings.
 The official binary still uses Go 1.26.9. The local build identifies itself with
-`+rivet.go1.27.3`, not a fabricated upstream Git commit; its build inventory and
+`+rivet.go1.27.4`, not a fabricated upstream Git commit; its build inventory and
 license are retained under `/opt/rivet/toolchain`. The official kubectl 1.34.13
 binary still contains vulnerable x/net and x/text versions. A small locked
 build-only Go tool module compiles its **unmodified upstream main package** with

@@ -26,7 +26,7 @@ try {
     '-e', `RIVET_TRUSTED_FORWARDING_PROXIES=${edge}/32,192.0.2.200/32,2001:db8:ffff::/48`,
     '--mount', `type=bind,source=${path.resolve('deploy/studio-server/images/proxy/client-address.sh')},target=/client-address.sh,readonly`,
     '--mount', `type=bind,source=${root},target=/fixture,readonly`,
-    '--entrypoint', '/bin/sh', 'nginx:1.30.6-alpine@sha256:47928bf67eb62a1863cb08d9ecb52d3e704304ba614eaee17884204677702951', '-c',
+    '--entrypoint', '/bin/sh', 'nginx:1.30.7-alpine@sha256:bef154735288bc38d99fac41ae63730684bcc661503673a04a0f9bc526ba8598', '-c',
     '. /client-address.sh && write_client_address_include /tmp/client-address.inc && exec nginx -c /fixture/nginx.conf -g "daemon off;"');
   containers.push(proxy);
   const request = (from, headers = [], target = proxy) => docker('run', '--rm', '--network', `container:${from}`,
@@ -51,7 +51,7 @@ try {
       '-e', `RIVET_TRUSTED_FORWARDING_PROXIES=${peers}`,
       '--mount', `type=bind,source=${path.resolve('deploy/studio-server/images/proxy/client-address.sh')},target=/client-address.sh,readonly`,
       '--mount', `type=bind,source=${root},target=/fixture,readonly`,
-      '--entrypoint', '/bin/sh', 'nginx:1.30.6-alpine@sha256:47928bf67eb62a1863cb08d9ecb52d3e704304ba614eaee17884204677702951', '-c',
+      '--entrypoint', '/bin/sh', 'nginx:1.30.7-alpine@sha256:bef154735288bc38d99fac41ae63730684bcc661503673a04a0f9bc526ba8598', '-c',
       '. /client-address.sh && write_client_address_include /tmp/client-address.inc && exec nginx -c /fixture/nginx.conf -g "daemon off;"');
     assert.equal(request(containers[1], [`X-Forwarded-For: 127.0.0.1, ${client}, 192.0.2.200`], id), expected);
     assert.notEqual(expected, client, 'Incomplete forwarding trust must not authorize the public test client');
@@ -86,7 +86,7 @@ try {
       ]),
       '--mount', `type=bind,source=${path.resolve('deploy/studio-server/images/proxy')},target=/opt/rivet/proxy,readonly`,
       '--mount', `type=bind,source=${path.resolve(template)},target=/etc/nginx/templates/default.conf.template,readonly`,
-      '--entrypoint', '/bin/sh', 'nginx:1.30.6-alpine@sha256:47928bf67eb62a1863cb08d9ecb52d3e704304ba614eaee17884204677702951', '/opt/rivet/proxy/normalize-workflow-paths.sh');
+      '--entrypoint', '/bin/sh', 'nginx:1.30.7-alpine@sha256:bef154735288bc38d99fac41ae63730684bcc661503673a04a0f9bc526ba8598', '/opt/rivet/proxy/normalize-workflow-paths.sh');
     const inspect = docker('run', '--rm', '--network', `container:${containers[0]}`,
       'curlimages/curl:8.10.1', '-fsS', '--retry', '5', '--retry-connrefused', '--retry-delay', '1',
       '-H', 'X-Rivet-Client-IP: 127.0.0.1', '-H', 'X-Rivet-Token-Free-Host: 1',
