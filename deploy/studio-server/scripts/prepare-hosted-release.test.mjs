@@ -5,7 +5,6 @@ import fs from 'node:fs/promises';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { parseAllDocuments } from 'yaml';
 import { prepareHostedRelease, cleanupHostedStagingSetup } from './prepare-hosted-release.mjs';
 import { waitForStagingJanitor, observeStagingJanitor } from './lib/staging-janitor-health.mjs';
 import { stagingCoordinatorControlRole, stagingCoordinatorRunnerRole } from './lib/staging-coordinator-access.mjs';
@@ -110,17 +109,17 @@ async function fixture(t, failedStep) {
     RIVET_QUALIFICATION_MAX_SECONDS: '7200',
   };
   const events = [];
+  const job = path.join(directory, 'rivet-staging');
+  const readManifest = (file) => JSON.parse(readFileSync(path.join(job, file), 'utf8'));
   const action = (step) => {
     // Local compilation and exact janitor update validation must precede every
     // provider command, lock acquisition and remote evidence write.
-    const job = path.join(directory, 'rivet-staging');
-    assert.ok(existsSync(path.join(job, 'package/driver/provider.mjs')));
-    assert.ok(existsSync(path.join(job, 'package/driver/driver.json')));
-    const update = parseAllDocuments(readFileSync(path.join(job, 'janitor-update.yaml'), 'utf8')).map((d) => d.toJS());
-    assert.deepEqual(
-      update.map((item) => item.kind),
-      ['ConfigMap', 'Deployment'],
-    );
+    if (!events.length) {
+      assert.ok(existsSync(path.join(job, 'package/driver/provider.mjs')));
+      assert.ok(existsSync(path.join(job, 'package/driver/driver.json')));
+      assert.equal(readManifest('janitor-code.json').immutable, true);
+      assert.equal(readManifest('janitor-deployment.json').kind, 'Deployment');
+    }
     events.push(step);
     if (step === failedStep) throw new Error(`fixture ${step} failure`);
   };
@@ -190,7 +189,9 @@ async function fixture(t, failedStep) {
                   : args.includes('configmaps')
                     ? args.includes('rivet-qualification-janitor-health')
                       ? 'janitor-health'
-                      : 'operation-registry'
+                      : args.some((arg) => arg.startsWith('rivet-qualification-janitor-'))
+                        ? 'janitor-code'
+                        : 'operation-registry'
                     : args.includes('pods')
                       ? 'janitor-owner'
                       : args.includes('deployments')
@@ -200,13 +201,22 @@ async function fixture(t, failedStep) {
                           : 'cluster-identity'
                 : args.includes('apply')
                   ? 'apply'
-                  : 'rollout';
+                  : args.includes('create')
+                    ? 'create-code'
+                    : 'rollout';
           action(step);
           if (step === 'registries')
             return JSON.stringify({ items: this.registries, metadata: { continue: this.registryContinuation } });
           if (step === 'actor-pods') return JSON.stringify({ items: this.actorPods });
           if (step === 'actor-job') return this.actorJob ? JSON.stringify(this.actorJob) : '';
           if (step === 'operation-registry') return this.admittedRegistry ? JSON.stringify(this.admittedRegistry) : '';
+          if (step === 'janitor-code') {
+            if (this.installedCode) return JSON.stringify(this.installedCode);
+            if (!this.reuseCode) return '';
+            const code = readManifest('janitor-code.json');
+            this.reuseCode(code);
+            return JSON.stringify(code);
+          }
           if (step === 'janitor-deployment') return JSON.stringify(this.deployment);
           if (step === 'janitor-health') {
             if (this.updated) this.newHealthReads++;
@@ -239,9 +249,16 @@ async function fixture(t, failedStep) {
             return JSON.stringify({
               metadata: { uid: failedStep === 'wrong-cluster' ? 'foreign-cluster' : 'staging-uid' },
             });
+          if (step === 'create-code') {
+            assert.ok(allowed('create', 'configmaps'));
+            assert.ok(!args.includes('--save-config'));
+            this.installedCode = JSON.parse(readFileSync(args[args.indexOf('-f') + 1], 'utf8'));
+            assert.equal(this.installedCode.kind, 'ConfigMap');
+          }
           if (step === 'apply') {
-            const update = parseAllDocuments(readFileSync(args[args.indexOf('-f') + 1], 'utf8')).map((d) => d.toJS());
-            this.deployment.spec = update.find((o) => o.kind === 'Deployment').spec;
+            const workload = JSON.parse(readFileSync(args[args.indexOf('-f') + 1], 'utf8'));
+            assert.equal(workload.kind, 'Deployment');
+            this.deployment.spec = workload.spec;
             this.deployment.metadata.generation++;
             this.deployment.status.observedGeneration++;
             this.updated = true;
@@ -289,7 +306,8 @@ test('hosted staging compiles and validates the local package before accessing t
   for (const [first, next] of [
     ['credentials', 'permission'],
     ['permission', 'acquire'],
-    ['acquire', 'apply'],
+    ['acquire', 'create-code'],
+    ['create-code', 'apply'],
     ['apply', 'rollout'],
   ])
     assert.ok(f.events.indexOf(first) < f.events.indexOf(next));
@@ -300,6 +318,24 @@ test('hosted staging compiles and validates the local package before accessing t
   const jobEnv = await fs.readFile(f.jobEnv, 'utf8');
   assert.match(jobEnv, /RIVET_QUALIFICATION_LOCK_GENERATION=51\n/);
   assert.ok(!jobEnv.includes('RIVET_DEPLOYMENT_CONFIGURATION'));
+});
+
+test('staging reuses exact immutable cleanup-worker code and rejects different code before applying a workload', async (t) => {
+  await t.test('matching content', async (t) => {
+    const f = await fixture(t);
+    f.reuseCode = () => {};
+    await f.prepare();
+    assert.ok(!f.events.includes('create-code'));
+    assert.ok(f.events.includes('apply'));
+  });
+  await t.test('different content', async (t) => {
+    const f = await fixture(t);
+    f.reuseCode = (code) => (code.data['janitor.mjs'] = 'unexpected content');
+    await assert.rejects(f.prepare(), /janitor-code/);
+    assert.ok(!f.events.includes('create-code'));
+    assert.ok(!f.events.includes('apply'));
+    assert.equal((await f.cleanup()).state, 'closed');
+  });
 });
 
 test('the administrator Role grants only Pod GET and the renderer never applies access', async (t) => {
@@ -398,7 +434,7 @@ test('cleanup-worker identity follows the named container and its mounted code',
 });
 
 test('failed pre-operation setup closes only its known lock after fresh health and absence checks', async (t) => {
-  for (const step of ['upload', 'rollout'])
+  for (const step of ['upload', 'create-code', 'rollout'])
     await t.test(step, async (t) => {
       const f = await fixture(t, step);
       await assert.rejects(f.prepare());
@@ -410,7 +446,7 @@ test('failed pre-operation setup closes only its known lock after fresh health a
       assert.equal(f.events.at(-1), 'lock-absent');
       assert.equal((await f.cleanup()).state, 'closed');
       assert.equal(f.events.filter((event) => event === 'release').length, 1);
-      assert.equal(f.events.filter((event) => event === 'apply').length, step === 'upload' ? 0 : 1);
+      assert.equal(f.events.filter((event) => event === 'apply').length, step === 'rollout' ? 1 : 0);
     });
 });
 

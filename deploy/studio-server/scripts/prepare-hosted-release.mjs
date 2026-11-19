@@ -4,7 +4,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { parseAllDocuments, stringify } from 'yaml';
+import { isDeepStrictEqual } from 'node:util';
+import { parseAllDocuments } from 'yaml';
 import { packageReusableStaging } from './package-reusable-staging.mjs';
 import { privateCloudEvidence } from './lib/private-cloud-evidence.mjs';
 import { assertActionsQualificationWindow } from './lib/runtime-qualification-execution.mjs';
@@ -238,10 +239,13 @@ async function prepareHostedReleaseWork(
       assert.equal(d.errors.length, 0);
       return d.toJS();
     });
-    const update = objects.filter((o) => o.kind === 'Deployment' || (o.kind === 'ConfigMap' && o.immutable === true));
-    assert.equal(update.length, 2);
-    const updateFile = path.join(directory, 'janitor-update.yaml');
-    await fs.writeFile(updateFile, update.map((o) => stringify(o)).join('\n---\n'), { flag: 'wx', mode: 0o600 });
+    const code = objects.find((o) => o.kind === 'ConfigMap' && o.immutable === true);
+    const workload = objects.find((o) => o.kind === 'Deployment');
+    assert.ok(code && workload, 'Cleanup worker package is incomplete');
+    const codeFile = path.join(directory, 'janitor-code.json');
+    const workloadFile = path.join(directory, 'janitor-deployment.json');
+    await fs.writeFile(codeFile, JSON.stringify(code), { flag: 'wx', mode: 0o600 });
+    await fs.writeFile(workloadFile, JSON.stringify(workload), { flag: 'wx', mode: 0o600 });
     Object.assign(variables, {
       RIVET_QUALIFICATION_EVIDENCE_BUCKET: configuration.evidenceBucket,
       RIVET_QUALIFICATION_DRIVER_DIRECTORY: path.join(output, 'driver'),
@@ -291,7 +295,7 @@ async function prepareHostedReleaseWork(
       baselineDriverDigest: baselineDigest,
       driverDigest: packaged.driverDigest,
       janitorImage: publication.janitor.image,
-      codeName: update.find((o) => o.kind === 'ConfigMap').metadata.name,
+      codeName: code.metadata.name,
       updateIssued: false,
       writerClosed: false,
     });
@@ -308,10 +312,35 @@ async function prepareHostedReleaseWork(
       bucket: configuration.evidenceBucket,
       prefix: `qualification/packages/rivet-q-${environment.GITHUB_RUN_ID}-${environment.GITHUB_RUN_ATTEMPT}`,
     }).saveDirectory(output);
+    phase.name = 'janitor-code';
+    let installedCode = read('configmaps', receipt.codeName);
+    if (!installedCode) {
+      // Client-side apply copies the entire program into an annotation, which
+      // has a much smaller size limit than ConfigMap data.
+      run('kubectl', [
+        '--kubeconfig',
+        kubeconfig,
+        '--context',
+        s.context,
+        'create',
+        '--namespace',
+        s.controlNamespace,
+        '-f',
+        codeFile,
+      ]);
+      installedCode = read('configmaps', receipt.codeName);
+    }
+    assert.ok(
+      installedCode?.immutable === true &&
+        !installedCode.metadata.deletionTimestamp &&
+        !Object.keys(installedCode.binaryData ?? {}).length &&
+        isDeepStrictEqual(installedCode.data, code.data),
+      'Cleanup worker code ConfigMap differs from the packaged content',
+    );
     phase.name = 'janitor-update';
     receipt.updateIssued = true;
     await saveStagingSetup(directory, receipt, cloud);
-    run('kubectl', ['--kubeconfig', kubeconfig, '--context', s.context, 'apply', '-f', updateFile]);
+    run('kubectl', ['--kubeconfig', kubeconfig, '--context', s.context, 'apply', '-f', workloadFile]);
     const applied = read('deployments', 'rivet-qualification-janitor');
     assertSetupJanitorUpdate(applied, receipt);
     receipt.appliedSpec = applied.spec;
