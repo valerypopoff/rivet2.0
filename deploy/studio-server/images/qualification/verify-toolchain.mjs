@@ -50,10 +50,10 @@ async function cli(program, args, success = true) {
 }
 try {
   const client = JSON.parse(await cli('kubectl', ['version', '--client', '-o', 'json']));
-  assert.equal(client.clientVersion.gitVersion, 'v1.36.6+rivet.go1.27.3');
-  assert.equal(client.clientVersion.goVersion, 'go1.27.3');
+  assert.equal(client.clientVersion.gitVersion, 'v1.36.6+rivet.go1.27.4');
+  assert.equal(client.clientVersion.goVersion, 'go1.27.4');
   const helm = await cli('helm', ['version', '--template', '{{.Version}}|{{.GoVersion}}']);
-  assert.equal(helm.trim(), 'v3.22.1+rivet.go1.27.3|go1.27.3');
+  assert.equal(helm.trim(), 'v3.22.1+rivet.go1.27.4|go1.27.4');
   const key = path.join(directory, 'key.pem'),
     cert = path.join(directory, 'cert.pem');
   execFileSync(

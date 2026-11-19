@@ -1,16 +1,16 @@
 # syntax=docker/dockerfile:1.7
-FROM --platform=$BUILDPLATFORM golang:1.27.3-alpine@sha256:b8c9b82affbbb82a020bbcf998dad2ba9516944ac7e883524642a481a9505e9c AS esbuild-security
+FROM --platform=$BUILDPLATFORM golang:1.27.4-alpine@sha256:70bd7ddea8b6cbe5d6943cde279d6b67feb10cc924fb9100d1d8757c1575b280 AS esbuild-security
 ARG TARGETARCH
 COPY source/deploy/studio-server/images/lib/rebuild-esbuild.sh /rebuild-esbuild.sh
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build sh /rebuild-esbuild.sh "$TARGETARCH"
 
-FROM --platform=$BUILDPLATFORM golang:1.27.3-alpine@sha256:b8c9b82affbbb82a020bbcf998dad2ba9516944ac7e883524642a481a9505e9c AS helm-security
+FROM --platform=$BUILDPLATFORM golang:1.27.4-alpine@sha256:70bd7ddea8b6cbe5d6943cde279d6b67feb10cc924fb9100d1d8757c1575b280 AS helm-security
 ARG TARGETARCH
 COPY source/deploy/studio-server/images/qualification/helm /helm-policy
 COPY source/deploy/studio-server/images/qualification/rebuild-helm.sh /rebuild-helm.sh
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build sh /rebuild-helm.sh "$TARGETARCH"
 
-FROM --platform=$BUILDPLATFORM golang:1.27.3-alpine@sha256:b8c9b82affbbb82a020bbcf998dad2ba9516944ac7e883524642a481a9505e9c AS kubectl-security
+FROM --platform=$BUILDPLATFORM golang:1.27.4-alpine@sha256:70bd7ddea8b6cbe5d6943cde279d6b67feb10cc924fb9100d1d8757c1575b280 AS kubectl-security
 ARG TARGETARCH
 COPY source/deploy/studio-server/images/qualification/kubectl /kubectl-policy
 COPY source/deploy/studio-server/images/qualification/rebuild-kubectl.sh /rebuild-kubectl.sh

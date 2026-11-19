@@ -8,14 +8,14 @@ case "${1:-}" in
   amd64|arm64) target_arch=$1 ;;
   *) echo 'Unsupported qualification Helm architecture' >&2; exit 1 ;;
 esac
-test "$(go env GOVERSION)" = go1.27.3
+test "$(go env GOVERSION)" = go1.27.4
 cd /helm-policy
 mkdir -p /out
 # Building the dependency's actual main package preserves its release version
 # and checksum; do not build a wrapper or relabel a '(devel)' main module.
 CGO_ENABLED=0 GOOS=linux GOARCH="$target_arch" GOTOOLCHAIN=local \
   go build -p 2 -mod=readonly -trimpath \
-  -ldflags="-X helm.sh/helm/v3/internal/version.version=v${version} -X helm.sh/helm/v3/internal/version.metadata=rivet.go1.27.3" \
+  -ldflags="-X helm.sh/helm/v3/internal/version.version=v${version} -X helm.sh/helm/v3/internal/version.metadata=rivet.go1.27.4" \
   -o /out/helm helm.sh/helm/v3/cmd/helm
 go version -m /out/helm > /out/helm-build.txt
 grep -F "$(printf '\tmod\thelm.sh/helm/v3\tv%s\th1:' "$version")" /out/helm-build.txt
