@@ -78,16 +78,26 @@ export function assertOnlineEditorResources(installed, desired) {
     isDeepStrictEqual(neutralBackend(source), neutralBackend(backend)),
     'Editor image, storage, credentials or owner identity changed',
   );
-  const unchanged = (resources) =>
-    resources.filter(
-      (r) =>
-        key(r) !== key(backend) &&
-        // The installed checkpoint may have had a schema Job. This operation
-        // verifies the existing schema and never installs a migration hook.
-        !(
-          r.metadata.annotations?.['helm.sh/hook'] && /-(schema-guard|workflow-schema-migration)$/.test(r.metadata.name)
-        ),
-    );
+  const unchanged = (resources, controlMode) =>
+    resources
+      .filter(
+        (r) =>
+          key(r) !== key(backend) &&
+          // The installed checkpoint may have had a schema Job. Adoption only verifies it.
+          !(
+            r.metadata.annotations?.['helm.sh/hook'] &&
+            /-(schema-guard|workflow-schema-migration)$/.test(r.metadata.name)
+          ),
+      )
+      .map((resource) => {
+        if (resource.kind !== 'ConfigMap' || component(resource) !== 'release-identity') return resource;
+        assert.equal(resource.data['ha-control-plane-mode'], controlMode);
+        assert.match(resource.data['chart-content-digest'], /^sha256:[a-f0-9]{64}$/);
+        const data = { ...resource.data };
+        delete data['ha-control-plane-mode'];
+        delete data['chart-content-digest'];
+        return { ...resource, data };
+      });
   assert.ok(
     !desired.some(
       (r) =>
@@ -96,8 +106,8 @@ export function assertOnlineEditorResources(installed, desired) {
     'Online adoption requires schema verification only',
   );
   assert.equal(
-    getHaConfigurationDigest(unchanged(installed)),
-    getHaConfigurationDigest(unchanged(desired)),
+    getHaConfigurationDigest(unchanged(installed, 'singleton')),
+    getHaConfigurationDigest(unchanged(desired, 'singleton-overlap')),
     'Online editor adoption changes a non-editor resource',
   );
   const services = ['api', 'executor'].map((role) => find(desired, 'Service', role));

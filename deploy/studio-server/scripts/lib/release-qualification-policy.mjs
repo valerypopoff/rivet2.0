@@ -107,10 +107,8 @@ export function assertQualificationPlan(plan) {
   };
 }
 
-/** Request continuity is the ordinary release gate, including first adoption.
- * Full autoscaler stress is a separate protected configuration choice; overlap
- * and releases without the bounded continuity contract retain the full suite.
- * Neither tier reuses test results from a predecessor. */
+/** Paired execution uses the real focused rollout. Editor overlap adds
+ * handoff checks to that rollout. Serial editor adoption uses the full suite. */
 export function releaseQualificationPlan({
   safetyDigest,
   installed,
@@ -130,8 +128,12 @@ export function releaseQualificationPlan({
     overlap,
     stagingExecutionProfile,
   );
-  const focused = installed.controlPlaneMode === 'singleton' && !overlap && !!profile && suite !== 'full';
-  if (suite === 'focused') assert.ok(focused, 'Focused qualification requires singleton request continuity');
+  const focusedLayout = overlap
+    ? installed.qualificationValues?.ha?.executionPools?.enabled === true
+    : installed.controlPlaneMode === 'singleton';
+  const focused = focusedLayout && !!profile && suite !== 'full';
+  if (suite === 'focused')
+    assert.ok(focused, 'Focused qualification requires request continuity on a supported layout');
   return assertQualificationPlan({
     protocol: 2,
     tier: focused ? 'focused' : 'full',

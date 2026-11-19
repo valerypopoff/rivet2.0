@@ -14,6 +14,7 @@ import {
 import { fileURLToPath } from 'node:url';
 import {
   createStudioServerReleaseManifest,
+  createProductionHelmValues,
   promoteStudioServerReleaseManifest,
   getStudioServerReleaseManifestDigest,
   assertStudioServerReleaseManifest,
@@ -39,6 +40,7 @@ import {
   executionPoolCapacityProfile,
 } from './lib/runtime-qualification-installation.mjs';
 import { prepareRuntimeQualification } from './lib/runtime-qualification-publication.mjs';
+import { planInstalledUpgrade } from './lib/installed-upgrade-plan.mjs';
 import { autoscalerPolicyDigest } from './lib/execution-autoscaler.mjs';
 import { qualificationConfigurationDigest } from './lib/release-qualification-policy.mjs';
 
@@ -1405,36 +1407,48 @@ for (const profile of [
   'parallel pools',
   'parallel grown pools',
   'parallel surge pools',
+  'paired online editor adoption',
   'single proxy',
   'one proxy against two-proxy production',
 ])
   test(`focused adoption publishes continuity evidence: ${profile}`, async () => {
-    const retained = profile !== 'disposable';
+    const onlineAdoption = profile === 'paired online editor adoption';
+    const retained = profile !== 'disposable' && !onlineAdoption;
     const serialPools = profile === 'serial pools';
-    const parallelPools = profile.startsWith('parallel');
-    const poolOwners = ['parallel grown pools', 'parallel surge pools'].includes(profile) ? 3 : 2;
-    const singleProxy = ['single proxy', 'one proxy against two-proxy production'].includes(profile);
-    const f = fixture(),
-      continuity = focusedContinuityProviderFacts();
-    f.input.now = Date.parse(continuity.upgrade.startedAt) - 1000;
+    const parallelPools = profile.startsWith('parallel') || onlineAdoption;
+    const surgePools = profile === 'parallel surge pools' || onlineAdoption;
+    const poolOwners = surgePools || profile === 'parallel grown pools' ? 3 : 2;
+    const singleProxy = onlineAdoption || ['single proxy', 'one proxy against two-proxy production'].includes(profile);
+    const f = fixture(onlineAdoption),
+      continuity = focusedContinuityProviderFacts({ adopted: onlineAdoption });
+    const continuityStart = Date.parse(continuity.upgrade.startedAt);
+    const observationStart = onlineAdoption ? continuityStart - 900_000 : continuityStart;
+    f.input.now = observationStart - 1000;
     f.input.installed.observedAt = new Date(f.input.now).toISOString();
     f.input.installed.qualificationValues = { resources: {}, postgres: {}, lifecycle: {} };
     if (poolOwners === 3) {
       f.input.policy.maxReplicas = 7;
-      if (profile === 'parallel surge pools') f.input.policy.maxSurgeReplicas = 7;
+      if (surgePools) f.input.policy.maxSurgeReplicas = 7;
       f.input.installed.policy = f.input.policy;
       f.input.installed.policyDigest = autoscalerPolicyDigest(f.input.policy);
     }
     f.input.approval.safetyDigest = '9'.repeat(64);
     f.input.approval.requestContinuityProfile = continuity.operation.requestContinuityProfile;
-    if (profile === 'single proxy') f.input.installed.baseline.proxy = 1;
+    if (onlineAdoption) {
+      Object.assign(f.input.installed.qualificationValues, continuity.operation.installed.qualificationValues, {
+        ha: { executionPools: { enabled: true } },
+        postgres: { poolMaxPerApiPod: 10 },
+      });
+      f.input.approval.developerOverlapProfile.poolMaxPerApiPod = 10;
+    }
+    if (profile === 'single proxy' || onlineAdoption) f.input.installed.baseline.proxy = 1;
     if (profile === 'one proxy against two-proxy production')
       Object.assign(f.input.installed.qualificationValues, {
         replicaCount: { proxy: 1 },
         autoscaling: { proxy: { minReplicas: 1 } },
         availability: { topologySpread: { minDomains: 1 } },
       });
-    if (serialPools || parallelPools) f.input.approval.executionPoolsEnabled = true;
+    if (serialPools || (parallelPools && !onlineAdoption)) f.input.approval.executionPoolsEnabled = true;
     if (retained)
       f.input.approval.retainedApplication = {
         protocol: 1,
@@ -1461,7 +1475,7 @@ for (const profile of [
         manifestDigest: f.operation.candidateManifestDigest,
       };
     }
-    const stages = continuityStages(false, 'upgrade', 'focused');
+    const stages = continuityStages(onlineAdoption, 'upgrade', 'focused');
     const requestContinuity = {
       ...continuity.upgrade.requestContinuity,
       requests: continuity.upgrade.requestContinuity.requests.filter((r) => stages.includes(r.stage)),
@@ -1471,7 +1485,7 @@ for (const profile of [
       },
     };
     Object.assign(f.facts.upgrade, {
-      startedAt: continuity.upgrade.startedAt,
+      startedAt: new Date(observationStart).toISOString(),
       finishedAt: continuity.upgrade.finishedAt,
       requestContinuity,
       capacity: {
@@ -1496,7 +1510,18 @@ for (const profile of [
       f.facts.upgrade.finalApplicationPods = 9;
     }
     for (const run of f.facts.upgrade.outcomes.acceptedWork) run.retirementDelayMs = 315000;
-    const start = Date.parse(f.facts.upgrade.startedAt);
+    const start = continuityStart;
+    if (onlineAdoption) {
+      f.facts.upgrade.outcomes.overlapPreparation = {
+        sourceMode: 'singleton',
+        sourcePool: 10,
+        preparationComplete: true,
+        onlineAdoption: onlineEditorAdoptionEvidence(f.operation.predecessorManifestDigest, observationStart),
+      };
+      f.facts.upgrade.outcomes.developerOverlap.profileDigest = overlapProfileDigest(
+        f.operation.developerOverlapProfile,
+      );
+    }
     if (parallelPools) {
       const work = f.facts.upgrade.outcomes.acceptedWork;
       if (poolOwners === 3) {
@@ -1510,7 +1535,7 @@ for (const profile of [
         for (const run of work) run.recordingLookup.totalRuns = poolOwners;
         for (const stage of ['initial', 'final']) {
           f.facts.upgrade.capacity[stage].execution = poolOwners;
-          f.facts.upgrade[`${stage}ApplicationPods`] = 8;
+          f.facts.upgrade[`${stage}ApplicationPods`] = singleProxy ? 7 : 8;
         }
       }
       work.forEach((run, index) =>
@@ -1572,7 +1597,7 @@ for (const profile of [
       assert.equal(result.control.evidence.executionPools, true);
       assert.equal(result.control.evidence.executionPool.parallelAcceptedWork, true);
       assert.equal(result.control.evidence.executionPool.acceptedOwners.length, poolOwners);
-      if (profile === 'parallel surge pools') {
+      if (surgePools) {
         assert.equal(result.control.evidence.executionPool.maxReplicas, 14);
         assert.equal(f.operation.policy.maxReplicas, 7);
       }
@@ -1598,10 +1623,63 @@ for (const profile of [
     });
     assert.equal(packet.candidate.evidence.runtimeControl.protocol, 5);
     assert.equal(packet.candidate.evidence.runtimeAutoscaling.protocol, 4);
-    assert.equal(packet.candidate.evidence.runtimeControl.requestContinuity.completedRequests, 9);
+    assert.equal(packet.candidate.evidence.runtimeControl.requestContinuity.completedRequests, 3 * stages.length);
     for (const key of ['startedAt', 'finishedAt', 'reportSha256'])
       assert.equal(result.control[key], result.autoscaling[key]);
     assert.ok(!d.calls.includes('autoscaling'));
+    if (onlineAdoption) {
+      const proof = packet.candidate.evidence.runtimeControl;
+      assert.equal(proof.controlPlaneMode, 'singleton-overlap');
+      assert.equal(proof.developerOverlap.profileDigest, overlapProfileDigest(f.operation.developerOverlapProfile));
+      const missingHandoff = structuredClone(f.facts.upgrade);
+      delete missingHandoff.outcomes.overlapPreparation.onlineAdoption;
+      assert.throws(() => assertOrdinaryProviderReport(missingHandoff, f.operation), /first-adoption observations/);
+      const missingPools = structuredClone(packet.candidate);
+      delete missingPools.evidence.runtimeControl.executionPools;
+      assert.throws(() => assertStudioServerReleaseManifest(missingPools));
+      const ha = {
+        ...f.promoted.evidence.ha,
+        mode: 'mixed',
+        predecessorSourceSha: f.operation.previous.source.sha,
+        predecessorImages: f.operation.previous.images,
+      };
+      const qualified = promoteStudioServerReleaseManifest(
+        { ...packet.candidate, evidence: { ...packet.candidate.evidence, ha } },
+        { promotionEvidence: evidence },
+      );
+      const policy = f.operation.policy;
+      const installed = {
+        ...f.input.installed.qualificationValues,
+        ...createProductionHelmValues(f.operation.previous),
+        ha: {
+          enabled: true,
+          controlPlane: { mode: 'singleton' },
+          executionPools: { enabled: true, maxSurgeReplicas: 7 },
+        },
+        availability: { gkeGatewayProfile: 'compact' },
+        replicaCount: { backend: 1, web: 1, proxy: 1, execution: 2 },
+        autoscaling: {
+          executionController: { ...policy, enabled: true },
+          execution: { enabled: false, minReplicas: 2, maxReplicas: 7 },
+          proxy: { enabled: true, minReplicas: 1, maxReplicas: 4 },
+        },
+      };
+      installed.release.production.browserContract = ha.browserContract;
+      const plan = () => planInstalledUpgrade({ candidate: qualified, installed, requireOnline: true });
+      assert.equal((await plan()).status, 'continuity-required');
+      installed.ha.controlPlane.mode = 'singleton-overlap';
+      const { profile } = proof.developerOverlap;
+      installed.postgres = {
+        poolMaxPerApiPod: profile.poolMaxPerApiPod,
+        maxConnections: profile.maxConnections,
+        reservedConnections: profile.reservedConnections,
+      };
+      installed.resources.backendOverlap = profile.backendResources;
+      assert.equal((await plan()).status, 'qualified-route');
+      installed.ha.executionPools.enabled = false;
+      assert.equal((await plan()).status, 'qualification-required');
+      return;
+    }
     for (const change of [
       (proof) => {
         proof.requestSamples++;

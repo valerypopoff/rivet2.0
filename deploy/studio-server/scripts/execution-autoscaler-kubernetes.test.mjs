@@ -9,6 +9,10 @@ import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import { parseAllDocuments } from 'yaml';
 import { resolveHelmBinOrThrow } from './lib/k8s-tools.mjs';
+import {
+  readHelmChartIdentity,
+  readManagedWorkflowSchemaReleaseContract,
+} from './lib/studio-server-release-manifest.mjs';
 import { prepareExecutionPoolResources, alignSettledExecutionPoolResources } from './lib/execution-pool-resources.mjs';
 import { exerciseExecutionPoolRollout } from './test-fixtures/execution-pool-cluster.mjs';
 import { assertOrdinaryRuntimeResources } from './lib/ha-release-evidence.mjs';
@@ -88,20 +92,46 @@ const protectedValues = [
 ];
 
 test('paired editor overlap preserves the published layout within the installed database allowance', async () => {
+  const { name, version, contentDigest } = readHelmChartIdentity(root);
+  const schema = readManagedWorkflowSchemaReleaseContract(root);
+  const manifestDigest = `sha256:${'c'.repeat(64)}`;
   const common = [
     ...protectedValues,
     'ha.executionPools.enabled=true,ha.executionPools.maxSurgeReplicas=7',
     'autoscaling.execution.maxReplicas=7',
     'postgres.maxConnections=305,postgres.reservedConnections=30,postgres.poolMaxPerApiPod=10',
     'workflowSchema.migrationJob.enabled=false',
+    'release.production.enabled=true',
+    `release.production.manifestDigest=${manifestDigest},release.production.sourceSha=${'a'.repeat(40)}`,
+    'release.production.verification.workflow=fixture,release.production.verification.runId=1,release.production.verification.runAttempt=1',
+    `release.production.chart.name=${name},release.production.chart.version=${version}`,
+    `release.production.database.managedWorkflowSchemaVersion=${schema.version}`,
+    ...['api', 'executor', 'proxy', 'web'].map((role) => `images.${role}.digest=sha256:${'d'.repeat(64)}`),
+    ...['web', 'api', 'backend', 'backendOverlap', 'execution', 'proxy'].flatMap((role) => [
+      `resources.${role}.limits.memory=4Gi`,
+      `resources.${role}.requests.ephemeral-storage=128Mi`,
+      `resources.${role}.limits.ephemeral-storage=2Gi`,
+    ]),
   ];
   const overlap = [
     'ha.controlPlane.mode=singleton-overlap',
     'ha.namespaceUid=f70a25bb-0c5f-44e4-9da4-3b347f87331d',
     'resources.backendOverlap.limits.memory=3Gi,resources.backendOverlap.limits.ephemeral-storage=2Gi',
   ];
-  const singleton = render(...common, 'ha.controlPlane.mode=singleton');
-  const desired = render(...common, ...overlap);
+  const singleton = render(
+    ...common,
+    'ha.controlPlane.mode=singleton',
+    `release.production.chart.contentDigest=sha256:${'b'.repeat(64)}`,
+  );
+  const targetIdentity = `release.production.chart.contentDigest=${contentDigest}`;
+  const desired = render(...common, ...overlap, targetIdentity);
+  const settledIdentity = desired.find(
+    (resource) =>
+      resource.kind === 'ConfigMap' && resource.metadata.labels?.['app.kubernetes.io/component'] === 'release-identity',
+  );
+  assert.equal(settledIdentity.data['ha-control-plane-mode'], 'singleton-overlap');
+  assert.equal(settledIdentity.data['chart-content-digest'], contentDigest);
+  assert.equal(settledIdentity.data['release-manifest-digest'], manifestDigest);
   const { source, backend, active, inactive } = assertOnlineEditorResources(singleton, desired);
   assert.equal(active.spec.replicas, 2);
   assert.equal(inactive.spec.replicas, 0);
@@ -112,14 +142,21 @@ test('paired editor overlap preserves the published layout within the installed 
       (entry) => entry.name === 'RIVET_EXECUTION_STARTUP_FENCE' && entry.value === `${backend.metadata.name}-0`,
     ),
   );
-  assert.throws(() => render(...common, ...overlap, 'postgres.maxConnections=303'), /requires 304 connections/);
   assert.throws(
-    () => render(...common, ...overlap, 'replicaCount.backend=2,ha.executionPools.retiringReplicas=2'),
+    () => render(...common, ...overlap, targetIdentity, 'postgres.maxConnections=303'),
+    /requires 304 connections/,
+  );
+  assert.throws(
+    () => render(...common, ...overlap, targetIdentity, 'replicaCount.backend=2,ha.executionPools.retiringReplicas=2'),
     /Editor and paired execution surges must be separate/,
   );
   await exerciseOnlineEditorKubernetes(singleton, desired);
   await exerciseOnlineEditorKubernetes(singleton, desired, { loseAdmission: true });
   await exerciseOnlineEditorKubernetes(singleton, desired, { abortAfterFence: true });
+  const original = settledIdentity.data['release-manifest-digest'];
+  settledIdentity.data['release-manifest-digest'] = `sha256:${'d'.repeat(64)}`;
+  assert.throws(() => assertOnlineEditorResources(singleton, desired), /changes a non-editor resource/);
+  settledIdentity.data['release-manifest-digest'] = original;
   active.spec.template.spec.containers[0].image = 'changed';
   assert.throws(() => assertOnlineEditorResources(singleton, desired), /changes a non-editor resource/);
 });

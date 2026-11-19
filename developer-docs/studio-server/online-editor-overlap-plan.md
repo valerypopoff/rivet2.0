@@ -2,10 +2,10 @@
 
 ## Starting point
 
-The last saved production receipt identifies Build 44418796404, Helm revision
-89 and managed schema 22. It records one editor backend and two active
-published execution replicas. The saved paired-pool policy allows up to seven
-regular execution replicas and seven temporary ones during a pool handoff.
+Build 44564262037 deployed with managed schema 22, one editor backend and two
+ready published execution replicas. That rollout enabled frozen dependency
+capture using the singleton path. The saved paired-pool policy allows up to
+seven regular execution replicas and seven temporary ones during a handoff.
 Refresh the installed values, versions and owners during preflight.
 
 The serial first-adoption operator drains the only editor and scales it to
@@ -34,8 +34,8 @@ The design addresses three constraints from the installed layout.
 
 Adopt overlap on the installed images and schema 22. Keep the web and proxy
 workloads, published routes, authentication, and execution pools in place.
-Use the normal online rolling path for the separate frozen dependency
-release once adoption is qualified and settled.
+Once adoption is qualified and settled, use the online rolling path for the
+next separately qualified application update.
 
 From before the first change through settlement, existing browser sessions
 can read and save projects and start editor runs. New sessions can sign in.
@@ -236,6 +236,10 @@ probes and unconfirmed retirement writes also stop advancement.
    settled overlap baseline, including paired execution handoff and
    the editor handoff in the same rolling operation. Use schema 22
    compatibility and the online guard for both.
+   Check allocatable resources on the current editor node, including platform
+   reservations. The shared ReadWriteOnce volume requires same-node placement
+   for the handoff. Free capacity elsewhere in the cluster does not satisfy
+   this check.
 
 ## Operator inputs and recovery
 
@@ -254,6 +258,9 @@ Helm revision, the reviewed operator Git SHA (`operatorSource`) and
 `getHaConfigurationDigest` over the original pinned Helm manifest and the
 target render respectively. Use the deployment command's render inputs with
 the installed images, schema verification and the migration Job disabled.
+Release identity records the adopted editor mode and the reviewed chart digest.
+The installed application manifest, source, images and schema remain pinned
+until the separately qualified image update.
 The bootstrap and fenced templates are derived from that render.
 
 Under `qualification`, record the passing isolated-provider outcome,

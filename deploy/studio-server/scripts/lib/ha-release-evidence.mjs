@@ -158,7 +158,9 @@ export function assertRuntimeControlEvidence(value, release, expectedEdgeProfile
   if (focused ? qualification?.tier !== 'focused' : qualification && qualification.tier !== 'full')
     throw Error('Runtime qualification tier is missing or inconsistent');
   const overlap = value?.developerOverlap;
-  const providerOverlap = value?.protocol === 3;
+  const providerOverlap =
+    value?.protocol === 3 ||
+    (value?.protocol === 5 && value.controlPlaneMode === 'singleton-overlap' && value.executionPools === true);
   const overlapChecks = providerOverlap ? HA_PROVIDER_OVERLAP_CHECKS : HA_DEVELOPER_OVERLAP_CHECKS;
   if (
     (requireDeveloperOverlap || overlap) &&
@@ -184,7 +186,8 @@ export function assertRuntimeControlEvidence(value, release, expectedEdgeProfile
     providerOverlap &&
     (!['singleton', 'singleton-overlap'].includes(overlap.sourceMode) ||
       !Number.isSafeInteger(overlap.sourcePool) ||
-      overlap.sourcePool < overlap.profile.poolMaxPerApiPod)
+      overlap.sourcePool < overlap.profile.poolMaxPerApiPod ||
+      (focused && overlap.sourcePool !== overlap.profile.poolMaxPerApiPod))
   )
     throw Error('Provider overlap source preparation is missing or changed.');
   const ordinary = [2, 3, 4, 5].includes(value?.protocol);
@@ -617,7 +620,9 @@ export function assertHaUpgradeEvidence(manifest, installed) {
 /** A routine certificate never grants first adoption or a different tier layout. */
 export function assertOrdinaryRuntimeLayout(proof, values, policyDigest) {
   if (![2, 3, 4, 5].includes(proof?.protocol)) return;
-  const overlap = proof.protocol === 3;
+  const overlap = proof.protocol === 3 || proof.controlPlaneMode === 'singleton-overlap';
+  if (proof.protocol === 5 && overlap && values.ha?.executionPools?.enabled !== true)
+    throw Error('Focused editor overlap requires the qualified paired execution layout.');
   if (overlap && values.ha?.controlPlane?.mode === 'singleton-overlap')
     assertOverlapQualificationValues(values, proof.developerOverlap.profile);
   if (
@@ -747,13 +752,14 @@ export function assertOrdinaryRuntimeResources(proof, resources, { adoptionSizin
     backend.spec.template.spec.containers
       .find((c) => c.name === 'backend')
       ?.env?.filter((e) => e.name === 'RIVET_HA_CONTROL_PLANE_MODE') ?? [];
+  const overlap = proof.protocol === 3 || proof.controlPlaneMode === 'singleton-overlap';
   if (
     modes.length !== 1 ||
     modes[0].valueFrom ||
-    modes[0].value !== (proof.protocol === 3 && !adoptionSizing ? 'singleton-overlap' : 'singleton')
+    modes[0].value !== (overlap && !adoptionSizing ? 'singleton-overlap' : 'singleton')
   )
     throw Error('Ordinary runtime qualification cannot authorize a control topology change.');
-  if (proof.protocol === 3) {
+  if (overlap) {
     const c = backend.spec.template.spec.containers.find((c) => c.name === 'backend');
     const pools = c.env.filter((e) => e.name === 'RIVET_DEPLOYMENT_DATABASE_POOL_MAX');
     if (
