@@ -11,8 +11,6 @@ export type EndpointDependencyPointer = {
   bundle_relative_path: string | null;
 };
 
-export const endpointReleaseWritesEnabled = () => process.env.RIVET_ENABLE_FROZEN_ENDPOINT_RELEASES === '1';
-
 export async function readDependencyPointers(
   client: ManagedWorkflowDbClient,
   ids: readonly string[],

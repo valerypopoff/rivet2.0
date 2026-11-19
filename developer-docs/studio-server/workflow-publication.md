@@ -896,12 +896,10 @@ the project tree and requires a fresh review before accepting another write.
 ### Frozen endpoint releases
 
 Managed schema 22 stores releases and pins their project and dataset
-artifacts. Opt in to new captures with `RIVET_ENABLE_FROZEN_ENDPOINT_RELEASES=1`
-on the control-plane API after every serving replica runs a release-aware
-reader. The local development launcher enables capture by default with its
-own PostgreSQL and MinIO. The write switch has no effect on already-captured
-releases. Current
-endpoint requests on the public and internal routes use the exact release
+artifacts. Every managed endpoint Publish or Update captures the saved root
+and effective dependency revisions. Existing legacy publications keep their
+previous dependency resolution until explicitly updated. Current requests on
+the public and internal routes use the exact release
 pointer, reuse its prepared artifacts and build run-local reference providers.
 A cold load uses the same pinned root and dependencies as Restore and Download.
 The root pin must agree with the saved revision’s object keys, and every
@@ -918,13 +916,14 @@ targets selected at runtime, it visits each possible local target once per
 captured project revision. The server revalidates saved selections in a short
 transaction. The browser checks that a release review includes the selected
 draft and the source of each captured revision. It then checks the latest
-reported unsaved edits and asks the developer to save before publishing. With
-capture enabled, **Update** can protect an existing legacy endpoint even
-when its draft is unchanged. A conflicting save
-or move requires another review. The first protected update attempts to
-capture the currently live legacy endpoint for rollback. A confirmed invalid
-legacy dataset prevents an exact rollback and requires acknowledgement before
-publishing the repaired draft. Storage read failures stop publication.
+reported unsaved edits and asks the developer to save before publishing.
+**Update** can protect an existing legacy endpoint even when its draft is
+unchanged. A conflicting save or move requires another review. The first
+protected update attempts to capture the currently live legacy endpoint for
+rollback. A missing or mismatched active history row or a confirmed invalid
+legacy dataset requires explicit acknowledgement before the update. Attaching
+the rollback capture requires the matching history row and revision in the
+publish transaction. Storage read failures stop publication.
 Managed history reads require the stored revision to belong to the project
 that owns the history. Historic snapshots without a capture can still be
 previewed and downloaded. Restore requires an
@@ -978,10 +977,25 @@ malformed call fields. Known extraction gaps remain visible. A completed
 backfill sends one catalog refresh hint and leaves execution caches warm.
 
 Schema 22 is the deployment rollback floor because older readers would ignore
-the release binding. Rehearse the 21-to-22 additive migration with capture
-writes disabled. Use the managed staged cutover for an installed reader below
-the floor. Verify the readers and recent metadata-plus-object backup before
-enabling new captures. The object reference verifier includes captured
+the release binding. For an installation below that floor, rehearse the
+21-to-22 migration and use the managed staged cutover. Verify the recent
+metadata-plus-object backup and replace all serving readers before reopening
+publication. An upgrade from schema 22 to schema 22 needs no migration for
+this feature.
+
+For an upgrade that must keep the editor and published endpoints online, use
+`--require-online` on the installed release plan, preflight and rollout. The
+application upgrade requires settled editor overlap and qualification for the
+exact image pair, covering both editor handover and protected published requests.
+
+If the installation still has one editor backend and paired execution pools,
+qualify and complete `--online-editor-adoption <receipt.json>` on the installed
+images first. This moves editor ownership while keeping the current execution
+pool and schema in place. Then qualify the application upgrade against the
+settled topology.
+See [online rollout planning](deployment-operations.md#online-rollout-planning).
+
+The object reference verifier includes captured
 artifacts during reconciliation and deletion. Legacy restore includes both
 release tables and inventories exact project and dataset pins even after a
 dependency project or its saved revision has been deleted. The captured

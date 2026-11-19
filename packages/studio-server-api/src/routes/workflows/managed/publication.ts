@@ -6,7 +6,6 @@ import {
   readEndpointReleasePreviewArtifact,
   readEndpointRelease,
 } from './endpoint-release-reader.js';
-import { endpointReleaseWritesEnabled } from './endpoint-release-selection.js';
 import {
   hashPreparedEndpointReleases,
   prepareEndpointRelease,
@@ -194,24 +193,20 @@ export function createManagedWorkflowPublicationService(options: ManagedWorkflow
   };
 
   const prepareReleasePublication = async (workflow: WorkflowRow, revisionId: string) => {
-    const version = workflow.published_version_id
-      ? await deps.queryOne<Pick<PublishedVersionRow, 'release_id'>>(deps.pool,
-          'SELECT release_id FROM workflow_published_versions WHERE workflow_id = $1 AND version_id = $2',
-          [workflow.workflow_id, workflow.published_version_id])
+    const { published_revision_id: activeRevisionId, published_version_id: activeVersionId } = workflow;
+    const version = activeRevisionId && activeVersionId
+      ? await deps.queryOne<Pick<PublishedVersionRow, 'release_id'>>(
+          deps.pool,
+          'SELECT release_id FROM workflow_published_versions WHERE workflow_id = $1 AND version_id = $2 AND revision_id = $3',
+          [workflow.workflow_id, activeVersionId, activeRevisionId],
+        )
       : null;
-    if (!endpointReleaseWritesEnabled()) {
-      const hasProtectedHistory = version?.release_id || await deps.queryOne(deps.pool,
-        'SELECT release_id FROM workflow_endpoint_releases WHERE workflow_id = $1 LIMIT 1',
-        [workflow.workflow_id]);
-      if (hasProtectedHistory) throw conflict('Enable frozen endpoint publication before publishing this project again.');
-      return null;
-    }
     const next = await prepareEndpointRelease(context, workflow.workflow_id, revisionId, 'latest');
     let baseline: PreparedEndpointRelease | null = null;
-    let missingRollback = false;
-    if (workflow.published_revision_id && !version?.release_id) {
+    let missingRollback = Boolean(activeRevisionId && activeVersionId && !version);
+    if (activeRevisionId && !version?.release_id && !missingRollback) {
       try {
-        baseline = await prepareEndpointRelease(context, workflow.workflow_id, workflow.published_revision_id, 'published');
+        baseline = await prepareEndpointRelease(context, workflow.workflow_id, activeRevisionId, 'published');
       } catch (error) {
         // A missing graph or an invalid reference can block capture of an old
         // release. Availability failures still stop publication.
@@ -420,11 +415,12 @@ export function createManagedWorkflowPublicationService(options: ManagedWorkflow
       };
     },
 
-    async reviewEndpointRelease(relativePath: string, preconditions: WorkflowDraftPublicationPreconditions): Promise<WorkflowEndpointReleaseReview | null> {
-      if (!endpointReleaseWritesEnabled()) return null;
+    async reviewEndpointRelease(
+      relativePath: string,
+      preconditions: WorkflowDraftPublicationPreconditions,
+    ): Promise<WorkflowEndpointReleaseReview> {
       const prepared = await prepareDraftPublication(relativePath, preconditions, 'publish-endpoint');
       const review = await prepareReleasePublication(prepared.workflow, prepared.revision.revision_id);
-      if (!review) return null;
       return {
         token: review.token,
         projects: review.next.manifest.projects.map((project) => ({
@@ -892,13 +888,13 @@ export function createManagedWorkflowPublicationService(options: ManagedWorkflow
       const prepared = await prepareDraftPublication(normalizedRelativePath, preconditions, 'publish-endpoint');
       requireProjectMainGraphForEndpoint(prepared.project);
       const release = await prepareReleasePublication(prepared.workflow, prepared.revision.revision_id);
-      if (settings.releaseReviewToken && release?.token !== settings.releaseReviewToken)
+      if (settings.releaseReviewToken && release.token !== settings.releaseReviewToken)
         throw conflict('The reviewed endpoint dependencies changed. Review the release again.');
-      if (release?.missingRollback && (!settings.releaseReviewToken || !settings.acknowledgeMissingRollback))
+      if (release.missingRollback && (!settings.releaseReviewToken || !settings.acknowledgeMissingRollback))
         throw conflict('The current endpoint cannot be captured for rollback. Review the release before replacing it.');
 
       return deps.withTransaction(async (client, hooks) => {
-        await validatePreparedEndpointReleases(client, release?.prepared ?? []);
+        await validatePreparedEndpointReleases(client, release.prepared);
         const workflow = await deps.getWorkflowByRelativePath(client, normalizedRelativePath, { forUpdate: true });
         if (!workflow) {
           throw createHttpError(404, 'Project not found');
@@ -909,14 +905,23 @@ export function createManagedWorkflowPublicationService(options: ManagedWorkflow
 
         const publishedVersionId = publication.versionId;
         await backfillLegacyPublishedVersion(client, workflow);
-        if (release?.baseline) {
+        if (release.baseline) {
           await storeEndpointRelease(client, workflow.workflow_id, release.baseline);
-          await client.query(
-            'UPDATE workflow_published_versions SET release_id = $1 WHERE workflow_id = $2 AND version_id = $3',
-            [release.baseline.releaseId, workflow.workflow_id, workflow.published_version_id ?? workflow.published_revision_id],
+          const linked = await client.query(
+            `
+              UPDATE workflow_published_versions SET release_id = $1
+              WHERE workflow_id = $2 AND version_id = $3 AND revision_id = $4 AND release_id IS NULL
+            `,
+            [
+              release.baseline.releaseId,
+              workflow.workflow_id,
+              workflow.published_version_id ?? workflow.published_revision_id,
+              workflow.published_revision_id,
+            ],
           );
+          if (linked.rowCount !== 1) throw conflict('The current endpoint history changed. Review the release again.');
         }
-        if (release) await storeEndpointRelease(client, workflow.workflow_id, release.next);
+        await storeEndpointRelease(client, workflow.workflow_id, release.next);
 
         await deps.syncWorkflowEndpointRows(client, workflow, {
           draftEndpointName: normalizedSettings.endpointName,
@@ -928,7 +933,13 @@ export function createManagedWorkflowPublicationService(options: ManagedWorkflow
             INSERT INTO workflow_published_versions (version_id, workflow_id, revision_id, endpoint_name, published_at, release_id)
             VALUES ($1, $2, $3, $4, NOW(), $5)
           `,
-          [publishedVersionId, workflow.workflow_id, currentDraftRevision.revision_id, normalizedSettings.endpointName, release?.next.releaseId ?? null],
+          [
+            publishedVersionId,
+            workflow.workflow_id,
+            currentDraftRevision.revision_id,
+            normalizedSettings.endpointName,
+            release.next.releaseId,
+          ],
         );
 
         await client.query(
