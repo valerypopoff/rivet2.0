@@ -612,6 +612,15 @@ Current request/response behavior:
 - if the success payload is an object and does not already include `durationMs`, the API injects `durationMs` into the JSON body
 - failures return JSON shaped like `{ "error": { "name"?: string, "message": string }, "durationMs": number }`
 
+Published HTTP endpoints perform their current access lookup before acquiring the
+shared published execution permit. Revision/frozen-release loading and per-run
+project construction happen only after admission. Full replicas therefore skip
+that work for rejected requests, while authentication, private/not-found `404`s,
+capacity `429`s and retry guidance are preserved. Preparation and the complete
+background tail retain the permit and shutdown registration. Public managed
+lookups still make one fresh metadata query; this is not a database-admission
+limit. See the [implementation and verification contract](published-endpoint-admission-plan.md).
+
 ## Filesystem execution hot path
 
 When `Settings` -> `Storage` uses `Local folders`, the published/latest routes keep a local derived warm path on the API process:
@@ -655,7 +664,7 @@ When `Settings` -> `Storage` uses `Object storage`, workflow execution stays aut
 - endpoint-pointer cache entries map `runKind + endpointName` to workflow identity, relative path, and revision id
 - revision-materialization cache entries store immutable raw project and dataset contents by revision id
 - the first request after startup or after an invalidating mutation can still be a cold miss that reads Postgres/object storage
-- repeated requests for the same unchanged workflow reuse the warm local cache path instead of repeating remote shared-state reads
+- repeated requests reuse immutable project/release artifacts; public endpoint requests still resolve current route/access metadata from Postgres on every request
 - pointer-cache invalidation comes from same-process post-commit clearing plus Postgres `LISTEN/NOTIFY`
 - if the invalidation listener is degraded, pointer caches are cleared and bypassed until listener health is restored
 

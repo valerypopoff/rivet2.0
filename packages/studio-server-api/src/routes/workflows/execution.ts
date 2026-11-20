@@ -12,7 +12,7 @@ import { getRequestCorrelationId } from '../../request-correlation.js';
 import { parseLatestEndpointSegment } from '@valerypopoff/rivet2-core';
 import { readWorkflowEndpointAuthSettingsSync } from '../../workflow-endpoint-auth-settings.js';
 import { isWorkflowCapacityCapabilityValid } from '../../workflow-capacity-capability.js';
-import { resolveLatestExecutionProject, resolvePublishedExecutionProject } from './storage-backend.js';
+import { resolveLatestExecutionProject, resolvePublishedExecutionTarget } from './storage-backend.js';
 import { getWorkflowExecutionRecorderOptions, isWorkflowRecordingEnabled } from './recordings-config.js';
 import type { WorkflowRecordingExecutionIdentity } from '@valerypopoff/rivet-studio-server-shared/workflow-recording-types.js';
 import { createHostedProcessor } from './hosted-processor.js';
@@ -272,23 +272,34 @@ async function handlePublishedWorkflowRequest(
     }
     // Public access must reflect the committed policy even before another replica
     // receives its asynchronous cache invalidation notification.
-    const executionProject = await resolvePublishedExecutionProject(endpointName, !options.internalRoute);
-    if (!executionProject || (!options.internalRoute && executionProject.endpointAccess === 'internal')) {
+    const target = await resolvePublishedExecutionTarget(endpointName, !options.internalRoute);
+    if (!target || (!options.internalRoute && target.endpointAccess === 'internal')) {
       sendJsonWithDuration(res, 404, { error: 'Published workflow not found' }, requestStartedAt);
       return;
     }
 
     const permit = acquirePublishedExecutionPermit('workflow-endpoint');
-    const activeExecution = registerActiveHttpExecution();
     try {
-      await executeWorkflowEndpoint(executionProject, requestStartedAt, req, res, {
-        abortSignal: activeExecution.signal,
-        enableRemoteDebugger: false,
-        endpointName,
-        runKind: 'published',
-      });
+      const activeExecution = registerActiveHttpExecution();
+      try {
+        const executionProject = await target.load();
+        // Loading can retry after a publication/access change. Never execute a
+        // target that disappeared or became private during preparation.
+        if (!executionProject || (!options.internalRoute && executionProject.endpointAccess === 'internal')) {
+          sendJsonWithDuration(res, 404, { error: 'Published workflow not found' }, requestStartedAt);
+          return;
+        }
+        activeExecution.signal.throwIfAborted();
+        await executeWorkflowEndpoint(executionProject, requestStartedAt, req, res, {
+          abortSignal: activeExecution.signal,
+          enableRemoteDebugger: false,
+          endpointName,
+          runKind: 'published',
+        });
+      } finally {
+        activeExecution.release();
+      }
     } finally {
-      activeExecution.release();
       permit.release();
     }
   } catch (error) {

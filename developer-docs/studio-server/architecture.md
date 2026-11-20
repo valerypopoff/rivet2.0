@@ -193,6 +193,13 @@ replacement. An unconfirmed close requires process recovery, not a blind retry.
 Context shutdown must propagate that failure instead of closing its pool beneath
 an unsettled listener.
 
+Published HTTP endpoints resolve current access metadata before acquiring their
+shared execution permit, then load project/frozen-release artifacts and construct
+per-run state only for admitted requests. Preparation is tracked during shutdown
+and retains its permit through the full background tail. Public managed requests
+still perform one fresh metadata lookup before admission; rejected requests skip
+artifact loading and cloning. See the [admission contract and local checks](./published-endpoint-admission-plan.md).
+
 ## Managed legacy backup restore
 
 `legacy-restore/service.ts` is the singleton control-backend owner for the UI's

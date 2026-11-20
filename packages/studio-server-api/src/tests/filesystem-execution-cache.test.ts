@@ -203,6 +203,45 @@ test.after(async () => {
   }
 });
 
+test('filesystem published targets defer artifact reads and recheck access before loading', async (t) => {
+  const created = await createRootPublishedProject('Admission', 'admission');
+  const cache = new FilesystemExecutionCache();
+  await cache.initialize(workflowsRoot);
+  const reads = observeFileReads(t);
+  const target = await cache.resolvePublishedExecutionTarget(workflowsRoot, 'admission');
+  assert.equal(target?.endpointAccess, 'public');
+  assert.equal(reads.length, 0, 'Admission lookup reads no project/dataset contents on a warm routing index.');
+  const first = await target!.load();
+  assert.equal(first?.project.metadata.id, created.projectMetadataId);
+  assert.ok(reads.length > 0);
+
+  const stale = await cache.resolvePublishedExecutionTarget(workflowsRoot, 'admission');
+  await workflowMutations.updateWorkflowEndpointAccess(created.relativePath, 'internal');
+  assert.equal((await stale!.load())?.endpointAccess, 'internal');
+  const removed = await cache.resolvePublishedExecutionTarget(workflowsRoot, 'admission');
+  await workflowMutations.unpublishWorkflowProjectItem(created.relativePath);
+  assert.equal(await removed!.load(), null);
+  assert.equal(await cache.resolvePublishedExecutionTarget(workflowsRoot, 'missing'), null);
+});
+
+test('immediate filesystem loads keep the original routing-validation IO budget', async (t) => {
+  const created = await createRootPublishedProject('Immediate', 'immediate');
+  const cache = new FilesystemExecutionCache();
+  await cache.initialize(workflowsRoot);
+  const settingsPath = workflowFs.getWorkflowProjectSettingsPath(created.absolutePath);
+  const stat = fs.stat;
+  let settingsStats = 0;
+  t.mock.method(fs, 'stat', (...args: Parameters<typeof stat>) => {
+    if (args[0] === settingsPath) settingsStats++;
+    return Reflect.apply(stat, fs, args);
+  });
+  for (const load of [cache.loadPublishedExecutionProject.bind(cache), cache.loadLatestExecutionProject.bind(cache)]) {
+    settingsStats = 0;
+    assert.ok(await load(workflowsRoot, 'immediate'));
+    assert.ok(settingsStats <= 2, `Expected index and pointer validation only, got ${settingsStats} settings stats.`);
+  }
+});
+
 test('filesystem execution cache warms published and latest endpoint pointers at startup', async () => {
   const created = await createRootPublishedProject('WarmIndex', 'warm-index-endpoint');
   const cache = new FilesystemExecutionCache();

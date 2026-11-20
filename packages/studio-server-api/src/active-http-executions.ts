@@ -1,5 +1,5 @@
 /**
- * Tracks graph processors started by HTTP requests so shutdown can distinguish
+ * Tracks accepted HTTP preparation and graph processors so shutdown can distinguish
  * a disconnected client from execution that is still consuming host resources.
  *
  * The registry does not schedule or limit work. Published admission remains

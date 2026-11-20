@@ -72,6 +72,33 @@ test('SQLite direct and serving-worker adapters satisfy the shared SQL publicati
   }
 });
 
+test('SQLite direct and worker admission lookup uses metadata only and preserves concurrent-change checks', async () => {
+  for (const worker of [false, true]) {
+    await fixture(async (backend, options) => {
+      let item = await createExecutable(backend);
+      item = await backend.publishWorkflowProjectItem(item.relativePath, { endpointName: 'admission' }, conditions(item));
+      const offlineArtifacts = `${options.artifactRoot}-offline`;
+      await fs.rename(options.artifactRoot, offlineArtifacts);
+      let target;
+      try {
+        target = await backend.resolvePublishedExecutionTarget('admission');
+        assert.equal(target?.endpointAccess, 'public');
+        assert.equal(await backend.resolvePublishedExecutionTarget('missing'), null);
+      } finally {
+        await fs.rename(offlineArtifacts, options.artifactRoot);
+      }
+      assert.equal((await target!.load())?.project.metadata.id, item.projectMetadataId);
+      item = await backend.updateWorkflowEndpointAccess(item.relativePath, 'internal', conditions(item));
+      await assert.rejects(target!.load(), { code: 'workflow_state_changed' });
+      const privateTarget = await backend.resolvePublishedExecutionTarget('admission');
+      assert.equal(privateTarget?.endpointAccess, 'internal');
+      await backend.unpublishWorkflowProjectItem(item.relativePath, conditions(item));
+      await assert.rejects(privateTarget!.load(), { code: 'workflow_state_changed' });
+      assert.equal(await backend.resolvePublishedExecutionTarget('admission'), null);
+    }, { worker });
+  }
+});
+
 test('an internal publication identity collision is not disguised as a destination conflict', async (t) => {
   await fixture(async (backend) => {
     let item = await createExecutable(backend);

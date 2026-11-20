@@ -176,6 +176,7 @@ export const defaultApiTestFiles = [
   'src/tests/workflow-filesystem-tree.test.ts',
   'src/tests/workflow-publication-filesystem.test.ts',
   'src/tests/workflow-publication-policy.test.ts',
+  'src/tests/workflow-published-admission.test.ts',
   'src/tests/workflow-published-history-filesystem.test.ts',
   'src/tests/workflow-recordings-http.test.ts',
   'src/tests/workflow-storage-config.test.ts',

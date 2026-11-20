@@ -209,6 +209,11 @@ export type LocalExecutionSnapshot = {
   webApp?: Omit<StoredWebApp, 'contents' | 'datasetsContents'>;
   cacheStatus?: 'hit' | 'miss' | 'bypass';
 };
+/** Serializable metadata and immutable artifact references; no project bytes. */
+export type LocalExecutionTarget = {
+  selection: LocalExecutionSelection;
+  match: { bundle: StoredProjectBundle; app?: StoredWebApp };
+};
 export type LocalCatalogChange = {
   before: LocalWorkflowCatalogSnapshot | null;
   after: LocalWorkflowCatalogSnapshot | null;
@@ -1048,9 +1053,25 @@ export class LocalWorkflowCatalog {
     selection: LocalExecutionSelection,
     cache?: Pick<ManagedWorkflowExecutionCache, 'getRevisionMaterialization' | 'setRevisionMaterialization'>,
   ): Promise<LocalExecutionSnapshot | null> {
+    const target = this.resolveExecutionSource(selection);
+    return target ? this.loadExecutionSource(target, cache) : null;
+  }
+
+  resolveExecutionSource(selection: LocalExecutionSelection): LocalExecutionTarget | null {
     selection = structuredClone(selection);
     const match = this.#executionBundle(selection);
     if (!match) return null;
+    const hasContents = selection.version === 'latest'
+      ? match.bundle.project.contents
+      : match.app ? match.app.contents : match.bundle.project.publishedContents;
+    if (!hasContents) return null;
+    return { selection, match };
+  }
+
+  async loadExecutionSource(
+    { selection, match }: LocalExecutionTarget,
+    cache?: Pick<ManagedWorkflowExecutionCache, 'getRevisionMaterialization' | 'setRevisionMaterialization'>,
+  ): Promise<LocalExecutionSnapshot> {
     const project = match.bundle.project;
     const source =
       selection.version === 'latest'
@@ -1059,7 +1080,7 @@ export class LocalWorkflowCatalog {
             contents: project.publishedContents,
             datasetsContents: project.publishedDatasetsContents,
           };
-    if (!source.contents) return null;
+    if (!source.contents) throw new Error('Local catalog execution target has no contents.');
     // Only immutable, checksum-verified content is cached. The route, path and
     // access policy are resolved from SQL on every call, including cache hits.
     const revisionId = `local:${source.contents.hash}:${source.contents.size}:${source.datasetsContents?.hash ?? 'none'}:${source.datasetsContents?.size ?? 0}`;

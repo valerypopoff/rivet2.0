@@ -10,6 +10,7 @@ import type {
   HostedProjectStorageSaveOptions,
   WorkflowRepositories,
   WorkflowExecutionDefinition,
+  WorkflowPublishedExecutionTarget,
   WorkflowRecordingPageQuery,
   WorkflowPublicationRepository,
   PersistWorkflowExecutionRecordingOptions,
@@ -83,6 +84,7 @@ import {
   markFilesystemExecutionStructureDirty,
   invalidateFilesystemExecutionMove,
   resolveLegacyPublishedExecutionProject,
+  resolveLegacyPublishedExecutionTarget,
   resolveLegacyLatestExecutionProject,
   resolveLegacyPublishedWebAppExecutionProject,
   resolveLegacyLatestWebAppExecutionProject,
@@ -713,6 +715,19 @@ export async function deleteWorkflowProjectItemWithBackend(relativePath: string)
     async (backend) => backend.deleteWorkflowProjectItem(relativePath),
     () => legacyCommands.deleteWorkflowProjectItem(relativePath),
   );
+}
+
+export async function resolvePublishedExecutionTarget(
+  endpointName: string,
+  requireFreshPointer = false,
+): Promise<WorkflowPublishedExecutionTarget | null> {
+  if (usesDatabaseCatalog()) {
+    return (await getWorkflowStorageServices().getRepository('execution')).resolvePublishedExecutionTarget(
+      endpointName,
+      requireFreshPointer,
+    );
+  }
+  return resolveLegacyPublishedExecutionTarget(endpointName);
 }
 
 export async function resolvePublishedExecutionProject(

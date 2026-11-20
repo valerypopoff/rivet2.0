@@ -1,4 +1,4 @@
-import type { WorkflowRecordingPageQuery } from '../routes/workflows/data-backend.js';
+import type { WorkflowPublishedExecutionTarget, WorkflowRecordingPageQuery } from '../routes/workflows/data-backend.js';
 import {
   hasWorkflowFailure,
   normalizeWorkflowStorageFailure,
@@ -1007,6 +1007,18 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
   }
   async loadPublishedExecutionProject(name: string) {
     return this.#loadEndpoint(name, 'published');
+  }
+  async resolvePublishedExecutionTarget(name: string): Promise<WorkflowPublishedExecutionTarget | null> {
+    const target = await this.#catalog.resolveExecutionSource({
+      endpointName: normalizeWorkflowEndpointLookupName(name), version: 'published',
+    });
+    return target && {
+      endpointAccess: target.match.bundle.project.endpointAccess,
+      load: async () => {
+        const snapshot = await this.#catalog.loadExecutionSource(target, this.#readOnly ? undefined : this.#executionCache);
+        return this.#execution(snapshot, snapshot.contents, snapshot.datasetsContents);
+      },
+    };
   }
   async loadLatestExecutionProject(name: string) {
     return this.#loadEndpoint(name, 'latest');
