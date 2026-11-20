@@ -20,6 +20,8 @@ type AsyncWorkflowOptions = {
   failure?: 'foreground' | 'serialization';
   requireUiAuth?: boolean;
   costProviderUrl?: string;
+  projectPayloadBytes?: number;
+  workflowMaintenance?: boolean;
 };
 type AsyncWorkflowProcess = {
   baseUrl: string;
@@ -37,6 +39,9 @@ export async function startAsyncWorkflowProcess(options: AsyncWorkflowOptions = 
   const maxActiveRuns = options.maxActiveRuns ?? 4;
   if (!Number.isInteger(maxActiveRuns) || maxActiveRuns < 1 || maxActiveRuns > 32)
     throw Error('Invalid fixture concurrency');
+  const projectBytes = options.projectPayloadBytes ?? 0;
+  if (!Number.isInteger(projectBytes) || projectBytes < 0 || projectBytes > 1024 * 1024)
+    throw Error('Invalid fixture project size');
   if (options.httpEchoUrl) {
     const target = new URL(options.httpEchoUrl);
     if (target.protocol !== 'http:' || target.hostname !== '127.0.0.1') throw Error('The echo fixture must be local');
@@ -75,6 +80,7 @@ async function startOwnedProcess(
     RIVET_API_PROFILE: 'combined',
     RIVET_RECORDINGS_ENABLED: 'true',
     RIVET_RECORDING_DURABILITY_ENABLED: options.recordingDurability ? 'true' : 'false',
+    ...(options.workflowMaintenance === false ? { RIVET_MANAGED_MAINTENANCE_ENABLED: 'false' } : {}),
     ...(options.holdRecordingWork ? { RIVET_ASYNC_TEST_HOLD_RECORDING_WORK: 'true' } : {}),
     RIVET_SHUTDOWN_GRACE_SECONDS: String(options.graceSeconds ?? 2),
     RIVET_PUBLISHED_EXECUTION_ADMISSION_MODE: 'enforce',
@@ -104,6 +110,9 @@ async function startOwnedProcess(
     ...(options.projectName ? { RIVET_ASYNC_TEST_PROJECT_NAME: options.projectName } : {}),
     ...(options.failure ? { RIVET_ASYNC_TEST_FAILURE: options.failure } : {}),
     ...(options.costProviderUrl ? { RIVET_ASYNC_TEST_COST_PROVIDER_URL: options.costProviderUrl } : {}),
+    ...(options.projectPayloadBytes !== undefined
+      ? { RIVET_ASYNC_TEST_PROJECT_BYTES: String(options.projectPayloadBytes) }
+      : {}),
   });
   const child = fork(new URL('./workflow-async-server.mts', import.meta.url), [], {
     env,

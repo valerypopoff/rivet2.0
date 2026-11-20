@@ -3,6 +3,7 @@ import { promisify } from 'node:util';
 import { gzip, gunzip } from 'node:zlib';
 
 export const MAX_MANAGED_ARTIFACT_BYTES = 100 * 1024 * 1024;
+export class ManagedArtifactIntegrityError extends Error {}
 export type ManagedArtifactDescriptor = {
   key: string;
   encoding: 'identity' | 'gzip';
@@ -30,8 +31,8 @@ export function parseManagedArtifactDescriptor(key: string): ManagedArtifactDesc
   return { key, encoding, hash: match[1]!, storedBytes, decodedBytes };
 }
 
-export async function prepareManagedTextArtifact(key: string, text: string, compress = false, level = 6) {
-  const decoded = Buffer.from(text, 'utf8');
+export async function prepareManagedTextArtifact(key: string, text: string | Buffer, compress = false, level = 6) {
+  const decoded = typeof text === 'string' ? Buffer.from(text, 'utf8') : text;
   if (decoded.length > MAX_MANAGED_ARTIFACT_BYTES) throw new Error('Managed artifact exceeds the supported size.');
   const bytes = compress ? await zip(decoded, { level }) : decoded;
   const descriptorKey = `${key}.artifact-v1.${createHash('sha256').update(bytes).digest('hex')}.${bytes.length}.${decoded.length}.${compress ? 'gzip' : 'identity'}`;
@@ -47,12 +48,12 @@ export function verifyManagedArtifactBytes(bytes: Uint8Array, descriptor: Manage
     expected.storedBytes !== descriptor.storedBytes ||
     expected.decodedBytes !== descriptor.decodedBytes
   )
-    throw new Error('Managed artifact descriptor differs from its immutable key.');
+    throw new ManagedArtifactIntegrityError('Managed artifact descriptor differs from its immutable key.');
   if (
     bytes.byteLength !== descriptor.storedBytes ||
     createHash('sha256').update(bytes).digest('hex') !== descriptor.hash
   )
-    throw new Error('Managed artifact failed its size or checksum check.');
+    throw new ManagedArtifactIntegrityError('Managed artifact failed its size or checksum check.');
 }
 
 export async function decodeManagedArtifact(
@@ -61,11 +62,20 @@ export async function decodeManagedArtifact(
 ): Promise<string> {
   if (bytes.byteLength > MAX_MANAGED_ARTIFACT_BYTES) throw new Error('Managed artifact exceeds the supported size.');
   if (descriptor) verifyManagedArtifactBytes(bytes, descriptor);
-  const decoded =
-    descriptor?.encoding === 'gzip'
-      ? await unzip(bytes, { maxOutputLength: Math.max(1, descriptor.decodedBytes) })
-      : bytes;
-  if (descriptor && decoded.byteLength !== descriptor.decodedBytes)
-    throw new Error('Managed artifact decoded size differs.');
-  return new TextDecoder('utf-8', { fatal: true }).decode(decoded);
+  try {
+    const decoded =
+      descriptor?.encoding === 'gzip'
+        ? await unzip(bytes, { maxOutputLength: Math.max(1, descriptor.decodedBytes) })
+        : bytes;
+    if (descriptor && decoded.byteLength !== descriptor.decodedBytes)
+      throw new Error('Managed artifact decoded size differs.');
+    return new TextDecoder('utf-8', { fatal: true }).decode(decoded);
+  } catch (error) {
+    throw new ManagedArtifactIntegrityError(
+      error instanceof Error ? error.message : 'Managed artifact decode failed.',
+      {
+        cause: error,
+      },
+    );
+  }
 }

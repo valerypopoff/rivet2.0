@@ -8,38 +8,50 @@ import {
   type GraphId,
   type ProjectId,
   type NodeId,
+  type PortId,
   type Project,
 } from '@valerypopoff/rivet2-core';
 import { createChildPlaybackFixture } from '../../app/src/hooks/fixtures/childPlaybackRecording.js';
 import { mockHostedEditorBootstrap, waitForDashboardReady } from './helpers/hostedEditorObserve';
 import type { WorkflowRecordingRunSummary } from '../../studio-server-shared/workflow-recording-types';
+import { bindSharedReplayProjectId, serializeSharedReplayProject } from '@valerypopoff/rivet2-core/serialization';
 
 test('full output stays with its recording tab across playback, switching and close/reopen', async ({ page }) => {
+  const ids = ['A', 'B', 'C'] as const;
+  const replayTitle = (id: (typeof ids)[number]) => (id === 'A' ? 'Replay A' : 'Replay shared');
+  let historyCompacted = false;
   const recordings = await Promise.all(
-    ['A', 'B'].map(async (id) => {
-      const text = createBuiltInRegistry().createDynamic('text');
+    ids.map(async (id) => {
+      const registry = createBuiltInRegistry();
+      const input = registry.createDynamic('graphInput');
+      input.id = 'shared-recorded-input' as NodeId;
+      input.data = { id: 'value', dataType: 'string' };
+      input.visualData = { x: 100, y: 300, width: 260 };
+      const text = registry.createDynamic('text');
       text.id = 'shared-recorded-node' as NodeId;
       text.title = 'Recorded text';
       text.visualData = { x: 100, y: 100, width: 260 };
-      text.data = { text: `Output belonging to recording ${id}` };
+      text.data = { text: '{{value}}' };
       const project: Project = {
         metadata: {
           id: 'original-project' as ProjectId,
-          title: `Replay ${id}`,
+          title: replayTitle(id),
           description: '',
           mainGraphId: 'shared-graph' as GraphId,
         },
         graphs: {
           ['shared-graph' as GraphId]: {
             metadata: { id: 'shared-graph' as GraphId, name: 'Recorded graph' },
-            nodes: [text],
-            connections: [],
+            nodes: [input, text],
+            connections: [
+              { outputNodeId: input.id, outputId: 'data' as PortId, inputNodeId: text.id, inputId: 'value' as PortId },
+            ],
           },
         },
         plugins: [],
       };
       const recorder = new ExecutionRecorder();
-      const runner = coreCreateProcessor(project, {});
+      const runner = coreCreateProcessor(project, { inputs: { value: `Output belonging to recording ${id}` } });
       recorder.record(runner.processor);
       try {
         await runner.run();
@@ -47,12 +59,21 @@ test('full output stays with its recording tab across playback, switching and cl
         runner.dispose();
       }
       return {
-        project: serializeProject({ ...project, metadata: { ...project.metadata, id: `replay-${id}` as ProjectId } }),
+        sharedProject: bindSharedReplayProjectId(
+          serializeSharedReplayProject(project, {}),
+          project.metadata.id,
+          `recording-${id}`,
+        ),
+        legacyProject:
+          id === 'A'
+            ? serializeProject({ ...project, metadata: { ...project.metadata, id: 'legacy-id' as ProjectId } })
+            : undefined,
         recording: recorder.serialize(),
       };
     }),
   );
-  const runs: WorkflowRecordingRunSummary[] = ['A', 'B'].map((id) => ({
+  expect(recordings[1]!.sharedProject.replace('"recording-B"', '"recording-C"')).toBe(recordings[2]!.sharedProject);
+  const runs: WorkflowRecordingRunSummary[] = ids.map((id) => ({
     id: `recording-${id}`,
     workflowId: 'original-workflow',
     createdAt: '2026-11-17T10:00:00Z',
@@ -88,21 +109,34 @@ test('full output stays with its recording tab across playback, switching and cl
     route.fulfill({ json: { root: '/workflows', projects: [], folders: [], sync: { epoch: 'modal', revision: 0 } } }),
   );
   await page.route(/\/api\/workflows\/recordings\/workflows(?:\?.*)?$/, (route) =>
-    route.fulfill({ json: { workflows: [], totals: { totalRuns: 2, failedRuns: 0, suspiciousRuns: 0 } } }),
+    route.fulfill({ json: { workflows: [], totals: { totalRuns: runs.length, failedRuns: 0, suspiciousRuns: 0 } } }),
   );
   await page.route('**/api/workflows/recordings/**', (route) => {
     const path = new URL(route.request().url()).pathname;
     if (path.endsWith('/runs'))
       return route.fulfill({
-        json: { workflowId: '', page: 1, pageSize: 20, totalRuns: 2, totalRunsExact: true, statusFilter: 'all', runs },
+        json: {
+          workflowId: '',
+          page: 1,
+          pageSize: 20,
+          totalRuns: runs.length,
+          totalRunsExact: true,
+          statusFilter: 'all',
+          runs,
+        },
       });
     const index = runs.findIndex((run) => path.startsWith(`/api/workflows/recordings/${run.id}/`));
     if (index === -1) return route.fallback();
     if (path.endsWith('/summary')) return route.fulfill({ json: runs[index] });
     if (path.endsWith('/recording'))
       return route.fulfill({ contentType: 'text/plain', body: recordings[index]!.recording });
-    if (path.endsWith('/replay-project'))
-      return route.fulfill({ contentType: 'text/plain', body: recordings[index]!.project });
+    if (path.endsWith('/replay-project')) {
+      const { sharedProject, legacyProject } = recordings[index]!;
+      return route.fulfill({
+        contentType: 'text/plain',
+        body: historyCompacted ? sharedProject : legacyProject ?? sharedProject,
+      });
+    }
     if (path.endsWith('/replay-dataset')) return route.fulfill({ status: 404, json: { error: 'No replay dataset' } });
     return route.fallback();
   });
@@ -112,12 +146,12 @@ test('full output stays with its recording tab across playback, switching and cl
   await waitForDashboardReady(page);
   const editor = page.frameLocator('iframe.dashboard-editor-frame');
   const modal = editor.getByTestId('fullscreen-output-modal');
-  const openRecording = async (id: 'A' | 'B') => {
+  const openRecording = async (id: (typeof ids)[number]) => {
     await page.getByRole('button', { name: 'Run recordings', exact: true }).click();
     const browser = page.getByTestId('run-recordings-modal');
     await browser.locator(`[data-recording-id="recording-${id}"]`).locator('.run-recordings-run-open-button').click();
     await expect(browser).toBeHidden();
-    await expect(editor.locator('.projects .project.active')).toContainText(`Replay ${id}`);
+    await expect(editor.locator('.projects .project.active')).toContainText(replayTitle(id));
   };
   const playAndExpand = async (id: string) => {
     await editor.getByRole('button', { name: 'Play Recording', exact: true }).click();
@@ -129,6 +163,7 @@ test('full output stays with its recording tab across playback, switching and cl
   };
   await openRecording('A');
   await playAndExpand('A');
+  historyCompacted = true;
   await modal.locator('.search-input').fill('belonging');
   await openRecording('B');
   await expect(modal).toHaveCount(0);
@@ -137,6 +172,12 @@ test('full output stays with its recording tab across playback, switching and cl
   await openRecording('A');
   await expect(modal).toContainText('Output belonging to recording A');
   await expect(modal).not.toContainText('Output belonging to recording B');
+  await openRecording('B');
+  await expect(modal).toContainText('Output belonging to recording B');
+  await openRecording('C');
+  await expect(modal).toHaveCount(0);
+  await playAndExpand('C');
+  await expect(editor.locator('.projects .project').filter({ hasText: 'Replay shared' })).toHaveCount(2);
   await openRecording('B');
   await expect(modal).toContainText('Output belonging to recording B');
   await modal.press('Escape');
@@ -152,6 +193,7 @@ test('full output stays with its recording tab across playback, switching and cl
   await expect(inactiveA).toHaveCount(0);
   await openRecording('A');
   await expect(modal).toHaveCount(0);
+  await playAndExpand('A');
   expect(errors).toEqual([]);
 });
 

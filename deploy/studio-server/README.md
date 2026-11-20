@@ -73,6 +73,14 @@ For an upgrade from older recording/garbage-collection binaries, keep it false
 until schema 20 is installed and all serving and maintenance owners are updated.
 The equivalent Helm value is `env.RIVET_RECORDING_DURABILITY_ENABLED`.
 
+Schema 23 enables shared replay project snapshots for durable recordings.
+The first upgrade from schema 22 requires the maintenance cutover and a
+verified recovery checkpoint. When service resumes, the managed maintenance
+owner begins compacting older recordings in bounded batches. Both features
+start automatically. Recovery uses schema 23-aware readers or the verified
+pre-cutover backup procedure.
+[Schema 23 rollout and restore](../../developer-docs/studio-server/recording-snapshot-sharing-plan.md#rollout-and-restore)
+
 Frozen endpoint capture requires schema 22 and compatible readers on all
 control and execution replicas when publication opens. An installation already
 on schema 22 needs no additional database migration for capture. Once captures

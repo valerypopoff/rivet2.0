@@ -6,6 +6,7 @@ import { parseAllDocuments } from 'yaml';
 import { resolveHelmBinOrThrow } from './lib/k8s-tools.mjs';
 import { maintenanceValidationValues } from './lib/managed-release-cutover.mjs';
 import { createMaintenanceValidationValues, getMaintenanceValidationTargets } from './lib/maintenance-validation.mjs';
+import { readManagedWorkflowSchemaReleaseContract } from './lib/studio-server-release-manifest.mjs';
 
 const root = fileURLToPath(new URL('../../../', import.meta.url));
 function render({
@@ -106,7 +107,8 @@ test('same-layout compact HA validates every API pod using its real container an
   assert.equal(new Set(targets.map((target) => target.podName)).size, 3);
 });
 
-test('schema 22 maintenance keeps both execution pool owners while traffic and replica writers are paused', () => {
+test('schema maintenance keeps both execution pool owners while traffic and replica writers are paused', () => {
+  const { version } = readManagedWorkflowSchemaReleaseContract(root);
   const configuration = {
     overlays: [...ha, 'gke-proxy-continuity'],
     sameLayout: true,
@@ -143,7 +145,7 @@ test('schema 22 maintenance keeps both execution pool owners while traffic and r
   );
   for (const pool of pools) {
     const template = pool.spec.template;
-    assert.equal(template.metadata.annotations['rivet.dev/managed-schema-reader-version'], '22');
+    assert.equal(template.metadata.annotations['rivet.dev/managed-schema-reader-version'], String(version));
     assert.ok(
       template.spec.containers[0].env.some(
         ({ name, value }) => name === 'RIVET_RELEASE_MAINTENANCE' && value === 'true',
@@ -153,7 +155,10 @@ test('schema 22 maintenance keeps both execution pool owners while traffic and r
   const migration = fenced.find(
     (resource) => resource.kind === 'Job' && component(resource) === 'workflow-schema-migration',
   );
-  assert.match(migration.spec.template.spec.containers[0].args[0], /MIGRATION_POLICY="maintenance".*MAX_VERSION="22"/);
+  assert.match(
+    migration.spec.template.spec.containers[0].args[0],
+    new RegExp(`MIGRATION_POLICY="maintenance".*MAX_VERSION="${version}"`),
+  );
   assert.ok(
     !fenced.some((resource) => resource.kind === 'HorizontalPodAutoscaler' || component(resource) === 'autoscaler'),
   );

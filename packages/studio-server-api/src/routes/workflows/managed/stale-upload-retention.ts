@@ -102,6 +102,9 @@ function candidateSql(forUpdate: boolean, onlyRecognizedArtifacts: boolean): str
           AND split_part(split_part(finding.subject_key, '/', 4), '.artifact-v1.', 1) IN ('project.rivet-project', 'dataset.rivet-data'))
         OR (split_part(finding.subject_key, '/', 2) = 'recordings'
           AND split_part(split_part(finding.subject_key, '/', 4), '.artifact-v1.', 1) IN ('recording.rivet-recording', 'replay.rivet-project', 'replay.rivet-data'))
+        OR (split_part(finding.subject_key, '/', 2) = 'recording-project-snapshots'
+          AND split_part(finding.subject_key, '/', 3) ~ '^[a-f0-9]{8}(-[a-f0-9]{4}){3}-[a-f0-9]{12}$'
+          AND split_part(finding.subject_key, '/', 4) ~ '^replay[.]rivet-project[.]artifact-v1[.][a-f0-9]{64}[.][0-9]+[.][0-9]+[.](identity|gzip)$')
       )`
     : '';
   return `

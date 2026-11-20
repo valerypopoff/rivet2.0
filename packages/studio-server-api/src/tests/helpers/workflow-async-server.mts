@@ -1,7 +1,8 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { monitorEventLoopDelay } from 'node:perf_hooks';
 import { setTimeout as delay } from 'node:timers/promises';
-import type { ChartNode, PortId } from '@valerypopoff/rivet2-node';
+import type { ChartNode, DataId, PortId } from '@valerypopoff/rivet2-node';
 
 if (!process.send || !process.env.RIVET_ASYNC_TEST_ROOT) throw new Error('Requires the isolated async test harness');
 const root = process.env.RIVET_ASYNC_TEST_ROOT;
@@ -30,14 +31,16 @@ if (process.env.RIVET_ASYNC_TEST_STORAGE) {
 }
 const storage = await import('../../routes/workflows/storage-backend.js');
 const rivet = await import('@valerypopoff/rivet2-node');
+const { ManagedRecordingEvidence } = await import('../../routes/workflows/managed/recording-evidence.js');
+const canShareReplayProject = ManagedRecordingEvidence.prototype.canShareReplayProject;
 await storage.initializeWorkflowStorage();
 let releaseRecordingWork: (() => void) | undefined;
+let finishSnapshotTiming: (() => Record<string, number>) | undefined;
 const recordingWork = { registrations: 0, outcomes: 0 };
 if (process.env.RIVET_ASYNC_TEST_HOLD_RECORDING_WORK === 'true') {
   const gate = new Promise<void>((resolve) => {
     releaseRecordingWork = resolve;
   });
-  const { ManagedRecordingEvidence } = await import('../../routes/workflows/managed/recording-evidence.js');
   const begin = ManagedRecordingEvidence.prototype.begin,
     outcome = ManagedRecordingEvidence.prototype.outcome;
   ManagedRecordingEvidence.prototype.begin = async function (...args) {
@@ -81,6 +84,8 @@ const connect = (from: ChartNode, outputId: string, to: ChartNode, inputId: stri
   inputId: inputId as PortId,
 });
 if (!resume) {
+  const payloadBytes = Number(process.env.RIVET_ASYNC_TEST_PROJECT_BYTES ?? 0);
+  if (payloadBytes) project.data = { ['replay-fixture' as DataId]: 'x'.repeat(payloadBytes) };
   graph.nodes = [input, output, trigger, tail, result];
   graph.connections = [
     connect(input, 'data', output, 'value'),
@@ -88,6 +93,10 @@ if (!resume) {
     connect(trigger, 'output1', tail, 'url'),
     connect(tail, 'res_body', result, 'value'),
   ];
+  if (process.env.RIVET_ASYNC_TEST_PROJECT_BYTES !== undefined) {
+    graph.nodes = [input, output];
+    graph.connections = [connect(input, 'data', output, 'value')];
+  }
   if (process.env.RIVET_ASYNC_TEST_HTTP_ECHO_URL) {
     tail.data.useUrlInput = false;
     tail.data.url = process.env.RIVET_ASYNC_TEST_HTTP_ECHO_URL;
@@ -170,6 +179,120 @@ process.on('message', async (message: { id: number; command: string }) => {
     if (message.command === 'durability-off' || message.command === 'durability-on') {
       process.env.RIVET_RECORDING_DURABILITY_ENABLED = message.command === 'durability-on' ? 'true' : 'false';
       process.send?.({ id: message.id, result: true });
+      return;
+    }
+    if (message.command === 'snapshot-sharing-off' || message.command === 'snapshot-sharing-on') {
+      ManagedRecordingEvidence.prototype.canShareReplayProject = message.command.endsWith('-on')
+        ? canShareReplayProject
+        : () => false;
+      process.send?.({ id: message.id, result: true });
+      return;
+    }
+    if (message.command === 'begin-snapshot-timing') {
+      if (finishSnapshotTiming) throw new Error('A snapshot timing sample is already active.');
+      const { getManagedPostgresPoolMetrics } = await import('../../managed-postgres-pool.js');
+      const { getWorkflowExecutionRecordingPersistenceMetrics } = await import('../../routes/workflows/recordings.js');
+      const histogram = monitorEventLoopDelay({ resolution: 10 });
+      let peakPendingWrites = 0;
+      let peakPoolWaiting = 0;
+      const samples = setInterval(() => {
+        peakPendingWrites = Math.max(
+          peakPendingWrites,
+          getWorkflowExecutionRecordingPersistenceMetrics().pendingWrites,
+        );
+        peakPoolWaiting = Math.max(peakPoolWaiting, getManagedPostgresPoolMetrics().waiting);
+      }, 25);
+      samples.unref();
+      histogram.enable();
+      const baseline = process.cpuUsage();
+      finishSnapshotTiming = () => {
+        clearInterval(samples);
+        histogram.disable();
+        const cpu = process.cpuUsage(baseline);
+        return {
+          cpuMs: (cpu.user + cpu.system) / 1000,
+          eventLoopP95Ms: histogram.percentile(95) / 1e6,
+          peakPendingWrites,
+          peakPoolWaiting,
+        };
+      };
+      process.send?.({ id: message.id, result: true });
+      return;
+    }
+    if (message.command === 'finish-snapshot-timing') {
+      if (!finishSnapshotTiming) throw new Error('No snapshot timing sample is active.');
+      const result = finishSnapshotTiming();
+      finishSnapshotTiming = undefined;
+      process.send?.({ id: message.id, result });
+      return;
+    }
+    if (message.command === 'measure-scheduled-permit') {
+      const { getScheduledRunService } = await import('../../scheduled-runs/runtime.js');
+      const { ScheduledRunService } = await import('../../scheduled-runs/service.js');
+      const { runScheduledGraph } = await import('../../scheduled-runs/runner.js');
+      const { getPublishedExecutionAdmission } = await import('../../published-execution-admission.js');
+      const live = getScheduledRunService();
+      await live.drainAcceptedWork();
+      const schedule = await live.store.save({
+        name: 'Recording permit fixture',
+        description: '',
+        projectId: project.metadata.id,
+        version: 'published',
+        enabled: false,
+        timeZone: 'UTC',
+        schedule: { kind: 'daily', time: '12:00' },
+        input: { fixture: 'timing' },
+        record: true,
+        timeoutMinutes: 1,
+        missed: 'skip',
+      });
+      let permitMs = 0;
+      let runError: unknown;
+      const service = new ScheduledRunService(
+        live.store,
+        async (job, owner, signal) => {
+          try {
+            return await runScheduledGraph(job, live.store, owner, signal);
+          } catch (error) {
+            runError = error;
+            throw error;
+          }
+        },
+        () => true,
+        1,
+        {
+          scope: 'published',
+          acquirePermit() {
+            const result = getPublishedExecutionAdmission().acquire('scheduled-run');
+            if (result.kind !== 'accepted') return undefined;
+            const started = performance.now();
+            return {
+              release() {
+                permitMs = performance.now() - started;
+                result.permit.release();
+              },
+            };
+          },
+        },
+      );
+      try {
+        const occurrence = await live.store.runNow(schedule.id, schedule.revision);
+        await service.tick();
+        const deadline = Date.now() + 7000;
+        while (service.activeCount) {
+          if (Date.now() >= deadline) throw new Error('Scheduled permit did not settle');
+          await delay(2);
+        }
+        const finished = (await live.store.list()).history.find((row) => row.id === occurrence.id);
+        if (!permitMs || finished?.status !== 'succeeded' || finished.recordingStatus !== 'saved')
+          throw new Error(
+            `Scheduled permit fixture did not persist a successful run (${permitMs} ms, ${JSON.stringify(finished)})`,
+            { cause: runError },
+          );
+        process.send?.({ id: message.id, result: permitMs });
+      } finally {
+        await live.store.delete(schedule.id, schedule.revision);
+      }
       return;
     }
     if (message.command === 'recording-off' || message.command === 'recording-on') {

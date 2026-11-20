@@ -9,6 +9,7 @@ import {
   maintenanceValidationValues,
 } from './lib/managed-release-cutover.mjs';
 import { fixtureDeploymentSafety } from './fixtures/deployment-safety.mjs';
+import { readManagedWorkflowSchemaReleaseContract } from './lib/studio-server-release-manifest.mjs';
 const runManagedReleaseCutover = (options) =>
   runMaintenanceStrategy({
     ...options,
@@ -97,6 +98,14 @@ test('incompatible and unknown installed readers require explicit maintenance, b
     }),
     false,
   );
+});
+test('schema 22 installations must retire their readers before automatic snapshot sharing', () => {
+  const schema = readManagedWorkflowSchemaReleaseContract(process.cwd());
+  assert.equal(schema.minimumRollbackCompatibleVersion, 23);
+  const candidate = { database: { managedWorkflowSchema: schema } };
+  const installed = (version) => ({ release: { production: { database: { managedWorkflowSchemaVersion: version } } } });
+  assert.equal(requiresMaintenanceCutover(candidate, installed(22)), true);
+  assert.equal(requiresMaintenanceCutover(candidate, installed(23)), false);
 });
 test('cutover records ownership before stopping controllers, validates before reopening, and completes durably', async () => {
   const state = fixture();

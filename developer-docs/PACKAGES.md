@@ -2,6 +2,22 @@
 
 > Detailed package-by-package reference for the current monorepo.
 
+## Version update 2026-11-20 — shared recording snapshots
+
+App and Studio Server last changed versions in `385c0441a`. The public npm
+family and App Executor last changed versions in `3105c6eaf`. This review
+covers changes through `80631cd00` and the recording snapshot changes.
+
+| Packages | Version | Changes since the last bump |
+| --- | --- | --- |
+| All five Studio Server packages | `1.42.0` → `1.43.0` | Managed recordings share project snapshots and compact saved history automatically after the schema 23 cutover. This release also preserves the selected project on recordings refresh and always captures dependencies on managed endpoint publication. Bootstrap, executor and shared follow the product version. |
+| Core, Node, CLI, Evaluations | `2.32.0` → `2.33.0` | Core adds replay snapshot serialization and project ID rebinding. Node, CLI and Evaluations follow the public npm family version. |
+| App | `2.39.0` → `2.39.1` | Rebuilds Desktop with the updated Core. |
+| App Executor | `2.24.0` → `2.24.1` | Rebuilds the bundled executor with the updated Core. |
+
+See [release preparation](BUILD-AND-CI.md#prepared-release-versions-2026-11-20)
+for checks and the deployment requirements.
+
 ## Version update 2026-11-19 — frozen endpoint releases
 
 App, Docs, and Studio Server last changed versions in `a2de21b30`. This review

@@ -19,6 +19,7 @@ import type { RuntimeHealthCheckContext } from '../../../runtime-health.js';
 import type { ManagedWorkflowStorageConfig } from '../storage-config.js';
 import {
   decodeManagedArtifact,
+  ManagedArtifactIntegrityError,
   MAX_MANAGED_ARTIFACT_BYTES,
   parseManagedArtifactDescriptor,
   verifyManagedArtifactBytes,
@@ -68,6 +69,11 @@ export type ManagedWorkflowBlobPage = {
   objects: ManagedWorkflowBlobObject[];
   nextCursor?: string;
 };
+
+export function isMissingManagedWorkflowObject(error: unknown): boolean {
+  const failure = error as { name?: string; $metadata?: { httpStatusCode?: number } } | null;
+  return failure?.$metadata?.httpStatusCode === 404 || failure?.name === 'NotFound' || failure?.name === 'NoSuchKey';
+}
 
 function normalizeKeyPrefix(prefix: string): string {
   const trimmed = prefix.trim().replace(/^\/+/, '');
@@ -265,7 +271,7 @@ export class S3ManagedWorkflowBlobStore implements ManagedWorkflowBlobStore {
       if ((error as { $metadata?: { httpStatusCode?: number } }).$metadata?.httpStatusCode !== 412) throw error;
       // An identical immutable upload is idempotent; a corrupt existing object
       // must fail rather than be overwritten or accepted merely by HEAD.
-      await this.getBytes(descriptor.key);
+      await this.getBytes(descriptor.key, options);
     }
   }
 
@@ -296,11 +302,11 @@ export class S3ManagedWorkflowBlobStore implements ManagedWorkflowBlobStore {
       try {
         signal.throwIfAborted();
         if (response.ContentLength !== undefined && (response.ContentLength > limit || response.ContentLength < 0))
-          throw new Error('Managed artifact exceeds its expected size.');
+          throw new ManagedArtifactIntegrityError('Managed artifact exceeds its expected size.');
         for await (const chunk of body) {
           signal.throwIfAborted();
           size += chunk.byteLength;
-          if (size > limit) throw new Error('Managed artifact exceeds its expected size.');
+          if (size > limit) throw new ManagedArtifactIntegrityError('Managed artifact exceeds its expected size.');
           chunks.push(chunk);
         }
         signal.throwIfAborted();
@@ -328,16 +334,7 @@ export class S3ManagedWorkflowBlobStore implements ManagedWorkflowBlobStore {
       );
       return true;
     } catch (error) {
-      const statusCode =
-        typeof error === 'object' &&
-        error != null &&
-        '$metadata' in error &&
-        typeof (error as { $metadata?: { httpStatusCode?: unknown } }).$metadata?.httpStatusCode === 'number'
-          ? (error as { $metadata: { httpStatusCode: number } }).$metadata.httpStatusCode
-          : undefined;
-      if (statusCode === 404 || (error as { name?: unknown } | null)?.name === 'NotFound') {
-        return false;
-      }
+      if (isMissingManagedWorkflowObject(error)) return false;
       throw error;
     }
   }
@@ -473,6 +470,18 @@ export function createRecordingBlobKey(
   return createManagedWorkflowBlobKey(workflowId, 'recordings', recordingId, fileName);
 }
 
+const REPLAY_SNAPSHOT_COLLECTION = 'recording-project-snapshots';
+
+export function createRecordingProjectSnapshotKey(workflowId: string): string {
+  return createManagedWorkflowBlobKey(workflowId, REPLAY_SNAPSHOT_COLLECTION, randomUUID(), 'replay.rivet-project');
+}
+
+/** Recognize the namespace even when a descriptor is damaged, so the ordinary deletion path cannot own it. */
+export function isRecordingProjectSnapshotKey(key: string): boolean {
+  const segments = key.split('/', 5);
+  return segments.length === 4 && segments[1] === REPLAY_SNAPSHOT_COLLECTION;
+}
+
 /**
  * A reconciliation finding is not by itself permission to delete a key. This
  * narrow grammar recognizes only the immutable revision/recording artifacts
@@ -494,6 +503,9 @@ export function isManagedWorkflowArtifactObjectKey(key: string): boolean {
   }
   return (
     (collection === 'revisions' && (fileName === 'project.rivet-project' || fileName === 'dataset.rivet-data')) ||
+    (collection === REPLAY_SNAPSHOT_COLLECTION &&
+      /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(objectId) &&
+      /^replay\.rivet-project\.artifact-v1\.[a-f0-9]{64}\.\d+\.\d+\.(identity|gzip)$/.test(storedFileName!)) ||
     (collection === 'recordings' &&
       (fileName === 'recording.rivet-recording' ||
         fileName === 'replay.rivet-project' ||

@@ -34,7 +34,12 @@ import { getWorkflowRecordingConfig, type WorkflowRecordingConfig } from '../rec
 import { notifyRecordingPersisted } from '../recording-diagnostics.js';
 import { parseManagedWorkflowProjectVirtualPath } from '../virtual-paths.js';
 import { parseManagedArtifactDescriptor } from './artifact-descriptor.js';
-import type { ManagedWorkflowBlobStore } from './blob-store.js';
+import {
+  isMissingManagedWorkflowObject,
+  isRecordingProjectSnapshotKey,
+  type ManagedWorkflowBlobStore,
+} from './blob-store.js';
+import { readSharedRecordingProject } from './recording-project-snapshots.js';
 import type { ManagedWorkflowContext } from './context.js';
 import type { ManagedWorkflowMaintenanceLease } from './maintenance.js';
 import type {
@@ -896,28 +901,42 @@ export function createManagedWorkflowRecordingService(options: ManagedWorkflowRe
       artifact: 'recording' | 'replay-project' | 'replay-dataset',
     ): Promise<string> {
       await deps.initialize();
-      const row = await deps.queryOne<RecordingRow>(
-        deps.pool,
-        `
-          SELECT ${deps.recordingColumns}
-          FROM workflow_recordings
-          WHERE recording_id = $1
-        `,
-        [recordingId],
-      );
+      const readRow = () =>
+        deps.queryOne<
+          Pick<
+            RecordingRow,
+            'workflow_id' | 'recording_blob_key' | 'replay_project_blob_key' | 'replay_dataset_blob_key'
+          >
+        >(
+          deps.pool,
+          `SELECT workflow_id, recording_blob_key, replay_project_blob_key, replay_dataset_blob_key
+         FROM workflow_recordings WHERE recording_id = $1`,
+          [recordingId],
+        );
+      const row = await readRow();
       if (!row) {
         throw createHttpError(404, 'Recording not found');
       }
-
-      if (artifact === 'replay-dataset' && !row.replay_dataset_blob_key) {
-        throw createHttpError(404, 'Replay dataset not found');
+      if (artifact === 'recording') return deps.blobStore.getText(row.recording_blob_key);
+      if (artifact === 'replay-dataset') {
+        if (!row.replay_dataset_blob_key) throw createHttpError(404, 'Replay dataset not found');
+        return deps.blobStore.getText(row.replay_dataset_blob_key);
       }
 
-      return artifact === 'recording'
-        ? deps.blobStore.getText(row.recording_blob_key)
-        : artifact === 'replay-project'
-          ? deps.blobStore.getText(row.replay_project_blob_key)
-          : deps.blobStore.getText(row.replay_dataset_blob_key!);
+      const readShared = (key: string) =>
+        readSharedRecordingProject(deps.pool, deps.blobStore, key, row.workflow_id, recordingId);
+      if (isRecordingProjectSnapshotKey(row.replay_project_blob_key)) return readShared(row.replay_project_blob_key);
+      try {
+        return await deps.blobStore.getText(row.replay_project_blob_key);
+      } catch (error) {
+        if (!isMissingManagedWorkflowObject(error)) throw error;
+        // The compactor may have replaced the key and the outbox may already
+        // have removed it. Refresh the pointer once, only after a missing file.
+        const latest = await readRow();
+        if (latest?.workflow_id === row.workflow_id && isRecordingProjectSnapshotKey(latest.replay_project_blob_key))
+          return readShared(latest.replay_project_blob_key);
+        throw error;
+      }
     },
 
     async deleteWorkflowRecording(recordingId: string): Promise<void> {

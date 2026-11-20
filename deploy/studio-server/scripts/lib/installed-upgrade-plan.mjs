@@ -68,7 +68,7 @@ export async function planInstalledUpgrade({
     };
   const assertOnlineProof = (release) => {
     const proof = release.evidence.runtimeControl;
-    if (requireOnline && (proof?.protocol !== 3 || !proof.requestContinuity))
+    if (requireOnline && (proof?.controlPlaneMode !== 'singleton-overlap' || !proof.requestContinuity))
       throw Error('Online upgrades require exact-image editor handover and protected published-request evidence.');
   };
   const pending = [],
@@ -102,15 +102,17 @@ export async function planInstalledUpgrade({
       assertOnlineProof(next);
       if (current.ha?.enabled) {
         assertHaUpgradeEvidence(next, current);
-        if (next.evidence.runtimeControl?.protocol === 3 && current.ha.controlPlane?.mode === 'singleton')
+        if (
+          next.evidence.runtimeControl?.controlPlaneMode === 'singleton-overlap' &&
+          current.ha.controlPlane?.mode === 'singleton'
+        )
           return {
             formatVersion: 1,
             status: 'adoption-required',
             installedDigest,
             targetDigest,
             steps: [],
-            reason:
-              'Prepare the certified pool and same-image ownership transfer before the ordinary overlap image upgrade.',
+            reason: 'Complete the qualified same-image editor handoff before the overlap image upgrade.',
             requiredPair: {
               installedSourceSha: current.release.production.sourceSha,
               candidateSourceSha: next.source.sha,
@@ -166,7 +168,10 @@ export async function planInstalledUpgrade({
     try {
       assertOnlineProof(candidate);
       assertHaUpgradeEvidence(candidate, installed);
-      if (candidate.evidence.runtimeControl?.protocol === 3 && installed.ha.controlPlane?.mode === 'singleton')
+      if (
+        candidate.evidence.runtimeControl?.controlPlaneMode === 'singleton-overlap' &&
+        installed.ha.controlPlane?.mode === 'singleton'
+      )
         return {
           formatVersion: 1,
           status: 'adoption-required',

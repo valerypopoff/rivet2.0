@@ -7,6 +7,7 @@ import { RECORDING_EVIDENCE_RESTORE_GUARDS } from '../routes/workflows/managed/r
 import {
   createManagedWorkflowS3ClientConfig,
   isManagedWorkflowArtifactObjectKey,
+  isRecordingProjectSnapshotKey,
 } from '../routes/workflows/managed/blob-store.js';
 
 /** Schema owners, not a prefix scan or CASCADE. Control and migration history are deliberately absent. */
@@ -21,6 +22,8 @@ export const LEGACY_RESTORE_TABLES = [
   'workflow_endpoints',
   'workflow_web_apps',
   'workflow_recordings',
+  'workflow_recording_project_snapshots',
+  'workflow_recording_project_compaction',
   'workflow_run_evidence',
   'evaluation_library',
   'evaluation_library_imports',
@@ -185,12 +188,39 @@ export async function captureRestoreObjects(
     'runtime-libraries/'.startsWith(config.objectStoragePrefix)
   )
     throw new Error('Storage namespaces overlap.');
-  const keys = new Set<string>();
-  const addArtifact = (reference: unknown, expectedRoot: string) => {
+  const keys = new Map<string, boolean>();
+  const addArtifact = (reference: unknown, expectedRoot: string, required = true) => {
     if (reference == null) return;
     if (typeof reference !== 'string') throw new Error('Invalid artifact reference.');
     if (!reference.startsWith(expectedRoot)) throw new Error('Artifact reference belongs to a different resource.');
-    keys.add(validateRestoreObjectKey(config.objectStoragePrefix, reference, 'workflow'));
+    const key = validateRestoreObjectKey(config.objectStoragePrefix, reference, 'workflow');
+    keys.set(key, required || keys.get(key) === true);
+  };
+  const snapshotOwners = new Map<string, string>();
+  if (tables.includes('workflow_recording_project_snapshots')) {
+    const snapshots = await pool.query<{ workflow_id: string; object_key: string; state: string }>(
+      'SELECT workflow_id,object_key,state FROM public.workflow_recording_project_snapshots',
+    );
+    for (const row of snapshots.rows) {
+      if (!isRecordingProjectSnapshotKey(row.object_key)) throw new Error('Invalid recording project snapshot key.');
+      addArtifact(row.object_key, `${row.workflow_id}/`, row.state === 'verified');
+      snapshotOwners.set(row.object_key, row.workflow_id);
+    }
+  }
+  const addRecordingArtifact = (
+    workflowId: string,
+    recordingId: string,
+    kind: string,
+    key: unknown,
+    required: boolean,
+  ) => {
+    if (typeof key === 'string' && isRecordingProjectSnapshotKey(key)) {
+      if (kind !== 'replay_project_blob_key' || snapshotOwners.get(key) !== workflowId)
+        throw new Error('Shared recording project belongs to a different resource.');
+      addArtifact(key, `${workflowId}/`, required);
+    } else {
+      addArtifact(key, `${workflowId}/recordings/${recordingId}/`, required);
+    }
   };
   const sources: Array<[string, string[]]> = [
     ['workflow_revisions', ['project_blob_key', 'dataset_blob_key']],
@@ -203,7 +233,33 @@ export async function captureRestoreObjects(
     const rows = await pool.query(`SELECT ${identity}, ${columns.join(',')} FROM public.${table}`);
     for (const row of rows.rows) {
       const expectedRoot = `${row.workflow_id}/${table === 'workflow_revisions' ? 'revisions' : 'recordings'}/${row.revision_id ?? row.recording_id}/`;
-      for (const column of columns) addArtifact(row[column], expectedRoot);
+      for (const column of columns) {
+        if (table === 'workflow_recordings')
+          addRecordingArtifact(row.workflow_id, row.recording_id, column, row[column], true);
+        else addArtifact(row[column], expectedRoot);
+      }
+    }
+  }
+  if (snapshotOwners.size && tables.includes('workflow_run_evidence')) {
+    // Uploads can still be incomplete at a frozen backup point. Capture
+    // the objects that survived under the pending shared manifest.
+    const pending = await pool.query<{
+      workflow_id: string;
+      run_id: string;
+      project_key: string;
+      recording_key: string;
+      dataset_key: string | null;
+    }>(
+      `SELECT workflow_id,run_id,manifest_json->'row'->>'replayProjectBlobKey' AS project_key,
+              manifest_json->'row'->>'recordingBlobKey' AS recording_key,
+              manifest_json->'row'->>'replayDatasetBlobKey' AS dataset_key
+       FROM public.workflow_run_evidence WHERE availability IN ('pending','unavailable')
+         AND manifest_json ? 'replayProjectDigest'`,
+    );
+    for (const row of pending.rows) {
+      addRecordingArtifact(row.workflow_id, row.run_id, 'replay_project_blob_key', row.project_key, false);
+      addRecordingArtifact(row.workflow_id, row.run_id, 'recording_blob_key', row.recording_key, false);
+      addRecordingArtifact(row.workflow_id, row.run_id, 'replay_dataset_blob_key', row.dataset_key, false);
     }
   }
   if (tables.includes('workflow_endpoint_release_projects')) {
@@ -235,8 +291,18 @@ export async function captureRestoreObjects(
   const s3 = new S3Client(createManagedWorkflowS3ClientConfig(config));
   try {
     const objects: RestoreObject[] = [];
-    for (const key of [...keys].sort()) {
-      const head = await s3.send(new HeadObjectCommand({ Bucket: config.objectStorageBucket, Key: key }));
+    for (const key of [...keys.keys()].sort()) {
+      const head = await s3
+        .send(new HeadObjectCommand({ Bucket: config.objectStorageBucket, Key: key }))
+        .catch((error: unknown) => {
+          if (
+            !keys.get(key) &&
+            (error as { $metadata?: { httpStatusCode?: number } })?.$metadata?.httpStatusCode === 404
+          )
+            return null;
+          throw error;
+        });
+      if (!head) continue;
       if (!head.ETag) throw new Error('Referenced artifact has no stable identity.');
       if (
         head.ObjectLockLegalHoldStatus === 'ON' ||

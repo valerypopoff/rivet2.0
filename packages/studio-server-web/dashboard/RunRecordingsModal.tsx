@@ -52,19 +52,19 @@ function getWorkflowEndpoint(workflow: WorkflowRecordingWorkflowSummary): string
 export const RunRecordingsModal: FC<RunRecordingsModalProps> = ({
   isOpen,
   isRetained,
-  resetToken: externalResetToken,
+  resetToken,
   initialProject = null,
   onDismiss,
   onClose,
   onOpenRecording,
   onFoundCountChange,
 }) => {
-  const [refreshToken, setRefreshToken] = useState(0);
-  const resetToken = `${externalResetToken}:${refreshToken}`;
   const [openingRecordingId, setOpeningRecordingId] = useState<string | null>(null);
   const [openingError, setOpeningError] = useState<string | null>(null);
   const openingAttemptRef = useRef(0);
   const {
+    refresh,
+    refreshToken,
     workflows,
     workflowsLoading,
     catalogError,
@@ -111,6 +111,7 @@ export const RunRecordingsModal: FC<RunRecordingsModalProps> = ({
 
   const hierarchyScope = JSON.stringify([
     resetToken,
+    refreshToken,
     selectedWorkflowId,
     page,
     runsPerPage,
@@ -156,7 +157,7 @@ export const RunRecordingsModal: FC<RunRecordingsModalProps> = ({
     return () => {
       openingAttemptRef.current += 1;
     };
-  }, [isOpen, resetToken]);
+  }, [isOpen, resetToken, refreshToken]);
 
   const workflowOptions = useMemo<RecordingWorkflowOption[]>(
     () => [
@@ -242,7 +243,7 @@ export const RunRecordingsModal: FC<RunRecordingsModalProps> = ({
                     aria-label="Refresh run recordings"
                     title="Refresh run recordings"
                     disabled={openingRecordingId !== null || deletingRecordingId !== null}
-                    onClick={() => setRefreshToken((current) => current + 1)}
+                    onClick={refresh}
                   >
                     <RefreshIcon label="" size="small" />
                   </button>

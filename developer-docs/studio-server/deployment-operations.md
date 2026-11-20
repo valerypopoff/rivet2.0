@@ -661,6 +661,23 @@ exclusive housekeeping or editor-session behavior on GKE. See
 [developer backend overlap](developer-backend-overlap.md) for the still-required
 provider qualification, resource budget and approved bridge/adoption procedure.
 
+## Schema 23 shared recording snapshots
+
+Use the maintenance cutover to upgrade a schema 22 installation. It
+temporarily stops the editor and published endpoints, verifies the frozen
+database and object-storage recovery checkpoint, and fences older readers
+before installing schema 23. Ordinary rolling migration and forward rollback
+to schema 22 fail the compatibility checks. The SQL migration creates the
+snapshot and compaction tables without scanning saved recording blobs.
+Use the maintenance staging rehearsal for this image pair. Ordinary
+runtime qualification requires a compatible predecessor.
+
+After the schema 23 release opens admission, managed durable recordings
+share snapshots by default. The existing maintenance owner compacts older
+recordings in bounded batches outside the execution path. The regular
+operation requires no activation settings or separate compaction step.
+[Snapshot sharing and recovery](recording-snapshot-sharing-plan.md#rollout-and-restore)
+
 ## Schema 18 recording cost metadata
 
 Schema 18 adds nullable `workflow_recordings.cost_json` for root-run AI estimates.

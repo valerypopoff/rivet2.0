@@ -7,7 +7,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { Pool } from 'pg';
-import { S3Client, CreateBucketCommand } from '@aws-sdk/client-s3';
+import { S3Client, CreateBucketCommand, CopyObjectCommand } from '@aws-sdk/client-s3';
+import { deserializeProject } from '@valerypopoff/rivet2-core/serialization';
 import {
   migrateManagedWorkflowSchema,
   verifyManagedWorkflowSchema,
@@ -20,7 +21,7 @@ import { ManagedWorkflowBackend } from '../routes/workflows/managed/backend.js';
 import { completeRunEvidence, incompleteChildEvidence } from '../routes/workflows/execution-evidence-owner.js';
 import type { ManagedWorkflowStorageConfig } from '../routes/workflows/storage-config.js';
 import type { RunEvidenceHandle } from '@valerypopoff/rivet-studio-server-shared/workflow-run-evidence.js';
-import { serializeProject, ExecutionRecorder, type Project } from '@valerypopoff/rivet2-node';
+import { serializeProject, ExecutionRecorder, type DataId, type Project } from '@valerypopoff/rivet2-node';
 import { listRecordingHistory, missingRecordingCount } from '../routes/workflows/managed/recording-history.js';
 import {
   recordingStatisticsRowsSql,
@@ -28,8 +29,12 @@ import {
   recordingStatisticsCatalogSql,
 } from '../routes/workflows/recording-statistics-sql.js';
 import { findManagedWorkflowObjectReferences } from '../routes/workflows/managed/workflow-object-references.js';
+import { captureRestoreObjects, type RestoreObject } from '../legacy-restore/scope.js';
+import { isRecordingProjectSnapshotKey } from '../routes/workflows/managed/blob-store.js';
+import { createRecordingProjectSnapshotRetentionTask } from '../routes/workflows/managed/recording-project-snapshots.js';
 import { startAsyncWorkflowProcess, withAsyncDeadline } from './helpers/workflow-async-process.js';
 import { listenTestServer } from './helpers/http-server-harness.js';
+import { verifyHistoricalRecordingCompaction } from './helpers/recording-project-compaction.js';
 import http from 'node:http';
 
 const input = {
@@ -58,6 +63,9 @@ const recording = {
   durationMs: 300.25,
   executionIdentity: input.executionIdentity,
 };
+const proxyHeaders = {
+  'x-rivet-proxy-auth': createHash('sha256').update('async-fixture-key:proxy-auth').digest('hex'),
+};
 
 async function crashWorker() {
   const config = JSON.parse(process.env.RIVET_DURABILITY_TEST_CONFIG!) as ManagedWorkflowStorageConfig;
@@ -75,6 +83,461 @@ async function crashWorker() {
   throw new Error('Crash injection was not reached.');
 }
 
+async function verifySharedReplayProjects(
+  context: ReturnType<typeof createManagedWorkflowContext>,
+  other: ReturnType<typeof createManagedWorkflowContext>,
+  config: ManagedWorkflowStorageConfig,
+  baseUrl: string,
+  measure: boolean,
+  compacted: Awaited<ReturnType<typeof verifyHistoricalRecordingCompaction>>,
+  copyBackup: (objects: RestoreObject[]) => Promise<ReturnType<typeof createManagedWorkflowContext>>,
+) {
+  const { pool, blobStore } = context;
+  const evidence = new ManagedRecordingEvidence(context);
+  const peer = new ManagedRecordingEvidence(other);
+  const service = createManagedWorkflowRecordingService({ context, evidence });
+  const workflowId = 'shared-replay-fixture' as Project['metadata']['id'];
+  const sourceProject = { ...project, metadata: { ...project.metadata, id: workflowId } };
+  const capture = {
+    ...recording,
+    sourceProject,
+    executedProject: sourceProject,
+    executedAttachedData: { fixture: 'one' },
+  };
+  const begin = async (writer: ManagedRecordingEvidence) => {
+    const handle = await writer.begin({ ...input, projectId: workflowId });
+    await writer.outcome(handle, { state: 'succeeded', durationMs: 300 });
+    return handle;
+  };
+  const persist = async (writer = evidence, data = capture) => writer.persist(data, await begin(writer));
+  const keyFor = async (id: string) =>
+    (
+      await pool.query<{ replay_project_blob_key: string }>(
+        'SELECT replay_project_blob_key FROM workflow_recordings WHERE recording_id=$1',
+        [id],
+      )
+    ).rows[0]!.replay_project_blob_key;
+  const readFromApi = async (id: string) => {
+    const res = await fetch(`${baseUrl}/api/workflows/recordings/${id}/replay-project`, {
+      headers: proxyHeaders,
+      signal: AbortSignal.timeout(5000),
+    });
+    assert.equal(res.status, 200, await res.clone().text());
+    return res.text();
+  };
+  const put = blobStore.putArtifact!.bind(blobStore);
+  const get = blobStore.getBytes!.bind(blobStore);
+  const remove = blobStore.delete.bind(blobStore);
+  try {
+    const legacyWriter = new ManagedRecordingEvidence(context);
+    legacyWriter.canShareReplayProject = () => false;
+    const legacy = await persist(legacyWriter).finally(() => legacyWriter.dispose());
+    const legacyKey = await keyFor(legacy);
+    const legacyText = await blobStore.getText(legacyKey);
+    const [first, second] = await Promise.all([persist(), persist(peer)]);
+    const key = await keyFor(first);
+    assert.ok(isRecordingProjectSnapshotKey(key));
+    assert.equal(await keyFor(second), key);
+    blobStore.putArtifact = async (...args) => {
+      assert.equal(isRecordingProjectSnapshotKey(args[0].key), false, 'Verified reuse performed a replay PUT.');
+      return put(...args);
+    };
+    blobStore.getBytes = async (...args) => {
+      assert.equal(isRecordingProjectSnapshotKey(args[0]), false, 'Verified reuse performed a replay GET.');
+      return get(...args);
+    };
+    try {
+      const warm = await persist();
+      assert.equal(await keyFor(warm), key);
+      await service.deleteWorkflowRecording(warm);
+    } finally {
+      blobStore.putArtifact = put;
+      blobStore.getBytes = get;
+    }
+
+    const distinct = await persist(evidence, { ...capture, executedAttachedData: { fixture: 'two' } });
+    assert.notEqual(await keyFor(distinct), key);
+    assert.equal(await readFromApi(legacy), legacyText);
+    for (const id of [first, second, distinct]) {
+      const [replay, attached] = deserializeProject(await readFromApi(id));
+      assert.equal(replay.metadata.id, id);
+      assert.equal(replay.metadata.title, sourceProject.metadata.title);
+      assert.deepEqual(attached, { fixture: id === distinct ? 'two' : 'one' });
+    }
+    const restoreObjects = await captureRestoreObjects(pool, config);
+    assert.equal(restoreObjects.filter((object) => object.key === config.objectStoragePrefix + key).length, 1);
+    assert.ok(restoreObjects.some((object) => object.key === config.objectStoragePrefix + legacyKey));
+    assert.equal(
+      restoreObjects.filter((object) => object.key === config.objectStoragePrefix + compacted.sharedKey).length,
+      1,
+    );
+    assert.ok(!restoreObjects.some((object) => object.key === config.objectStoragePrefix + compacted.originalKey));
+    const restored = await copyBackup(restoreObjects);
+    try {
+      const reader = createManagedWorkflowRecordingService({ context: restored });
+      assert.equal(await reader.readWorkflowRecordingArtifact(legacy, 'replay-project'), legacyText);
+      for (const id of [first, second])
+        assert.equal(await reader.readWorkflowRecordingArtifact(id, 'replay-project'), await readFromApi(id));
+      assert.equal(
+        await reader.readWorkflowRecordingArtifact(compacted.recordingId, 'replay-project'),
+        compacted.sharedContents,
+      );
+      assert.equal(
+        await reader.readWorkflowRecordingArtifact(compacted.recordingId, 'replay-dataset'),
+        compacted.dataset,
+      );
+      assert.equal(await reader.readWorkflowRecordingArtifact(compacted.recordingId, 'recording'), compacted.trace);
+      const checkpointSql = 'SELECT next_after,resume_at FROM workflow_recording_project_compaction WHERE singleton';
+      const checkpoint = (await pool.query(checkpointSql)).rows;
+      assert.equal(checkpoint.length, 1);
+      assert.deepEqual((await restored.pool.query(checkpointSql)).rows, checkpoint);
+    } finally {
+      await restored.dispose();
+    }
+
+    context.maintenance.registerTask(
+      'verify-shared-replay-reclamation',
+      createRecordingProjectSnapshotRetentionTask(context),
+    );
+    await service.deleteWorkflowRecording(first);
+    await context.maintenance.runNow();
+    assert.equal(await blobStore.exists!(key), true);
+    assert.equal(deserializeProject(await readFromApi(second))[0].metadata.id, second);
+
+    // An unfinalized run also pins the generation through its manifest.
+    const pending = await evidence.begin({ ...input, projectId: workflowId });
+    await assert.rejects(evidence.persist(capture, pending), /confirmed execution outcome/);
+    await service.deleteWorkflowRecording(second);
+    await context.maintenance.runNow();
+    assert.equal(await blobStore.exists!(key), true);
+    await service.deleteWorkflowRecording(pending.id);
+
+    let releaseDelete!: () => void;
+    let enteredDelete!: () => void;
+    const deleting = new Promise<void>((resolve) => {
+      enteredDelete = resolve;
+    });
+    const heldDelete = new Promise<void>((resolve) => {
+      releaseDelete = resolve;
+    });
+    blobStore.delete = async (target) => {
+      if (target === key) {
+        enteredDelete();
+        await heldDelete;
+      }
+      await remove(target);
+    };
+    const cleanup = context.maintenance.runNow();
+    let replacement: string;
+    try {
+      await withAsyncDeadline(
+        Promise.race([
+          deleting,
+          cleanup.then(async () => {
+            const catalog = await pool.query(
+              'SELECT state FROM workflow_recording_project_snapshots WHERE object_key=$1',
+              [key],
+            );
+            const outbox = await pool.query(
+              'SELECT status,last_error FROM managed_object_deletion_outbox WHERE object_key=$1',
+              [key],
+            );
+            const references = await findManagedWorkflowObjectReferences(pool, [key]);
+            throw new Error(
+              `Shared replay was not collected ${JSON.stringify({ catalog: catalog.rows, outbox: outbox.rows, live: references.has(key) })}`,
+            );
+          }),
+        ]),
+        'retired shared replay object enters deletion',
+      );
+      replacement = await persist(peer);
+      assert.notEqual(await keyFor(replacement), key);
+    } finally {
+      releaseDelete();
+      await cleanup;
+      blobStore.delete = remove;
+    }
+    assert.equal(await blobStore.exists!(key), false);
+    assert.equal(deserializeProject(await readFromApi(replacement))[0].metadata.id, replacement);
+    const replacementKey = await keyFor(replacement);
+    await remove(replacementKey);
+    await assert.rejects(service.readWorkflowRecordingArtifact(replacement, 'replay-project'));
+    assert.equal(
+      (await pool.query('SELECT state FROM workflow_recording_project_snapshots WHERE object_key=$1', [replacementKey]))
+        .rows[0]?.state,
+      'unusable',
+    );
+    const fallback = await persist();
+    assert.equal(isRecordingProjectSnapshotKey(await keyFor(fallback)), false);
+    assert.equal(deserializeProject(await readFromApi(fallback))[0].metadata.id, fallback);
+
+    // Mixed encoders may run together during an update. A different encoding
+    // must keep its own replay while the cold shared reservation is unverified.
+    const codecCapture = { ...capture, executedAttachedData: { fixture: 'codec' } };
+    let enteredUpload!: () => void;
+    let releaseUpload!: () => void;
+    const uploading = new Promise<void>((resolve) => {
+      enteredUpload = resolve;
+    });
+    const continueUpload = new Promise<void>((resolve) => {
+      releaseUpload = resolve;
+    });
+    process.env.RIVET_RECORDINGS_COMPRESS = 'gzip';
+    blobStore.putArtifact = async (...args) => {
+      if (isRecordingProjectSnapshotKey(args[0].key)) {
+        enteredUpload();
+        await continueUpload;
+      }
+      return put(...args);
+    };
+    const gzipCapture = persist(evidence, codecCapture);
+    void gzipCapture.catch(() => undefined);
+    try {
+      await withAsyncDeadline(Promise.race([uploading, gzipCapture]), 'cold shared upload begins');
+      process.env.RIVET_RECORDINGS_COMPRESS = 'identity';
+      const dedicated = await persist(peer, codecCapture);
+      assert.equal(isRecordingProjectSnapshotKey(await keyFor(dedicated)), false);
+      assert.deepEqual(deserializeProject(await readFromApi(dedicated))[1], codecCapture.executedAttachedData);
+    } finally {
+      releaseUpload();
+      blobStore.putArtifact = put;
+      delete process.env.RIVET_RECORDINGS_COMPRESS;
+      await gzipCapture.catch(() => undefined);
+    }
+    assert.ok(isRecordingProjectSnapshotKey(await keyFor(await gzipCapture)));
+    console.log(
+      'Shared replay reuse, exact legacy API bytes, mixed restore scope, pending pins, delayed deletes and missing-object fallback passed.',
+    );
+
+    if (measure) {
+      const listFixtureKeys = async () => {
+        const result = new Set<string>();
+        let cursor: string | undefined;
+        do {
+          const page = await blobStore.listPage!({ cursor, pageSize: 1000 });
+          for (const object of page.objects) if (object.key.startsWith(workflowId + '/')) result.add(object.key);
+          cursor = page.nextCursor;
+        } while (cursor);
+        return result;
+      };
+      const before = await listFixtureKeys();
+      const variant = { ...capture, executedAttachedData: { fixture: 'measured' } };
+      const started = performance.now();
+      const keys = new Set<string>();
+      for (let batch = 0; batch < 125; batch++) {
+        const ids = await Promise.all(Array.from({ length: 8 }, () => persist(evidence, variant)));
+        for (const id of ids) keys.add(await keyFor(id));
+      }
+      assert.equal(keys.size, 1);
+      const measuredKey = [...keys][0]!;
+      assert.equal(await blobStore.exists!(measuredKey), true);
+      const added = [...(await listFixtureKeys())].filter((key) => !before.has(key));
+      assert.deepEqual(added.filter(isRecordingProjectSnapshotKey), [measuredKey]);
+      const traces = (
+        await pool.query<{ key: string }>(
+          'SELECT recording_blob_key AS key FROM workflow_recordings WHERE replay_project_blob_key=$1',
+          [measuredKey],
+        )
+      ).rows;
+      assert.equal(new Set(traces.map((row) => row.key)).size, 1000);
+      const addedKeys = new Set(added);
+      assert.ok(traces.every((row) => addedKeys.has(row.key)));
+      console.log(
+        `LOCAL_SHARED_REPLAY_OBJECTS ${JSON.stringify({ recordings: traces.length, snapshots: keys.size, elapsedMs: performance.now() - started })}`,
+      );
+
+      // Exercise a single workflow's retention lookup with more metadata
+      // rows than the normal test fixture, without inventing extra S3 traces.
+      await pool.query(
+        `INSERT INTO workflow_recordings (recording_id,workflow_id,source_project_name,source_project_relative_path,
+            run_kind,status,duration_ms,endpoint_name_at_execution,recording_blob_key,replay_project_blob_key)
+         SELECT 'retention-measure-' || n, $1, 'Fixture', 'Fixture.rivet-project', 'published', 'succeeded',
+           1, 'fixture', $1 || '/recordings/retention-measure-' || n || '/recording.rivet-recording', $2
+         FROM generate_series(1,100000) AS n`,
+        [workflowId, measuredKey],
+      );
+      const orphaned = measuredKey.replace(/(recording-project-snapshots\/)[^/]+/, '$1' + randomUUID());
+      await pool.query(
+        `INSERT INTO workflow_recording_project_snapshots(workflow_id,digest,object_key,state)
+         VALUES($1,$2,$3,'pending')`,
+        [workflowId, createHash('sha256').update(orphaned).digest('hex'), orphaned],
+      );
+      const reclaimStarted = performance.now();
+      await context.maintenance.runNow();
+      const reclaimMs = performance.now() - reclaimStarted;
+      const retained = (
+        await pool.query(
+          'SELECT object_key FROM workflow_recording_project_snapshots WHERE object_key=ANY($1::text[])',
+          [[measuredKey, orphaned]],
+        )
+      ).rows;
+      assert.deepEqual(
+        retained.map((row) => row.object_key),
+        [measuredKey],
+      );
+      console.log(`LOCAL_SHARED_REPLAY_RETENTION ${JSON.stringify({ extraRecordings: 100000, reclaimMs })}`);
+      await pool.query(
+        "DELETE FROM workflow_recordings WHERE workflow_id=$1 AND recording_id LIKE 'retention-measure-%'",
+        [workflowId],
+      );
+    }
+  } finally {
+    await evidence.dispose();
+    await peer.dispose();
+  }
+}
+
+async function measureSnapshotSharing(options: Parameters<typeof startAsyncWorkflowProcess>[0], pool: Pool) {
+  const percentile = (values: number[], p: number) =>
+    [...values].sort((a, b) => a - b)[Math.ceil(values.length * p) - 1];
+  const summarize = (values: number[]) => ({
+    samples: values.length,
+    p50: percentile(values, 0.5),
+    p95: percentile(values, 0.95),
+    p99: percentile(values, 0.99),
+  });
+  for (const projectPayloadBytes of [0, 512 * 1024]) {
+    const api = await startAsyncWorkflowProcess({
+      ...options,
+      projectPayloadBytes,
+      projectName: `Snapshot timing ${projectPayloadBytes}`,
+      endpointName: 'snapshot-timing-' + projectPayloadBytes,
+    });
+    const run = async () => {
+      const start = performance.now();
+      const response = await fetch(`${api.baseUrl}/workflows/snapshot-timing-${projectPayloadBytes}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: '{"fixture":"timing"}',
+        signal: AbortSignal.timeout(5000),
+      });
+      if (response.status !== 200)
+        throw new Error(`Timed endpoint returned ${response.status}: ${await response.text()}`);
+      await response.arrayBuffer();
+      return performance.now() - start;
+    };
+    const idle = async () => {
+      const deadline = Date.now() + 5000;
+      while ((await api.command<{ activeRuns: number }>('execution-admission')).activeRuns) {
+        assert.ok(Date.now() < deadline, 'Measured request kept an execution permit.');
+        await delay(5);
+      }
+    };
+    const timedReplay = async (id: string) => {
+      const start = performance.now();
+      const response = await fetch(`${api.baseUrl}/api/workflows/recordings/${id}/replay-project`, {
+        headers: proxyHeaders,
+        signal: AbortSignal.timeout(10000),
+      });
+      assert.equal(response.status, 200);
+      await response.arrayBuffer();
+      return performance.now() - start;
+    };
+    const editorContents = serializeProject({
+      ...project,
+      metadata: { ...project.metadata, id: api.projectId as Project['metadata']['id'] },
+      data: projectPayloadBytes ? { ['replay-fixture' as DataId]: 'x'.repeat(projectPayloadBytes) } : undefined,
+    });
+    const editorRecording = new ExecutionRecorder().serialize();
+    const editorPost = (suffix: string, body: object) =>
+      fetch(api.baseUrl + '/api/workflows/local-editor-recordings' + suffix, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', ...proxyHeaders },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(10000),
+      });
+    const timedEditorUpload = async () => {
+      const handle = { id: randomUUID(), token: randomUUID() };
+      const executionIdentity = { graphId: 'unsaved-editor-graph', correlationId: 'rvt-timing-' + randomUUID() };
+      const source = { projectId: api.projectId, projectPath: api.projectPath };
+      const accepted = await editorPost('/runs/begin', {
+        ...source,
+        ...executionIdentity,
+        handle,
+        createdAt: new Date().toISOString(),
+      });
+      assert.equal(accepted.status, 201, await accepted.text());
+      const start = performance.now();
+      const completed = await editorPost('', {
+        ...source,
+        executionIdentity,
+        evidenceHandle: handle,
+        projectContents: editorContents,
+        recordingSerialized: editorRecording,
+        status: 'succeeded',
+        durationMs: 1,
+      });
+      assert.equal(completed.status, 201, await completed.text());
+      return performance.now() - start;
+    };
+    const count = async () =>
+      (
+        await pool.query(
+          "SELECT COUNT(*)::int AS n FROM workflow_run_evidence WHERE workflow_id=$1 AND availability='available'",
+          [api.projectId],
+        )
+      ).rows[0].n as number;
+    const group = () => ({
+      endpoint: [] as number[],
+      replay: [] as number[],
+      schedule: [] as number[],
+      editor: [] as number[],
+      capturedPerSecond: [] as number[],
+      resources: [] as Record<string, number>[],
+    });
+    const timings = { off: group(), on: group() };
+    try {
+      for (const mode of ['off', 'on', 'on', 'off', 'on', 'off', 'off', 'on'] as const) {
+        const samples = timings[mode];
+        await api.command('snapshot-sharing-' + mode);
+        await run();
+        await idle();
+        await api.command('scheduled-recordings');
+        const replayId = (await api.command<{ runs: { id: string }[] }>('recordings')).runs[0]!.id;
+        const before = await count();
+        await api.command('begin-snapshot-timing');
+        const started = performance.now();
+        for (let batch = 0; batch < 16; batch++) {
+          const reads = batch % 4 === 0 ? timedReplay(replayId) : undefined;
+          void reads?.catch(() => undefined);
+          samples.endpoint.push(...(await Promise.all(Array.from({ length: 4 }, run))));
+          await idle();
+          if (reads) samples.replay.push(await reads);
+        }
+        await api.command('scheduled-recordings');
+        assert.equal((await count()) - before, 64, 'Timed writes must retain every measured recording.');
+        samples.capturedPerSecond.push(64_000 / (performance.now() - started));
+        for (let sample = 0; sample < 6; sample++) {
+          const scheduled = api.command<number>('measure-scheduled-permit');
+          void scheduled.catch(() => undefined);
+          await Promise.all(Array.from({ length: 3 }, run));
+          samples.schedule.push(await scheduled);
+          await idle();
+        }
+        await api.command('scheduled-recordings');
+        for (let sample = 0; sample < 6; sample++) samples.editor.push(await timedEditorUpload());
+        samples.resources.push(await api.command('finish-snapshot-timing'));
+      }
+      console.log(
+        `LOCAL_SHARED_REPLAY_LATENCY ${JSON.stringify({
+          projectPayloadBytes,
+          endpointMs: { off: summarize(timings.off.endpoint), on: summarize(timings.on.endpoint) },
+          replayOpenMs: { off: summarize(timings.off.replay), on: summarize(timings.on.replay) },
+          scheduledPermitMs: { off: summarize(timings.off.schedule), on: summarize(timings.on.schedule) },
+          editorUploadMs: { off: summarize(timings.off.editor), on: summarize(timings.on.editor) },
+          capturedPerSecond: {
+            off: summarize(timings.off.capturedPerSecond),
+            on: summarize(timings.on.capturedPerSecond),
+          },
+          resources: { off: timings.off.resources, on: timings.on.resources },
+        })}`,
+      );
+    } finally {
+      await api.close();
+    }
+  }
+}
+
 async function main() {
   const measurePerformance = process.argv.includes('--measure');
   const owned: string[] = [],
@@ -82,6 +545,7 @@ async function main() {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-durability-'));
   process.env.RIVET_APP_DATA_ROOT = root;
   process.env.RIVET_RECORDING_DURABILITY_ENABLED = 'true';
+  process.env.RIVET_MANAGED_MAINTENANCE_ENABLED = 'true';
   process.env.RIVET_MANAGED_WORKFLOW_SCHEMA_MODE = 'verify';
   let pool: Pool | undefined, s3: S3Client | undefined;
   const contexts: Array<ReturnType<typeof createManagedWorkflowContext>> = [];
@@ -166,6 +630,30 @@ async function main() {
       },
     });
     await s3.send(new CreateBucketCommand({ Bucket: config.objectStorageBucket }));
+    const apiOptions = {
+      recordingDurability: true,
+      workflowMaintenance: false,
+      graceSeconds: 5,
+      storage: {
+        version: 1,
+        storageMode: 'managed',
+        databaseMode: 'managed',
+        databaseSslMode: 'disable',
+        databaseConnectionString: config.databaseUrl,
+        objectStorageBucket: config.objectStorageBucket,
+        objectStorageEndpoint: config.objectStorageEndpoint,
+        objectStorageRegion: config.objectStorageRegion,
+        objectStoragePrefix: config.objectStoragePrefix,
+        objectStorageForcePathStyle: true,
+        storageAccessKeyId: config.objectStorageAccessKeyId,
+        storageAccessKey: config.objectStorageSecretAccessKey,
+        storageUrl: config.objectStorageEndpoint + '/' + config.objectStorageBucket,
+      },
+    };
+    if (process.argv.includes('--sharing-latency-only')) {
+      await measureSnapshotSharing(apiOptions, pool);
+      return;
+    }
     const context = createManagedWorkflowContext(config, undefined, { migrationMode: 'verify' });
     contexts.push(context);
     const evidence = new ManagedRecordingEvidence(context);
@@ -203,7 +691,10 @@ async function main() {
     console.log('A child-coverage write failure preserved the known root failure and its replay.');
 
     const child = spawn(process.execPath, [...process.execArgv, fileURLToPath(import.meta.url), '--worker'], {
-      env: { ...process.env, RIVET_DURABILITY_TEST_CONFIG: JSON.stringify(config) },
+      env: {
+        ...process.env,
+        RIVET_DURABILITY_TEST_CONFIG: JSON.stringify(config),
+      },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     let output = '',
@@ -235,6 +726,10 @@ async function main() {
     const recovered = new ManagedRecordingEvidence(fresh);
     await recovered.recover();
     assert.equal((await recovered.read(crashed)).availability, 'available');
+    const crashedReplayKey = (
+      await pool.query('SELECT replay_project_blob_key FROM workflow_recordings WHERE recording_id=$1', [crashed.id])
+    ).rows[0].replay_project_blob_key;
+    assert.ok(isRecordingProjectSnapshotKey(crashedReplayKey));
     assert.equal((await pool.query('SELECT COUNT(*)::int AS n FROM durability_side_effects')).rows[0].n, 1);
     console.log('Abrupt process exit after real uploads recovered with a fresh owner; no business replay.');
 
@@ -304,10 +799,17 @@ async function main() {
       true,
     );
 
-    for (const failAfter of [1, 2]) {
+    for (const [sharing, failAfter] of [
+      [false, 1],
+      [false, 2],
+      [true, 1],
+      [true, 2],
+    ] as const) {
       const uncertain = await evidence.begin({ ...input, endpointName: 'uncertain-' + failAfter });
       await evidence.outcome(uncertain, { state: 'succeeded', durationMs: 300 });
       const transaction = context.withTransaction;
+      const canShare = evidence.canShareReplayProject;
+      if (!sharing) evidence.canShareReplayProject = () => false;
       let transactions = 0;
       context.withTransaction = async (operation) => {
         const value = await transaction(operation);
@@ -319,6 +821,7 @@ async function main() {
         assert.equal(await evidence.persist(recording, uncertain), uncertain.id);
       } finally {
         context.withTransaction = transaction;
+        evidence.canShareReplayProject = canShare;
       }
     }
     console.log('Lost manifest and publication commit acknowledgements confirmed by readback.');
@@ -495,25 +998,6 @@ async function main() {
         tailEntered?.();
       }),
     );
-    const apiOptions = {
-      recordingDurability: true,
-      graceSeconds: 5,
-      storage: {
-        version: 1,
-        storageMode: 'managed',
-        databaseMode: 'managed',
-        databaseSslMode: 'disable',
-        databaseConnectionString: config.databaseUrl,
-        objectStorageBucket: config.objectStorageBucket,
-        objectStorageEndpoint: config.objectStorageEndpoint,
-        objectStorageRegion: config.objectStorageRegion,
-        objectStoragePrefix: config.objectStoragePrefix,
-        objectStorageForcePathStyle: true,
-        storageAccessKeyId: config.objectStorageAccessKeyId,
-        storageAccessKey: config.objectStorageSecretAccessKey,
-        storageUrl: config.objectStorageEndpoint + '/' + config.objectStorageBucket,
-      },
-    };
     api = await startAsyncWorkflowProcess(apiOptions);
     const response = await fetch(api.baseUrl + '/workflows/async-acceptance', {
       method: 'POST',
@@ -532,9 +1016,6 @@ async function main() {
     console.log('Real API route accepted, executed and durably recorded an asynchronous graph.');
 
     const localUrl = api.baseUrl + '/api/workflows/local-editor-recordings';
-    const proxyHeaders = {
-      'x-rivet-proxy-auth': createHash('sha256').update('async-fixture-key:proxy-auth').digest('hex'),
-    };
     const capabilityResponse = await fetch(localUrl + '/capability', { headers: proxyHeaders });
     assert.equal(capabilityResponse.status, 200, await capabilityResponse.clone().text());
     const capability = (await capabilityResponse.json()) as { durability?: string };
@@ -680,6 +1161,36 @@ async function main() {
     console.log(
       'Four public requests completed and released execution slots while recording writes were blocked; recordings caught up after release.',
     );
+    const lockedRegistry = await pool.connect();
+    try {
+      await lockedRegistry.query('BEGIN; LOCK TABLE workflow_recording_project_snapshots IN ACCESS EXCLUSIVE MODE');
+      await Promise.all(Array.from({ length: 4 }, timedRequest));
+      await waitIdle();
+      const before = Date.now() + 3500;
+      for (;;) {
+        const blocked = await pool.query(
+          `SELECT 1 FROM pg_locks WHERE relation='workflow_recording_project_snapshots'::regclass AND NOT granted`,
+        );
+        if (blocked.rows.length) break;
+        assert.ok(Date.now() < before, 'The snapshot writer did not reach the recording database lock.');
+        await delay(10);
+      }
+      assert.equal((await api.command<{ activeRuns: number }>('execution-admission')).activeRuns, 0);
+    } finally {
+      await lockedRegistry.query('ROLLBACK');
+      lockedRegistry.release();
+    }
+    await api.command('scheduled-recordings');
+    assert.equal(
+      (
+        await pool.query(
+          "SELECT COUNT(*)::int AS n FROM workflow_recording_project_snapshots WHERE workflow_id=$1 AND state='verified'",
+          [api.projectId],
+        )
+      ).rows[0].n,
+      1,
+    );
+    console.log('Public execution released its permits while the shared-snapshot registry was blocked.');
     if (measurePerformance) {
       const latency: { baselineMs: number[]; asynchronousMs: number[] } = { baselineMs: [], asynchronousMs: [] };
       for (let batch = 0; batch < 8; batch++) {
@@ -800,6 +1311,53 @@ async function main() {
     assert.ok(!deletedCatalog.workflows.some((item) => item.workflowId === catalogProject.projectMetadataId));
     assert.equal(deletedCatalog.totals!.totalRuns, catalogBefore.totals!.totalRuns);
     console.log('Catalog shows first pending/unavailable runs and counts publication/deletion exactly once.');
+    const compacted = await verifyHistoricalRecordingCompaction(context, {
+      baseUrl: api.baseUrl,
+      headers: proxyHeaders,
+      storage: apiOptions.storage,
+      storageConfig: config,
+      count: measurePerformance ? 128 : 6,
+      compiledCommand: process.argv.includes('--compiled-compaction'),
+      traffic: measurePerformance ? { run: timedRequest, settle: waitIdle } : undefined,
+    });
+    await verifySharedReplayProjects(
+      context,
+      fresh,
+      config,
+      api.baseUrl,
+      measurePerformance,
+      compacted,
+      async (objects) => {
+        const database = 'rivet_durability_restore';
+        const dbContainer = owned[0]!;
+        const fixtureDump = '/tmp/rivet-durability-restore.dump';
+        docker('exec', dbContainer, 'pg_dump', '-U', 'postgres', '-Fc', '-f', fixtureDump, 'rivet_durability');
+        docker('exec', dbContainer, 'createdb', '-U', 'postgres', database);
+        docker('exec', dbContainer, 'pg_restore', '-U', 'postgres', '--exit-on-error', '-d', database, fixtureDump);
+        const objectStoragePrefix = 'durability-restored/';
+        for (const { key, etag } of objects)
+          await s3!.send(
+            new CopyObjectCommand({
+              Bucket: config.objectStorageBucket,
+              CopySource: config.objectStorageBucket + '/' + key,
+              CopySourceIfMatch: etag,
+              Key: objectStoragePrefix + key.slice(config.objectStoragePrefix.length),
+            }),
+          );
+        const databaseUrl = new URL(config.databaseUrl!);
+        databaseUrl.pathname = '/' + database;
+        return createManagedWorkflowContext(
+          { ...config, databaseUrl: databaseUrl.href, objectStoragePrefix },
+          undefined,
+          { migrationMode: 'verify' },
+        );
+      },
+    );
+    if (measurePerformance) {
+      await api.close();
+      api = undefined;
+      await measureSnapshotSharing(apiOptions, pool);
+    }
     await catalogBackend.dispose();
     await evidence.dispose();
     await recovered.dispose();

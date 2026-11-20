@@ -383,8 +383,10 @@ test('qualification preserves candidate lineage/images/schema and binds both pro
 
 test('provider publication cannot turn a legacy startup-only schema check into rolling qualification', () => {
   const f = fixture();
-  const to = f.candidate.database.managedWorkflowSchema.version;
-  const from = to - 1;
+  const to = 22;
+  const from = 21;
+  for (const manifest of [f.candidate, f.promoted])
+    manifest.database.managedWorkflowSchema = { version: to, minimumRollbackCompatibleVersion: from };
   f.candidate.lineage.predecessor.managedWorkflowSchemaVersion = from;
   f.promoted.lineage.predecessor.managedWorkflowSchemaVersion = from;
   assert.throws(() => prepareRuntimeQualification(f), /schema compatibility evidence/);
@@ -404,9 +406,18 @@ test('provider publication cannot turn a legacy startup-only schema check into r
   };
   assert.equal(prepareRuntimeQualification(f).candidate.evidence.ha.schemaCompatibility.runId, runId);
   const unreviewed = structuredClone(f);
-  unreviewed.candidate.lineage.predecessor.managedWorkflowSchemaVersion = from - 1;
-  unreviewed.promoted.lineage.predecessor.managedWorkflowSchemaVersion = from - 1;
+  for (const manifest of [unreviewed.candidate, unreviewed.promoted]) {
+    manifest.database.managedWorkflowSchema.minimumRollbackCompatibleVersion = from - 1;
+    manifest.lineage.predecessor.managedWorkflowSchemaVersion = from - 1;
+  }
   assert.throws(() => prepareRuntimeQualification(unreviewed), /no reviewed mixed-writer probe/);
+});
+
+test('an incompatible predecessor requires the maintenance route', () => {
+  const f = fixture();
+  for (const manifest of [f.candidate, f.promoted])
+    manifest.lineage.predecessor.managedWorkflowSchemaVersion = 22;
+  assert.throws(() => prepareRuntimeQualification(f), /requires a maintenance cutover/);
 });
 
 test('local/failed/uncleaned or incomplete declarations cannot become provider evidence', () => {

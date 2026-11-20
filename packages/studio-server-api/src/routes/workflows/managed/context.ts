@@ -4,6 +4,7 @@ import { isLegacyRestorePaused } from '../../../legacy-restore/service.js';
 import { checkPostgresPoolHealth } from '../../../managed-health.js';
 import { acquireManagedPostgresPool } from '../../../managed-postgres-pool.js';
 import type { RuntimeHealthCheckContext } from '../../../runtime-health.js';
+import { isRecordingCompactionPaused } from '../recording-compaction-maintenance.js';
 import type { ManagedWorkflowStorageConfig } from '../storage-config.js';
 import { S3ManagedWorkflowBlobStore, type ManagedWorkflowBlobStore } from './blob-store.js';
 import {
@@ -48,6 +49,8 @@ import {
   verifyManagedWorkflowSchema,
 } from './schema-migrations.js';
 import { createManagedWorkflowTransactionRunner } from './transactions.js';
+import { createRecordingProjectCompactionTask } from './recording-project-compaction.js';
+import { createRecordingProjectSnapshotRetentionTask } from './recording-project-snapshots.js';
 import type { TransactionHooks } from './types.js';
 import { assertManagedSchemaMigrationSafe } from '../../../managed-schema-cutover.js';
 
@@ -279,6 +282,31 @@ export function createManagedWorkflowContext(
     pool,
     initialize,
   });
+  if (runBackgroundTasks && maintenance.config.enabled) {
+    maintenance.registerTask(
+      'workflow-recording-snapshot-retention',
+      createRecordingProjectSnapshotRetentionTask({
+        pool,
+        maintenance,
+        withTransaction: transactionRunner.withTransaction,
+      }),
+    );
+    if (resolvedBlobStore.putArtifact) {
+      const compact = createRecordingProjectCompactionTask({
+        pool,
+        blobStore: resolvedBlobStore,
+        maintenance,
+        withTransaction: transactionRunner.withTransaction,
+      });
+      maintenance.registerTask(
+        'workflow-recording-snapshot-compaction',
+        async (lease) => {
+          if (!isLegacyRestorePaused() && !isRecordingCompactionPaused()) await compact(lease);
+        },
+        { periodicOnly: true },
+      );
+    }
+  }
 
   return {
     pool,

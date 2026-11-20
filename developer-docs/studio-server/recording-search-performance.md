@@ -306,15 +306,17 @@ The Windows run needed its remaining preview processes stopped after all browser
 assertions finished; the test command then exited successfully. Hosted Linux CI
 remains the release gate for the committed revision.
 
-The icon-only **Refresh run recordings** button follows the modal title. It starts
-a new controller reset generation: Any for an ordinary footer session, or the
-inspected project for a project-context session; All outcomes, page 1, 20 top-level
-families per page, no input filter and collapsed families. Explicit close clears
-the inspected project, so a subsequent ordinary opening uses Any. The dialog and
-backdrop remain mounted, so refresh does
-not restart their opening animations or lose focus. Resetting cancels the old
-catalog/run/search/child requests and fences late results, including a refresh
-during initial loading; the catalog effect depends explicitly on this generation.
+### Refresh and session lifecycle
+
+The icon-only **Refresh run recordings** button follows the modal title. It
+reloads the catalog and the current Project selection, including Any. **Inspect
+recordings** seeds the project when opening a fresh session. During refresh,
+the picker uses the available catalog options while their replacements load.
+Refresh resets to All outcomes, page 1, 20 top-level families per page, a cleared
+input filter and collapsed families. Explicit close clears the inspected project,
+so a subsequent ordinary opening uses Any. The dialog and backdrop stay mounted
+and Refresh keeps focus. Both query effects use the refresh token to replace old
+reads and fence late catalog, run, search and child results.
 It does not reload the editor or replay writes. Dismissing via the backdrop still
 retains the existing session as before. Persistent input-path history is untouched.
 Refresh is disabled while opening or deleting a recording; it remains available
@@ -504,6 +506,8 @@ production qualification.
 - The extractor makes the single transfer-buffer copy at worker dispatch. Storage providers return stable bytes without an extra defensive full-artifact copy; the extractor never detaches provider-owned or pooled memory. Text-only providers remain supported, and the in-memory store preserves exact text reads without a UTF-8 round trip.
 - Browser checks cover replacement searches, progressive append/scroll position, viewport resizing, deletion, and close cancellation through `yarn studio-server:ui:observe`.
 - The recordings modal supplies a definite viewport-relative height: a virtualized list has no intrinsic content height and otherwise collapses before its first measurement. Browser assertions use the search count for complete results, not the number of mounted virtual rows.
+- Sub-run ordering tests check that the final child intersects the scroll viewport and is the last mounted child in the same poll that scrolls to the bottom. ResizeObserver can change the virtual list height after a jump. A mounted child may also sit outside the viewport.
+
 - Row indexes are established in the layout phase before child measurements. Appends retain existing measurements; viewport-width changes and replaced row content invalidate cached heights, including offscreen rows.
 - Deletion callbacks own the view/request generation in which they started. Completion or failure cannot overwrite a replacement search, page, workflow selection, or closed session. If deletion removes the last row on a page, the ordinary page effect performs the replacement fetch rather than a second request in the delete callback.
 - Only one deletion may be pending within a view: row actions are disabled and the controller also rejects duplicate invocation. Changing the view releases this UI ownership, not the server-side deletion. A late response must not clear a newer deletion's loading state or report its error in the new view.

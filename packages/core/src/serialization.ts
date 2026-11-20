@@ -8,3 +8,4 @@ export {
   serializeDatasets,
   type CombinedDataset,
 } from './utils/serialization/serialization.js';
+export { bindSharedReplayProjectId, serializeSharedReplayProject } from './utils/serialization/serialization_v4.js';

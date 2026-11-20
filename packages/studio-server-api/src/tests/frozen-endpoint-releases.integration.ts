@@ -212,7 +212,8 @@ try {
   const probes = await import(
     new URL('../../../../deploy/studio-server/scripts/lib/schema-compatibility-probe.mjs', import.meta.url).href
   );
-  await probes.probeSchemaLockContention(admin, probe, MANAGED_WORKFLOW_SCHEMA_MIGRATIONS.at(-1)!);
+  const publicationMigration = MANAGED_WORKFLOW_SCHEMA_MIGRATIONS.find((migration) => migration.version === 22)!;
+  await probes.probeSchemaLockContention(admin, probe, publicationMigration);
   const c1 = project('shared', 'C1');
   const inner = project('helper', c1);
   const a1 = project('a', inner);

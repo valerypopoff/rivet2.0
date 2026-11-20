@@ -15,6 +15,7 @@ import {
 import { loadDevEnv } from './lib/dev-env.mjs';
 import { renderKubernetesLauncherValuesYaml } from './lib/kubernetes-launcher-config.mjs';
 import { resolveHelmBinOrThrow } from './lib/k8s-tools.mjs';
+import { readManagedWorkflowSchemaReleaseContract } from './lib/studio-server-release-manifest.mjs';
 
 const yaml = createRequire(import.meta.url)('yaml');
 const selection = { release: 'test', namespace: 'test', context: 'test-cluster' };
@@ -83,6 +84,7 @@ test('production uses external connections, scoped Secrets and refuses incompati
 
 test('Helm defaults enable durable recording on API roles and retain explicit false', () => {
   const helm = resolveHelmBinOrThrow(process.cwd(), { env: process.env });
+  const { version } = readManagedWorkflowSchemaReleaseContract(process.cwd());
   for (const enabled of [true, false]) {
     const rendered = spawnSync(
       helm,
@@ -111,6 +113,7 @@ test('Helm defaults enable durable recording on API roles and retain explicit fa
     assert.ok(workloads.some((doc) => doc.metadata.labels['app.kubernetes.io/component'] === 'execution'));
     for (const workload of workloads) {
       const container = workload.spec.template.spec.containers[0];
+      assert.equal(workload.spec.template.metadata.annotations['rivet.dev/managed-schema-reader-version'], String(version));
       assert.equal(
         container.env.find((item) => item.name === 'RIVET_RECORDING_DURABILITY_ENABLED')?.value,
         String(enabled),

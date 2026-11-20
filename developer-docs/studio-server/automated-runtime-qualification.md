@@ -562,9 +562,10 @@ maintained provider-handover path. Its implementation and local regressions are
 not GKE evidence: an actual approved provider run must still pass before release
 publication. A singleton certificate cannot certify developer continuity.
 
-The overlap suite performs the same-image predecessor bridge **before** starting
-its developer-continuity observation window. Customer workflow/web observers and
-two-ready execution/proxy floors remain active through that bridge too. Initial adoption may interrupt
+The legacy serial overlap suite performs the same-image predecessor bridge
+**before** starting its developer-continuity observation window. Customer
+workflow/web observers and two-ready execution/proxy floors stay active through
+that bridge. Initial adoption may interrupt
 developer activity and still requires separate production approval. It then runs
 the real deployment coordinator with same-node placement, exclusive housekeeping
 transfer in both directions, per-candidate authenticated API/editor acceptance,
@@ -639,6 +640,14 @@ and immutable-artifact checks remain required.
 
 For a singleton with paired execution pools, use the
 [online first-adoption route](online-editor-overlap-plan.md#operator-inputs-and-recovery).
+Use an isolated fixture with the focused suite and an explicit
+`developerOverlapProfile`. The fixture inherits paired execution from the
+observed installation. Keep the retained application configuration and the
+separate execution-capacity transition out of this operation.
+Verify a distinct rehearsal hostname is covered by the staging Gateway
+listener, DNS and TLS certificate before dispatch. A listener restricted to
+the retained application's hostname cannot route the isolated fixture there
+while the retained application is serving.
 The provider runner observes that same-image transition before the separate
 mixed-image rollout. It records fresh authentication, a retained browser
 session and full protected responses across both withdrawals and the
@@ -651,6 +660,13 @@ request must show actual connection reuse. The withdrawal checkpoints follow
 the EndpointSlice propagation window. The browser resumes its accepted run
 after the original editor starts draining. Admission checks the installed
 database pool size and request protection before the provider run starts.
+The focused certificate binds editor overlap to the paired execution layout.
+The deployment planner requires that layout and a separately verified same-image
+editor handoff before admitting the candidate image rollout.
+Run the hosted qualification with `deploy_production=false`. Use the
+`--require-online` operator command for production, passing the adoption receipt
+for the same-image handoff and the qualified manifest for the subsequent image
+rollout.
 
 The serial activation route uses the existing deployment command in three
 separately journaled steps with its policy, backup, ownership and acceptance
@@ -788,24 +804,27 @@ this input empty. See [the request format, checks and limits](resource-sizing.md
 
 `lib/release-qualification-policy.mjs` defaults to focused qualification for a
 singleton release with the bounded request-continuity profile, including its
-first protected rollout. Source/chart/settings changes and the absence of an
+first protected rollout, and for editor overlap on a protected paired
+execution layout. Source/chart/settings changes and the absence of an
 older stress certificate do not automatically add hours of stress testing.
 Exact-source/chart/image, schema compatibility and live configuration checks
 still apply; a changed or unsafe contract cannot bypass those validators.
 
 Focused qualification runs the actual predecessor-to-candidate update once while
-observing public workflow/web traffic, two-ready floors, fresh controller policy
-samples, accepted work, recordings and storage. It does not shut down developer
-services, force a second proxy rollout or run browser-resume/schedule journeys.
-Basic authentication and public-route checks remain part of fixture preparation.
+observing public workflow/web traffic, ready floors, fresh controller policy
+samples, accepted work, recordings and storage. Authentication and public-route
+checks are part of fixture preparation. Editor overlap adds the authenticated
+browser and run-resumption journeys, including the same-image handoff when
+adopting overlap for the first time.
 Its policy evidence comes from this same rollout/report; there is no separate
 autoscaling phase or second 100-workflow/100-web traffic window.
 Both streams must collect their own 100 successful completions before observation
 ends; a faster workflow stream cannot stand in for slower web traffic.
 
 Focused settlement accepts healthy autoscaler-grown capacity instead of waiting
-for exactly seven Pods. Proxy capacity stays within the certified HPA range of
-two to four; execution stays between two and the frozen policy ceiling. Backend,
+for exactly seven Pods. Proxy capacity stays between the certified HPA minimum
+of one or two and its maximum of four. Execution stays between two and the
+frozen policy ceiling. Backend,
 web and autoscaler remain singletons. Every final application Pod must be ready,
 non-terminating and on the expected image; unknown roles and duplicate identities
 fail. Reports retain observed initial/final per-role counts and matching totals,

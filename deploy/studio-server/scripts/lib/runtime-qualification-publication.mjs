@@ -118,7 +118,13 @@ export function assertRuntimeQualificationArtifacts({
   assert.equal(promoted.evidence.promotion.runAttempt, build.runAttempt);
   assert.ok(promoted.evidence.ha, 'Ordinary HA qualification must already have passed');
   const from = candidate.lineage?.predecessor?.managedWorkflowSchemaVersion;
-  if (from !== candidate.database.managedWorkflowSchema.version)
+  const schema = candidate.database.managedWorkflowSchema;
+  assert.ok(Number.isSafeInteger(from) && from > 0, 'Runtime qualification requires a known predecessor schema');
+  assert.ok(
+    from >= schema.minimumRollbackCompatibleVersion,
+    'The predecessor schema requires a maintenance cutover for this image pair.',
+  );
+  if (from !== schema.version)
     assertSchemaCompatibilityEvidence(promoted.evidence.ha.schemaCompatibility, candidate, from);
   assert.ok(
     !promoted.evidence.runtimeControl && !promoted.evidence.runtimeAutoscaling,

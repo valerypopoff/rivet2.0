@@ -517,10 +517,10 @@ test('migration rejects non-current windows before database access and retries s
 });
 
 test('managed schema migration definitions and compatibility probes remain coherent', () => {
-  assert.equal(CURRENT_MANAGED_WORKFLOW_SCHEMA_VERSION, 22);
+  assert.equal(CURRENT_MANAGED_WORKFLOW_SCHEMA_VERSION, 23);
   assert.deepEqual(
     MANAGED_WORKFLOW_SCHEMA_MIGRATIONS.map(({ version }) => version),
-    [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22],
+    [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23],
   );
   assert.equal(
     MANAGED_WORKFLOW_SCHEMA_MIGRATIONS[0]?.checksum,
@@ -670,7 +670,8 @@ test('verify mode rejects a database that has not been migrated', async () => {
 test('schema compatibility rejects future and modified migration histories', async (t) => {
   await t.test('future version', async () => {
     const database = createCurrentDatabase();
-    database.migrations.set(23, { version: 23, name: 'future', checksum: 'f'.repeat(64) });
+    const future = CURRENT_MANAGED_WORKFLOW_SCHEMA_VERSION + 1;
+    database.migrations.set(future, { version: future, name: 'future', checksum: 'f'.repeat(64) });
     await assert.rejects(
       verifyManagedWorkflowSchema(createPool(database), { logger: quietLogger }),
       /newer than this server supports/,
@@ -692,7 +693,8 @@ test('schema compatibility rejects future and modified migration histories', asy
 
 test('verify mode accepts only an explicitly declared additive successor schema', async () => {
   const database = createCurrentDatabase();
-  database.migrations.set(23, { version: 23, name: 'successor', checksum: 'f'.repeat(64) });
+  const successor = CURRENT_MANAGED_WORKFLOW_SCHEMA_VERSION + 1;
+  database.migrations.set(successor, { version: successor, name: 'successor', checksum: 'f'.repeat(64) });
 
   await assert.rejects(
     verifyManagedWorkflowSchema(createPool(database), { logger: quietLogger }),
@@ -701,9 +703,9 @@ test('verify mode accepts only an explicitly declared additive successor schema'
 
   const result = await verifyManagedWorkflowSchema(createPool(database), {
     logger: quietLogger,
-    compatibilityWindow: { minimumVersion: CURRENT_MANAGED_WORKFLOW_SCHEMA_VERSION, maximumVersion: 23 },
+    compatibilityWindow: { minimumVersion: CURRENT_MANAGED_WORKFLOW_SCHEMA_VERSION, maximumVersion: successor },
   });
-  assert.deepEqual(result, { currentVersion: 23, appliedVersions: [] });
+  assert.deepEqual(result, { currentVersion: successor, appliedVersions: [] });
   assert.equal(database.applyCount, 0);
 });
 
