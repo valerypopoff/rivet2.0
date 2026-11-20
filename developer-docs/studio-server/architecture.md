@@ -843,6 +843,33 @@ the descriptor's encoding. Payload uploads/reads have a five-minute absolute
 deadline in addition to transport timeouts. Reconciliation recognizes both key
 generations.
 
+Managed schema 23 enables shared recording project snapshots. Durable
+recording persistence reuses one verified snapshot for the exact project and attached
+data from multiple runs. Each run retains its own trace, metadata and optional
+dataset. The snapshot is a v4 project encoded as JSON with its original project
+ID at the start of the envelope. The replay API binds the recording ID after
+verifying the blob, so older clients can open independent replay tabs through
+the existing API. Playback reads unconverted recordings from their original
+artifacts.
+
+Recording persistence pins the object in its manifest before uploading.
+Maintenance retires a generation only after its last retained recording and
+pending manifest release it. Subsequent snapshots use fresh object keys so
+delayed deletion targets the retired object. Confirmed missing or corrupt
+objects stop receiving new references. Schema 23 is a maintenance cutover
+that retires older readers before opening managed storage. See the
+[snapshot sharing plan](recording-snapshot-sharing-plan.md).
+
+The periodic managed maintenance owner automatically compacts historical
+recordings using a durable cursor. The same operation is available as a
+scoped command. It checks a bounded page, compares the
+decoded replay, and verifies the replacement before changing the pointer and
+queuing the original blob in one transaction. It reads no live project
+revisions. The retention owner deletes replaced blobs after checking their
+references. A replay request that encountered a retired key reads the current
+pointer once after a missing-object response. See
+[historical compaction](recording-snapshot-sharing-plan.md#compact-existing-recordings).
+
 Workflow object downloads request `Accept-Encoding: gzip` so S3-compatible
 providers return the original stored bytes, not a transcoded representation.
 Google Cloud Storage's XML API otherwise transparently expands objects uploaded

@@ -147,7 +147,7 @@ try {
       version INTEGER PRIMARY KEY CHECK(version>0), name TEXT NOT NULL,
       checksum TEXT NOT NULL CHECK(char_length(checksum)=64), application_version TEXT,
       applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`);
-    for (const migration of MANAGED_WORKFLOW_SCHEMA_MIGRATIONS.filter((m) => m.version <= 18)) {
+    for (const migration of MANAGED_WORKFLOW_SCHEMA_MIGRATIONS.filter((m) => m.version <= 22)) {
       await rollingPool.query(migration.sql);
       await rollingPool.query(
         'INSERT INTO managed_workflow_schema_migrations(version,name,checksum) VALUES($1,$2,$3)',
@@ -166,38 +166,21 @@ try {
         "SELECT to_jsonb(r) AS value FROM workflow_recordings r WHERE recording_id='before-expand'",
       )
     ).rows[0].value;
-    const blocker = await rollingPool.connect();
-    try {
-      await blocker.query('BEGIN');
-      await blocker.query('SELECT * FROM workflow_revisions');
-      const started = Date.now();
-      await assert.rejects(
-        migrateManagedWorkflowSchema(rollingPool, { migrationPolicy: 'rolling', logger: { log() {}, warn() {} } }),
-        { code: '55P03' },
-      );
-      assert.ok(
-        Date.now() - started < 4000,
-        'Rolling migration must not retry or wait for the maintenance lock budget',
-      );
-      assert.equal(
-        (await rollingPool.query('SELECT max(version) AS version FROM managed_workflow_schema_migrations')).rows[0]
-          .version,
-        18,
-      );
-      assert.equal(
-        (
-          await rollingPool.query(
-            "SELECT count(*)::int AS n FROM information_schema.columns WHERE table_name='workflow_revisions' AND column_name='reference_summary'",
-          )
-        ).rows[0].n,
-        0,
-      );
-    } finally {
-      await blocker.query('ROLLBACK');
-      blocker.release();
-    }
-    const forward = await migrateManagedWorkflowSchema(rollingPool, { migrationPolicy: 'rolling' });
-    assert.deepEqual(forward.appliedVersions, [19, 20, 21, 22]);
+    await verifySchemaImagePair(docker, containerId, process.env, { from: 21, to: 22 });
+    await assert.rejects(
+      migrateManagedWorkflowSchema(rollingPool, { migrationPolicy: 'rolling', logger: { log() {}, warn() {} } }),
+      /requires maintenance/,
+    );
+    assert.equal(
+      (await rollingPool.query('SELECT max(version) AS version FROM managed_workflow_schema_migrations')).rows[0].version,
+      22,
+    );
+    assert.equal(
+      (await rollingPool.query("SELECT to_regclass('workflow_recording_project_snapshots') AS name")).rows[0].name,
+      null,
+    );
+    const forward = await migrateManagedWorkflowSchema(rollingPool, { migrationPolicy: 'maintenance' });
+    assert.deepEqual(forward.appliedVersions, [23]);
     await verifyManagedWorkflowSchema(rollingPool);
     assert.deepEqual(
       (
@@ -206,7 +189,7 @@ try {
         )
       ).rows[0].value,
       beforeExpand,
-      'Expand must preserve historical failed recordings and artifact pointers',
+      'The cutover must preserve historical failed recordings and artifact pointers',
     );
     assert.deepEqual(
       (
@@ -216,7 +199,6 @@ try {
       ).rows,
       [{ project_blob_key: 'preserved/project', reference_summary: null }],
     );
-    await verifySchemaImagePair(docker, containerId, process.env, { from: 21, to: 22 });
     const repositoryModules = Object.fromEntries(
       await Promise.all(
         ['revision-factory', 'recordings', 'db', 'mappers'].map(async (name) => [
@@ -228,8 +210,9 @@ try {
       ),
     );
     repositoryModules.migrations = { MANAGED_WORKFLOW_SCHEMA_MIGRATIONS };
-    // Actual repositories/SQL, deliberately staggered beyond the round budget.
-    // Each role must tolerate the other image starting late, in either order.
+    // Keep the prior reviewed rolling transition's peer timing coverage.
+    // Schema 23 uses a maintenance cutover and has no mixed-writer probe.
+    const rollingProbeVersion = 22;
     for (const lateRole of ['previous', 'candidate']) {
       const runId = randomUUID().replaceAll('-', '');
       const results = await Promise.allSettled(
@@ -242,8 +225,8 @@ try {
               modules: repositoryModules,
               role,
               runId,
-              version: CURRENT_MANAGED_WORKFLOW_SCHEMA_VERSION,
-              targetVersion: CURRENT_MANAGED_WORKFLOW_SCHEMA_VERSION,
+              version: rollingProbeVersion,
+              targetVersion: rollingProbeVersion,
               timeoutMs: 1000,
               startupTimeoutMs: 5000,
             });
@@ -252,8 +235,14 @@ try {
           }
         }),
       );
+      const failures = results.flatMap((result, index) =>
+        result.status === 'rejected'
+          ? [new Error(`Schema peer ${index === 0 ? 'previous' : 'candidate'} failed`, { cause: result.reason })]
+          : [],
+      );
+      if (failures.length) throw new AggregateError(failures, `Late ${lateRole} schema peer probe failed`);
       for (const result of results) {
-        if (result.status === 'rejected') throw result.reason;
+        if (result.status !== 'fulfilled') continue;
         assert.equal(result.value.rounds, 2);
         assert.equal(result.value.peerRowsRead, 2);
       }
@@ -265,8 +254,8 @@ try {
         modules: repositoryModules,
         role: 'previous',
         runId: randomUUID().replaceAll('-', ''),
-        version: CURRENT_MANAGED_WORKFLOW_SCHEMA_VERSION,
-        targetVersion: CURRENT_MANAGED_WORKFLOW_SCHEMA_VERSION,
+        version: rollingProbeVersion,
+        targetVersion: rollingProbeVersion,
         timeoutMs: 1000,
         startupTimeoutMs: 100,
       }),
@@ -288,7 +277,7 @@ try {
     } finally {
       await rollingPool.query(`DROP SCHEMA ${schema} CASCADE`);
     }
-    console.log('Rolling schema: 18 -> 22, bounded trigger/telemetry contention and preserved rows passed.');
+    console.log('Schema 22 -> 23 refused rolling mode and preserved existing records in maintenance mode.');
   } finally {
     await rollingPool.end();
   }

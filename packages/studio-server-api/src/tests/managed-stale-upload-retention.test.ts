@@ -4,7 +4,12 @@ import test from 'node:test';
 import type { Pool } from 'pg';
 
 import { configureStudioMetrics, getStudioMetrics, resetStudioMetricsForTests } from '../metrics.js';
-import { isManagedWorkflowArtifactObjectKey } from '../routes/workflows/managed/blob-store.js';
+import {
+  createRecordingBlobKey,
+  createRecordingProjectSnapshotKey,
+  isManagedWorkflowArtifactObjectKey,
+  isRecordingProjectSnapshotKey,
+} from '../routes/workflows/managed/blob-store.js';
 import type { ManagedWorkflowMaintenanceLease } from '../routes/workflows/managed/maintenance.js';
 import {
   createManagedStaleUploadRetentionTask,
@@ -97,6 +102,13 @@ test('the artifact grammar accepts only revision and recording blobs created by 
   assert.equal(isManagedWorkflowArtifactObjectKey('workflow-a/revisions/object/not-rivet.txt'), false);
   assert.equal(isManagedWorkflowArtifactObjectKey('../revisions/object/project.rivet-project'), false);
   assert.equal(isManagedWorkflowArtifactObjectKey('workflow-a/revisions//project.rivet-project'), false);
+  assert.equal(isRecordingProjectSnapshotKey(createRecordingProjectSnapshotKey('workflow-a')), true);
+  assert.equal(
+    isRecordingProjectSnapshotKey(
+      createRecordingBlobKey('legacy/recording-project-snapshots', 'old', 'replay-project'),
+    ),
+    false,
+  );
 });
 
 test('audit mode reads only fully proven candidates and never creates an outbox intent', async () => {

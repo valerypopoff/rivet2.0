@@ -1,4 +1,5 @@
 import { mapValues } from 'lodash-es';
+import stableStringify from 'safe-stable-stringify';
 import { normalizeSerializedLLMTemperatureData } from '../../model/chat-v2/llmChatV2NodeMigration.js';
 import type {
   NodeGraph,
@@ -99,6 +100,34 @@ export function graphV4Deserializer(data: unknown): NodeGraph {
 }
 
 export function projectV4Serializer(project: Project, attachedData?: AttachedData): unknown {
+  return wrapInYamlEnvelope(4, prepareSerializedProject(project, attachedData));
+}
+
+const replayProjectHeader = '{"version":4,"data":{"metadata":{"id":';
+
+/** A v4 project with its ID at a known location, for rebinding a verified replay without re-encoding the graph. */
+export function serializeSharedReplayProject(project: Project, attachedData: AttachedData): string {
+  const {
+    metadata: { id, ...metadata },
+    ...data
+  } = prepareSerializedProject(project, attachedData);
+  const metadataJson = stableStringify(metadata)!;
+  const dataJson = stableStringify(data)!;
+  // Numeric metadata keys are allowed and JSON.stringify would move them
+  // ahead of id. Write the fixed envelope once and keep the rest canonical.
+  const metadataTail = metadataJson === '{}' ? '}' : ',' + metadataJson.slice(1);
+  return replayProjectHeader + JSON.stringify(id) + metadataTail + ',' + dataJson.slice(1) + '}';
+}
+
+export function bindSharedReplayProjectId(snapshot: string, sourceId: string, recordingId: string): string {
+  const sourceHeader = replayProjectHeader + JSON.stringify(sourceId);
+  const afterId = snapshot[sourceHeader.length];
+  if (!snapshot.startsWith(sourceHeader) || (afterId !== ',' && afterId !== '}'))
+    throw new Error('Shared replay project has an invalid source identity.');
+  return replayProjectHeader + JSON.stringify(recordingId) + snapshot.slice(sourceHeader.length);
+}
+
+function prepareSerializedProject(project: Project, attachedData?: AttachedData): SerializedProject {
   if (!isValidProjectStaticData(project.data)) {
     throw new Error('Project data must be a record of static-data strings');
   }
@@ -117,7 +146,7 @@ export function projectV4Serializer(project: Project, attachedData?: AttachedDat
     },
   };
 
-  return wrapInYamlEnvelope(4, toSerializedProject(filteredProject, attachedData));
+  return toSerializedProject(filteredProject, attachedData);
 }
 
 export function graphV4Serializer(graph: NodeGraph): unknown {

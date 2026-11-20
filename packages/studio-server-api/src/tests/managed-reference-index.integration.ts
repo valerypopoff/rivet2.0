@@ -106,7 +106,7 @@ try {
     ]);
   }
   const migrated = await migrateManagedWorkflowSchema(pool, {
-    migrationPolicy: 'rolling',
+    migrationPolicy: 'maintenance',
     logger: { log() {}, warn() {} },
   });
   const pendingVersions = MANAGED_WORKFLOW_SCHEMA_MIGRATIONS.filter((entry) => entry.version > baselineVersion).map(
@@ -122,7 +122,8 @@ try {
   const contentionPool = new Pool({ ...config, max: 3 });
   try {
     await pool.query(`CREATE SCHEMA ${probeSchema}`);
-    await probes.probeSchemaLockContention(contentionPool, probeSchema, MANAGED_WORKFLOW_SCHEMA_MIGRATIONS.at(-1));
+    const referenceMigration = MANAGED_WORKFLOW_SCHEMA_MIGRATIONS.find((migration) => migration.version === 19);
+    await probes.probeSchemaLockContention(contentionPool, probeSchema, referenceMigration);
   } finally {
     await contentionPool.end();
     await pool.query(`DROP SCHEMA ${probeSchema} CASCADE`);

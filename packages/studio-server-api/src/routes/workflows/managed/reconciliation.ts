@@ -1,7 +1,8 @@
 import type { Pool, PoolClient, QueryResultRow } from 'pg';
 
 import { recordStudioMetrics } from '../../../metrics.js';
-import type { ManagedWorkflowBlobStore } from './blob-store.js';
+import { isRecordingProjectSnapshotKey, type ManagedWorkflowBlobStore } from './blob-store.js';
+import { markRecordingProjectSnapshotUnusable } from './recording-project-snapshots.js';
 import type { ManagedWorkflowMaintenanceLease, ManagedWorkflowMaintenanceTask } from './maintenance.js';
 import {
   findManagedWorkflowObjectReferences,
@@ -173,7 +174,9 @@ async function listWorkflowReferencePage(
     `${MANAGED_WORKFLOW_OBJECT_REFERENCES_CTE}
       SELECT object_key
       FROM referenced_objects
-      WHERE $1::text IS NULL OR object_key > $1::text
+      WHERE ($1::text IS NULL OR object_key > $1::text)
+        AND NOT EXISTS (SELECT 1 FROM workflow_recording_project_snapshots AS snapshot
+                        WHERE snapshot.object_key=referenced_objects.object_key AND snapshot.state='pending')
       ORDER BY object_key ASC
       LIMIT $2
     `,
@@ -396,6 +399,14 @@ async function commitPage(input: {
     }
     const activeGeneration = toFiniteInteger(current.active_generation);
     await upsertFindings(client, input.domain, activeGeneration, input.findings);
+    if (input.domain === 'workflows') {
+      await markRecordingProjectSnapshotUnusable(
+        client,
+        input.findings
+          .filter((finding) => finding.kind === 'missing-referenced-object' && isRecordingProjectSnapshotKey(finding.subjectKey))
+          .map((finding) => finding.subjectKey),
+      );
+    }
     if (input.completion) {
       await markCompletedFindingGenerations(client, input.domain, activeGeneration);
       await client.query(

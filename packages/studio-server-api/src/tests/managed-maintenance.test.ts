@@ -83,6 +83,30 @@ function createMaintenanceLogger() {
   };
 }
 
+test('periodic maintenance stays outside the immediate startup pass', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const maintenance = createManagedWorkflowMaintenance({
+    pool: {
+      query: async (sql: string) => ({
+        rows: sql.includes('INSERT INTO managed_maintenance_leases') ? [{ fencing_token: 7 }] : [],
+      }),
+    } as never,
+    blobStore: {} as never,
+    config: { enabled: true, intervalMs: 60_000, leaseMs: 60_000, batchSize: 1 },
+  });
+  let periodicRuns = 0;
+  maintenance.registerTask('compaction', async () => void periodicRuns++, { periodicOnly: true });
+  try {
+    await maintenance.runNow();
+    assert.equal(periodicRuns, 0);
+    t.mock.timers.tick(60_000);
+    await maintenance.runNow();
+    assert.equal(periodicRuns, 1);
+  } finally {
+    await maintenance.dispose();
+  }
+});
+
 test('managed maintenance claims an orphaned key once and marks it completed after object deletion', async () => {
   const queries: Array<{ sql: string; parameters: unknown[] | undefined }> = [];
   let claimCount = 0;

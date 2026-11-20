@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type { PoolClient, QueryConfig, QueryResultRow } from 'pg';
 import { serializeDatasets, serializeProject } from '@valerypopoff/rivet2-node';
+import { serializeSharedReplayProject } from '@valerypopoff/rivet2-core/serialization';
 import type {
   RunEvidenceHandle,
   RunEvidenceInput,
@@ -13,11 +14,23 @@ import type { ManagedWorkflowContext } from './context.js';
 import type { PersistWorkflowExecutionRecordingOptions } from '../data-backend.js';
 import type { RecordingInsertRowData } from './types.js';
 import {
+  ManagedArtifactIntegrityError,
+  MAX_MANAGED_ARTIFACT_BYTES,
   prepareManagedTextArtifact,
   verifyManagedArtifactBytes,
   type ManagedArtifactDescriptor,
 } from './artifact-descriptor.js';
-import { createRecordingBlobKey } from './blob-store.js';
+import {
+  createRecordingBlobKey,
+  createRecordingProjectSnapshotKey,
+  isRecordingProjectSnapshotKey,
+} from './blob-store.js';
+import {
+  confirmRecordingProjectSnapshot,
+  noteRecordingProjectSnapshotReadFailure,
+  canShareRecordingProjectSnapshot,
+  readRecordingProjectSnapshotDescriptor,
+} from './recording-project-snapshots.js';
 import { getWorkflowRecordingRuntimeConfig, readWorkflowRecordingLimitSettings } from '../recordings-config.js';
 import { conflict, createHttpError } from '../../../utils/httpError.js';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -58,7 +71,11 @@ type Manifest = {
   row: RecordingInsertRowData;
   compression: boolean;
   gzipLevel: number;
+  replayProjectDigest?: string;
 };
+type PreparedArtifact = Awaited<ReturnType<typeof prepareManagedTextArtifact>>;
+type ReplayProjectSelection = Awaited<ReturnType<typeof selectRecordingProjectSnapshot>>;
+type StagedRecording = { manifest: Manifest; projectUpload?: PreparedArtifact; available: boolean };
 export type EvidenceRow = QueryResultRow & {
   has_sub_runs?: boolean;
   run_id: string;
@@ -97,6 +114,62 @@ export function evidenceSummary(row: EvidenceRow): RunEvidenceSummary {
     handoffReady: row.handoff_ready && (row.availability === 'pending' || row.availability === 'available'),
   };
 }
+type SnapshotSelectionRow = { object_key: string; state: 'pending' | 'verified' | 'unusable' };
+
+/** Bind only while the caller holds the transaction that will pin the manifest. */
+async function selectRecordingProjectSnapshot(
+  client: PoolClient,
+  workflowId: string,
+  digest: string,
+  prepared?: PreparedArtifact,
+  boundKey?: string,
+  alreadyAvailable = false,
+): Promise<
+  | {
+      descriptor: PreparedArtifact['descriptor'];
+      upload?: PreparedArtifact;
+    }
+  | 'prepare'
+  | 'dedicated'
+> {
+  const lookup = async () =>
+    (
+      await client.query<SnapshotSelectionRow>(
+        `SELECT object_key,state FROM workflow_recording_project_snapshots
+       WHERE workflow_id=$1 AND digest=$2 FOR KEY SHARE ${boundKey ? '' : 'NOWAIT'}`,
+        [workflowId, digest],
+      )
+    ).rows[0];
+  let row = await lookup();
+  if (boundKey && row?.object_key !== boundKey) throw conflict('Recording project snapshot differs from its manifest.');
+  if (!row && prepared) {
+    row =
+      (
+        await client.query<SnapshotSelectionRow>(
+          `INSERT INTO workflow_recording_project_snapshots (workflow_id,digest,object_key,state)
+       VALUES ($1,$2,$3,'pending') ON CONFLICT (workflow_id,digest) DO NOTHING RETURNING object_key,state`,
+          [workflowId, digest, prepared.descriptor.key],
+        )
+      ).rows[0] ?? (await lookup());
+  }
+  if (!row) return prepared ? 'dedicated' : 'prepare';
+  const descriptor = readRecordingProjectSnapshotDescriptor(row.object_key, workflowId);
+  if (row.state === 'verified' || alreadyAvailable) return { descriptor };
+  if (row.state === 'pending') {
+    if (!prepared) return 'prepare';
+    const local = prepared.descriptor;
+    if (
+      descriptor.hash === local.hash &&
+      descriptor.encoding === local.encoding &&
+      descriptor.storedBytes === local.storedBytes &&
+      descriptor.decodedBytes === local.decodedBytes
+    )
+      return { descriptor, upload: { descriptor, bytes: prepared.bytes } };
+  }
+  if (boundKey) throw conflict('Recording project snapshot could not be verified.');
+  return 'dedicated';
+}
+
 function fingerprint(value: unknown): string {
   return createHash('sha256')
     .update(
@@ -124,6 +197,10 @@ export class ManagedRecordingEvidence implements RunEvidenceRepository {
   #activeBytes = 0;
   #safetyCheck?: Promise<void>;
   constructor(readonly context: ManagedWorkflowContext) {}
+
+  canShareReplayProject(workflowId: string): boolean {
+    return canShareRecordingProjectSnapshot(workflowId);
+  }
 
   async #query<T extends QueryResultRow>(text: string, values: unknown[] = []) {
     await this.context.initialize();
@@ -309,11 +386,15 @@ export class ManagedRecordingEvidence implements RunEvidenceRepository {
         const bytes = await this.context.blobStore.getBytes(descriptor.key, {
           signal: AbortSignal.timeout(Math.max(1, Math.min(30_000, deadline - Date.now()))),
         });
-        try {
-          verifyManagedArtifactBytes(bytes, descriptor);
-        } catch {
+        verifyManagedArtifactBytes(bytes, descriptor);
+        if (isRecordingProjectSnapshotKey(descriptor.key))
+          await confirmRecordingProjectSnapshot(this.context.pool, descriptor.key);
+      } catch (error) {
+        if (isRecordingProjectSnapshotKey(descriptor.key))
+          await noteRecordingProjectSnapshotReadFailure(this.context.pool, descriptor.key, error);
+        if (error instanceof ManagedArtifactIntegrityError)
           throw new RecordingIntegrityError('The staged recording failed verification.');
-        }
+        throw error;
       } finally {
         this.#activeBytes -= descriptor.storedBytes;
       }
@@ -334,6 +415,14 @@ export class ManagedRecordingEvidence implements RunEvidenceRepository {
           throw createHttpError(409, 'Recording publication is awaiting its confirmed execution outcome.', {
             code: 'recording_outcome_pending',
           });
+        if (manifest.replayProjectDigest) {
+          const snapshot = await client.query(
+            `SELECT 1 FROM workflow_recording_project_snapshots
+             WHERE workflow_id=$1 AND digest=$2 AND object_key=$3 AND state='verified' FOR SHARE`,
+            [current.workflow_id, manifest.replayProjectDigest, manifest.row.replayProjectBlobKey],
+          );
+          if (!snapshot.rows.length) throw new RecordingIntegrityError('The shared replay project is unavailable.');
+        }
         await this.context.revisions.insertRecordingRow(client, manifest.row, {
           timestampMode: 'provided',
           createdAt: new Date(current.created_at).toISOString(),
@@ -351,10 +440,74 @@ export class ManagedRecordingEvidence implements RunEvidenceRepository {
     }
     return handle.id;
   }
+  async #stageManifest(
+    handle: RunEvidenceHandle,
+    selectProject: (client: PoolClient, current: EvidenceRow) => Promise<ReplayProjectSelection>,
+    buildManifest: (descriptor: ManagedArtifactDescriptor) => Manifest,
+    sharing = false,
+  ): Promise<StagedRecording | 'prepare' | 'dedicated'> {
+    let proposed: StagedRecording | 'prepare' | 'dedicated' | undefined;
+    let sharingContended = false;
+    try {
+      return await this.context.withTransaction(async (client) => {
+        const row = await this.#get(handle, client);
+        if (row.availability === 'deleted' || Date.parse(String(row.upload_until)) <= Date.now())
+          throw conflict('Recording upload window has closed.');
+        let selected: ReplayProjectSelection;
+        try {
+          selected = await selectProject(client, row);
+        } catch (error) {
+          sharingContended = sharing && !row.manifest_json && (error as { code?: string })?.code === '55P03';
+          throw error;
+        }
+        if (typeof selected === 'string') {
+          proposed = selected;
+          return selected;
+        }
+        const manifest = buildManifest(selected.descriptor);
+        const hash = fingerprint(manifest);
+        if (row.fingerprint && row.fingerprint !== hash) throw conflict('Recording content differs.');
+        const staged = { manifest, projectUpload: selected.upload, available: row.availability === 'available' };
+        if (row.manifest_json) {
+          proposed = staged;
+          return staged;
+        }
+        await client.query("SELECT pg_advisory_xact_lock(hashtext('rivet-recording-pending-bytes'))");
+        const budget = await client.query<{ bytes: string }>(
+          "SELECT COALESCE(SUM(pending_bytes),0)::text AS bytes FROM workflow_run_evidence WHERE availability='pending'",
+        );
+        const bytes = manifest.artifacts.reduce((n, descriptor) => n + descriptor.storedBytes, 0);
+        if (Number(budget.rows[0]?.bytes) + bytes > MAX_PENDING_BYTES)
+          throw createHttpError(503, 'Pending recording capacity is exhausted.');
+        proposed = staged;
+        await client.query(
+          `UPDATE workflow_run_evidence SET availability='pending',reason=NULL,manifest_json=$3::jsonb,
+           fingerprint=$4,pending_bytes=$5,updated_at=NOW() WHERE run_id=$1 AND token=$2`,
+          [handle.id, handle.token, JSON.stringify(manifest), hash, bytes],
+        );
+        return staged;
+      });
+    } catch (error) {
+      // Selection failed before a manifest was proposed. A timed-out
+      // optimization may use the same durable, per-recording format.
+      if (sharingContended) return 'dedicated';
+      if (!proposed) throw error;
+      if (typeof proposed === 'string') return proposed;
+      const confirmed = await this.#get(handle);
+      if (
+        confirmed.fingerprint !== fingerprint(proposed.manifest) ||
+        !confirmed.manifest_json ||
+        confirmed.availability === 'deleted'
+      )
+        throw error;
+      return { ...proposed, available: confirmed.availability === 'available' };
+    }
+  }
+
   async persist(options: PersistWorkflowExecutionRecordingOptions, handle: RunEvidenceHandle): Promise<string> {
     const current = await this.#get(handle);
-    if (current.workflow_id !== options.sourceProject.metadata.id)
-      throw conflict('Recording project differs from its run.');
+    const workflowId = current.workflow_id;
+    if (workflowId !== options.sourceProject.metadata.id) throw conflict('Recording project differs from its run.');
     if (
       current.input_json.runKind !== options.runKind ||
       (['surface', 'graphId', 'correlationId'] as const).some(
@@ -366,11 +519,15 @@ export class ManagedRecordingEvidence implements RunEvidenceRepository {
       throw conflict('Recording outcome differs from its execution owner.');
     if (current.availability === 'deleted' || Date.parse(String(current.upload_until)) <= Date.now())
       throw conflict('Recording upload window has closed.');
+
     const policy = getWorkflowRecordingRuntimeConfig();
     const compression = current.manifest_json?.compression ?? policy.compression === 'gzip';
     const gzipLevel = current.manifest_json?.gzipLevel ?? policy.gzipLevel;
-    const texts = [
-      options.recordingSerialized,
+    const prepare = (key: string, value: string | Buffer) =>
+      prepareManagedTextArtifact(key, value, compression, gzipLevel);
+    const prepareDedicatedProject = (text: string) =>
+      prepare(createRecordingBlobKey(workflowId, handle.id, 'replay-project'), text);
+    const dedicatedProjectText = () =>
       serializeProject(
         {
           ...options.executedProject,
@@ -380,39 +537,55 @@ export class ManagedRecordingEvidence implements RunEvidenceRepository {
           },
         },
         options.executedAttachedData,
-      ) as string,
-      options.executedDatasets.length ? serializeDatasets(options.executedDatasets) : null,
-    ];
-    const estimate = texts.reduce<number>((sum, text) => sum + (text ? Buffer.byteLength(text) : 0), 0);
-    if (this.#activeBytes + estimate > MAX_ACTIVE_BYTES) {
-      await this.unavailable(handle, 'capacity');
-      throw createHttpError(503, 'Recording upload capacity is temporarily exhausted.');
-    }
-    this.#activeBytes += estimate;
+      ) as string;
+    const boundShared = current.manifest_json?.replayProjectDigest;
+    let snapshot =
+      boundShared || (!current.manifest_json && this.canShareReplayProject(workflowId))
+        ? Buffer.from(
+            serializeSharedReplayProject(
+              {
+                ...options.executedProject,
+                metadata: { ...options.executedProject.metadata, id: options.sourceProject.metadata.id },
+              },
+              options.executedAttachedData,
+            ),
+          )
+        : undefined;
+    if (snapshot && !boundShared && snapshot.byteLength > MAX_MANAGED_ARTIFACT_BYTES) snapshot = undefined;
+    const projectText = snapshot ? undefined : dedicatedProjectText();
+    const datasetText = options.executedDatasets.length ? serializeDatasets(options.executedDatasets) : null;
+    const projectBytes = snapshot?.byteLength ?? Buffer.byteLength(projectText!);
+    let estimate = 0;
+    const reserveBytes = (amount: number) => {
+      if (this.#activeBytes + amount > MAX_ACTIVE_BYTES)
+        throw createHttpError(503, 'Recording upload capacity is temporarily exhausted.');
+      this.#activeBytes += amount;
+      estimate += amount;
+    };
     try {
-      const kinds = ['recording', 'replay-project', 'replay-dataset'] as const;
-      const prepared = await Promise.all(
-        texts.map((text, index) =>
-          text === null
-            ? null
-            : prepareManagedTextArtifact(
-                createRecordingBlobKey(options.sourceProject.metadata.id, handle.id, kinds[index]!),
-                text,
-                compression,
-                gzipLevel,
-              ),
-        ),
-      );
-      const recording = prepared[0]!,
-        project = prepared[1]!,
-        dataset = prepared[2];
-      const manifest: Manifest = {
+      try {
+        reserveBytes(
+          projectBytes + Buffer.byteLength(options.recordingSerialized) + Buffer.byteLength(datasetText ?? ''),
+        );
+      } catch (error) {
+        await this.unavailable(handle, 'capacity');
+        throw error;
+      }
+      const [recording, dataset, dedicated] = await Promise.all([
+        prepare(createRecordingBlobKey(workflowId, handle.id, 'recording'), options.recordingSerialized),
+        datasetText === null
+          ? null
+          : prepare(createRecordingBlobKey(workflowId, handle.id, 'replay-dataset'), datasetText),
+        projectText === undefined ? undefined : prepareDedicatedProject(projectText),
+      ]);
+      const buildManifest = (project: ManagedArtifactDescriptor, replayProjectDigest?: string): Manifest => ({
         compression,
         gzipLevel,
-        artifacts: prepared.flatMap((p) => (p ? [p.descriptor] : [])),
+        ...(replayProjectDigest ? { replayProjectDigest } : {}),
+        artifacts: dataset ? [recording.descriptor, project, dataset.descriptor] : [recording.descriptor, project],
         row: {
           recordingId: handle.id,
-          workflowId: current.workflow_id,
+          workflowId,
           sourceProjectName: current.input_json.sourceProjectName,
           sourceProjectRelativePath: current.input_json.sourceProjectRelativePath,
           runKind: options.runKind,
@@ -421,56 +594,90 @@ export class ManagedRecordingEvidence implements RunEvidenceRepository {
           cost: options.cost,
           endpointNameAtExecution: options.endpointName,
           executionIdentity: options.executionIdentity,
-          // Full node/provider diagnostics belong in the private replay payload,
-          // not in the small durable metadata journal.
+          // Full node/provider diagnostics belong in the private replay payload.
           errorMessage: options.errorMessage ? 'Execution reported an error. Inspect its recording for details.' : null,
           recordingBlobKey: recording.descriptor.key,
-          replayProjectBlobKey: project.descriptor.key,
+          replayProjectBlobKey: project.key,
           replayDatasetBlobKey: dataset?.descriptor.key ?? null,
           hasReplayDataset: !!dataset,
           recordingCompressedBytes: recording.descriptor.storedBytes,
           recordingUncompressedBytes: recording.descriptor.decodedBytes,
-          projectCompressedBytes: project.descriptor.storedBytes,
-          projectUncompressedBytes: project.descriptor.decodedBytes,
+          projectCompressedBytes: project.storedBytes,
+          projectUncompressedBytes: project.decodedBytes,
           datasetCompressedBytes: dataset?.descriptor.storedBytes ?? 0,
           datasetUncompressedBytes: dataset?.descriptor.decodedBytes ?? 0,
         },
-      };
-      const hash = fingerprint(manifest),
-        bytes = manifest.artifacts.reduce((n, d) => n + d.storedBytes, 0);
-      if (current.fingerprint && current.fingerprint !== hash) throw conflict('Recording content differs.');
-      if (current.availability === 'available') return handle.id;
-      try {
-        await this.context.withTransaction(async (client) => {
-          const row = await this.#get(handle, client);
-          if (row.availability === 'deleted' || (row.fingerprint && row.fingerprint !== hash))
-            throw conflict('Recording content differs or was deleted.');
-          if (row.manifest_json) return;
-          await client.query("SELECT pg_advisory_xact_lock(hashtext('rivet-recording-pending-bytes'))");
-          const budget = await client.query<{ bytes: string }>(
-            "SELECT COALESCE(SUM(pending_bytes),0)::text AS bytes FROM workflow_run_evidence WHERE availability='pending'",
+      });
+
+      let staged: StagedRecording | 'prepare' | 'dedicated' = 'dedicated';
+      if (snapshot) {
+        const digest = createHash('sha256').update(snapshot).digest('hex');
+        const trySharing = (prepared?: PreparedArtifact) =>
+          this.#stageManifest(
+            handle,
+            async (client, row) => {
+              const manifest = row.manifest_json;
+              if (manifest && !manifest.replayProjectDigest) return 'dedicated';
+              if (manifest && manifest.replayProjectDigest !== digest)
+                throw conflict('Recording project snapshot differs from its manifest.');
+              return selectRecordingProjectSnapshot(
+                client,
+                workflowId,
+                digest,
+                prepared,
+                manifest?.row.replayProjectBlobKey,
+                row.availability === 'available',
+              );
+            },
+            (descriptor) => buildManifest(descriptor, digest),
+            true,
           );
-          if (Number(budget.rows[0]?.bytes) + bytes > MAX_PENDING_BYTES)
-            throw createHttpError(503, 'Pending recording capacity is exhausted.');
-          await client.query(
-            `UPDATE workflow_run_evidence SET availability='pending',reason=NULL,manifest_json=$3::jsonb,fingerprint=$4,pending_bytes=$5,
-          updated_at=NOW() WHERE run_id=$1 AND token=$2`,
-            [handle.id, handle.token, JSON.stringify(manifest), hash, bytes],
-          );
-        });
-      } catch (error) {
-        const confirmed = await this.#get(handle);
-        if (confirmed.fingerprint !== hash || !confirmed.manifest_json || confirmed.availability === 'deleted')
-          throw error;
+        staged = await trySharing();
+        if (staged === 'prepare')
+          staged = await trySharing(await prepare(createRecordingProjectSnapshotKey(workflowId), snapshot));
+        snapshot = undefined;
       }
+      if (staged === 'dedicated') {
+        let projectUpload = dedicated;
+        if (!projectUpload) {
+          const text = dedicatedProjectText();
+          reserveBytes(Math.max(0, Buffer.byteLength(text) - projectBytes));
+          projectUpload = await prepareDedicatedProject(text);
+        }
+        staged = await this.#stageManifest(
+          handle,
+          async () => ({ descriptor: projectUpload.descriptor, upload: projectUpload }),
+          buildManifest,
+        );
+      }
+      if (typeof staged === 'string') throw new Error('Recording project snapshot could not be prepared.');
+      if (staged.available) return handle.id;
+      const { manifest, projectUpload } = staged;
+      const artifacts = [recording, projectUpload, dataset];
       if (!this.context.blobStore.putArtifact) throw new Error('Durable recording storage requires immutable writes.');
       const uploadDeadline = Date.now() + 300_000,
         uploadSignal = AbortSignal.timeout(300_000);
       for (let attempt = 0; attempt < 3; attempt++) {
         uploadSignal.throwIfAborted();
         const uploads = await Promise.allSettled(
-          prepared.flatMap((p) =>
-            p ? [this.context.blobStore.putArtifact!(p.descriptor, p.bytes, undefined, { signal: uploadSignal })] : [],
+          artifacts.flatMap((artifact) =>
+            artifact
+              ? [
+                  (async () => {
+                    const key = artifact.descriptor.key;
+                    const shared = isRecordingProjectSnapshotKey(key);
+                    try {
+                      await this.context.blobStore.putArtifact!(artifact.descriptor, artifact.bytes, undefined, {
+                        signal: uploadSignal,
+                      });
+                      if (shared) await confirmRecordingProjectSnapshot(this.context.pool, key);
+                    } catch (error) {
+                      if (shared) await noteRecordingProjectSnapshotReadFailure(this.context.pool, key, error);
+                      throw error;
+                    }
+                  })(),
+                ]
+              : [],
           ),
         );
         const failed = uploads.find((r) => r.status === 'rejected');
@@ -479,8 +686,7 @@ export class ManagedRecordingEvidence implements RunEvidenceRepository {
           await this.#verify(manifest, uploadDeadline);
           break;
         } catch {
-          if (attempt === 2 || failed.status !== 'rejected' || !retryableRecordingStorageError(failed.reason))
-            throw failed.status === 'rejected' ? failed.reason : new Error('Recording upload failed.');
+          if (attempt === 2 || !retryableRecordingStorageError(failed.reason)) throw failed.reason;
         }
         await delay(100 * 2 ** attempt + Math.floor(Math.random() * 50));
       }

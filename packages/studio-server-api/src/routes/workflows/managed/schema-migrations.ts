@@ -12,13 +12,13 @@ import { RESOURCE_MONITORING_SCHEMA_SQL } from './resource-monitoring-schema.js'
 import { ENDPOINT_RELEASE_SCHEMA_SQL } from './endpoint-release-schema.js';
 
 export const MANAGED_WORKFLOW_SCHEMA_MIGRATIONS_TABLE = 'managed_workflow_schema_migrations';
-export const CURRENT_MANAGED_WORKFLOW_SCHEMA_VERSION = 22;
+export const CURRENT_MANAGED_WORKFLOW_SCHEMA_VERSION = 23;
 // Minimum predecessor schema whose reader can safely serve data produced by
 // this release. Deployment consumes this explicit rollback floor; additive DDL
 // alone does not establish compatibility when stored representations change.
-// Schema 22 adds executable release bindings. An older image can verify
-// additive DDL but would ignore a frozen binding and serve floating revisions.
-export const MINIMUM_ROLLBACK_COMPATIBLE_MANAGED_WORKFLOW_SCHEMA_VERSION = 22;
+// Shared recording projects change artifact ownership and replay identity.
+// The first writer and automatic compactor require a schema 23 reader fleet.
+export const MINIMUM_ROLLBACK_COMPATIBLE_MANAGED_WORKFLOW_SCHEMA_VERSION = 23;
 
 const MANAGED_WORKFLOW_SCHEMA_LOCK = {
   classId: 8_071,
@@ -230,6 +230,21 @@ export type ManagedWorkflowSchemaCompatibilityWindow = {
   minimumVersion: number;
   maximumVersion: number;
 };
+
+const RECORDING_PROJECT_SNAPSHOT_SCHEMA_SQL = `
+CREATE TABLE workflow_recording_project_snapshots (
+  workflow_id TEXT NOT NULL,
+  digest TEXT NOT NULL,
+  object_key TEXT NOT NULL UNIQUE,
+  state TEXT NOT NULL CHECK (state IN ('pending', 'verified', 'unusable')),
+  PRIMARY KEY (workflow_id, digest)
+);
+CREATE TABLE workflow_recording_project_compaction (
+  singleton BOOLEAN PRIMARY KEY CHECK (singleton),
+  next_after TEXT,
+  resume_at TIMESTAMPTZ NOT NULL
+);
+`;
 
 type ManagedWorkflowSchemaMigration = {
   version: number;
@@ -483,6 +498,12 @@ export const MANAGED_WORKFLOW_SCHEMA_MIGRATIONS: readonly ManagedWorkflowSchemaM
     sql: ENDPOINT_RELEASE_SCHEMA_SQL,
     checksum: 'c8cf2e02d2da42fd73fe977d382ef53618764077b84ea50a6d2baa29ae77b1da',
   },
+  {
+    version: 23,
+    name: 'shared-recording-project-snapshots',
+    sql: RECORDING_PROJECT_SNAPSHOT_SCHEMA_SQL,
+    checksum: '27dd234b445481060f7376ccb54c7c2fbfc939bdcc4e3639970f491be82297bb',
+  },
 ];
 
 function assertMigrationDefinitions(): void {
@@ -533,6 +554,8 @@ export const MANAGED_WORKFLOW_SCHEMA_REQUIRED_TABLES = [
   'workflow_endpoints',
   'workflow_web_apps',
   'workflow_recordings',
+  'workflow_recording_project_snapshots',
+  'workflow_recording_project_compaction',
   'workflow_run_evidence',
   'web_app_action_runs',
   'web_app_action_run_events',
@@ -549,6 +572,13 @@ export const MANAGED_WORKFLOW_SCHEMA_REQUIRED_TABLES = [
 ] as const;
 
 export const MANAGED_WORKFLOW_SCHEMA_REQUIRED_COLUMNS = [
+  ['workflow_recording_project_compaction', 'singleton', 'bool', 'NO'],
+  ['workflow_recording_project_compaction', 'next_after', 'text', 'YES'],
+  ['workflow_recording_project_compaction', 'resume_at', 'timestamptz', 'NO'],
+  ['workflow_recording_project_snapshots', 'workflow_id', 'text', 'NO'],
+  ['workflow_recording_project_snapshots', 'digest', 'text', 'NO'],
+  ['workflow_recording_project_snapshots', 'object_key', 'text', 'NO'],
+  ['workflow_recording_project_snapshots', 'state', 'text', 'NO'],
   ['workflow_published_versions', 'release_id', 'text', 'YES'],
   ['workflow_published_versions', 'restored_from', 'text', 'YES'],
   ['workflow_endpoint_releases', 'release_id', 'text', 'NO'],
@@ -1073,6 +1103,15 @@ export const MANAGED_WORKFLOW_SCHEMA_REQUIRED_INDEXES = [
 ] as const;
 
 export const MANAGED_WORKFLOW_SCHEMA_REQUIRED_CONSTRAINTS = [
+  ['workflow_recording_project_compaction', 'p', 'PRIMARY KEY (singleton)'],
+  ['workflow_recording_project_compaction', 'c', 'CHECK (singleton)'],
+  ['workflow_recording_project_snapshots', 'p', 'PRIMARY KEY (workflow_id, digest)'],
+  ['workflow_recording_project_snapshots', 'u', 'UNIQUE (object_key)'],
+  [
+    'workflow_recording_project_snapshots',
+    'c',
+    "CHECK ((state = ANY (ARRAY['pending'::text, 'verified'::text, 'unusable'::text])))",
+  ],
   ['workflow_endpoint_releases', 'p', 'PRIMARY KEY (release_id)'],
   ['workflow_endpoint_releases', 'f', 'FOREIGN KEY (workflow_id) REFERENCES workflows(workflow_id) ON DELETE CASCADE'],
   ['workflow_endpoint_release_projects', 'p', 'PRIMARY KEY (release_id, revision_id)'],

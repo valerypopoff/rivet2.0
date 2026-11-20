@@ -2140,6 +2140,19 @@ version. It checks npm before publishing each package and skips package versions
 that are already present in the registry, so re-running the same main-branch
 workflow does not turn an already-published package into a hard failure.
 
+### Prepared release versions (2026-11-20)
+
+Studio Server `1.43.0` shares managed recording project snapshots. It compacts
+eligible legacy snapshots in the background and retains playback compatibility.
+The [package review](PACKAGES.md#version-update-2026-11-20--shared-recording-snapshots)
+records the version baselines and rebuilds for the public npm and Desktop tracks.
+
+Check `yarn verify:desktop-version`, `yarn check:npm-publish-versions` and an
+immutable Yarn install. The CLI Docker fallback follows the public npm family.
+For rollout, follow the [schema 23 maintenance cutover](studio-server/deployment-operations.md#schema-23-shared-recording-snapshots).
+The cutover verifies the checkpoint and restored copy before migrating. Once
+the new managed services start, sharing and bounded compaction run automatically.
+
 ### Prepared release versions (2026-11-19)
 
 App `2.39.0` adds hosted history navigation to the shared editor. Studio Server

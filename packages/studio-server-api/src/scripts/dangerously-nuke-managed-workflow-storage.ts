@@ -11,6 +11,8 @@ import { getManagedDbPoolConfig } from '../routes/workflows/managed/db.js';
 const WORKFLOW_TABLES = [
   'workflow_run_evidence',
   'workflow_recordings',
+  'workflow_recording_project_snapshots',
+  'workflow_recording_project_compaction',
   'workflow_endpoints',
   'workflow_web_apps',
   'workflow_revisions',

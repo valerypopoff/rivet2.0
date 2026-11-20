@@ -2,7 +2,14 @@ import { describe, it, mock } from 'node:test';
 import { strict as assert } from 'node:assert';
 
 import type { NodeGraph, Project } from '../../src/index.js';
-import { deserializeGraph, deserializeProject, serializeGraph, serializeProject } from '../../src/serialization.js';
+import {
+  bindSharedReplayProjectId,
+  deserializeGraph,
+  deserializeProject,
+  serializeGraph,
+  serializeProject,
+  serializeSharedReplayProject,
+} from '../../src/serialization.js';
 import { prepareSerializedInput } from '../../src/utils/serialization/serializationInput.js';
 import { projectV2Deserializer } from '../../src/utils/serialization/serialization_v2.js';
 import { graphV3Serializer } from '../../src/utils/serialization/serialization_v3.js';
@@ -208,6 +215,17 @@ data:
 `;
 
 describe('serialization compatibility', () => {
+  it('rebinds replay identity without changing numeric metadata keys or attached data', () => {
+    const project = { ...baseProject, metadata: { ...baseProject.metadata, 0: 'kept' } };
+    const attached = { fixture: { 10: 'ten', 2: 'two' } };
+    const shared = serializeSharedReplayProject(project, attached);
+    const rebound = bindSharedReplayProjectId(shared, project.metadata.id, 'replay-id');
+    const expected = deserializeProject(serializeProject(project, attached));
+    assert.deepEqual(deserializeProject(rebound), [
+      { ...expected[0], metadata: { ...expected[0].metadata, id: 'replay-id' } },
+      expected[1],
+    ]);
+  });
   it('round-trips portable project global variable metadata through the current project format', () => {
     const project: Project = {
       ...baseProject,
