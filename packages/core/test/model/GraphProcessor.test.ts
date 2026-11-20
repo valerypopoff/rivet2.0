@@ -2139,33 +2139,20 @@ void describe('GraphProcessor', () => {
     ]);
   });
 
-  void it('aborting a paused graph does not hang the run promise', async () => {
+  void it('aborting a paused graph does not hang the run promise', { timeout: 2_000 }, async () => {
     const processor = await loadTestGraphInProcessor('Passthrough');
 
     processor.pause();
+    const started = processor.once('graphStart');
 
-    const runOutcome = processor
-      .processGraph(testProcessContext(), {
-        input: {
-          type: 'string',
-          value: 'input value',
-        },
-      })
-      .then(
-        () => 'resolved',
-        (error) => `rejected:${(error as Error).message}`,
-      );
-
-    setTimeout(() => {
-      void processor.abort(false, 'graph execution aborted');
-    }, 10);
-
-    const outcome = await Promise.race([
-      runOutcome,
-      new Promise((resolve) => setTimeout(() => resolve('timeout'), 500)),
-    ]);
-
-    assert.equal(outcome, 'rejected:graph execution aborted');
+    const run = processor.processGraph(testProcessContext(), {
+      input: { type: 'string', value: 'input value' },
+    });
+    await Promise.race([started, run]);
+    // Let startup finish its microtasks and reach the pause waiter before aborting.
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    const rejected = assert.rejects(run, { message: 'graph execution aborted' });
+    await Promise.all([processor.abort(false, 'graph execution aborted'), rejected]);
   });
 
   void it('bounds graph-level node concurrency', async () => {

@@ -202,6 +202,10 @@ Graph Builder evaluation manifest hashes canonicalize text asset line endings to
 
 Use table-driven cases when many inputs share the same setup. Keep fixtures local unless at least three nearby tests need the same builder. Keep characterization tests broad but few, and avoid asserting entire large objects when a minimal observable subset proves the same behavior. Test names should describe behavior rather than implementation details.
 
+When consolidating, retain scenario names and independent expected results; check
+representative faults before and after. Shared fixtures must preserve absent fields
+and keep valid configuration opt-in. Reuse existing assertion helpers first.
+
 Avoid `as any` unless the test intentionally models malformed caller input or a boundary that TypeScript normally protects. Do not commit `.only`. Skipped tests need a nearby comment explaining why they are skipped and what condition lets the skip be removed.
 
 For app graph-editing tests, prefer the shared builders in [`packages/app/src/domain/graphEditing/testGraphBuilders.ts`](../packages/app/src/domain/graphEditing/testGraphBuilders.ts) for common minimal `ChartNode`, `NodeGraph`, `Project`, and connection fixtures. Keep scenario-specific wrappers local when they clarify the port defaults or graph names being asserted.
@@ -209,6 +213,31 @@ For app graph-editing tests, prefer the shared builders in [`packages/app/src/do
 When splitting large mixed-owner test files, keep the split mechanical first: move assertions unchanged, put shared fake runtime or fixture setup in a nearby `*.testUtils.ts` file, and keep existing focused owner tests under their current filenames. Do not reuse a filename that already owns a narrower helper contract. Shared test utilities should expose setup hooks explicitly instead of registering `beforeEach` / `afterEach` as an import side effect.
 
 When de-duplicating overlap between owner tests and composed-path tests, keep the detailed edge cases at the owner module and retain one broad wiring smoke for the composed path. Do not delete compatibility or characterization coverage just because another test reaches the same final value; public API, recorder, debugger, and app-visible surfaces are separate contracts.
+
+Check enrollment before adding or removing coverage. App discovery scans
+`packages/app/src`, not `packages/app/tests`. Reuse the real configuration load in
+`scripts/checks/vite-core-source-aliases.test.mts` for Vite contracts, including
+browser-only stubs and Node package resolution outside the browser.
+
+Use controlled time for debounce/TTL tests; mock `Date` with `setTimeout`. Check
+the deadline from the last edit and assert an explicit flush both before advancing
+time and afterward to catch delayed duplicates. Share repeated backend fixtures
+and combine overlapping cases that exercise the same transition. For async races,
+wait for readiness, observe all promises and bound or clear any deadline.
+
+For provider-tool wiring, mock transport and assert the outgoing tool identifiers,
+their absence when disabled and the destination host. Cover each switch alone,
+both/neither and foreign-provider switches. Avoid duplicating those checks against
+internal SDK objects. Require the intended HTTP failure, not just any rejection.
+
+Keep fake runtime-package fixtures outside the Yarn PnP checkout: repository-local
+`TEMP`/`TMP` makes PnP treat their `node_modules` as undeclared dependencies. Use
+normal temp and required native-process permissions; report access failures
+separately rather than weakening assertions.
+
+File counts, source scans and a passing unit selection do not establish complete
+qualification. Retain separately owned browser, native, container and release
+gates, with explicit fixture requirements for opt-in tests.
 
 ### `yarn test:all`
 

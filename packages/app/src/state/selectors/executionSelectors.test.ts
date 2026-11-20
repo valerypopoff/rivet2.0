@@ -306,185 +306,92 @@ describe('executionSelectors', () => {
     assert.equal(shouldUseRemoteExecutor({ selectedExecutor: 'browser', session }), true);
   });
 
-  test('action bar keeps node executor run controls visible while internal sidecar reconnects', () => {
-    const session = {
-      capabilities: inactiveCapabilities,
-      status: 'reconnecting',
-      started: true,
-      reconnecting: true,
-      socket: null,
-      url: 'ws://127.0.0.1:21889/internal',
-      remoteUploadAllowed: true,
-      isInternalExecutor: true,
-      target: { type: 'internal-desktop', url: 'ws://127.0.0.1:21889/internal' },
-    } as const;
-
-    assert.deepEqual(
-      getActionBarExecutionState({
-        graphPaused: false,
-        graphRunning: false,
-        selectedExecutor: 'nodejs',
-        session,
-      }),
-      {
+  for (const { name, input, expected } of [
+    {
+      name: 'action bar keeps node executor run controls visible while internal sidecar reconnects',
+      input: {
+        session: {
+          capabilities: inactiveCapabilities,
+          status: 'reconnecting',
+          target: { type: 'internal-desktop', url: 'ws://127.0.0.1:21889/internal' },
+        },
+      },
+      expected: {
         canRun: false,
         executorLoading: true,
         executorProductState: { type: 'internal-node-reconnecting' },
-        graphPaused: false,
-        graphRunning: false,
-        isActuallyRemoteDebugging: false,
-        remoteDebuggerBanner: null,
         runButtonLoading: true,
-        showRunButton: true,
-        showRemoteDebuggerBanner: false,
       },
-    );
-  });
-
-  test('action bar shows node executor startup as loading before the internal socket connects', () => {
-    const session = {
-      capabilities: inactiveCapabilities,
-      status: 'idle',
-      started: false,
-      reconnecting: false,
-      socket: null,
-      url: '',
-      remoteUploadAllowed: false,
-      isInternalExecutor: false,
-      target: null,
-    } as const;
-
-    assert.deepEqual(
-      getActionBarExecutionState({
-        graphPaused: false,
-        graphRunning: false,
-        selectedExecutor: 'nodejs',
-        session,
-      }),
-      {
+    },
+    {
+      name: 'action bar shows node executor startup as loading before the internal socket connects',
+      input: {},
+      expected: {
         canRun: false,
         executorLoading: true,
         executorProductState: { type: 'internal-node-starting' },
-        graphPaused: false,
-        graphRunning: false,
-        isActuallyRemoteDebugging: false,
-        remoteDebuggerBanner: null,
         runButtonLoading: true,
-        showRunButton: true,
-        showRemoteDebuggerBanner: false,
       },
-    );
-  });
-
-  test('action bar lets recording playback run without waiting for the node executor', () => {
-    const session = {
-      capabilities: inactiveCapabilities,
-      status: 'idle',
-      started: false,
-      reconnecting: false,
-      socket: null,
-      url: '',
-      remoteUploadAllowed: false,
-      isInternalExecutor: false,
-      target: null,
-    } as const;
-
-    assert.deepEqual(
-      getActionBarExecutionState({
-        graphPaused: false,
-        graphRunning: false,
-        hasLoadedRecording: true,
-        selectedExecutor: 'nodejs',
-        session,
-      }),
-      {
+    },
+    {
+      name: 'action bar lets recording playback run without waiting for the node executor',
+      input: { hasLoadedRecording: true },
+      expected: {
         canRun: true,
         executorLoading: false,
         executorProductState: { type: 'recording-playback-ready' },
-        graphPaused: false,
-        graphRunning: false,
-        isActuallyRemoteDebugging: false,
-        remoteDebuggerBanner: null,
         runButtonLoading: false,
-        showRunButton: true,
-        showRemoteDebuggerBanner: false,
       },
-    );
-  });
-
-  test('action bar shows recording playback startup as a loading run button', () => {
-    const session = {
-      capabilities: inactiveCapabilities,
-      status: 'idle',
-      started: false,
-      reconnecting: false,
-      socket: null,
-      url: '',
-      remoteUploadAllowed: false,
-      isInternalExecutor: false,
-      target: null,
-    } as const;
-
-    assert.deepEqual(
-      getActionBarExecutionState({
-        graphPaused: false,
-        graphRunning: false,
-        hasLoadedRecording: true,
-        recordingPlaybackStarting: true,
-        selectedExecutor: 'browser',
-        session,
-      }),
-      {
+    },
+    {
+      name: 'action bar shows recording playback startup as a loading run button',
+      input: { selectedExecutor: 'browser', hasLoadedRecording: true, recordingPlaybackStarting: true },
+      expected: {
         canRun: false,
         executorLoading: false,
         executorProductState: { type: 'recording-playback-ready' },
-        graphPaused: false,
-        graphRunning: false,
-        isActuallyRemoteDebugging: false,
-        remoteDebuggerBanner: null,
         runButtonLoading: true,
-        showRunButton: true,
-        showRemoteDebuggerBanner: false,
       },
-    );
-  });
-
-  test('action bar ignores recording playback startup once the graph is running', () => {
-    const session = {
-      capabilities: inactiveCapabilities,
-      status: 'idle',
-      started: false,
-      reconnecting: false,
-      socket: null,
-      url: '',
-      remoteUploadAllowed: false,
-      isInternalExecutor: false,
-      target: null,
-    } as const;
-
-    assert.deepEqual(
-      getActionBarExecutionState({
-        graphPaused: false,
+    },
+    {
+      name: 'action bar ignores recording playback startup once the graph is running',
+      input: {
+        selectedExecutor: 'browser',
         graphRunning: true,
         hasLoadedRecording: true,
         recordingPlaybackStarting: true,
-        selectedExecutor: 'browser',
-        session,
-      }),
-      {
+      },
+      expected: {
         canRun: true,
         executorLoading: false,
         executorProductState: { type: 'recording-playback-ready' },
-        graphPaused: false,
         graphRunning: true,
-        isActuallyRemoteDebugging: false,
-        remoteDebuggerBanner: null,
         runButtonLoading: false,
-        showRunButton: true,
-        showRemoteDebuggerBanner: false,
       },
-    );
-  });
+    },
+  ] as const) {
+    test(name, () => {
+      assert.deepEqual(
+        getActionBarExecutionState({
+          graphPaused: false,
+          graphRunning: false,
+          selectedExecutor: 'nodejs',
+          ...input,
+          session:
+            'session' in input ? input.session : { capabilities: inactiveCapabilities, status: 'idle', target: null },
+        }),
+        {
+          graphPaused: false,
+          graphRunning: false,
+          isActuallyRemoteDebugging: false,
+          remoteDebuggerBanner: null,
+          showRunButton: true,
+          showRemoteDebuggerBanner: false,
+          ...expected,
+        },
+      );
+    });
+  }
 
   test('getGraphRunsForView finds subgraph runs when navigating via root context', () => {
     const graphRunHistoryByView = {

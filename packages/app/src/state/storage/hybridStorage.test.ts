@@ -10,6 +10,18 @@ import {
 import { MemoryAsyncStorage } from './indexedDB.js';
 import { initializeHybridStorage, memoryStorage } from './migrations.js';
 
+function recordingBackend() {
+  const writes: Array<{ key: string; value: string }> = [];
+  const backend = {
+    getItem: async () => null,
+    setItem: async (key: string, value: string) => {
+      writes.push({ key, value });
+    },
+    removeItem: async () => {},
+  };
+  return { backend, writes };
+}
+
 describe('createHybridStorage', () => {
   it('continuous workspace edits checkpoint periodically and retain the final trailing edit', async (t) => {
     const oldMemory = new Map(memoryStorage);
@@ -208,101 +220,65 @@ describe('createHybridStorage', () => {
     await flushHybridStorageGroup('failed-flush');
     assert.deepEqual(writes, ['{"value":2}']);
   });
-  it('buffers values in memory for grouped keys', () => {
-    const writes: Array<{ key: string; value: string }> = [];
-    const { storage } = createHybridStorage('grouped', {
-      getItem: async () => null,
-      setItem: async (key, value) => {
-        writes.push({ key, value });
-      },
-      removeItem: async () => {},
-    });
+  it('buffers grouped values and automatically persists the latest snapshot after debouncing', async (t) => {
+    t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 0 });
+    const { backend, writes } = recordingBackend();
+    const { storage } = createHybridStorage('grouped', backend);
 
     storage.setItem('alpha', { value: 1 });
+    t.mock.timers.tick(500);
     storage.setItem('beta', { value: 2 });
 
     assert.deepEqual(storage.getItem('alpha', null), { value: 1 });
     assert.deepEqual(storage.getItem('beta', null), { value: 2 });
     assert.equal(writes.length, 0);
-  });
 
-  it('flushHybridStorageGroup immediately persists the latest grouped snapshot', async () => {
-    const writes: Array<{ key: string; value: string }> = [];
-    const { storage } = createHybridStorage('grouped-flush', {
-      getItem: async () => null,
-      setItem: async (key, value) => {
-        writes.push({ key, value });
-      },
-      removeItem: async () => {},
-    });
-
-    storage.setItem('alpha', { value: 1 });
-    storage.setItem('beta', { value: 2 });
-
-    await flushHybridStorageGroup('grouped-flush');
-
+    // The second edit resets the deadline; even the first edit's deadline must pass without a write.
+    t.mock.timers.tick(999);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(writes.length, 0, 'Grouped writes must wait for the last edit to finish debouncing.');
+    t.mock.timers.tick(1);
+    await new Promise<void>((resolve) => setImmediate(resolve));
     assert.deepEqual(writes, [
-      {
-        key: 'grouped-flush',
-        value: JSON.stringify({
-          alpha: { value: 1 },
-          beta: { value: 2 },
-        }),
-      },
+      { key: 'grouped', value: JSON.stringify({ alpha: { value: 1 }, beta: { value: 2 } }) },
     ]);
   });
 
-  it('flushing after rapid writes persists the latest value and cancels stale debounced writes', async () => {
-    const writes: Array<{ key: string; value: string }> = [];
-    const { storage } = createHybridStorage('grouped-cancel', {
-      getItem: async () => null,
-      setItem: async (key, value) => {
-        writes.push({ key, value });
-      },
-      removeItem: async () => {},
-    });
+  it('flushes the latest grouped snapshot immediately and cancels stale debounced writes', async (t) => {
+    t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 0 });
+    const { backend, writes } = recordingBackend();
+    const { storage } = createHybridStorage('grouped-cancel', backend);
 
     storage.setItem('alpha', { value: 1 });
     storage.setItem('alpha', { value: 2 });
+    storage.setItem('beta', { value: 3 });
 
     await flushHybridStorageGroup('grouped-cancel');
-    await new Promise((resolve) => setTimeout(resolve, 1100));
-
-    assert.deepEqual(writes, [
-      {
-        key: 'grouped-cancel',
-        value: JSON.stringify({
-          alpha: { value: 2 },
-        }),
-      },
-    ]);
+    const expected = [
+      { key: 'grouped-cancel', value: JSON.stringify({ alpha: { value: 2 }, beta: { value: 3 } }) },
+    ];
+    assert.deepEqual(writes, expected);
+    // Advance past both the trailing debounce and its five-second max-wait.
+    t.mock.timers.tick(6_000);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.deepEqual(writes, expected);
   });
 
-  it('registering the same grouped key more than once remains safe and flushes the latest state', async () => {
-    const writesA: Array<{ key: string; value: string }> = [];
-    const writesB: Array<{ key: string; value: string }> = [];
-    const first = createHybridStorage('grouped-shared', {
-      getItem: async () => null,
-      setItem: async (key, value) => {
-        writesA.push({ key, value });
-      },
-      removeItem: async () => {},
-    });
-    const second = createHybridStorage('grouped-shared', {
-      getItem: async () => null,
-      setItem: async (key, value) => {
-        writesB.push({ key, value });
-      },
-      removeItem: async () => {},
-    });
+  it('reuses one initializer for repeated grouped keys and flushes both writers through the latest backend', async () => {
+    const initialSize = allInitializeStoreFns.size;
+    const a = recordingBackend();
+    const b = recordingBackend();
+    const first = createHybridStorage('grouped-shared', a.backend);
+    const second = createHybridStorage('grouped-shared', b.backend);
+    assert.equal(allInitializeStoreFns.size, initialSize + 1);
 
     first.storage.setItem('alpha', { value: 1 });
     second.storage.setItem('beta', { value: 2 });
 
     await flushHybridStorageGroup('grouped-shared');
 
-    assert.deepEqual(writesA, []);
-    assert.deepEqual(writesB, [
+    assert.deepEqual(a.writes, []);
+    assert.deepEqual(b.writes, [
       {
         key: 'grouped-shared',
         value: JSON.stringify({
@@ -313,36 +289,9 @@ describe('createHybridStorage', () => {
     ]);
   });
 
-  it('registering the same grouped key more than once only registers one initialize function', () => {
-    const initialSize = allInitializeStoreFns.size;
-
-    createHybridStorage('grouped-init-shared', {
-      getItem: async () => null,
-      setItem: async () => {},
-      removeItem: async () => {},
-    });
-    createHybridStorage('grouped-init-shared', {
-      getItem: async () => null,
-      setItem: async () => {},
-      removeItem: async () => {},
-    });
-
-    assert.equal(allInitializeStoreFns.size, initialSize + 1);
-  });
-
   it('can persist grouped keys immediately when debouncing is disabled', async () => {
-    const writes: Array<{ key: string; value: string }> = [];
-    const { storage } = createHybridStorage(
-      'grouped-immediate',
-      {
-        getItem: async () => null,
-        setItem: async (key, value) => {
-          writes.push({ key, value });
-        },
-        removeItem: async () => {},
-      },
-      { debounceMs: 0 },
-    );
+    const { backend, writes } = recordingBackend();
+    const { storage } = createHybridStorage('grouped-immediate', backend, { debounceMs: 0 });
 
     storage.setItem('alpha', { value: 1 });
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -358,16 +307,10 @@ describe('createHybridStorage', () => {
   });
 
   it('can swap the async storage backend before hosted initialization', async () => {
-    const writes: Array<{ key: string; value: string }> = [];
+    const { backend, writes } = recordingBackend();
     createHybridStorage('grouped-host-storage');
 
-    const previousBackend = configureHybridStorageBackend({
-      getItem: async () => null,
-      setItem: async (key, value) => {
-        writes.push({ key, value });
-      },
-      removeItem: async () => {},
-    });
+    const previousBackend = configureHybridStorageBackend(backend);
 
     try {
       const { storage } = createHybridStorage('grouped-host-storage');
@@ -388,16 +331,10 @@ describe('createHybridStorage', () => {
   });
 
   it('resets hosted storage controllers to the built-in backend when storage is omitted', async () => {
-    const writes: Array<{ key: string; value: string }> = [];
+    const { backend, writes } = recordingBackend();
     createHybridStorage('grouped-host-storage-reset');
 
-    const previousBackend = configureHybridStorageBackend({
-      getItem: async () => null,
-      setItem: async (key, value) => {
-        writes.push({ key, value });
-      },
-      removeItem: async () => {},
-    });
+    const previousBackend = configureHybridStorageBackend(backend);
 
     try {
       const { storage } = createHybridStorage('grouped-host-storage-reset');

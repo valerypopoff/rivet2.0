@@ -510,97 +510,26 @@ test('storeDataValueForHistory keeps smaller strings inline', () => {
   assert.equal(dataRefs.values.size, 0);
 });
 
-test('storeDataValueForHistory keeps malformed string values inline without throwing', () => {
-  const dataRefs = createDataRefStore();
-  const value = { type: 'string', value: undefined } as unknown as DataValue;
+for (const [label, type, suffix] of [
+  ['string values', 'string', 'string'],
+  ['string arrays', 'string[]', 'string-array'],
+  ['media values', 'image', 'image'],
+  ['media arrays', 'binary[]', 'binary-array'],
+] as const) {
+  test(`storeDataValueForHistory keeps malformed ${label} inline without throwing`, () => {
+    const dataRefs = createDataRefStore();
+    const value = { type, value: undefined } as unknown as DataValue;
+    const stored = storeDataValueForHistory(
+      value,
+      dataRefs,
+      { nodeId: `node-malformed-${suffix}`, processId: `process-malformed-${suffix}`, channel: 'output' },
+      'output' as PortId,
+    );
 
-  const stored = storeDataValueForHistory(
-    value,
-    dataRefs,
-    {
-      nodeId: 'node-malformed-string',
-      processId: 'process-malformed-string',
-      channel: 'output',
-    },
-    'output' as PortId,
-  );
-
-  assert.deepEqual(stored, {
-    type: 'string',
-    storage: 'inline',
-    value: undefined,
+    assert.deepEqual(stored, { type, storage: 'inline', value: undefined });
+    assert.equal(dataRefs.values.size, 0);
   });
-  assert.equal(dataRefs.values.size, 0);
-});
-
-test('storeDataValueForHistory keeps malformed string arrays inline without throwing', () => {
-  const dataRefs = createDataRefStore();
-  const value = { type: 'string[]', value: undefined } as unknown as DataValue;
-
-  const stored = storeDataValueForHistory(
-    value,
-    dataRefs,
-    {
-      nodeId: 'node-malformed-string-array',
-      processId: 'process-malformed-string-array',
-      channel: 'output',
-    },
-    'output' as PortId,
-  );
-
-  assert.deepEqual(stored, {
-    type: 'string[]',
-    storage: 'inline',
-    value: undefined,
-  });
-  assert.equal(dataRefs.values.size, 0);
-});
-
-test('storeDataValueForHistory keeps malformed media values inline without throwing', () => {
-  const dataRefs = createDataRefStore();
-  const value = { type: 'image', value: undefined } as unknown as DataValue;
-
-  const stored = storeDataValueForHistory(
-    value,
-    dataRefs,
-    {
-      nodeId: 'node-malformed-image',
-      processId: 'process-malformed-image',
-      channel: 'output',
-    },
-    'output' as PortId,
-  );
-
-  assert.deepEqual(stored, {
-    type: 'image',
-    storage: 'inline',
-    value: undefined,
-  });
-  assert.equal(dataRefs.values.size, 0);
-});
-
-test('storeDataValueForHistory keeps malformed media arrays inline without throwing', () => {
-  const dataRefs = createDataRefStore();
-  const value = { type: 'binary[]', value: undefined } as unknown as DataValue;
-
-  const stored = storeDataValueForHistory(
-    value,
-    dataRefs,
-    {
-      nodeId: 'node-malformed-binary-array',
-      processId: 'process-malformed-binary-array',
-      channel: 'output',
-    },
-    'output' as PortId,
-  );
-
-  assert.deepEqual(stored, {
-    type: 'binary[]',
-    storage: 'inline',
-    value: undefined,
-  });
-  assert.equal(dataRefs.values.size, 0);
-});
+}
 
 test('storeInputsOrOutputsForHistory stores large objects by ref with json preview', () => {
   const dataRefs = createDataRefStore();

@@ -31,6 +31,28 @@ function makeConnection(overrides: Partial<NodeConnection> = {}): NodeConnection
   };
 }
 
+const pathBinding = {
+  side: 'output',
+  identity: 'stored-stable-id',
+  idDataKey: 'pathPortIds',
+  legacyPortIdPattern: { kind: 'prefix', prefix: 'match_', startIndex: 0 },
+} as const;
+const caseBinding = {
+  side: 'output',
+  identity: 'stored-stable-id',
+  idDataKey: 'casePortIds',
+  legacyPortIdPattern: { kind: 'prefix', prefix: 'case', startIndex: 1 },
+} as const;
+const pairedCaseBinding = {
+  ...caseBinding,
+  companionBindings: [{ side: 'input' as const, prefix: 'value-' }],
+};
+const outputNameBinding = {
+  side: 'output',
+  identity: 'value-derived',
+  valueToPortId: 'sanitize-identifier',
+} as const;
+
 test('editable string-list rows keep their ui ids stable across typing and reorder', () => {
   const initialRows = createEditableStringListRows(['alpha', 'beta']);
   const typedRows = reconcileEditableStringListRows(initialRows, ['alpha!', 'beta']);
@@ -66,16 +88,7 @@ test('stored stable ids carry through reorder and rename without changing connec
   const result = prepareStringListPortBindingEdit({
     node,
     dataKey: 'paths',
-    portBinding: {
-      side: 'output',
-      identity: 'stored-stable-id',
-      idDataKey: 'pathPortIds',
-      legacyPortIdPattern: {
-        kind: 'prefix',
-        prefix: 'match_',
-        startIndex: 0,
-      },
-    },
+    portBinding: pathBinding,
     previousRows,
     nextRows,
     connections,
@@ -100,16 +113,7 @@ test('stored stable ids generate ids for added rows and remove deleted-row conne
   const addedResult = prepareStringListPortBindingEdit({
     node,
     dataKey: 'paths',
-    portBinding: {
-      side: 'output',
-      identity: 'stored-stable-id',
-      idDataKey: 'pathPortIds',
-      legacyPortIdPattern: {
-        kind: 'prefix',
-        prefix: 'match_',
-        startIndex: 0,
-      },
-    },
+    portBinding: pathBinding,
     previousRows,
     nextRows,
     connections: [],
@@ -122,16 +126,7 @@ test('stored stable ids generate ids for added rows and remove deleted-row conne
   const deletedResult = prepareStringListPortBindingEdit({
     node,
     dataKey: 'paths',
-    portBinding: {
-      side: 'output',
-      identity: 'stored-stable-id',
-      idDataKey: 'pathPortIds',
-      legacyPortIdPattern: {
-        kind: 'prefix',
-        prefix: 'match_',
-        startIndex: 0,
-      },
-    },
+    portBinding: pathBinding,
     previousRows,
     nextRows: [],
     connections: [
@@ -168,16 +163,7 @@ test('legacy destructure ids remap to generated stable ids on first edit', () =>
   const result = prepareStringListPortBindingEdit({
     node,
     dataKey: 'paths',
-    portBinding: {
-      side: 'output',
-      identity: 'stored-stable-id',
-      idDataKey: 'pathPortIds',
-      legacyPortIdPattern: {
-        kind: 'prefix',
-        prefix: 'match_',
-        startIndex: 0,
-      },
-    },
+    portBinding: pathBinding,
     previousRows,
     nextRows,
     connections,
@@ -211,16 +197,7 @@ test('legacy match ids remap to generated stable ids on first edit', () => {
   const result = prepareStringListPortBindingEdit({
     node,
     dataKey: 'cases',
-    portBinding: {
-      side: 'output',
-      identity: 'stored-stable-id',
-      idDataKey: 'casePortIds',
-      legacyPortIdPattern: {
-        kind: 'prefix',
-        prefix: 'case',
-        startIndex: 1,
-      },
-    },
+    portBinding: caseBinding,
     previousRows,
     nextRows,
     connections,
@@ -255,13 +232,7 @@ test('paired stable-id bindings keep Match case input and output wires with the 
   const result = prepareStringListPortBindingEdit({
     node,
     dataKey: 'cases',
-    portBinding: {
-      side: 'output',
-      identity: 'stored-stable-id',
-      idDataKey: 'casePortIds',
-      legacyPortIdPattern: { kind: 'prefix', prefix: 'case', startIndex: 1 },
-      companionBindings: [{ side: 'input', prefix: 'value-' }],
-    },
+    portBinding: pairedCaseBinding,
     previousRows,
     nextRows,
     connections,
@@ -287,13 +258,7 @@ test('paired stable-id bindings delete the matching input and output wires toget
   const result = prepareStringListPortBindingEdit({
     node,
     dataKey: 'cases',
-    portBinding: {
-      side: 'output',
-      identity: 'stored-stable-id',
-      idDataKey: 'casePortIds',
-      legacyPortIdPattern: { kind: 'prefix', prefix: 'case', startIndex: 1 },
-      companionBindings: [{ side: 'input', prefix: 'value-' }],
-    },
+    portBinding: pairedCaseBinding,
     previousRows,
     nextRows: [{ uiId: previousRows[0]!.uiId, value: 'YES' }],
     connections,
@@ -316,13 +281,7 @@ test('paired stable-id bindings migrate legacy Regex Match input and output ids 
   const result = prepareStringListPortBindingEdit({
     node,
     dataKey: 'cases',
-    portBinding: {
-      side: 'output',
-      identity: 'stored-stable-id',
-      idDataKey: 'casePortIds',
-      legacyPortIdPattern: { kind: 'prefix', prefix: 'case', startIndex: 1 },
-      companionBindings: [{ side: 'input', prefix: 'value-' }],
-    },
+    portBinding: pairedCaseBinding,
     previousRows,
     nextRows: [{ uiId: previousRows[0]!.uiId, value: 'YEP' }],
     connections,
@@ -344,13 +303,7 @@ test('paired stable-id bindings retain recoverable Regex Match value wires throu
   const result = prepareStringListPortBindingEdit({
     node,
     dataKey: 'cases',
-    portBinding: {
-      side: 'output',
-      identity: 'stored-stable-id',
-      idDataKey: 'casePortIds',
-      legacyPortIdPattern: { kind: 'prefix', prefix: 'case', startIndex: 1 },
-      companionBindings: [{ side: 'input', prefix: 'value-' }],
-    },
+    portBinding: pairedCaseBinding,
     previousRows,
     nextRows: [{ uiId: previousRows[0]!.uiId, value: 'YEP' }],
     connections: [],
@@ -385,16 +338,7 @@ test('duplicate stored stable ids are treated as legacy and remapped to fresh st
   const result = prepareStringListPortBindingEdit({
     node,
     dataKey: 'paths',
-    portBinding: {
-      side: 'output',
-      identity: 'stored-stable-id',
-      idDataKey: 'pathPortIds',
-      legacyPortIdPattern: {
-        kind: 'prefix',
-        prefix: 'match_',
-        startIndex: 0,
-      },
-    },
+    portBinding: pathBinding,
     previousRows,
     nextRows,
     connections,
@@ -461,11 +405,7 @@ test('code value-derived binding keeps connections intact on reorder', () => {
   const result = prepareStringListPortBindingEdit({
     node,
     dataKey: 'outputNames',
-    portBinding: {
-      side: 'output',
-      identity: 'value-derived',
-      valueToPortId: 'sanitize-identifier',
-    },
+    portBinding: outputNameBinding,
     previousRows,
     nextRows,
     connections,
@@ -495,11 +435,7 @@ test('code value-derived binding removes only the deleted port connections', () 
   const result = prepareStringListPortBindingEdit({
     node,
     dataKey: 'outputNames',
-    portBinding: {
-      side: 'output',
-      identity: 'value-derived',
-      valueToPortId: 'sanitize-identifier',
-    },
+    portBinding: outputNameBinding,
     previousRows,
     nextRows,
     connections,
@@ -531,11 +467,7 @@ test('code value-derived binding preserves existing duplicate-name semantics whi
   const result = prepareStringListPortBindingEdit({
     node,
     dataKey: 'outputNames',
-    portBinding: {
-      side: 'output',
-      identity: 'value-derived',
-      valueToPortId: 'sanitize-identifier',
-    },
+    portBinding: outputNameBinding,
     previousRows,
     nextRows,
     connections,

@@ -6,7 +6,6 @@ export const sourceReadingTestAllowlist = new Set([
   // executor's socket server, so this narrow source guard is intentional.
   'packages/app-executor/bin/executorHost.test.mts',
   'packages/cli/test/cli.test.ts',
-  'packages/core/test/model/nodes/LLMChatV2Node.test.ts',
   // Static release-deployment contract: the script intentionally guards
   // source checkout and Helm argument ordering before it touches a cluster.
   'deploy/studio-server/scripts/studio-server-release-manifest.test.mjs',
