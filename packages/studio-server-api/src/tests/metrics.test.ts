@@ -94,7 +94,10 @@ void test('metrics registry renders only finite, fixed-label metric families', (
     maxReservedBytes: 1024,
     reservedBytes: 512,
     retainedBodies: 1,
+    queuedRequests: 3,
+    maxQueuedRequests: 64,
   });
+  metrics.observeHttpBodyAdmissionWait(100, 'admitted');
   metrics.recordHttpBodyAdmission('capacity_exceeded');
   metrics.recordHostedEvaluationSubmission('accepted');
   metrics.recordHostedEvaluationSubmission('outstanding_capacity_exceeded');
@@ -171,6 +174,9 @@ void test('metrics registry renders only finite, fixed-label metric families', (
   assert.match(rendered, /rivet_http_body_admission_active_parsers\{profile="execution"\} 2/);
   assert.match(rendered, /rivet_http_body_admission_retained_bodies\{profile="execution"\} 1/);
   assert.match(rendered, /rivet_http_body_admission_reserved_bytes\{profile="execution"\} 512/);
+  assert.match(rendered, /rivet_http_body_admission_queued_requests\{profile="execution"\} 3/);
+  assert.match(rendered, /rivet_http_body_admission_queue_limit\{profile="execution"\} 64/);
+  assert.match(rendered, /rivet_http_body_admission_wait_seconds_count\{outcome="admitted",profile="execution"\} 1/);
   assert.match(
     rendered,
     /rivet_http_body_admission_rejections_total\{outcome="capacity_exceeded",profile="execution"\} 1/,

@@ -3,7 +3,7 @@ import { Router, type NextFunction, type Request, type Response } from 'express'
 import { registerActiveHttpExecution } from '../../active-http-executions.js';
 import { asyncHandler } from '../../utils/asyncHandler.js';
 import { badRequest, createHttpError } from '../../utils/httpError.js';
-import { closeResponseConnectionAfterFlush } from '../../middleware/body-admission.js';
+import { sendRejectedBodyResponse } from '../../middleware/body-admission.js';
 import { createJsonBodyParser } from '../../middleware/body-parsers.js';
 import { normalizeStoredEndpointName } from './endpoint-names.js';
 import { createManagedCodeRunnerTelemetry } from '../../runtime-libraries/managed-code-runner.js';
@@ -159,8 +159,7 @@ function authorizePublishedWorkflowBeforeBody(req: Request, res: Response, next:
     requirePublishedWorkflowApiKey(req, { capacityEndpointName: endpointName });
     next();
   } catch (error) {
-    closeResponseConnectionAfterFlush(res, req);
-    sendWorkflowErrorWithDuration(res, error, performance.now());
+    sendRejectedBodyResponse(req, res, () => sendWorkflowErrorWithDuration(res, error, performance.now()));
   }
 }
 
@@ -173,8 +172,7 @@ function authorizeLatestWorkflowBeforeBody(req: Request, res: Response, next: Ne
     requirePublishedWorkflowApiKey(req);
     next();
   } catch (error) {
-    closeResponseConnectionAfterFlush(res, req);
-    sendWorkflowErrorWithDuration(res, error, performance.now());
+    sendRejectedBodyResponse(req, res, () => sendWorkflowErrorWithDuration(res, error, performance.now()));
   }
 }
 

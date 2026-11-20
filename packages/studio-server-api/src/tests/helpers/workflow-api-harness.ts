@@ -7,6 +7,7 @@ import type { WebAppActionWebSocketRuntime } from '../../web-app-action-websocke
 
 import { createRequestCorrelationMiddleware } from '../../request-correlation.js';
 import { listenTestServer } from './http-server-harness.js';
+import { sendRejectedBodyResponse } from '../../middleware/body-admission.js';
 
 type InitializeWorkflowStorage = () => Promise<void>;
 
@@ -60,12 +61,15 @@ function attachJsonFallbackHandlers(app: express.Express) {
   app.use((_req, res) => {
     res.status(404).json({ error: 'Not found' });
   });
-  app.use((err: Error, _req: Request, res: ExpressResponse, _next: NextFunction) => {
+  app.use((err: Error, req: Request, res: ExpressResponse, _next: NextFunction) => {
     const code = (err as { code?: unknown }).code;
-    res.status((err as { status?: number }).status ?? 500).json({
+    const send = () => res.status((err as { status?: number }).status ?? 500).json({
       error: err.message,
       ...(code ? { code: String(code) } : {}),
     });
+    if ((err as { closeConnection?: boolean }).closeConnection || !res.shouldKeepAlive) {
+      sendRejectedBodyResponse(req, res, send);
+    } else send();
   });
 }
 

@@ -58,6 +58,8 @@ commands; the guides below describe implementation and verification.
 - [Repository Structure](./studio-server/repo-structure.md)
 - [Development And Verification](./studio-server/development.md)
 - [Access And Routing](./studio-server/access-and-routing.md)
+- [HTTP Body Admission: Implementation And Validation](./studio-server/http-body-admission-queue-plan.md)
+- [HTTP Callback Capacity And Diagnostics Plan (Proposed)](./studio-server/http-callback-capacity-plan.md)
 - [Web-app HTTP Separation Plan](./studio-server/web-app-http-separation-plan.md)
 - [Recording HTTP Separation Plan](./studio-server/recording-http-separation-plan.md)
 - [Publication HTTP Separation Plan](./studio-server/publication-http-separation-plan.md)

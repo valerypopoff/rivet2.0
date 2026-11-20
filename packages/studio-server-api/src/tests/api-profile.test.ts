@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { once } from 'node:events';
 import fs from 'node:fs';
 import http from 'node:http';
+import type { AddressInfo } from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -97,7 +98,7 @@ test('restore standbys remain probe-responsive but warmup requires healthy consu
     const server = http.createServer(app);
     server.listen(0, '127.0.0.1');
     await once(server, 'listening');
-    const url = `http://127.0.0.1:${(server.address() as import('node:net').AddressInfo).port}`;
+    const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
     try {
       setLegacyRestorePaused(true);
       setLegacyRestoreWarmup(false);
@@ -834,6 +835,34 @@ test('UI-gated web-app actions reject before parsing and close the rejected body
     } finally {
       await server.close();
     }
+  });
+});
+
+test('large uploads retain authentication and missing-app responses before body admission', async (t) => {
+  await withApiEnv({ RIVET_SERVER_UI_AUTH_MODE: 'key' }, async () => {
+    await writeWorkflowEndpointAuthSettings({ requireBearerAuth: true });
+    const server = await startServer('combined');
+    const operator = { ...trustedProxyHeaders(), cookie: `rivet_ui_token=${getExpectedUiSessionToken()}` };
+    try {
+      for (const [pathname, headers, status] of [
+        ['/workflows/missing', {}, 401],
+        ['/workflows-latest/missing', {}, 401],
+        ['/api/workflows/move', {}, 403],
+        ['/apps/missing/actions/run', {}, 401],
+        ['/apps/missing/actions/run', operator, 404],
+        ['/apps-latest/missing/actions/run', operator, 404],
+      ] as const) {
+        await t.test(`${pathname} returns ${status}`, async () => {
+          const response = await fetch(server.baseUrl + pathname, {
+            method: 'POST', headers: { ...headers, 'content-type': 'application/json' },
+            body: '{' + 'x'.repeat(1024 * 1024), signal: AbortSignal.timeout(5000),
+          });
+          assert.equal(response.status, status);
+          assert.equal(response.headers.get('connection'), 'close');
+          assert.ok((await response.json()).error);
+        });
+      }
+    } finally { await server.close(); }
   });
 });
 

@@ -32,7 +32,7 @@ import { registerActiveHttpExecution } from '../../active-http-executions.js';
 import { PublishedExecutionAdmissionError } from '../../published-execution-admission.js';
 import { asyncHandler } from '../../utils/asyncHandler.js';
 import { badRequest, createHttpError } from '../../utils/httpError.js';
-import { closeResponseConnectionAfterFlush } from '../../middleware/body-admission.js';
+import { closeResponseConnectionAfterFlush, sendRejectedBodyResponse } from '../../middleware/body-admission.js';
 import { createJsonBodyParser } from '../../middleware/body-parsers.js';
 import { normalizeStoredEndpointName } from './endpoint-names.js';
 import {
@@ -177,10 +177,10 @@ function isWebAppBrowserRequestOriginAllowed(req: Request, requestKind: WebAppRe
   return requestKind === 'html' || fetchSite !== 'cross-site';
 }
 
-function prepareWebAppRejection(req: Request, res: Response, requestKind: WebAppRequestKind): void {
+function sendWebAppRejection(req: Request, res: Response, requestKind: WebAppRequestKind, send: () => void): void {
   if (requestKind === 'action') {
-    closeResponseConnectionAfterFlush(res, req);
-  }
+    sendRejectedBodyResponse(req, res, send);
+  } else send();
 }
 
 function authorizeWebAppRequestBeforeResolve(
@@ -195,11 +195,11 @@ function authorizeWebAppRequestBeforeResolve(
   }
 
   if (!isWebAppBrowserRequestOriginAllowed(req, requestKind)) {
-    prepareWebAppRejection(req, res, requestKind);
     if (requestKind === 'html') {
       sendHtmlWithDuration(res, 403, renderWebAppOriginDeniedHtml(req), requestStartedAt);
     } else {
-      sendWebAppAuthJsonError(res, requestStartedAt, 403, 'Cross-origin web app request denied', 'origin_forbidden');
+      sendWebAppRejection(req, res, requestKind, () =>
+        sendWebAppAuthJsonError(res, requestStartedAt, 403, 'Cross-origin web app request denied', 'origin_forbidden'));
     }
     return false;
   }
@@ -214,7 +214,6 @@ function authorizeWebAppRequestBeforeResolve(
       return true;
     } catch (error) {
       if (requestKind === 'html' && (error as { status?: unknown }).status === 401) {
-        prepareWebAppRejection(req, res, requestKind);
         res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
         res.setHeader('Pragma', 'no-cache');
         sendHtmlWithDuration(res, 401, renderWebAppUiGatePromptHtml(req), requestStartedAt);
@@ -224,7 +223,7 @@ function authorizeWebAppRequestBeforeResolve(
       // The action route has not admitted its JSON body yet. Let the shared
       // error formatter keep this legacy error response, but first make the
       // connection non-reusable so the client cannot continue that body.
-      prepareWebAppRejection(req, res, requestKind);
+      if (requestKind === 'action') closeResponseConnectionAfterFlush(res, req);
       throw error;
     }
   }
@@ -236,7 +235,6 @@ function authorizeWebAppRequestBeforeResolve(
 
   const authError = getWebAppAuthError(req);
   if (requestKind === 'html' && authError) {
-    prepareWebAppRejection(req, res, requestKind);
     sendHtmlWithDuration(
       res,
       401,
@@ -247,19 +245,17 @@ function authorizeWebAppRequestBeforeResolve(
   }
 
   if (requestKind === 'html' && isWebAppOAuthLoginRequest(req)) {
-    prepareWebAppRejection(req, res, requestKind);
     startWebAppOAuthLogin(req, res);
     return false;
   }
 
   if (requestKind === 'html') {
-    prepareWebAppRejection(req, res, requestKind);
     sendHtmlWithDuration(res, 401, renderWebAppLoginRequiredHtml(req), requestStartedAt);
     return false;
   }
 
-  prepareWebAppRejection(req, res, requestKind);
-  sendWebAppAuthJsonError(res, requestStartedAt, 401, 'OAuth login required', 'oauth_required');
+  sendWebAppRejection(req, res, requestKind, () =>
+    sendWebAppAuthJsonError(res, requestStartedAt, 401, 'OAuth login required', 'oauth_required'));
   return false;
 }
 
@@ -280,7 +276,6 @@ function authorizeResolvedWebAppRequest(
   }
 
   if (requestKind === 'html') {
-    prepareWebAppRejection(req, res, requestKind);
     sendHtmlWithDuration(
       res,
       403,
@@ -290,8 +285,8 @@ function authorizeResolvedWebAppRequest(
     return false;
   }
 
-  prepareWebAppRejection(req, res, requestKind);
-  sendWebAppAuthJsonError(res, requestStartedAt, 403, 'Forbidden', 'oauth_forbidden');
+  sendWebAppRejection(req, res, requestKind, () =>
+    sendWebAppAuthJsonError(res, requestStartedAt, 403, 'Forbidden', 'oauth_forbidden'));
   return false;
 }
 
@@ -511,13 +506,12 @@ async function resolveWebAppExecutionProject(
     return null;
   }
   if (!executionProject) {
-    prepareWebAppRejection(req, res, requestKind);
-    sendJsonWithDuration(
+    sendWebAppRejection(req, res, requestKind, () => sendJsonWithDuration(
       res,
       404,
       { error: routeKind === 'published' ? 'Published Rivet web app not found' : 'Latest Rivet web app not found' },
       requestStartedAt,
-    );
+    ));
     return null;
   }
 
@@ -578,9 +572,8 @@ function prepareWebAppActionBeforeBody(routeKind: WebAppRouteKind) {
 
     const releasePreflight = acquireWebAppActionPreflight();
     if (!releasePreflight) {
-      closeResponseConnectionAfterFlush(res, req);
       res.setHeader('Retry-After', '1');
-      sendJsonWithDuration(
+      sendRejectedBodyResponse(req, res, () => sendJsonWithDuration(
         res,
         503,
         {
@@ -588,7 +581,7 @@ function prepareWebAppActionBeforeBody(routeKind: WebAppRouteKind) {
           code: 'web_app_action_preflight_capacity_exhausted',
         },
         requestStartedAt,
-      );
+      ));
       return;
     }
 
@@ -622,8 +615,8 @@ function prepareWebAppActionBeforeBody(routeKind: WebAppRouteKind) {
         return;
       }
       if (!uiGraph) {
-        closeResponseConnectionAfterFlush(res, req);
-        sendJsonWithDuration(res, 404, { error: 'Rivet web app not found' }, requestStartedAt);
+        sendRejectedBodyResponse(req, res, () =>
+          sendJsonWithDuration(res, 404, { error: 'Rivet web app not found' }, requestStartedAt));
         return;
       }
 

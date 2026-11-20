@@ -47,6 +47,7 @@ export type MetricsHttpBodyAdmissionOutcome =
   | 'too_large'
   | 'unsupported_body_encoding'
   | 'unsupported_media_type';
+export type MetricsHttpBodyWaitOutcome = 'admitted' | 'capacity_exceeded' | 'wait_expired' | 'receive_timeout' | 'cancelled';
 export type MetricsBrowserStorageRpcDirection = 'commit' | 'read';
 export type MetricsBrowserStorageRpcOutcome =
   | 'cancelled'
@@ -221,16 +222,24 @@ export class StudioMetrics {
     maxReservedBytes: number;
     reservedBytes: number;
     retainedBodies: number;
+    queuedRequests: number;
+    maxQueuedRequests: number;
   }): void {
     this.setGauge('rivet_http_body_admission_active_parsers', {}, input.activeParsers);
     this.setGauge('rivet_http_body_admission_active_parser_limit', {}, input.maxActiveParsers);
     this.setGauge('rivet_http_body_admission_retained_bodies', {}, input.retainedBodies);
     this.setGauge('rivet_http_body_admission_reserved_bytes', {}, input.reservedBytes);
     this.setGauge('rivet_http_body_admission_reserved_bytes_limit', {}, input.maxReservedBytes);
+    this.setGauge('rivet_http_body_admission_queued_requests', {}, input.queuedRequests);
+    this.setGauge('rivet_http_body_admission_queue_limit', {}, input.maxQueuedRequests);
   }
 
   recordHttpBodyAdmission(outcome: MetricsHttpBodyAdmissionOutcome): void {
     this.incrementCounter('rivet_http_body_admission_rejections_total', { outcome });
+  }
+
+  observeHttpBodyAdmissionWait(durationMs: number, outcome: MetricsHttpBodyWaitOutcome): void {
+    this.observeHistogram('rivet_http_body_admission_wait_seconds', { outcome }, durationMs / 1000);
   }
 
   recordBrowserStorageRpcProtocolNegotiation(version: 'legacy' | '2'): void {

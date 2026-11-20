@@ -1,6 +1,7 @@
 import type { NextFunction, Request, RequestHandler, Response } from 'express';
+import { performance } from 'node:perf_hooks';
 
-import { recordStudioMetrics } from '../metrics.js';
+import { recordStudioMetrics, type MetricsHttpBodyWaitOutcome } from '../metrics.js';
 import { createHttpError } from '../utils/httpError.js';
 
 // A request's decoded body can temporarily occupy substantially more memory
@@ -8,6 +9,8 @@ import { createHttpError } from '../utils/httpError.js';
 // small, process-wide ceiling; it is separate from graph-execution admission.
 export const MAX_CONCURRENT_HTTP_BODY_PARSERS = 4;
 export const MAX_RESERVED_HTTP_BODY_BYTES = 1024 * 1024 * 1024;
+export const MAX_QUEUED_HTTP_BODIES = 64;
+export const HTTP_BODY_ADMISSION_WAIT_MS = 1_000;
 /** Bound receipt separately from the lifetime of a successful graph execution. */
 export const DEFAULT_HTTP_BODY_RECEIVE_TIMEOUT_MS = 120_000;
 /**
@@ -27,31 +30,87 @@ export type HttpBodyAdmissionSnapshot = Readonly<{
   maxReservedBytes: number;
   reservedBytes: number;
   retainedBodies: number;
+  queuedRequests: number;
+  maxQueuedRequests: number;
 }>;
 
-type BodyReservation = {
+export type BodyReservation = {
   isRetained: () => boolean;
   release: () => void;
   releaseParserSlot: () => void;
   retain: () => void;
+  finalizeDecodedBytes: (bytes: number) => void;
 };
+
+type WaitingBody = {
+  bytes: number;
+  startedAt: number;
+  deadline: number;
+  receiveDeadline?: number;
+  signal?: AbortSignal;
+  abort: () => void;
+  timer?: ReturnType<typeof setTimeout>;
+  resolve: (reservation: BodyReservation) => void;
+  reject: (error: unknown) => void;
+};
+
+function bodyCapacityError() {
+  recordStudioMetrics((metrics) => metrics.recordHttpBodyAdmission('capacity_exceeded'));
+  return createHttpError(503, 'Request body capacity is temporarily exhausted.', {
+    expose: true,
+    code: 'body_capacity_exhausted',
+    retryAfterSeconds: 1,
+    closeConnection: true,
+  });
+}
+
+function bodyReceiveTimeoutError() {
+  return createHttpError(408, 'Request body was not received in time.', {
+    expose: true,
+    code: 'body_receive_timeout',
+    closeConnection: true,
+  });
+}
+
+function bodyAbortedError() {
+  return createHttpError(400, 'Request body was aborted.', { expose: true, closeConnection: true });
+}
 
 const requestReservations = new WeakMap<Request, BodyReservation>();
 // Both route middleware and the final error formatter can see the same
 // pre-body rejection. Keep closing response-owned so the second observer does
 // not install another drain timer or resume the upload a second time.
-const scheduledConnectionCloses = new WeakSet<Response>();
+const scheduledConnectionCloses = new WeakMap<Response, Promise<void>>();
 
 /**
- * Rejecting before a request body has been consumed must not keep a reusable
- * connection open for the client to continue uploading that rejected body.
- * Flush the useful HTTP response first, then terminate this connection.
+ * Prepare a terminal connection before throwing to an error formatter.
+ * Direct replies should use sendRejectedBodyResponse so they wait for the
+ * bounded discard instead of closing over an in-flight upload.
  */
 export function closeResponseConnectionAfterFlush(res: Response, req?: Request): void {
-  if (res.destroyed || scheduledConnectionCloses.has(res)) {
-    return;
-  }
-  scheduledConnectionCloses.add(res);
+  void prepareRejectedBodyResponse(res, req);
+}
+
+/** Send a terminal pre-body response only after the bounded discard is ready. */
+export function sendRejectedBodyResponse(req: Request, res: Response, send: () => void): void {
+  if (res.destroyed || res.writableEnded) return;
+  void prepareRejectedBodyResponse(res, req)
+    .then(() => {
+      if (!res.destroyed && !res.writableEnded) send();
+    })
+    .catch((error: unknown) => {
+      // A failed terminal reply must not become an unhandled promise or start
+      // another response. Keep diagnostics on the server and close the socket.
+      console.error('Failed to send a rejected request response:', error);
+      res.destroy();
+    });
+}
+
+/** Share one bounded discard between a route and its final error formatter. */
+function prepareRejectedBodyResponse(res: Response, req?: Request): Promise<void> {
+  const scheduled = scheduledConnectionCloses.get(res);
+  if (scheduled) return scheduled;
+  if (res.destroyed) return Promise.resolve();
 
   // Let Node own the terminal close after it has flushed the error response.
   // Calling socket.end() from response lifecycle hooks can race the queued
@@ -64,32 +123,42 @@ export function closeResponseConnectionAfterFlush(res: Response, req?: Request):
   // response without leaving the server in an unbounded receiving state.
   const declaredBytes = req ? readContentLength(req) : undefined;
   if (!req || req.complete || (declaredBytes != null && declaredBytes <= IMMEDIATE_REJECTION_CLOSE_MAX_BYTES)) {
-    return;
+    const complete = Promise.resolve();
+    scheduledConnectionCloses.set(res, complete);
+    return complete;
   }
 
-  let timeout: ReturnType<typeof setTimeout> | undefined;
-
-  const cleanup = () => {
-    if (timeout) clearTimeout(timeout);
-    req.off('end', cleanup);
-    req.off('aborted', cleanup);
-    res.off('finish', cleanup);
-    res.off('close', cleanup);
-  };
-
-  req.once('end', cleanup);
-  req.once('aborted', cleanup);
-  res.once('finish', cleanup);
-  res.once('close', cleanup);
-  timeout = setTimeout(() => {
-    // Stop accepting discarded bytes after the bounded grace period. Node
-    // sends the already-marked terminal response and then closes the socket.
-    req.pause();
-  }, REJECTED_BODY_DRAIN_GRACE_MS);
-  timeout.unref();
+  const pending = new Promise<void>((resolve) => {
+    const cleanup = () => {
+      clearTimeout(timeout);
+      req.off('end', cleanup);
+      req.off('aborted', cleanup);
+      res.off('finish', cleanup);
+      res.off('close', cleanup);
+      resolve();
+    };
+    const timeout = setTimeout(() => {
+      req.pause();
+      cleanup();
+    }, REJECTED_BODY_DRAIN_GRACE_MS);
+    timeout.unref();
+    req.once('end', cleanup);
+    req.once('aborted', cleanup);
+    res.once('finish', cleanup);
+    res.once('close', cleanup);
+  });
+  scheduledConnectionCloses.set(res, pending);
   // Discard bytes without constructing a parsed body. The grace period bounds
   // this work and ensures a valid error response can reach ordinary clients.
   req.resume();
+  return pending;
+}
+
+function forwardBodyParserError(req: Request, res: Response, next: NextFunction, error: unknown): void {
+  if (res.destroyed || res.writableEnded) return;
+  if ((error as { closeConnection?: unknown }).closeConnection === true) {
+    sendRejectedBodyResponse(req, res, () => next(error));
+  } else next(error);
 }
 
 export function isJsonRequest(req: Request): boolean {
@@ -143,6 +212,26 @@ export class HttpBodyAdmissionController {
   #activeParsers = 0;
   #reservedBytes = 0;
   #retainedBodies = 0;
+  readonly #waiting: WaitingBody[] = [];
+  readonly #maxQueued: number;
+  readonly #waitMs: number;
+  readonly #now: () => number;
+  #drainImmediate?: ReturnType<typeof setImmediate>;
+
+  constructor(options: { maxQueuedRequests?: number; waitMs?: number; now?: () => number } = {}) {
+    this.#maxQueued = options.maxQueuedRequests ?? MAX_QUEUED_HTTP_BODIES;
+    this.#waitMs = options.waitMs ?? HTTP_BODY_ADMISSION_WAIT_MS;
+    this.#now = options.now ?? (() => performance.now());
+    if (
+      !Number.isSafeInteger(this.#maxQueued) ||
+      this.#maxQueued < 0 ||
+      !Number.isSafeInteger(this.#waitMs) ||
+      this.#waitMs < 1 ||
+      this.#waitMs > 2_147_483_647
+    ) {
+      throw new Error('Invalid HTTP body admission queue limits.');
+    }
+  }
 
   getSnapshot(): HttpBodyAdmissionSnapshot {
     return Object.freeze({
@@ -151,15 +240,21 @@ export class HttpBodyAdmissionController {
       maxReservedBytes: MAX_RESERVED_HTTP_BODY_BYTES,
       reservedBytes: this.#reservedBytes,
       retainedBodies: this.#retainedBodies,
+      queuedRequests: this.#waiting.length,
+      maxQueuedRequests: this.#maxQueued,
     });
   }
 
-  admit(req: Request, limitBytes: number): BodyReservation | null {
+  admit(
+    req: Request,
+    limitBytes: number,
+    options: { signal?: AbortSignal; receiveDeadline?: number } = {},
+  ): BodyReservation | Promise<BodyReservation> {
+    options.signal?.throwIfAborted();
     const contentLength = readContentLength(req);
     // Reject declared identity size before reading; the bounded transport
     // reader enforces the decoded limit for compressed content.
     if (!hasNonIdentityContentEncoding(req) && contentLength != null && contentLength > limitBytes) {
-      recordStudioMetrics((metrics) => metrics.recordHttpBodyAdmission('too_large'));
       throw createHttpError(413, "Request body exceeds this route's allowed size.", {
         expose: true,
         code: 'body_too_large',
@@ -168,20 +263,136 @@ export class HttpBodyAdmissionController {
     }
 
     const reservationBytes = reservationBytesForRequest(req, limitBytes);
-    if (
-      this.#activeParsers >= MAX_CONCURRENT_HTTP_BODY_PARSERS ||
-      reservationBytes > MAX_RESERVED_HTTP_BODY_BYTES ||
-      this.#reservedBytes + reservationBytes > MAX_RESERVED_HTTP_BODY_BYTES
-    ) {
-      recordStudioMetrics((metrics) => metrics.recordHttpBodyAdmission('capacity_exceeded'));
-      return null;
+    if (options.receiveDeadline !== undefined && this.#now() >= options.receiveDeadline) {
+      throw bodyReceiveTimeoutError();
     }
+    if (!this.#fits(reservationBytes)) throw bodyCapacityError();
+    if (this.#activeParsers < MAX_CONCURRENT_HTTP_BODY_PARSERS && this.#waiting.length === 0) {
+      return this.#reserve(reservationBytes);
+    }
+    if (this.#waiting.length >= this.#maxQueued) throw bodyCapacityError();
+
+    const startedAt = this.#now();
+    let resolve!: WaitingBody['resolve'];
+    let reject!: WaitingBody['reject'];
+    const promise = new Promise<BodyReservation>((accept, decline) => {
+      resolve = accept;
+      reject = decline;
+    });
+    const entry: WaitingBody = {
+      bytes: reservationBytes,
+      startedAt,
+      deadline: startedAt + this.#waitMs,
+      receiveDeadline: options.receiveDeadline,
+      signal: options.signal,
+      resolve,
+      reject,
+      abort: () => this.#abortWait(entry),
+    };
+    this.#waiting.push(entry);
+    options.signal?.addEventListener('abort', entry.abort, { once: true });
+    this.#armTimeout(entry);
+    // A new arrival may follow a released slot whose drain is already scheduled.
+    this.#scheduleDrain();
+    if (options.signal?.aborted) entry.abort();
+    return promise;
+  }
+
+  #fits(bytes: number): boolean {
+    return bytes <= MAX_RESERVED_HTTP_BODY_BYTES && this.#reservedBytes + bytes <= MAX_RESERVED_HTTP_BODY_BYTES;
+  }
+
+  #scheduleDrain(): void {
+    if (this.#waiting.length === 0 || this.#drainImmediate) return;
+    this.#drainImmediate = setImmediate(() => {
+      this.#drainImmediate = undefined;
+      while (this.#waiting.length) {
+        const entry = this.#waiting[0]!;
+        if (this.#expire(entry)) continue;
+        if (this.#activeParsers >= MAX_CONCURRENT_HTTP_BODY_PARSERS) break;
+        if (!this.#fits(entry.bytes)) {
+          this.#reject(entry, bodyCapacityError(), 'capacity_exceeded');
+          continue;
+        }
+        this.#remove(entry, 'admitted');
+        entry.resolve(this.#reserve(entry.bytes));
+      }
+    });
+  }
+
+  #armTimeout(entry: WaitingBody): void {
+    const deadline = Math.min(entry.deadline, entry.receiveDeadline ?? Infinity);
+    entry.timer = setTimeout(
+      () => {
+        if (!this.#expire(entry)) this.#armTimeout(entry);
+      },
+      Math.max(1, Math.ceil(deadline - this.#now())),
+    );
+    entry.timer.unref();
+  }
+
+  #expire(entry: WaitingBody): boolean {
+    if (!this.#waiting.includes(entry)) return true;
+    if (entry.signal?.aborted) {
+      this.#abortWait(entry);
+      return true;
+    }
+    const now = this.#now();
+    const receiveDeadline = entry.receiveDeadline ?? Infinity;
+    // Preserve the first expiry even if event-loop work delays both timers.
+    if (now >= entry.deadline && entry.deadline < receiveDeadline) {
+      this.#reject(entry, bodyCapacityError(), 'wait_expired');
+      return true;
+    }
+    if (now >= receiveDeadline) {
+      this.#reject(entry, bodyReceiveTimeoutError(), 'receive_timeout');
+      return true;
+    }
+    return false;
+  }
+
+  #abortWait(entry: WaitingBody): void {
+    const reason: unknown = entry.signal?.reason ?? bodyAbortedError();
+    const receiveTimeout =
+      typeof reason === 'object' && reason !== null && 'code' in reason && reason.code === 'body_receive_timeout';
+    if (receiveTimeout && entry.deadline < (entry.receiveDeadline ?? Infinity) && this.#now() >= entry.deadline) {
+      this.#reject(entry, bodyCapacityError(), 'wait_expired');
+      return;
+    }
+    this.#reject(entry, reason, receiveTimeout ? 'receive_timeout' : 'cancelled');
+  }
+
+  #remove(entry: WaitingBody, outcome: MetricsHttpBodyWaitOutcome): boolean {
+    const index = this.#waiting.indexOf(entry);
+    if (index < 0) return false;
+    this.#waiting.splice(index, 1);
+    clearTimeout(entry.timer);
+    entry.signal?.removeEventListener('abort', entry.abort);
+    recordStudioMetrics((metrics) =>
+      metrics.observeHttpBodyAdmissionWait(Math.max(0, this.#now() - entry.startedAt), outcome),
+    );
+    if (this.#waiting.length === 0 && this.#drainImmediate) {
+      clearImmediate(this.#drainImmediate);
+      this.#drainImmediate = undefined;
+    }
+    return true;
+  }
+
+  #reject(entry: WaitingBody, error: unknown, outcome: MetricsHttpBodyWaitOutcome): void {
+    if (!this.#remove(entry, outcome)) return;
+    entry.reject(error);
+    this.#scheduleDrain();
+  }
+
+  #reserve(initialBytes: number): BodyReservation {
+    let reservationBytes = initialBytes;
 
     this.#activeParsers += 1;
     this.#reservedBytes += reservationBytes;
     let parserSlotReleased = false;
     let released = false;
     let retained = false;
+    let finalizedBytes: number | undefined;
 
     const releaseParserSlot = () => {
       if (parserSlotReleased) {
@@ -189,6 +400,7 @@ export class HttpBodyAdmissionController {
       }
       parserSlotReleased = true;
       this.#activeParsers = Math.max(0, this.#activeParsers - 1);
+      this.#scheduleDrain();
     };
 
     return {
@@ -211,6 +423,18 @@ export class HttpBodyAdmissionController {
         }
         retained = true;
         this.#retainedBodies += 1;
+      },
+      finalizeDecodedBytes: (bytes) => {
+        if (released) return;
+        if (!Number.isSafeInteger(bytes) || bytes < 0 || bytes > reservationBytes) {
+          throw new Error('Invalid decoded request-body size.');
+        }
+        if (finalizedBytes !== undefined && bytes !== finalizedBytes) {
+          throw new Error('Decoded request-body size was already finalized.');
+        }
+        finalizedBytes = bytes;
+        this.#reservedBytes -= reservationBytes - bytes;
+        reservationBytes = bytes;
       },
     };
   }
@@ -246,7 +470,7 @@ export function createAdmittedBodyParser(options: {
     next: NextFunction,
     limitBytes: number,
     signal: AbortSignal,
-    markBodyReceived: () => void,
+    markBodyReceived: (decodedBytes?: number) => void,
   ) => void;
   controller?: HttpBodyAdmissionController;
   receiveTimeoutMs?: number;
@@ -269,7 +493,10 @@ export function createAdmittedBodyParser(options: {
     if (!options.shouldParse(req)) {
       if (options.rejectUnsupportedMediaType && hasRequestBody(req)) {
         recordStudioMetrics((metrics) => metrics.recordHttpBodyAdmission('unsupported_media_type'));
-        next(
+        forwardBodyParserError(
+          req,
+          res,
+          next,
           createHttpError(415, 'Request body uses an unsupported media type.', {
             expose: true,
             code: 'unsupported_media_type',
@@ -282,32 +509,16 @@ export function createAdmittedBodyParser(options: {
       return;
     }
 
+    if (res.destroyed || res.writableEnded) return;
     const limitBytes = options.getLimitBytes(req);
-    let reservation: BodyReservation;
-    try {
-      const admitted = controller.admit(req, limitBytes);
-      if (!admitted) {
-        next(
-          createHttpError(503, 'Request body capacity is temporarily exhausted.', {
-            expose: true,
-            code: 'body_capacity_exhausted',
-            retryAfterSeconds: 1,
-            closeConnection: true,
-          }),
-        );
-        return;
-      }
-      reservation = admitted;
-    } catch (error) {
-      next(error);
-      return;
-    }
-
-    requestReservations.set(req, reservation);
+    const receiveTimeoutMs = options.receiveTimeoutMs ?? DEFAULT_HTTP_BODY_RECEIVE_TIMEOUT_MS;
+    const receiveDeadline = performance.now() + receiveTimeoutMs;
+    let reservation: BodyReservation | undefined;
+    let parsingStarted = false;
     let parsingSettled = false;
     const cancellation = new AbortController();
     const releaseIfNotRetained = () => {
-      if (parsingSettled && !reservation.isRetained()) {
+      if (parsingSettled && reservation && !reservation.isRetained()) {
         reservation.release();
       }
     };
@@ -315,18 +526,21 @@ export function createAdmittedBodyParser(options: {
     res.once('close', releaseIfNotRetained);
 
     let bodyReceived = false;
+    let decodedBytes: number | undefined;
+    let sizeReportError: Error | undefined;
     const receiveTimeout = setTimeout(() => {
-      cancellation.abort(
-        createHttpError(408, 'Request body was not received in time.', {
-          expose: true,
-          code: 'body_receive_timeout',
-          closeConnection: true,
-        }),
-      );
-    }, options.receiveTimeoutMs ?? DEFAULT_HTTP_BODY_RECEIVE_TIMEOUT_MS);
+      cancellation.abort(bodyReceiveTimeoutError());
+    }, receiveTimeoutMs);
     receiveTimeout.unref();
 
-    const markBodyReceived = () => {
+    const markBodyReceived = (bytes?: number) => {
+      if (parsingSettled) return;
+      if (bytes !== undefined) {
+        if (!Number.isSafeInteger(bytes) || bytes < 0 || (decodedBytes !== undefined && bytes !== decodedBytes)) {
+          sizeReportError = new Error('Invalid decoded request-body size report.');
+          cancellation.abort(sizeReportError);
+        } else decodedBytes = bytes;
+      }
       if (bodyReceived) return;
       bodyReceived = true;
       clearTimeout(receiveTimeout);
@@ -336,10 +550,19 @@ export function createAdmittedBodyParser(options: {
       if (parsingSettled) {
         return;
       }
+      if (!error) error = sizeReportError;
+      if (!error && decodedBytes !== undefined) {
+        try {
+          reservation!.finalizeDecodedBytes(decodedBytes);
+        } catch (sizeError) {
+          error = sizeError;
+        }
+      }
       parsingSettled = true;
       clearTimeout(receiveTimeout);
       req.off('aborted', abortParsing);
       res.off('close', abortParsing);
+      res.off('finish', abortParsing);
       if (error) {
         const status = (error as { status?: unknown }).status;
         if (status === 413) {
@@ -355,32 +578,60 @@ export function createAdmittedBodyParser(options: {
           (error as { code?: string }).code ??= 'unsupported_body_encoding';
           (error as { expose?: boolean }).expose = true;
         }
-        if ((error as { closeConnection?: unknown }).closeConnection === true) {
-          closeResponseConnectionAfterFlush(res, req);
-        }
-        reservation.release();
-        if (res.destroyed) {
-          return;
-        }
-        next(error);
+        reservation?.release();
+        res.off('finish', releaseIfNotRetained);
+        res.off('close', releaseIfNotRetained);
+        forwardBodyParserError(req, res, next, error);
         return;
       }
       // Parsing has finished. Long-running handlers can retain only their
       // body's byte reservation; they must not consume one of the four
       // expensive parsing slots for the lifetime of graph execution.
-      reservation.releaseParserSlot();
+      reservation!.releaseParserSlot();
       next();
     };
 
     const abortParsing = () => {
-      cancellation.abort(createHttpError(400, 'Request body was aborted.', { expose: true, closeConnection: true }));
+      cancellation.abort(bodyAbortedError());
+      // Waiting owns no decoder. Remove all middleware state immediately;
+      // a grant already queued as a promise reaction will release itself below.
+      if (!parsingStarted) settle(cancellation.signal.reason);
     };
     req.once('aborted', abortParsing);
     res.once('close', abortParsing);
-    if (res.destroyed) abortParsing();
+    res.once('finish', abortParsing);
+    if (req.destroyed || req.aborted) {
+      abortParsing();
+      return;
+    }
 
+    const startParsing = (admitted: BodyReservation) => {
+      if (parsingSettled || cancellation.signal.aborted || res.destroyed || res.writableEnded) {
+        admitted.release();
+        if (!parsingSettled) settle(cancellation.signal.reason ?? bodyAbortedError());
+        return;
+      }
+      reservation = admitted;
+      if (performance.now() >= receiveDeadline) {
+        settle(bodyReceiveTimeoutError());
+        return;
+      }
+      requestReservations.set(req, reservation);
+      parsingStarted = true;
+      try {
+        options.parse(req, res, settle, limitBytes, cancellation.signal, markBodyReceived);
+      } catch (error) {
+        settle(error);
+      }
+    };
     try {
-      options.parse(req, res, settle, limitBytes, cancellation.signal, markBodyReceived);
+      const admitted = controller.admit(req, limitBytes, { signal: cancellation.signal, receiveDeadline });
+      if (admitted instanceof Promise) {
+        req.pause();
+        // Attach here, in this request's settings/async context. The controller
+        // only resolves promises; another request must never run our parser.
+        void admitted.then(startParsing, settle);
+      } else startParsing(admitted);
     } catch (error) {
       settle(error);
     }

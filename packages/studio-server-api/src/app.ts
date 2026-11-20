@@ -1,5 +1,6 @@
 import { performance } from 'node:perf_hooks';
 import type { AcceptedWork, ProcessRetirement } from '../../studio-server-shared/process-retirement.js';
+import type { PublishedExecutionPolicySnapshot } from '../../studio-server-shared/app-settings-types.js';
 import { createRequestWorkBarrier } from './request-work.js';
 import { createProcessRetirementRouter } from './process-retirement-http.js';
 import { isLatestDebuggerRelayReady } from './latestWorkflowRemoteDebugger.js';
@@ -10,7 +11,6 @@ import {
   closeHousekeepingAdmission,
   getHousekeepingAdmissionState,
 } from './housekeeping-owner.js';
-import { getLegacyRestoreService } from './legacy-restore/service.js';
 import { asyncHandler } from './utils/asyncHandler.js';
 import { getLocalMetadataServingSelection } from './local-metadata/serving-selection.js';
 import { localUpgradeFailure } from './local-metadata/upgrade-diagnostics.js';
@@ -69,9 +69,14 @@ import type { RuntimeHealthReader } from './runtime-health.js';
 import { captureAppSettingsSnapshot } from './middleware/app-settings-snapshot.js';
 import { vmMigrationRequestBarrier } from './vm-migration-maintenance.js';
 import { releaseMaintenanceBarrier } from './release-maintenance.js';
-import { legacyRestoreRequestBarrier, isLegacyRestorePaused, isLegacyRestoreWarmup } from './legacy-restore/service.js';
+import {
+  getLegacyRestoreService,
+  legacyRestoreRequestBarrier,
+  isLegacyRestorePaused,
+  isLegacyRestoreWarmup,
+} from './legacy-restore/service.js';
 import { legacyRestoreRouter } from './legacy-restore/router.js';
-import { closeResponseConnectionAfterFlush, getHttpBodyAdmissionSnapshot } from './middleware/body-admission.js';
+import { sendRejectedBodyResponse, getHttpBodyAdmissionSnapshot } from './middleware/body-admission.js';
 import { getManagedPostgresPoolMetrics } from './managed-postgres-pool.js';
 import { getStudioMetrics, type MetricsHttpRoute, type StudioMetrics } from './metrics.js';
 import { getWorkflowExecutionRecordingPersistenceMetrics } from './routes/workflows/recordings.js';
@@ -92,9 +97,7 @@ type ApiAppOptions = {
   retirement?: {
     owner: ProcessRetirement;
     token: string;
-    readAdmission?: () =>
-      | import('../../studio-server-shared/app-settings-types.js').PublishedExecutionPolicySnapshot
-      | undefined;
+    readAdmission?: () => PublishedExecutionPolicySnapshot | undefined;
   };
 };
 
@@ -607,10 +610,12 @@ export function createApiApp(profile = getApiRuntimeProfile(), options: ApiAppOp
     if (typeof retryAfterSeconds === 'number' && Number.isFinite(retryAfterSeconds)) {
       res.setHeader('Retry-After', String(Math.max(0, Math.ceil(retryAfterSeconds))));
     }
-    if ((err as { closeConnection?: unknown }).closeConnection === true) {
-      closeResponseConnectionAfterFlush(res, req);
-    }
-    res.status(response.status).json(response.body);
+    const send = () => {
+      res.status(response.status).json(response.body);
+    };
+    if ((err as { closeConnection?: unknown }).closeConnection === true || !res.shouldKeepAlive) {
+      sendRejectedBodyResponse(req, res, send);
+    } else send();
   });
 
   return app;

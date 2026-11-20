@@ -4,6 +4,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { HttpBodyAdmissionController } from '../middleware/body-admission.js';
+import type { Request } from 'express';
 
 import {
   configureAppSettingsBackendForTests,
@@ -159,6 +161,44 @@ test('settings repository pins one revision for the lifetime of a request', asyn
     assert.equal(snapshots.first, snapshots.second);
     assert.equal(snapshots.second.value.count, 1);
     assert.equal((await repository.read()).value.count, 2);
+  });
+});
+
+test('queued HTTP bodies retain their original settings snapshots across another request releasing capacity', async () => {
+  await withTestRepository(async ({ repository }) => {
+    const controller = new HttpBodyAdmissionController({ waitMs: 30_000 });
+    const request = { get: () => undefined } as unknown as Request;
+    const held = Array.from({ length: 4 }, () => {
+      const reservation = controller.admit(request, 100);
+      assert.ok(!(reservation instanceof Promise));
+      return reservation;
+    });
+    const waiting: Promise<number>[] = [];
+    const enqueue = () => runWithAppSettingsSnapshot(() => {
+      const pending = controller.admit(request, 100);
+      assert.ok(pending instanceof Promise);
+      const result = pending.then((reservation) => {
+        try { return repository.readSync().value.count; }
+        finally { reservation.release(); }
+      });
+      waiting.push(result);
+      void result.catch(() => {}); // Cleanup still observes it if a fixture write fails first.
+      return result;
+    });
+    try {
+      await repository.update(() => ({ count: 1, nested: { label: 'first' } }));
+      const first = enqueue();
+      await repository.update(() => ({ count: 2, nested: { label: 'second' } }));
+      const second = enqueue();
+      await repository.update(() => ({ count: 3, nested: { label: 'releasing' } }));
+      runWithAppSettingsSnapshot(() => held.forEach((reservation) => reservation.release()));
+      assert.deepEqual(await Promise.all([first, second]), [1, 2]);
+      assert.equal(repository.readSync().value.count, 3);
+      assert.equal(controller.getSnapshot().reservedBytes, 0);
+    } finally {
+      held.forEach((reservation) => reservation.release());
+      await Promise.allSettled(waiting);
+    }
   });
 });
 
