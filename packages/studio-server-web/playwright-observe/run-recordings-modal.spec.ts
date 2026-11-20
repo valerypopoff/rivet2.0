@@ -2240,18 +2240,22 @@ test.describe('Run recordings modal', () => {
       expect(childRequests).toHaveLength(2);
       expect(childRequests.every((url) => !new URL(url).searchParams.has('statusFilter'))).toBe(true);
       expect(recordingFetches).toEqual([]);
-      // Unmeasured virtual rows use estimates; newly mounted wrapped rows
-      // change the total height. Follow the moving bottom until the final
-      // recording is visible rather than assuming one jump measures the list.
+      const viewport = modal.locator('.run-recordings-list');
+      // Scroll and check the visible tail together as newly measured rows resize the list.
       await expect
-        .poll(async () => {
-          await modal.locator('.run-recordings-list').evaluate((viewport) => {
-            viewport.scrollTop = viewport.scrollHeight;
-          });
-          return modal.locator('[data-recording-id="recording-b-1"]').isVisible();
-        })
-        .toBe(true);
-      await expect(children.last()).toHaveAttribute('data-recording-id', 'recording-b-1');
+        .poll(() =>
+          viewport.evaluate((list) => {
+            list.scrollTop = list.scrollHeight;
+            const lastChild = Array.from(list.querySelectorAll('.run-recordings-sub-run')).at(-1);
+            if (!lastChild) return null;
+            const row = lastChild.getBoundingClientRect();
+            const bounds = list.getBoundingClientRect();
+            return row.top < bounds.bottom && row.bottom > bounds.top
+              ? lastChild.getAttribute('data-recording-id')
+              : null;
+          }),
+        )
+        .toBe('recording-b-1');
     });
   }
 
