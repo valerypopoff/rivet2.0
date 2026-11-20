@@ -354,6 +354,17 @@ test-owned empty endpoint while checking its restored internal-only access polic
 `test:legacy-restore-managed` is a focused entry to that same fixture and ownership
 test; the default `test:migration-managed` keeps the full migration negative cases.
 
+## HTTP Call response ownership
+
+Published endpoints, web-app actions and hosted editor runs use the shared
+[Core HTTP Call lifecycle](../CORE-ENGINE.md#http-call-response-lifecycle).
+It releases discarded retry/error replies while retaining their status/header
+evidence. Cleanup adds no awaited work to successful requests, changes no
+admission limit and requires no server flag or database migration. It does not
+change configured retries or establish whether a remote mutation took effect.
+See the [implementation and validation record](http-call-response-cleanup-plan.md)
+for real transport checks and local performance measurements.
+
 ## OpenRouter LLM execution
 
 LLM Chat and LLM Profile share Core's first-class OpenRouter adapter across hosted

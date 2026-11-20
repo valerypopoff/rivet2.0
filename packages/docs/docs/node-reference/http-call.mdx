@@ -113,6 +113,8 @@ Enable `Catch all request failures` when you want failures to flow through node 
 
 Enable `Retry on non-200` when you want Rivet to repeat responses whose status code is not `200`. Retry mode changes the existing `Status Code`, `Request failed`, and `Request error` outputs to arrays. Rivet does not create extra ad-hoc retry outputs; downstream nodes should read those same output ports.
 
+Rivet releases response bodies it discards during retries or final status failures. This does not change which requests are retried or which outputs are returned. With `Fail on non-2XX status code` off, the final response body remains available as usual.
+
 ## FAQ
 
 **Q: Can I use the HTTP Call Node to make requests to any API?**

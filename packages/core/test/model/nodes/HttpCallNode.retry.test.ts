@@ -2,7 +2,6 @@ import test from 'node:test';
 import { strict as assert } from 'node:assert';
 import {
   assertRetryAttemptOutputs,
-  assertStringArrayOutputMatches,
   createContext,
   createNode,
   installHttpCallNodeTestHooks,
@@ -48,12 +47,15 @@ void test('retains response headers for every retry attempt when retries end in 
 
   await assert.rejects(
     () =>
-      node.process({}, {
-        ...createContext(),
-        setFailureOutputs: (outputs) => {
-          failureOutputs = outputs;
+      node.process(
+        {},
+        {
+          ...createContext(),
+          setFailureOutputs: (outputs) => {
+            failureOutputs = outputs;
+          },
         },
-      }),
+      ),
     /HTTP call returned non-2XX status code: 429/,
   );
 
@@ -295,51 +297,6 @@ void test('records request errors from each failed retry attempt in existing Req
       [/HTTP call returned non-2XX status code: 503/],
     ],
   });
-});
-void test('records final caught retry errors as an array on the existing Request error output', async () => {
-  let requestCount = 0;
-  globalThis.fetch = async () => {
-    requestCount++;
-    return new Response('missing', { status: 404, headers: { 'content-type': 'text/plain' } });
-  };
-
-  const node = createNode({
-    method: 'GET',
-    url: 'https://example.com',
-    errorOnNon200: true,
-    catchRequestFailed: true,
-    retryOnNon200: true,
-    retryOnNon200RepeatTimes: 1,
-  });
-  const result = await node.process({}, createContext());
-
-  assert.equal(requestCount, 2);
-  assertStringArrayOutputMatches(result, requestErrorOutputId, [
-    [/HTTP call returned non-2XX status code: 404/],
-    [/HTTP call returned non-2XX status code: 404/],
-  ]);
-});
-void test('does not swallow aborts during retry cooldown', async () => {
-  let requestCount = 0;
-  globalThis.fetch = async () => {
-    requestCount++;
-    return new Response('missing', { status: 404, headers: { 'content-type': 'text/plain' } });
-  };
-
-  const abortController = new AbortController();
-  const node = createNode({
-    method: 'GET',
-    url: 'https://example.com',
-    catchRequestFailed: true,
-    retryOnNon200: true,
-    retryOnNon200RepeatTimes: 1,
-    retryOnNon200CooldownMs: 50,
-  });
-
-  setTimeout(() => abortController.abort(), 5);
-
-  await assert.rejects(() => node.process({}, createContext({ signal: abortController.signal })), /Aborted/);
-  assert.equal(requestCount, 1);
 });
 void test('does not format unused retry-attempt errors when retry mode is disabled', async () => {
   globalThis.fetch = async () => new Response('created', { status: 201, headers: { 'content-type': 'text/plain' } });

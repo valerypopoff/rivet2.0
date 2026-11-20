@@ -18,15 +18,16 @@ void test('keeps success behavior unchanged when catchRequestFailed is disabled'
   });
 });
 void test('does not throw on non-2XX responses when errorOnNon200 is disabled', async () => {
-  globalThis.fetch = async () => new Response('created', { status: 201, headers: { 'content-type': 'text/plain' } });
+  globalThis.fetch = async () =>
+    new Response('unavailable', { status: 503, headers: { 'content-type': 'text/plain' } });
 
   const node = createNode({ method: 'GET', url: 'https://example.com', errorOnNon200: false });
   const result = await node.process({}, createContext());
 
   assert.deepStrictEqual(result, {
-    res_body: { type: 'string', value: 'created' },
+    res_body: { type: 'string', value: 'unavailable' },
     json: { type: 'control-flow-excluded', value: undefined },
-    statusCode: { type: 'number', value: 201 },
+    statusCode: { type: 'number', value: 503 },
     res_headers: { type: 'object', value: { 'content-type': 'text/plain' } },
   });
 });
@@ -48,7 +49,7 @@ void test('does not throw on 2XX responses when errorOnNon200 is enabled', async
     res_headers: { type: 'object', value: { 'content-type': 'text/plain' } },
   });
 });
-void test('returns excluded request error when retry mode succeeds without failed attempts', async () => {
+void test('returns the complete success contract when retry mode succeeds without failed attempts', async () => {
   globalThis.fetch = async () => new Response('ok', { status: 200, headers: { 'content-type': 'text/plain' } });
 
   const node = createNode({
@@ -59,23 +60,14 @@ void test('returns excluded request error when retry mode succeeds without faile
   });
   const result = await node.process({}, createContext());
 
-  assert.deepStrictEqual(result.statusCode, { type: 'number[]', value: [200] });
-  assert.deepStrictEqual(result.requestFailed, { type: 'boolean[]', value: [false] });
-  assert.deepStrictEqual(result.requestError, { type: 'control-flow-excluded', value: undefined });
-});
-void test('keeps old HTTP retry-attempt output IDs out of the runtime contract', async () => {
-  globalThis.fetch = async () => new Response('ok', { status: 200, headers: { 'content-type': 'text/plain' } });
-
-  const node = createNode({
-    method: 'GET',
-    url: 'https://example.com',
-    retryOnNon200: true,
+  assert.deepStrictEqual(result, {
+    res_body: { type: 'string', value: 'ok' },
+    json: { type: 'control-flow-excluded', value: undefined },
+    statusCode: { type: 'number[]', value: [200] },
+    res_headers: { type: 'object[]', value: [{ 'content-type': 'text/plain' }] },
+    requestFailed: { type: 'boolean[]', value: [false] },
+    requestError: { type: 'control-flow-excluded', value: undefined },
   });
-  const result = await node.process({}, createContext());
-
-  assert.equal('statusCodes' in result, false);
-  assert.equal('requestFailedAttempts' in result, false);
-  assert.equal('requestErrors' in result, false);
 });
 void test('returns requestFailed=false on successful text responses when enabled', async () => {
   globalThis.fetch = async () =>
@@ -110,7 +102,7 @@ void test('returns requestFailed=false on successful non-json responses when ena
 });
 void test('returns requestFailed=false on successful binary responses when enabled', async () => {
   globalThis.fetch = async () =>
-    new Response(Uint8Array.from([1, 2, 3]), {
+    new Response(Uint8Array.from([0, 127, 128, 255]), {
       status: 200,
       headers: { 'content-type': 'application/octet-stream' },
     });
@@ -123,15 +115,13 @@ void test('returns requestFailed=false on successful binary responses when enabl
   });
   const result = await node.process({}, createContext());
 
-  assert.equal(result.binary?.type, 'binary');
-  assert.deepStrictEqual(Array.from((result.binary as { value: Uint8Array }).value), [1, 2, 3]);
-  assert.deepStrictEqual(result.statusCode, { type: 'number', value: 200 });
-  assert.deepStrictEqual(result.res_headers, {
-    type: 'object',
-    value: { 'content-type': 'application/octet-stream' },
+  assert.deepStrictEqual(result, {
+    binary: { type: 'binary', value: Uint8Array.from([0, 127, 128, 255]) },
+    statusCode: { type: 'number', value: 200 },
+    res_headers: { type: 'object', value: { 'content-type': 'application/octet-stream' } },
+    requestFailed: { type: 'boolean', value: false },
+    requestError: { type: 'control-flow-excluded', value: undefined },
   });
-  assert.deepStrictEqual(result.requestFailed, { type: 'boolean', value: false });
-  assert.deepStrictEqual(result.requestError, { type: 'control-flow-excluded', value: undefined });
 });
 void test('keeps 2XX responses out of the requestFailed path when both toggles are enabled', async () => {
   globalThis.fetch = async () => new Response('created', { status: 201, headers: { 'content-type': 'text/plain' } });

@@ -1,10 +1,11 @@
 import { expect, test, type FrameLocator, type Page } from '@playwright/test';
-import { authenticateIfNeeded } from './helpers/hostedEditorObserve';
+import { authenticateIfNeeded, mockHostedEditorBootstrap } from './helpers/hostedEditorObserve';
 import { seedHostedEditorProject } from './helpers/hostedEditorStorage';
 
 type EditorRoot = Page | FrameLocator;
 
 test('HTTP Call keeps headers for every non-200 retry visible beside its terminal error', async ({ page }) => {
+  await mockHostedEditorBootstrap(page);
   const nodeId = 'rate-limited-http-call';
   const retryAfterValues = ['1', '15', '30'];
   const requestIds = retryAfterValues.map((_, index) => `rate-limit-request-429-${index + 1}`);
@@ -46,6 +47,24 @@ test('HTTP Call keeps headers for every non-200 retry visible beside its termina
       }),
     ),
   );
+  await page.addInitScript(() => {
+    const nativeFetch = window.fetch.bind(window);
+    const observed = window as typeof window & { httpCallDiscardedResponses: string[] };
+    observed.httpCallDiscardedResponses = [];
+    window.fetch = async (...args) => {
+      const response = await nativeFetch(...args);
+      const request = args[0];
+      const url = request instanceof Request ? request.url : String(request);
+      if (url.startsWith('https://http-call-headers.fixture.test/') && response.body) {
+        const cancel = response.body.cancel.bind(response.body);
+        response.body.cancel = (reason) => {
+          observed.httpCallDiscardedResponses.push(response.headers.get('x-request-id')!);
+          return cancel(reason);
+        };
+      }
+      return response;
+    };
+  });
   let requestCount = 0;
   await page.route('https://http-call-headers.fixture.test/**', (route) => {
     const requestIndex = requestCount++;
@@ -125,6 +144,13 @@ test('HTTP Call keeps headers for every non-200 retry visible beside its termina
   const nodeOutput = node.locator('.node-output');
   await expect(nodeOutput).toContainText('HTTP call returned non-2XX status code: 429');
   await expect.poll(() => requestCount, { timeout: 30_000 }).toBe(3);
+  await expect
+    .poll(async () =>
+      node.evaluate(
+        () => (window as typeof window & { httpCallDiscardedResponses?: string[] }).httpCallDiscardedResponses ?? [],
+      ),
+    )
+    .toEqual(requestIds);
 
   await nodeOutput.hover();
   // Compact node output keeps its normal one-port preview. Hover expands the

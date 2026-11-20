@@ -1,6 +1,6 @@
 # HTTP callback capacity and failure diagnostics
 
-Status — planned on November 20, 2026. This document describes future implementation and validation.
+Status — capacity and diagnostic work remains planned, November 20, 2026. The separate [HTTP response cleanup](http-call-response-cleanup-plan.md) is implemented and locally validated; it has not been deployed by this work.
 
 ## Intended outcome
 
@@ -102,6 +102,8 @@ Keep `/livez` focused on process health and `/up` focused on readiness. Ensure h
 Preserve current public success response formats. Use HTTP 503 with `Retry-After` for temporary API capacity rejection, and test the existing caller's handling. Keep Rivet's existing admission responses unchanged. Review GraphQL clients' handling of overload responses because HTTP 200 and application success have separate meanings. For required write callbacks, confirm the workflow checks an unsuccessful HTTP or application response. The inspected save node currently has `errorOnNon200` disabled, so response handling requires an explicit workflow review before relying on overload responses for that path. Make the correction in the affected workflow using its normal HTTP settings and response checks, preserving generic HTTP node defaults. A callback rejection must not silently turn a required write into a successful run or trigger a replay of the entire workflow.
 
 ## Phase 4 — Improve generic failure evidence in Rivet
+
+The implemented [HTTP response cleanup](http-call-response-cleanup-plan.md) releases unused retry/error replies in the generic HTTP Call node. Its transport and performance checks passed locally. It preserves this plan's retry policy and does not replace the receiving-service capacity or remaining failure-diagnostic work.
 
 Use the existing error and recording infrastructure.
 

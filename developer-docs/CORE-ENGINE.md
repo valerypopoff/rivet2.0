@@ -60,6 +60,31 @@ That file re-exports:
 
 For refactors, `exports.ts` is the API contract that downstream packages rely on. Downstream package code should import core through `@valerypopoff/rivet2-core`; it should not import `packages/core/src/...` files directly. The shared ESLint config enforces that boundary. When app presentation or another package needs to mirror runtime semantics, such as interpolation token parsing, warning-port handling, JS-list callback source interpolation, Gentrace app-facing utilities, `RivetUIContext`, tokenizer implementations, or project-reference loading, the shared contract should be exported intentionally from core instead of reaching into the source tree.
 
+## HTTP Call Response Lifecycle
+
+`HttpCallNodeImpl.process` owns at most one unconsumed Fetch response. It records
+ownership as soon as Fetch resolves, before collecting attempt headers. A retry
+discards that response before the cooldown; terminal cleanup discards any response
+left by status rejection, metadata callbacks or a failed body read. Successful
+`text()` and `blob()` reads clear ownership before JSON parsing or byte conversion.
+The final response is still consumed normally when fail-on-non-2XX is disabled.
+
+Discard clears ownership first and requests body cancellation once, without
+awaiting it. Cancellation errors cannot replace the node outcome. Locked streams
+are not stolen from their reader; native Fetch abort/read failures close their own
+transport. Custom Fetch implementations remain responsible for their own readers.
+The success path adds no storage access, timer, body copy or awaited cleanup.
+
+`HttpCallNode.lifecycle.test.ts` counts explicit cancellation calls (including
+repeated cancellation of an already-closed stream), and covers exceptional exits,
+independent calls, and real loopback response closure before fixture teardown.
+Its abort case enables caught failures to prove cancellation still propagates.
+Response-contract tests compare full outputs and include non-UTF-8 binary bytes.
+The browser HTTP failure-header test observes the editor's own frame and verifies
+cancellation while preserving attempt headers in compact and expanded outputs.
+The [implementation and validation record](./studio-server/http-call-response-cleanup-plan.md)
+documents fault checks, transport release and the measured local performance limits.
+
 ## Runtime Logging And Diagnostics
 
 Runtime code must not log raw graph values by default.

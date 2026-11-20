@@ -23,34 +23,16 @@ void test('returns excluded outputs and requestFailed=true for invalid URL when 
 
   assertCaughtTextRequestFailure(result, [/Invalid URL: not a url/]);
 });
-void test('catches browser-style Failed to fetch errors when enabled', async () => {
-  globalThis.fetch = async () => {
-    throw new TypeError('Failed to fetch');
-  };
-
-  const node = createNode({ method: 'GET', url: 'https://example.com', catchRequestFailed: true });
-  const result = await node.process({}, createContext({ executor: 'browser' }));
-
-  assert.deepStrictEqual(result.requestFailed, { type: 'boolean', value: true });
-  assert.deepStrictEqual(result.res_body, { type: 'control-flow-excluded', value: undefined });
-  const errorText = getStringOutputValue(result, requestErrorOutputId);
-  assert.match(errorText, /CORS problems/);
-  assert.match(errorText, /Failed to fetch/);
-});
-void test('catches browser-style Load failed errors when enabled', async () => {
-  globalThis.fetch = async () => {
-    throw new TypeError('Load failed');
-  };
-
-  const node = createNode({ method: 'GET', url: 'https://example.com', catchRequestFailed: true });
-  const result = await node.process({}, createContext({ executor: 'browser' }));
-
-  assert.deepStrictEqual(result.requestFailed, { type: 'boolean', value: true });
-  assert.deepStrictEqual(result.statusCode, { type: 'control-flow-excluded', value: undefined });
-  const errorText = getStringOutputValue(result, requestErrorOutputId);
-  assert.match(errorText, /CORS problems/);
-  assert.match(errorText, /Load failed/);
-});
+for (const message of ['Failed to fetch', 'Load failed']) {
+  void test(`catches browser-style ${message} errors when enabled`, async () => {
+    globalThis.fetch = async () => {
+      throw new TypeError(message);
+    };
+    const node = createNode({ url: 'https://example.com', catchRequestFailed: true });
+    const result = await node.process({}, createContext({ executor: 'browser' }));
+    assertCaughtTextRequestFailure(result, [/CORS problems/, new RegExp(message)]);
+  });
+}
 void test('catches node-style fetch failed errors when enabled', async () => {
   const fetchError = new TypeError('fetch failed') as TypeError & { cause?: { code: string; message: string } };
   fetchError.cause = { code: 'ENOTFOUND', message: 'getaddrinfo ENOTFOUND example.invalid' };
@@ -101,12 +83,15 @@ void test('retains a non-2XX response status and headers for the terminal error 
 
   await assert.rejects(
     () =>
-      node.process({}, {
-        ...createContext(),
-        setFailureOutputs: (outputs) => {
-          failureOutputs = outputs;
+      node.process(
+        {},
+        {
+          ...createContext(),
+          setFailureOutputs: (outputs) => {
+            failureOutputs = outputs;
+          },
         },
-      }),
+      ),
     /HTTP call returned non-2XX status code: 429/,
   );
 
@@ -139,10 +124,7 @@ void test('publishes non-2XX metadata to direct consumers when no failure-output
     },
   };
 
-  await assert.rejects(
-    () => node.process({}, context),
-    /HTTP call returned non-2XX status code: 429/,
-  );
+  await assert.rejects(() => node.process({}, context), /HTTP call returned non-2XX status code: 429/);
 
   assert.deepStrictEqual(context.partialOutputs, {
     statusCode: { type: 'number', value: 429 },
@@ -182,14 +164,13 @@ void test('does not catch abort errors', async () => {
 });
 void test('catches response body read failures when enabled', async () => {
   globalThis.fetch = async () =>
-    ({
-      ok: true,
-      status: 200,
-      headers: new Headers({ 'content-type': 'text/plain' }),
-      text: async () => {
-        throw new Error('Body read failed');
-      },
-    }) as Response;
+    new Response(
+      new ReadableStream({
+        start(controller) {
+          controller.error(new Error('Body read failed'));
+        },
+      }),
+    );
 
   const node = createNode({ method: 'GET', url: 'https://example.com', catchRequestFailed: true });
   const result = await node.process({}, createContext());
