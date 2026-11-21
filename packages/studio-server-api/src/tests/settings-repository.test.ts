@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 // test-style: fixture-read: reads serialized project fixtures and test-owned persisted artifacts, never implementation source.
 import fs from 'node:fs';
+import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -39,10 +40,7 @@ type TestSettings = {
 };
 
 async function withTestRepository(
-  run: (context: {
-    filePath: string;
-    repository: VersionedSettingsRepository<TestSettings>;
-  }) => Promise<void> | void,
+  run: (context: { filePath: string; repository: VersionedSettingsRepository<TestSettings> }) => Promise<void> | void,
   descriptorOverrides: Partial<SettingsRepositoryDescriptor<TestSettings>> = {},
 ): Promise<void> {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'rivet-settings-repository-'));
@@ -95,26 +93,33 @@ test('settings repository rejects unsupported future schema versions', async () 
 });
 
 test('settings repository applies explicit schema migrations', async () => {
-  await withTestRepository(async ({ filePath, repository }) => {
-    fs.writeFileSync(filePath, JSON.stringify({ version: 1, oldCount: 7, label: 'migrated' }));
+  await withTestRepository(
+    async ({ filePath, repository }) => {
+      fs.writeFileSync(filePath, JSON.stringify({ version: 1, oldCount: 7, label: 'migrated' }));
 
-    const snapshot = await repository.read();
-    assert.equal(snapshot.value.count, 7);
-    assert.equal(snapshot.value.nested.label, 'migrated');
-  }, {
-    currentVersion: 2,
-    migrations: {
-      1: (stored) => ({ ...stored, count: stored.oldCount }),
+      const snapshot = await repository.read();
+      assert.equal(snapshot.value.count, 7);
+      assert.equal(snapshot.value.nested.label, 'migrated');
     },
-  });
+    {
+      currentVersion: 2,
+      migrations: {
+        1: (stored) => ({ ...stored, count: stored.oldCount }),
+      },
+    },
+  );
 });
 
 test('settings repository serializes concurrent partial updates', async () => {
   await withTestRepository(async ({ repository }) => {
-    await Promise.all(Array.from({ length: 20 }, () => repository.update((current) => ({
-      count: current.count + 1,
-      nested: current.nested,
-    }))));
+    await Promise.all(
+      Array.from({ length: 20 }, () =>
+        repository.update((current) => ({
+          count: current.count + 1,
+          nested: current.nested,
+        })),
+      ),
+    );
 
     assert.equal((await repository.read()).value.count, 20);
   });
@@ -136,6 +141,93 @@ test('settings repository orders external refreshes before queued updates', asyn
     assert.equal(snapshot.value.count, 6);
     assert.equal(snapshot.value.nested.label, 'external');
     assert.equal(JSON.parse(fs.readFileSync(filePath, 'utf8')).count, 6);
+  });
+});
+
+void test('queued freshness checks bound sharing and refresh every request snapshot', async (t) => {
+  await withTestRepository(async ({ filePath, repository }) => {
+    await repository.initialize();
+    fs.writeFileSync(filePath, JSON.stringify({ version: 1, count: 9, label: 'external' }));
+    const stat = fsp.stat;
+    let calls = 0;
+    t.mock.method(fsp, 'stat', (...args: Parameters<typeof fsp.stat>) => {
+      if (args[0] === filePath) calls++;
+      return stat(...args);
+    });
+    const values = await Promise.all(
+      Array.from({ length: 20 }, () =>
+        runWithAppSettingsSnapshot(async () => {
+          await repository.refreshIfChanged();
+          return repository.readSync().value.count;
+        }),
+      ),
+    );
+    assert.deepEqual(values, Array(20).fill(9));
+    assert.equal(calls, 4, 'Three bounded freshness stats and the post-read signature for twenty callers');
+  });
+});
+
+void test('freshness sharing never joins running checks or crosses a queued write', async (t) => {
+  await withTestRepository(async ({ filePath, repository }) => {
+    await repository.update(() => ({ count: 1, nested: { label: 'first' } }));
+    const stat = fsp.stat;
+    let release!: () => void;
+    let entered!: () => void;
+    const started = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let held = false;
+    t.mock.method(fsp, 'stat', async (...args: Parameters<typeof fsp.stat>) => {
+      const result = await stat(...args);
+      if (args[0] === filePath && !held) {
+        held = true;
+        entered();
+        await gate;
+      }
+      return result;
+    });
+    const read = () =>
+      runWithAppSettingsSnapshot(async () => {
+        await repository.refreshIfChanged();
+        return repository.readSync().value.count;
+      });
+    const first = read();
+    await started;
+    fs.writeFileSync(filePath, JSON.stringify({ version: 1, count: 2, label: 'external-second' }));
+    const beforeWrite = read();
+    const write = repository.update(() => ({ count: 3, nested: { label: 'third' } }));
+    const afterWrite = read();
+    release();
+    assert.equal(await first, 1);
+    assert.equal(await beforeWrite, 2);
+    await write;
+    assert.equal(await afterWrite, 3);
+
+    // A later call must perform another check, not reuse the completed result.
+    fs.writeFileSync(filePath, JSON.stringify({ version: 1, count: 4, label: 'external-fourth' }));
+    assert.equal(await read(), 4);
+  });
+});
+
+void test('shared freshness failures reject all callers and allow a fresh retry', async (t) => {
+  await withTestRepository(async ({ filePath, repository }) => {
+    await repository.initialize();
+    const stat = fsp.stat;
+    let fail = true;
+    t.mock.method(fsp, 'stat', (...args: Parameters<typeof fsp.stat>) => {
+      if (args[0] === filePath && fail) return Promise.reject(Error('stat unavailable'));
+      return stat(...args);
+    });
+    const results = await Promise.allSettled(Array.from({ length: 20 }, () => repository.refreshIfChanged()));
+    assert.ok(
+      results.every((result) => result.status === 'rejected' && /stat unavailable/.test(String(result.reason))),
+    );
+    fail = false;
+    await repository.refreshIfChanged();
+    assert.equal(repository.readSync().value.count, 0);
   });
 });
 
@@ -174,17 +266,21 @@ test('queued HTTP bodies retain their original settings snapshots across another
       return reservation;
     });
     const waiting: Promise<number>[] = [];
-    const enqueue = () => runWithAppSettingsSnapshot(() => {
-      const pending = controller.admit(request, 100);
-      assert.ok(pending instanceof Promise);
-      const result = pending.then((reservation) => {
-        try { return repository.readSync().value.count; }
-        finally { reservation.release(); }
+    const enqueue = () =>
+      runWithAppSettingsSnapshot(() => {
+        const pending = controller.admit(request, 100);
+        assert.ok(pending instanceof Promise);
+        const result = pending.then((reservation) => {
+          try {
+            return repository.readSync().value.count;
+          } finally {
+            reservation.release();
+          }
+        });
+        waiting.push(result);
+        void result.catch(() => {}); // Cleanup still observes it if a fixture write fails first.
+        return result;
       });
-      waiting.push(result);
-      void result.catch(() => {}); // Cleanup still observes it if a fixture write fails first.
-      return result;
-    });
     try {
       await repository.update(() => ({ count: 1, nested: { label: 'first' } }));
       const first = enqueue();
@@ -367,6 +463,51 @@ class InMemoryAppSettingsBackend implements AppSettingsBackend {
   }
 }
 
+void test('queued managed freshness checks bound sharing without losing the refreshed request revision', async (t) => {
+  const backend = new InMemoryAppSettingsBackend();
+  await configureAppSettingsBackendForTests(backend);
+  try {
+    await withTestRepository(async ({ repository }) => {
+      await repository.initialize();
+      await repository.refresh();
+      const key = repository.descriptor.key;
+      const previous = backend.records.get(key)!;
+      backend.records.set(key, {
+        ...previous,
+        revision: previous.revision + 1n,
+        value: { version: 1, count: 9, label: 'external' },
+      });
+      const read = backend.read.bind(backend);
+      let calls = 0;
+      t.mock.method(backend, 'read', async (name: string) => {
+        const record = await read(name);
+        if (name === key && record) {
+          calls++;
+          // An external writer advances the saved revision between groups.
+          backend.records.set(key, {
+            ...record,
+            revision: record.revision + 1n,
+            value: { ...record.value, count: Number(record.value.count) + 1 },
+          });
+        }
+        return record;
+      });
+      const values = await Promise.all(
+        Array.from({ length: 20 }, () =>
+          runWithAppSettingsSnapshot(async () => {
+            await repository.refreshIfChanged();
+            return repository.readSync().value.count;
+          }),
+        ),
+      );
+      assert.deepEqual(values, [...Array(8).fill(9), ...Array(8).fill(10), ...Array(4).fill(11)]);
+      assert.equal(calls, 3, 'Twenty callers share three bounded reads');
+    });
+  } finally {
+    await configureAppSettingsBackendForTests(null);
+  }
+});
+
 test('an unconfirmed settings backend close cannot detach the owner and select file fallback', async () => {
   const backend = new InMemoryAppSettingsBackend();
   const failure = new Error('settings owner still closing');
@@ -521,14 +662,22 @@ test('managed trusted-client replicas preserve legacy data, fail closed on corru
     await first.update((current) => ({ ...current, trustedClients: ['10.20.0.0/16'] }));
     await waitFor(() => second.readSync().value.trustedClients.length === 1);
     const persisted = backend.records.get(key)!;
-    await backend.write({ key, expectedRevision: persisted.revision, schemaVersion: 1, value: { trustedClients: ['bad-host'] } });
+    await backend.write({
+      key,
+      expectedRevision: persisted.revision,
+      schemaVersion: 1,
+      value: { trustedClients: ['bad-host'] },
+    });
     await waitFor(() => !!second.readSync().value.policyError);
     assert.deepEqual(first.readSync().value.trustedClients, []);
     assert.deepEqual(backend.records.get(key)!.value, { trustedClients: ['bad-host'] });
     const invalid = await first.read();
     await first.update((current) => ({ ...current, policyError: undefined, trustedClients: [] }), invalid.revision);
     await waitFor(() => !second.readSync().value.policyError);
-    await assert.rejects(first.update((current) => current, invalid.revision), SettingsRevisionConflictError);
+    await assert.rejects(
+      first.update((current) => current, invalid.revision),
+      SettingsRevisionConflictError,
+    );
     assert.match(fs.readFileSync(settingsPath, 'utf8'), /legacy.example/);
   } finally {
     first.dispose();
@@ -543,15 +692,16 @@ test('managed settings seed a missing row in memory and never replace an existin
   const filePath = path.join(root, 'settings', 'deployment-storage.json');
   const key = `managed-memory-seed-${path.basename(root)}`;
   const backend = new InMemoryAppSettingsBackend();
-  const createRepository = (count: number) => new VersionedSettingsRepository<TestSettings>({
-    key,
-    currentVersion: 1,
-    getPath: () => filePath,
-    getDefault: () => ({ count: 0, nested: { label: 'default' } }),
-    getManagedBootstrap: () => ({ count, nested: { label: 'bootstrap' } }),
-    parseStored: (stored) => ({ count: Number(stored.count), nested: { label: String(stored.label) } }),
-    serialize: (value) => ({ count: value.count, label: value.nested.label }),
-  });
+  const createRepository = (count: number) =>
+    new VersionedSettingsRepository<TestSettings>({
+      key,
+      currentVersion: 1,
+      getPath: () => filePath,
+      getDefault: () => ({ count: 0, nested: { label: 'default' } }),
+      getManagedBootstrap: () => ({ count, nested: { label: 'bootstrap' } }),
+      parseStored: (stored) => ({ count: Number(stored.count), nested: { label: String(stored.label) } }),
+      serialize: (value) => ({ count: value.count, label: value.nested.label }),
+    });
   const first = createRepository(7);
   let second: VersionedSettingsRepository<TestSettings> | undefined;
   try {
@@ -583,7 +733,9 @@ test('filesystem metadata failures invalidate cached settings and recover withou
     try {
       await assert.rejects(repository.refreshIfChanged(), /stat denied/);
       assert.throws(() => repository.readSync(), /stat denied/);
-    } finally { mockedStat.mock.restore(); }
+    } finally {
+      mockedStat.mock.restore();
+    }
     await repository.refreshIfChanged();
     assert.equal(repository.readSync().value.count, 1);
   });
@@ -614,20 +766,20 @@ test('managed settings encryption binds ciphertext to its domain and schema vers
   const oldKey = deriveManagedSettingsEncryptionKey('old-deployment-secret');
   const newKey = deriveManagedSettingsEncryptionKey('new-deployment-secret');
   const context = { key: 'oauth', schemaVersion: 2 };
-  const encrypted = encryptManagedSettingsValue(
-    context,
-    { clientSecret: 'sensitive-value' },
-    oldKey,
-  );
+  const encrypted = encryptManagedSettingsValue(context, { clientSecret: 'sensitive-value' }, oldKey);
 
   assert.notEqual(oldKey.id, newKey.id);
   assert.equal(encrypted.keyId, oldKey.id);
   assert.equal(encrypted.ciphertext.includes(Buffer.from('sensitive-value')), false);
   assert.deepEqual(
-    decryptManagedSettingsValue(context, encrypted, new Map([
-      [newKey.id, newKey],
-      [oldKey.id, oldKey],
-    ])),
+    decryptManagedSettingsValue(
+      context,
+      encrypted,
+      new Map([
+        [newKey.id, newKey],
+        [oldKey.id, oldKey],
+      ]),
+    ),
     { clientSecret: 'sensitive-value' },
   );
   assert.throws(
@@ -635,19 +787,21 @@ test('managed settings encryption binds ciphertext to its domain and schema vers
     /encrypted with unavailable key/,
   );
   assert.throws(
-    () => decryptManagedSettingsValue(
-      { key: 'environment-variables', schemaVersion: context.schemaVersion },
-      encrypted,
-      new Map([[oldKey.id, oldKey]]),
-    ),
+    () =>
+      decryptManagedSettingsValue(
+        { key: 'environment-variables', schemaVersion: context.schemaVersion },
+        encrypted,
+        new Map([[oldKey.id, oldKey]]),
+      ),
     /authenticate data/,
   );
   assert.throws(
-    () => decryptManagedSettingsValue(
-      { key: context.key, schemaVersion: context.schemaVersion + 1 },
-      encrypted,
-      new Map([[oldKey.id, oldKey]]),
-    ),
+    () =>
+      decryptManagedSettingsValue(
+        { key: context.key, schemaVersion: context.schemaVersion + 1 },
+        encrypted,
+        new Map([[oldKey.id, oldKey]]),
+      ),
     /authenticate data/,
   );
 });
@@ -727,10 +881,12 @@ test('managed settings writes stay successful when notification delivery fails',
     (error) => errors.push(error),
   );
 
-  assert.deepEqual(queries, [{
-    text: 'SELECT pg_notify($1, $2)',
-    values: ['rivet_app_settings_changed', JSON.stringify({ key: 'oauth', revision: '12' })],
-  }]);
+  assert.deepEqual(queries, [
+    {
+      text: 'SELECT pg_notify($1, $2)',
+      values: ['rivet_app_settings_changed', JSON.stringify({ key: 'oauth', revision: '12' })],
+    },
+  ]);
   assert.equal(errors.length, 1);
   assert.match(String(errors[0]), /notification connection reset/);
 });

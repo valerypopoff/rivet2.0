@@ -15,6 +15,13 @@ void describe('vendored FNV-1a compatibility', () => {
     const value = 'Unicode: Привет 👋';
 
     assert.equal(fnv1a(value, { size: 32, utf8Buffer: new Uint8Array(4) }), fnv1a(value, { size: 32 }));
+    // The chunked path retains the original BigInt arithmetic, independently
+    // checking the optimized path across Unicode and unpaired surrogates.
+    for (let code = 0; code < 65536; code += 257) {
+      const text = String.fromCharCode(code, code ^ 0xffff) + value;
+      assert.equal(fnv1a(text), fnv1a(text, { utf8Buffer: new Uint8Array(7) }));
+    }
+    assert.equal(fnv1a('hello', { size: 64 }), 11_831_194_018_420_276_491n);
   });
 
   void it('rejects a reusable buffer that cannot make progress on the next UTF-8 code point', () => {

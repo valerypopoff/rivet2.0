@@ -23,6 +23,7 @@ import {
 import { checkPostgresPoolHealth } from './managed-health.js';
 import { getPublishedExecutionAdmission, toPublishedExecutionAdmissionError } from './published-execution-admission.js';
 import { recordStudioMetrics } from './metrics.js';
+import { recordingMemory } from './routes/workflows/recording-memory.js';
 import { acquireManagedPostgresPool, type ManagedPostgresPoolLease } from './managed-postgres-pool.js';
 import type { RuntimeHealthCheckContext } from './runtime-health.js';
 import { createRivetCorrelationId } from './request-correlation.js';
@@ -629,6 +630,7 @@ export async function initializeWebAppActionWebSockets(server: Server): Promise<
               const evidence = entry.evidence,
                 correlationId = entry.executionIdentity.correlationId;
               const unfinished = entry.processor.isRunning;
+              if (unfinished && entry.recorder) recordingMemory.discard(entry.recorder);
               const outcome = { state: unfinished ? ('unknown' as const) : status, durationMs, cost };
               const evidenceCompletion = evidence
                 ? deferEvidenceWork(() => completeRunEvidence(evidence, outcome, correlationId))
@@ -674,38 +676,37 @@ export async function initializeWebAppActionWebSockets(server: Server): Promise<
               const recorder = isWorkflowRecordingEnabled()
                 ? new ExecutionRecorder(getWorkflowExecutionRecorderOptions())
                 : null;
-              recorder?.record(processor);
-              const executionIdentity = createWebAppActionRecordingIdentity(
-                resolved.executionProject,
-                actionContext.uiGraph,
-                actionContext.component,
-                route.slug,
-                correlationId,
-              );
-              const evidence = recorder
-                ? beginRunEvidence({
-                    ...executionRunEvidenceInput(
-                      resolved.executionProject,
-                      executionIdentity,
-                      endpointName,
-                      route.routeKind,
-                    ),
-                    sourceRunId: runId,
-                  })
-                : undefined;
-              recorders.set(runId, {
-                evidence,
-                recorder,
-                startedAt: performance.now(),
-                processor,
-                executionIdentity: createWebAppActionRecordingIdentity(
+              try {
+                recorder?.record(processor);
+                const executionIdentity = createWebAppActionRecordingIdentity(
                   resolved.executionProject,
                   actionContext.uiGraph,
                   actionContext.component,
                   route.slug,
                   correlationId,
-                ),
-              });
+                );
+                const evidence = recorder
+                  ? beginRunEvidence({
+                      ...executionRunEvidenceInput(
+                        resolved.executionProject,
+                        executionIdentity,
+                        endpointName,
+                        route.routeKind,
+                      ),
+                      sourceRunId: runId,
+                    })
+                  : undefined;
+                recorders.set(runId, {
+                  evidence,
+                  recorder,
+                  startedAt: performance.now(),
+                  processor,
+                  executionIdentity,
+                });
+              } catch (error) {
+                if (recorder) recordingMemory.discard(recorder);
+                throw error;
+              }
             },
             onRunFinished({ result, runId }) {
               finishRecording(runId, getWorkflowRecordingStatusFromOutputs(result.outputs));

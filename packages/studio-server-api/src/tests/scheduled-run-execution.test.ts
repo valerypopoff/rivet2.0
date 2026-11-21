@@ -161,6 +161,7 @@ test('scheduled root uses real cross-project execution and root/child recording 
     const incompleteJob = (await store.tick('worker'))!;
     const incompleteRun = t.mock.method(ExecutionSession.prototype, 'run', async function (this: ExecutionSession) {
       this.processor.dispose();
+      this.recorder?.discard(); // Match the ownership cleanup of a withheld session capture.
       return {
         invoked: true,
         createdAt: new Date().toISOString(),

@@ -39,6 +39,10 @@ class FakeSocket {
   #messageListeners = new Set<(event: MessageEvent) => void>();
   readyState = 1;
 
+  get listenerCount() {
+    return this.#messageListeners.size + this.#closeListeners.size;
+  }
+
   addEventListener(type: 'message' | 'close', listener: ((event: MessageEvent) => void) | (() => void)) {
     if (type === 'message') {
       this.#messageListeners.add(listener as (event: MessageEvent) => void);
@@ -69,6 +73,68 @@ class FakeSocket {
     }
   }
 }
+
+void it('releases capture ownership and partial listeners when processor setup fails', () => {
+  for (const phase of ['events', 'finish']) {
+    let releases = 0;
+    let listeners = 0;
+    const error = new Error('Processor listener setup failed');
+    const recorder = new ExecutionRecorder({
+      createCapturePolicy: () => ({
+        retain: () => true,
+        release: () => {
+          releases++;
+        },
+      }),
+    });
+    const processor = {
+      onAny() {
+        if (phase === 'events') throw error;
+        listeners++;
+        return () => {
+          listeners--;
+        };
+      },
+      on() {
+        throw error;
+      },
+    } as unknown as GraphProcessor;
+    assert.throws(
+      () => recorder.record(processor),
+      (actual) => actual === error,
+    );
+    assert.equal(listeners, 0);
+    assert.equal(recorder.captureDiscarded, true);
+    recorder.discard();
+    assert.equal(releases, 1);
+  }
+});
+
+void it('releases capture ownership and partial listeners when socket setup fails', async () => {
+  for (const phase of ['message', 'close']) {
+    let releases = 0;
+    const error = new Error('Socket listener setup failed');
+    const recorder = new ExecutionRecorder({
+      createCapturePolicy: () => ({
+        retain: () => true,
+        release: () => {
+          releases++;
+        },
+      }),
+    });
+    const socket = new FakeSocket();
+    const add = socket.addEventListener.bind(socket);
+    socket.addEventListener = (type, listener) => {
+      add(type, listener);
+      if (type === phase) throw error;
+    };
+    await assert.rejects(recorder.recordSocket(socket as unknown as WebSocket), (actual) => actual === error);
+    assert.equal(socket.listenerCount, 0);
+    assert.equal(recorder.captureDiscarded, true);
+    recorder.discard();
+    assert.equal(releases, 1);
+  }
+});
 
 async function addEvents(recorder: ExecutionRecorder, options: { includeIntermediateEvents?: boolean } = {}) {
   const { includeIntermediateEvents = false } = options;
@@ -169,10 +235,13 @@ async function replayNodeFinishTiming(
   return { durationMs, splitRunDurationMs };
 }
 
-async function replayNodeResultOrigins(
-  recorder: ExecutionRecorder,
-): Promise<
-  Array<{ type: string; resultOrigin: NodeResultOrigin | undefined; outputs?: Outputs; splitOutputs?: Record<number, Outputs> }>
+async function replayNodeResultOrigins(recorder: ExecutionRecorder): Promise<
+  Array<{
+    type: string;
+    resultOrigin: NodeResultOrigin | undefined;
+    outputs?: Outputs;
+    splitOutputs?: Record<number, Outputs>;
+  }>
 > {
   const replayEmitter = new Emittery<ProcessEvents>();
   const replayed: Array<{
@@ -1159,8 +1228,12 @@ void describe('ExecutionRecorder', () => {
 
     const replayEmitter = new Emittery<ProcessEvents>();
     const replayed: Array<{ type: string; replayRecordedAt?: number }> = [];
-    replayEmitter.on('nodeStart', (data) => replayed.push({ type: 'nodeStart', replayRecordedAt: data.replayRecordedAt }));
-    replayEmitter.on('nodeFinish', (data) => replayed.push({ type: 'nodeFinish', replayRecordedAt: data.replayRecordedAt }));
+    replayEmitter.on('nodeStart', (data) =>
+      replayed.push({ type: 'nodeStart', replayRecordedAt: data.replayRecordedAt }),
+    );
+    replayEmitter.on('nodeFinish', (data) =>
+      replayed.push({ type: 'nodeFinish', replayRecordedAt: data.replayRecordedAt }),
+    );
 
     await replayExecutionRecording({
       emitter: replayEmitter,
@@ -1574,7 +1647,10 @@ void describe('ExecutionRecorder', () => {
     await Promise.resolve();
 
     assert.equal(emittedFinishedRecording, false);
-    assert.deepEqual(recorder.events.map((event) => event.type), ['graphStart']);
+    assert.deepEqual(
+      recorder.events.map((event) => event.type),
+      ['graphStart'],
+    );
   });
 
   void it('normalizes legacy null socket abort payloads without marking them successful', async () => {
@@ -1610,8 +1686,14 @@ void describe('ExecutionRecorder', () => {
       execution,
     });
 
-    assert.deepEqual(snapshot.events.map((event) => event.type), ['start']);
-    assert.deepEqual(recorder.events.map((event) => event.type), ['start', 'nodeStart']);
+    assert.deepEqual(
+      snapshot.events.map((event) => event.type),
+      ['start'],
+    );
+    assert.deepEqual(
+      recorder.events.map((event) => event.type),
+      ['start', 'nodeStart'],
+    );
   });
 
   void it('emits a scoped failed replay lifecycle when the recording cannot resolve its first graph', async () => {
@@ -1771,6 +1853,69 @@ void describe('ExecutionRecorder', () => {
       }
       assert.equal(running, false, scenario.name);
     }
+  });
+
+  void it('preserves accessor order, custom JSON values and sparse arrays in the v1 codec', () => {
+    const calls: string[] = [];
+    const value = {
+      ['__proto__']: 'ordinary own key',
+      get first() {
+        calls.push('first');
+        return {
+          get nested() {
+            calls.push('nested');
+            return 1;
+          },
+        };
+      },
+      get second() {
+        calls.push('second');
+        return [undefined, , NaN];
+      },
+      custom: new (class {
+        toJSON() {
+          calls.push('custom');
+          return 'custom value';
+        }
+      })(),
+    };
+    const recorder = new ExecutionRecorder();
+    recorder.recordingId = 'codec' as never;
+    recorder.events.push({ type: 'done', ts: 1, data: { results: { output: { type: 'any', value } } } });
+    const decoded = ExecutionRecorder.deserializeFromString(recorder.serialize());
+    assert.deepEqual(calls, ['first', 'second', 'nested', 'custom']);
+    assert.deepEqual(decoded.events[0]?.data, {
+      results: {
+        output: {
+          type: 'any',
+          value: {
+            ['__proto__']: 'ordinary own key',
+            first: { nested: 1 },
+            second: [null, null, null],
+            custom: 'custom value',
+          },
+        },
+      },
+    });
+  });
+
+  void it('preserves v1 collision-table order when the same object appears again', () => {
+    const first = 'costarring-recording-hash-collision-fixture';
+    const second = 'liquid-recording-hash-collision-fixture';
+    const shared = { value: first };
+    const recorder = new ExecutionRecorder();
+    recorder.recordingId = 'collision-order' as never;
+    recorder.events.push({
+      type: 'done',
+      ts: 1,
+      data: {
+        results: {
+          output: { type: 'any', value: [shared, { value: second }, shared] },
+        },
+      },
+    });
+    assert.equal(JSON.parse(recorder.serialize()).strings['1910960879'], first);
+    assert.equal(shared.value, first, 'Serialization cannot replace the source value with an encoded reference.');
   });
 
   void it('preserves remote socket node finish duration', async () => {

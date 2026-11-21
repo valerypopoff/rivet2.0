@@ -7,6 +7,7 @@ import type {
 import { VersionedSettingsRepository } from '../../app-settings/settings-repository.js';
 import { parseBoolean, parseEnum, parseIntWithMinimum } from '../../utils/env-parsing.js';
 import { getAppDataRoot } from '../../security.js';
+import { recordingMemory } from './recording-memory.js';
 
 export type WorkflowRecordingCompression = 'gzip' | 'identity';
 
@@ -194,6 +195,7 @@ export function getWorkflowExecutionRecorderOptions() {
   return {
     includePartialOutputs: config.includePartialOutputs,
     includeTrace: config.includeTrace,
+    createCapturePolicy: recordingMemory.createCapturePolicy,
   };
 }
 

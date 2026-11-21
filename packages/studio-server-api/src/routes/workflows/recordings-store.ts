@@ -1,3 +1,4 @@
+import { setImmediate as yieldToIo } from 'node:timers/promises';
 import { isWorkflowRecordingEnabled, runRecordingsSettingsRepository } from './recordings-config.js';
 import { recordStudioMetrics } from '../../metrics.js';
 import { runOutsideAppSettingsSnapshot } from '../../app-settings/settings-repository.js';
@@ -9,6 +10,8 @@ export type RecordingQueueAdmission = {
   deferredCapture?: boolean;
   /** An existing run-evidence handle keeps its accepted capture when recording is switched off. */
   acceptedEvidence?: boolean;
+  /** Runs when accepted work settles or is cancelled before start. The caller owns rejected work. */
+  finalize?: () => void;
 };
 
 type QueuePolicySnapshot = { path: string; value: { readonly maxPendingWrites: number } };
@@ -42,6 +45,7 @@ export function createWorkflowRecordingStore(options: {
     run: WorkflowRecordingPersistenceTask;
     context?: RecordingDiagnosticContext;
     retainedBytes: number;
+    finalize?: () => void;
   }> = [];
   let retainedBytes = 0;
   const maxRetainedBytes = 256 * 1024 * 1024;
@@ -203,7 +207,15 @@ export function createWorkflowRecordingStore(options: {
           reportRecordingFailure(error, { phase: 'persistence', ...task.context });
         } finally {
           retainedBytes = Math.max(0, retainedBytes - task.retainedBytes);
+          try {
+            task.finalize?.();
+          } catch {
+            /* Cleanup cannot stop the next recording. */
+          }
         }
+        // A previous storage wait may have finished before newly-ready request
+        // I/O. Give it a fresh turn before starting another recording's CPU work.
+        if (persistenceQueue.length > 0) await yieldToIo();
       }
     })().finally(() => {
       persistenceQueuePromise = null;
@@ -273,7 +285,7 @@ export function createWorkflowRecordingStore(options: {
       }
 
       retainedBytes += payloadBytes;
-      persistenceQueue.push({ run: task, context, retainedBytes: payloadBytes });
+      persistenceQueue.push({ run: task, context, retainedBytes: payloadBytes, finalize: admission.finalize });
       scheduleWorkflowRecordingPersistenceQueue();
       return true;
     },
@@ -321,7 +333,16 @@ export function createWorkflowRecordingStore(options: {
       cleanupRequested = false;
       persistenceQueuePromise = null;
       persistenceQueueStartImmediate = null;
+      const discarded = persistenceQueue;
       persistenceQueue = [];
+      for (const task of discarded) {
+        try {
+          task.finalize?.();
+        } catch {
+          /* Complete disposal of the remaining jobs. */
+        }
+      }
+      discarded.length = 0;
       lastDroppedPersistenceLogAt = 0;
       if (pendingPersistenceStartImmediate) {
         clearImmediate(pendingPersistenceStartImmediate);

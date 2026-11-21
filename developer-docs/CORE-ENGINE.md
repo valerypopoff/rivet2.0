@@ -177,6 +177,23 @@ Subgraph node `duration` is a graph-boundary wall-clock metric around the child 
 
 Recordings preserve incoming `durationMs` and `splitRunDurationMs` when present. [`RecordingPlayer`](../packages/core/src/model/RecordingPlayer.ts) can also derive replay-only legacy aggregate durations from existing recorded `nodeStart.ts` and terminal event `ts` values; that fallback is not used for live remote-debugger traffic where receive timing would be misleading. During playback it also exposes each original `RecordedEvent.ts` as transient `replayRecordedAt` provenance. That metadata lets the editor show the historical root duration without slowing playback, and `ExecutionRecorder` never serializes it into a replay-recorded recording.
 
+Hosts may supply `ExecutionRecorderOptions.createCapturePolicy` to account for
+retained replay data. Refusing an event discards the replay without cancelling
+the processor or its terminal observation. `captureDiscarded` makes that state
+explicit; `serialize()` and `serializeStream()` reject discarded captures rather
+than publishing an empty successful replay. `discard()` releases host accounting
+and retained events. Default recorders keep their existing behavior.
+Processor/socket attachment failures detach partial listeners, discard the
+capture and preserve the original setup error. Callers may still dispose the
+recorder afterward; capture-policy release remains idempotent. The v1
+codec memoizes repeated string hashes within one serialization. Its 32-bit
+FNV-1a path uses equivalent integer arithmetic, retaining the original BigInt
+result and UTF-8 encoding; other hash widths and buffered encoding stay unchanged.
+Object traversal reuses copied entries without changing getter order or treating
+`__proto__` as a prototype setter. Persisted hash keys and assets are unchanged. See the
+[server recording-memory implementation](studio-server/recording-memory-and-serialization-plan.md)
+for server limits and ownership.
+
 `GraphProcessor` also has an off-by-default runtime profiler hook used by Node
 benchmark attribution. It records coarse diagnostic buckets such as
 preprocessing, scheduler wall time, node implementation time, subprocessor
@@ -2275,6 +2292,12 @@ Core includes execution recording support under `recording/` and exports:
 - replay support used by `GraphProcessor.replayRecording(...)`
 
 The app relies on this for execution replay and recording-driven UX.
+
+The v1 string table is updated in codec traversal order, including repeated
+visits to aliased objects. Preserve that order during optimizations: colliding
+hashes use the last encountered value. The regression fixture covers an
+`A, B, A` encounter through the same source object; transformed values must not
+be written back into that source or reused as if they were its original values.
 
 Current replay/parity invariants:
 

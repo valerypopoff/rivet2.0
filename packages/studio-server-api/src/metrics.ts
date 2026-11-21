@@ -47,7 +47,12 @@ export type MetricsHttpBodyAdmissionOutcome =
   | 'too_large'
   | 'unsupported_body_encoding'
   | 'unsupported_media_type';
-export type MetricsHttpBodyWaitOutcome = 'admitted' | 'capacity_exceeded' | 'wait_expired' | 'receive_timeout' | 'cancelled';
+export type MetricsHttpBodyWaitOutcome =
+  | 'admitted'
+  | 'capacity_exceeded'
+  | 'wait_expired'
+  | 'receive_timeout'
+  | 'cancelled';
 export type MetricsBrowserStorageRpcDirection = 'commit' | 'read';
 export type MetricsBrowserStorageRpcOutcome =
   | 'cancelled'
@@ -295,11 +300,18 @@ export class StudioMetrics {
     activeWrites: number;
     maxPendingWrites: number | null;
     pendingWrites: number;
+    memory?: { estimatedBytes: number; captures: number; rejections: number; maxBytes: number };
   }): void {
     this.setGauge('rivet_workflow_recording_persistence_queue_depth', {}, input.pendingWrites);
     this.setGauge('rivet_workflow_recording_persistence_active_writes', {}, input.activeWrites);
     if (input.maxPendingWrites === null) this.#gauges.delete('rivet_workflow_recording_persistence_queue_limit');
     else this.setGauge('rivet_workflow_recording_persistence_queue_limit', {}, input.maxPendingWrites);
+    if (input.memory) {
+      this.setGauge('rivet_workflow_recording_memory_estimated_bytes', {}, input.memory.estimatedBytes);
+      this.setGauge('rivet_workflow_recording_memory_limit_bytes', {}, input.memory.maxBytes);
+      this.setGauge('rivet_workflow_recording_captures_retained', {}, input.memory.captures);
+      this.setGauge('rivet_workflow_recording_memory_rejections', {}, input.memory.rejections);
+    }
   }
 
   recordWorkflowRecordingPersistenceDrop(): void {

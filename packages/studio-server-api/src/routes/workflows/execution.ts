@@ -1,4 +1,5 @@
 import { performance } from 'node:perf_hooks';
+import { setImmediate as yieldToIo } from 'node:timers/promises';
 import { Router, type NextFunction, type Request, type Response } from 'express';
 import { registerActiveHttpExecution } from '../../active-http-executions.js';
 import { asyncHandler } from '../../utils/asyncHandler.js';
@@ -236,6 +237,10 @@ async function executeWorkflowEndpoint(
   });
   const failure = snapshot.failure;
   const executionDurationMs = snapshot.durationMs;
+  // Keep the execution permit while completed-response I/O gets a turn before
+  // the settled capture is inspected and admitted to the persistence queue.
+  if (snapshot.recorder && !snapshot.recorder.captureDiscarded && res.writableEnded && !res.destroyed)
+    await yieldToIo();
   enqueueExecutionRecording(executionProject, snapshot, {
     endpointName: options.endpointName,
     runKind: options.runKind,

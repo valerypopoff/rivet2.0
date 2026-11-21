@@ -1,4 +1,6 @@
 import { createLegacyWorkflowCommands } from './legacy-workflow-commands.js';
+import { recordingMemory } from './recording-memory.js';
+import type { ExecutionRecorder } from '@valerypopoff/rivet2-core';
 import type { ProjectReferenceQuery } from './managed/reference-index.js';
 import { REFERENCE_QUERY_TIMEOUT_MS } from './managed/reference-query.js';
 import { constants as fsConstants } from 'node:fs';
@@ -590,7 +592,10 @@ export async function readWorkflowPublishedVersionDownloadWithBackend(relativePa
 }
 
 export async function readWorkflowPublishedVersionPreviewWithBackend(
-  relativePath: string, versionId: string, artifactId?: string, ownerId?: string,
+  relativePath: string,
+  versionId: string,
+  artifactId?: string,
+  ownerId?: string,
 ) {
   return withWorkflowPublicationRepository((backend) =>
     backend.readWorkflowPublishedVersionPreview(relativePath, versionId, artifactId, ownerId),
@@ -602,7 +607,9 @@ export async function readWorkflowReferenceOverviewWithBackend() {
 }
 
 export async function readWorkflowBundleReferenceDetailsWithBackend(bundleId: string) {
-  return withWorkflowPublicationRepository(async (backend) => backend.readWorkflowBundleReferenceDetails?.(bundleId) ?? null);
+  return withWorkflowPublicationRepository(
+    async (backend) => backend.readWorkflowBundleReferenceDetails?.(bundleId) ?? null,
+  );
 }
 
 export async function readWorkflowHistoryPreviewWithBackend(relativePath: string, versionId: string, ownerId?: string) {
@@ -613,18 +620,30 @@ export async function readWorkflowHistoryPreviewWithBackend(relativePath: string
     if (!selected) throw createHttpError(404, 'Published revision not found.');
     return {
       coverage: 'project-only' as const,
-      rootArtifactId: versionId, endpointName: selected.endpointName, publishedAt: selected.publishedAt,
-      projects: [{ artifactId: versionId, projectId: selected.projectId, name: selected.projectName,
-        relativePath, savedAt: selected.publishedAt }],
+      rootArtifactId: versionId,
+      endpointName: selected.endpointName,
+      publishedAt: selected.publishedAt,
+      projects: [
+        {
+          artifactId: versionId,
+          projectId: selected.projectId,
+          name: selected.projectName,
+          relativePath,
+          savedAt: selected.publishedAt,
+        },
+      ],
       references: [],
     };
   });
 }
 
 export async function reviewEndpointReleaseWithBackend(
-  relativePath: string, preconditions: Extract<WorkflowPublicationCommand, { kind: 'publish-endpoint' }>['preconditions'],
+  relativePath: string,
+  preconditions: Extract<WorkflowPublicationCommand, { kind: 'publish-endpoint' }>['preconditions'],
 ) {
-  return withWorkflowPublicationRepository(async (backend) => backend.reviewEndpointRelease?.(relativePath, preconditions) ?? null);
+  return withWorkflowPublicationRepository(
+    async (backend) => backend.reviewEndpointRelease?.(relativePath, preconditions) ?? null,
+  );
 }
 
 export async function setWorkflowPublishedVersionStarWithBackend(
@@ -673,8 +692,11 @@ export async function executeWorkflowPublicationCommandWithBackend(
       return withWorkflowPublicationRepository((backend) =>
         backend.publishWorkflowProjectItem(
           command.relativePath,
-          { endpointName: command.endpointName, releaseReviewToken: command.releaseReviewToken,
-            acknowledgeMissingRollback: command.acknowledgeMissingRollback },
+          {
+            endpointName: command.endpointName,
+            releaseReviewToken: command.releaseReviewToken,
+            acknowledgeMissingRollback: command.acknowledgeMissingRollback,
+          },
           command.preconditions,
         ),
       );
@@ -836,17 +858,29 @@ export function createExecutionSubgraphProjectLoader() {
 
 export async function persistWorkflowExecutionRecordingWithBackend(
   options: PersistWorkflowExecutionRecordingOptions,
+  retainedCapture?: ExecutionRecorder,
 ): Promise<string | undefined> {
   // Every recording surface, including editor uploads and called-project runs,
   // must honor the same server-side dataset retention policy.
   const permittedOptions = shouldSnapshotWorkflowRecordingDatasets() ? options : { ...options, executedDatasets: [] };
-  if (usesDatabaseCatalog()) {
-    return await (
-      await getWorkflowStorageServices().getRepository('recordings')
-    ).persistWorkflowExecutionRecording(permittedOptions);
-  }
-
-  return await persistWorkflowExecutionRecording({ workflowsRoot: getWorkflowsRoot(), ...permittedOptions });
+  return await recordingMemory.prepared(
+    [
+      permittedOptions.recordingSerialized,
+      permittedOptions.sourceProject,
+      permittedOptions.executedProject,
+      permittedOptions.executedAttachedData,
+      permittedOptions.executedDatasets,
+    ],
+    async () => {
+      if (usesDatabaseCatalog()) {
+        return await (
+          await getWorkflowStorageServices().getRepository('recordings')
+        ).persistWorkflowExecutionRecording(permittedOptions);
+      }
+      return await persistWorkflowExecutionRecording({ workflowsRoot: getWorkflowsRoot(), ...permittedOptions });
+    },
+    retainedCapture,
+  );
 }
 
 export function getWorkflowStorageMode() {

@@ -65,6 +65,12 @@ test('evaluations do not persist a capture withheld by the execution session', a
 });
 
 test('hosted evaluation execution captures full provider evidence and persists it on success and failure', async (t) => {
+  const previousRecording = process.env.RIVET_RECORDINGS_ENABLED;
+  process.env.RIVET_RECORDINGS_ENABLED = 'false';
+  t.after(() => {
+    if (previousRecording === undefined) delete process.env.RIVET_RECORDINGS_ENABLED;
+    else process.env.RIVET_RECORDINGS_ENABLED = previousRecording;
+  });
   let failRequest = false;
   let requestCount = 0;
   const provider = createServer((request, response) => {

@@ -15,8 +15,10 @@ With managed storage, recording enabled and
 `RIVET_RECORDING_DURABILITY_ENABLED=true`, production endpoints, HTTP/WebSocket
 web-app actions and API execution sessions allocate a stable recording identity
 immediately and register it in PostgreSQL asynchronously. Registration, outcome
-writes and replay serialization do not delay graph execution, response delivery
-or release of its execution slot. Storage failure does not reject a business run.
+writes do not add an awaited step to graph execution, response delivery or
+release of its execution slot. Replay serialization runs in the background
+persistence phase on the serving thread; it still consumes CPU. Storage failure
+does not reject a business run.
 The user explicitly chose this latency policy: a process crash before registration
 commits, or a full metadata queue, can still leave no run-evidence entry. Durable
 guarantees start after that asynchronous registration commits.
@@ -148,27 +150,79 @@ Metadata uses one background writer, yielding to foreground I/O between jobs.
 Admission stops at 256 pending metadata jobs rather than consuming the execution
 slots or filling the database connection pool. Completed captures serialize in
 the existing background persistence queue, not in the request or Subgraph callback.
-Raw captures are limited by count; this is not a byte limit on recorder objects.
+Server recorders share one in-process memory-accounting owner. Active captures,
+queued root/child recordings and direct scheduled/Evaluation captures retain
+their reservations until disposal or persistence completion. Incoming prepared
+editor uploads join the same accounting at the writer. Recording switches and
+the Evaluation artifact store remain independent.
+
+The owner admits at most 256 captures/reservations and 256 MiB of estimated data;
+each raw capture has a 64 MiB estimate and 100,000-event limit. Each payload
+inspection has a 250,000-value limit. Strings and backing buffers are included, aliases are reused
+during capture, and settled payloads are rechecked for mutation at queue admission
+and again before encoding. A mutated intermediate value cannot enter a blocked
+writer queue using its earlier, smaller estimate.
+The recheck reads the recorder's current events rather than retaining a second
+payload list. Native Map/Set entries, error causes and sparse-array slots are
+included; collection inspection does not call user iterators or format error
+stacks. Failed processor/socket attachment removes partial listeners and releases
+its capture reservation. Unexpected serving-queue admission errors are reported
+as rejected recording work; callers release their captures and retain the graph's
+known outcome. The low-level queue still rejects uninitialized policy explicitly.
+Error classification cannot let a hostile thrown value bypass capture/write
+cleanup or replace the original serialization error.
+Completed reservations release their estimator rather than allocating a new
+empty one. An estimator reuses its traversal stack and clears its payload
+references even on failed inspection; it still remeasures mutable data at both
+handoff boundaries. The single persistence worker gives requests a fresh I/O
+turn after each job settles, before starting the next job's CPU work. A turn
+scheduled before a storage wait may already have elapsed when storage completes.
+FIFO order, accepted-job cleanup and the persistence drain contract stay intact.
+Completed endpoint responses also get an I/O turn before settled capture
+inspection. The execution permit and active HTTP owner stay held across that
+handoff, bounding not-yet-admitted snapshots within the existing drain. Discarded
+captures and unsent/destroyed responses skip the turn. Both fresh mutation checks
+and all memory limits remain unchanged.
+Measurement is shared across admission and preparation. Encoding and direct
+uploads reserve their working headroom once, for strings, UTF-8 and compression;
+re-encoding resets the borrowed writer reservation before a later write.
+These are conservative admission estimates, not exact heap/RSS or allocation
+limits. Opaque closures/proxies and changes made by unrelated code cannot be
+fully measured; garbage collection can retain released allocations temporarily.
+
+Capacity exhaustion discards replay data without cancelling the graph. Known
+outcomes and costs remain separate; managed evidence uses its existing capacity
+unavailability state and child captures mark coverage incomplete. The v1 replay
+codec, immutable artifacts and retry protocol are unchanged. The
+[implementation and serialization assessment](recording-memory-and-serialization-plan.md)
+records validation and why raw worker transfer was not enabled.
+The current local measurements have not cleared the strict no-slowdown release
+gate. The latest whole-change comparison improved mixed-workload latency, while
+the many-node p95 comparison remained inconclusive and event-loop delay was
+higher than the pre-change build. Passing replay/recovery tests alone is not
+release qualification. The [current assessment](recording-latency-repair-plan.md)
+records those results; the performance history retains the earlier failed and
+rejected candidates separately.
 Start timestamps are captured before queuing, so a storage backlog does not
 shift a run to a later time. Repeated missing-child notifications coalesce per
 root, and a dropped root capture marks availability only after registration.
 
-| Boundary                                   | Current bound                                                                                                     |
-| ------------------------------------------ | ----------------------------------------------------------------------------------------------------------------- |
-| Owner lease / renewal                      | 180 seconds / 30 seconds; server owners batch renewals                                                            |
-| Upload handle                              | One hour after registration or a valid active-owner renewal/outcome; deletion always fences it                    |
-| Metadata / outcome / manifest              | 32 KiB / 4 KiB / 64 KiB database limits; registration input limited to 24 KiB                                     |
-| Pending metadata admission                 | Stop new asynchronous registration at 256 pending jobs; admitted runs can still enqueue their completion          |
-| Deferred raw captures                      | Configured queue count, or 64 waiting captures when that count is zero; one active/scheduled capture in addition  |
-| Prepared payload queue byte budget         | 256 MiB for callers providing a prepared payload size; raw capture admission does not pre-serialize to measure it |
-| Active preparation/verification accounting | 256 MiB per process; existing per-artifact 100 MiB bound remains                                                  |
-| Durable pending compressed bytes           | 1 GiB per installation, admitted under a transaction advisory lock                                                |
-| Immutable upload                           | At most three attempts under one 300-second upload deadline; exact keys and bytes only                            |
-| Editor upload                              | Existing 24 MiB decoded limit; at most two identical uploads with readback                                        |
-| Recovery batch                             | At most ten handoffs; 20-second work-start budget, with separately bounded SQL/blob operations                    |
-| Recovery retries                           | At most twelve failures or 24 hours from the prepared/outcome update; exponential backoff up to one hour          |
-| Metadata expiry/retention writes           | At most 1,000 rows per policy/pass                                                                                |
-| Deleted/available evidence                 | Trimmed after the upload window and update are at least two days old; normal recording rows remain authoritative  |
+| Boundary                                   | Current bound                                                                                                       |
+| ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------- |
+| Owner lease / renewal                      | 180 seconds / 30 seconds; server owners batch renewals                                                              |
+| Upload handle                              | One hour after registration or a valid active-owner renewal/outcome; deletion always fences it                      |
+| Metadata / outcome / manifest              | 32 KiB / 4 KiB / 64 KiB database limits; registration input limited to 24 KiB                                       |
+| Pending metadata admission                 | Stop new asynchronous registration at 256 pending jobs; admitted runs can still enqueue their completion            |
+| Deferred raw captures                      | Existing queue count/fallback plus the shared capture memory reservation; admission does not serialize payloads     |
+| Capture/prepared memory admission          | 256 MiB estimated per process; 64 MiB per raw capture; preparation retains its working reservation until settlement |
+| Active preparation/verification accounting | 256 MiB per process; existing per-artifact 100 MiB bound remains                                                    |
+| Durable pending compressed bytes           | 1 GiB per installation, admitted under a transaction advisory lock                                                  |
+| Immutable upload                           | At most three attempts under one 300-second upload deadline; exact keys and bytes only                              |
+| Editor upload                              | Existing 24 MiB decoded limit; at most two identical uploads with readback                                          |
+| Recovery batch                             | At most ten handoffs; 20-second work-start budget, with separately bounded SQL/blob operations                      |
+| Recovery retries                           | At most twelve failures or 24 hours from the prepared/outcome update; exponential backoff up to one hour            |
+| Metadata expiry/retention writes           | At most 1,000 rows per policy/pass                                                                                  |
+| Deleted/available evidence                 | Trimmed after the upload window and update are at least two days old; normal recording rows remain authoritative    |
 
 Integrity failures and permanent storage permission/client errors close the
 handoff rather than repeatedly retrying it. Missing objects may still be an
@@ -181,6 +235,9 @@ The existing metrics registry exports pending/unavailable attempts, unknown
 outcomes, pending bytes and oldest pending age. Labels do not contain run IDs,
 project names or payload values. Logs use the existing sanitized recording
 diagnostics.
+The scrape also exposes estimated recording memory, its limit, retained capture
+count and cumulative memory rejections. They are process-local observations,
+not measurements of distinct heap objects or whole-process memory.
 
 ## Activation and rollback
 

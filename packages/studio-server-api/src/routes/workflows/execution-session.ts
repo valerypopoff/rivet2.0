@@ -11,6 +11,7 @@ import {
 } from './execution-evidence-owner.js';
 import { deferEvidenceWork } from './recording-evidence-work.js';
 import { reportRecordingFailure } from './recording-diagnostics.js';
+import { recordingMemory } from './recording-memory.js';
 type ExecutionRunCost = ReturnType<NodeCreatedProcessor['processor']['getRunCostSnapshot']>;
 
 export type ExecutionSessionResult = {
@@ -98,7 +99,7 @@ function disposeProcessor(processor: NodeCreatedProcessor): void {
 export class ExecutionSession {
   readonly #evidence?: RunEvidenceInput;
   readonly #beginEvidence?: BeginExecutionEvidence;
-  readonly recorder: ExecutionRecorder | null;
+  readonly recorder: ExecutionRecorder | null = null;
   #started = false;
   constructor(
     readonly processor: NodeCreatedProcessor,
@@ -115,6 +116,7 @@ export class ExecutionSession {
       this.recorder = options.recording ? new ExecutionRecorder(options.recorderOptions) : null;
       this.recorder?.record(processor.processor);
     } catch (error) {
+      if (this.recorder) recordingMemory.discard(this.recorder);
       disposeProcessor(processor);
       throw error;
     }
@@ -163,7 +165,10 @@ export class ExecutionSession {
         result.cost = getExecutionRunCostSnapshot(this.processor.processor);
       }
       const unfinished = this.processor.processor.isRunning;
-      if (unfinished) result.recorder = null;
+      if (unfinished) {
+        if (this.recorder) recordingMemory.discard(this.recorder);
+        result.recorder = null;
+      }
       if (evidence) {
         const owner = evidence;
         const outcome = {

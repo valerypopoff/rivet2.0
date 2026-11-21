@@ -24,6 +24,7 @@ import {
 import { createManagedWorkflowRevisionFactory } from '../routes/workflows/managed/revision-factory.js';
 import type { ManagedWorkflowBlobStore } from '../routes/workflows/managed/blob-store.js';
 import { createWorkflowRecordingStore } from '../routes/workflows/recordings-store.js';
+import { recordingMemory } from '../routes/workflows/recording-memory.js';
 
 test('a disconnected settings listener handles both driver errors without crashing or duplicating reconnect timers', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
@@ -365,7 +366,11 @@ test('recording runtime policy and artifact preparation survive settings expiry 
     assert.throws(() => readWorkflowRecordingLimitSettings(), /stale/);
     assert.equal(isWorkflowRecordingEnabled(), true);
     assert.equal(shouldSnapshotWorkflowRecordingDatasets(), false);
-    assert.deepEqual(getWorkflowExecutionRecorderOptions(), { includePartialOutputs: false, includeTrace: false });
+    assert.deepEqual(getWorkflowExecutionRecorderOptions(), {
+      includePartialOutputs: false,
+      includeTrace: false,
+      createCapturePolicy: recordingMemory.createCapturePolicy,
+    });
     assert.equal(queue.getPersistenceMetrics().maxPendingWrites, 3);
     assert.equal(
       queue.enqueuePersistence(async () => {

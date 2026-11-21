@@ -9,6 +9,7 @@ import { writeRuntimeLimitSettings } from '../runtime-limit-settings.js';
 import { readWebAppAuthSettingsSync, writeWebAppAuthSettings } from '../web-app-auth-settings.js';
 import { writeWorkflowEndpointAuthSettings } from '../workflow-endpoint-auth-settings.js';
 import { writeTrustedClientSettings } from '../trusted-client-settings.js';
+import { recordingMemory } from '../routes/workflows/recording-memory.js';
 import { readJson, waitForRecordingWorkflows, withEnvOverride } from './helpers/workflow-api-harness.js';
 import { createFilesystemWorkflowSuiteHarness } from './helpers/workflow-filesystem-suite-harness.js';
 import { createExhaustedProfileGraph, EXHAUSTION_PROVIDER_ORIGIN } from './helpers/llm-exhaustion-fixture.js';
@@ -1429,7 +1430,7 @@ test('published filesystem web app HTTP actions return Stored Value patches', as
   });
 });
 
-test('published filesystem web app actions use authenticated same-origin WebSockets and persist recordings', async () => {
+void test('published filesystem web app actions recover from recording setup failure and persist the next run', async (t) => {
   const created = await workflowMutations.createWorkflowProjectItem('', 'PublishedWebAppSocketAction');
   await writeWebAppProject(created.absolutePath, 'PublishedWebAppSocketAction', 'Published Socket Action App');
   await publishWebApp(created.relativePath, 'published-web-app-socket-action');
@@ -1449,6 +1450,27 @@ test('published filesystem web app actions use authenticated same-origin WebSock
       const ready = waitForWebSocketMessages(socket, ['server.ready'], { parser: parseWebAppSocketMessage });
       socket.send(JSON.stringify({ type: 'client.hello', protocolVersion: 1 }));
       await ready;
+
+      const before = recordingMemory.snapshot().captures;
+      const recordFailure = t.mock.method(rivetNode.ExecutionRecorder.prototype, 'record', () => {
+        throw new Error('Recording listener setup failed');
+      });
+      try {
+        const failed = waitForWebSocketMessages(socket, ['action.failed'], { parser: parseWebAppSocketMessage });
+        socket.send(
+          JSON.stringify({
+            type: 'action.start',
+            componentId: WEB_APP_TEST_ACTION_COMPONENT_ID,
+            requestId: 'failed-recording-setup',
+            revisionKey,
+            state: { prompt: 'not invoked' },
+          }),
+        );
+        await failed;
+      } finally {
+        recordFailure.mock.restore();
+      }
+      assert.equal(recordingMemory.snapshot().captures, before, 'Failed preparation must release its capture.');
 
       const terminal = waitForWebSocketMessages(socket, ['action.accepted', 'action.completed'], {
         parser: parseWebAppSocketMessage,

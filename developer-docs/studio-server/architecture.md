@@ -1184,6 +1184,16 @@ Kubernetes stores every App Settings domain as an encrypted, revisioned PostgreS
 
 ### Managed app-settings authority
 
+Explicit freshness checks, such as execution-environment reads, share adjacent
+checks only while they are queued and have not started, with at most eight
+callers sharing each check. The bound avoids releasing a whole execution burst
+from one I/O completion. A write or another queued operation breaks that group;
+an already-running check is never reused for a later caller. Every waiting
+request installs the check's exact refreshed snapshot in its own async context,
+including unchanged-file-signature reads.
+Ordinary request-scoped `read()` remains pinned. There is no time-based cache
+or relaxation of backend synchronization and freshness checks.
+
 The typed `VersionedSettingsRepository` keeps one contract across deployment shapes. Fresh/upgraded supported Docker installations use private plaintext SQLite settings with revisioned writes; legacy single-host file mode uses atomic JSON files and a process-local watcher. Kubernetes sets `RIVET_APP_SETTINGS_BACKEND=postgres`: migration 2 creates `app_settings`, each payload is encrypted with AES-256-GCM and authenticated against its domain key and schema version, writes use monotonic compare-and-swap revisions, and API replicas invalidate caches through `LISTEN`/`NOTIFY` plus a five-second revision poll. Notification publication happens after commit and cannot turn a committed settings save into an API failure. A replica acknowledges a newer revision only after its matching repositories refresh successfully, so a transient read or decrypt failure remains retryable by the poller. Schema verification requires the settings table, every column/default, and the cryptographic field-shape constraints. `AsyncLocalStorage` pins one immutable snapshot per HTTP request so a settings update cannot mix old and new policy inside one request.
 
 The PostgreSQL notification connection is owned before connection/LISTEN completion: early errors are observed and shutdown closes an opening client. Reconnects are coalesced; late events from an old socket do not affect its successor. Initialization cannot start a poll timer after disposal. Live published concurrency is a control-only domain: its committed subscription updates the in-memory admission counter instead of adding an eager settings read to each run.

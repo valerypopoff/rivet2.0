@@ -24,6 +24,7 @@ import {
 import type { RivetStudioLLMProfileHealthStore } from '../llm-profile-health/store.js';
 import type { RivetStudioEvaluationStore } from './store.js';
 import type { HostedEvaluationGraphRunner } from './hosted-coordinator.js';
+import { recordingMemory } from '../routes/workflows/recording-memory.js';
 
 type HostedEvaluationExecutionDependencies = {
   evaluationStore: Pick<RivetStudioEvaluationStore, 'putRecording'> &
@@ -78,14 +79,18 @@ export function createHostedEvaluationGraphRunner(
         runId: metadata.evaluationRunId,
         trialId: `${metadata.caseId}:${metadata.trialIndex}:${metadata.phase}`,
         reference,
-        serialized: recorder.serialize(),
+        serialized: recordingMemory.serialize(recorder, [project, datasetsContents]),
         createdAt: new Date().toISOString(),
       };
       // Freeze the bytes and identity before a write. A lost acknowledgement
       // may already have committed; only this exact artifact can be retried.
       for (let attempt = 0; ; attempt++) {
         try {
-          await dependencies.evaluationStore.putRecording(preparedRecording);
+          await recordingMemory.prepared(
+            [],
+            () => dependencies.evaluationStore.putRecording(preparedRecording!),
+            recorder,
+          );
           break;
         } catch (error) {
           const saved = await dependencies.evaluationStore.getRecording?.({
@@ -134,7 +139,10 @@ export function createHostedEvaluationGraphRunner(
       processor.processor.on('llmCallFinished', captured.llmCallFinished);
       processor.processor.on('llmProfileAttempt', captured.llmProfileAttempt);
       processor.processor.on('toolCallFinished', captured.toolCallFinished);
-      session = new ExecutionSession(processor, { recording: true });
+      session = new ExecutionSession(processor, {
+        recording: true,
+        recorderOptions: { createCapturePolicy: recordingMemory.createCapturePolicy },
+      });
       recorder = session.recorder!;
       const outcome = await session.run();
       recorder = outcome.recorder ?? undefined;
@@ -168,6 +176,7 @@ export function createHostedEvaluationGraphRunner(
         ...(captured.providerAttempts.length === 0 ? {} : { providerAttempts: captured.providerAttempts }),
       });
     } finally {
+      if (session?.recorder) recordingMemory.discard(session.recorder);
       // The session owns disposal once constructed, including late failures.
       if (!session) processor?.dispose();
     }

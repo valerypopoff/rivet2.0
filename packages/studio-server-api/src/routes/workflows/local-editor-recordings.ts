@@ -22,7 +22,8 @@ import {
 import { isWorkflowRecordingEnabled } from './recordings-config.js';
 import { reportRecordingFailure } from './recording-diagnostics.js';
 import { MAX_LOCAL_EDITOR_RECORDING_UPLOAD_BYTES } from './local-editor-recording-limits.js';
-import { getRunEvidenceRepository, beginChildEvidence } from './run-evidence.js';
+import { getRunEvidenceRepository, beginChildEvidence, unavailableRunEvidence } from './run-evidence.js';
+import { isRecordingMemoryCapacityError } from './recording-memory.js';
 import { isTrustedExecutorRequest } from '../../auth.js';
 import { getManagedWorkflowProjectVirtualPath } from './virtual-paths.js';
 import { getManagedWorkflowRelativePathFromVirtualPath } from '../../../../studio-server-shared/workflow-types.js';
@@ -453,6 +454,7 @@ localEditorRecordingsRouter.post(
       await reportOutcomeBestEffort(body.executionIdentity.correlationId, 'available', recordingId);
       res.status(201).json({ availability: 'available', recordingId });
     } catch (error) {
+      if (isRecordingMemoryCapacityError(error)) await unavailableRunEvidence(body.evidenceHandle, 'capacity');
       if (body.evidenceHandle && (error as Partial<HttpError>)?.code === 'recording_outcome_pending') {
         const repository = await getRunEvidenceRepository(true);
         const evidence = await repository?.read(body.evidenceHandle).catch(() => undefined);
@@ -488,6 +490,7 @@ localEditorRecordingsRouter.post(
     }
 
     const repository = body.rootEvidenceHandle ? await getRunEvidenceRepository(true) : undefined;
+    let evidenceHandle: z.infer<typeof evidenceHandleSchema> | undefined;
     try {
       const { sourceProject, sourcePath } = await loadCurrentHostedProject(body.projectId, '');
       const [executedProject, executedAttachedData] = parseProjectSnapshot(
@@ -507,7 +510,6 @@ localEditorRecordingsRouter.post(
           throw badRequest('The Subgraph execution dataset snapshot is invalid.');
         }
       }
-      let evidenceHandle: z.infer<typeof evidenceHandleSchema> | undefined;
       if (body.rootEvidenceHandle) {
         const root = await repository?.read(body.rootEvidenceHandle);
         if (!root || root.executionIdentity?.correlationId !== body.correlationId || !body.captureId)
@@ -557,6 +559,7 @@ localEditorRecordingsRouter.post(
         .status(recordingId ? 201 : 200)
         .json(recordingId ? { availability: 'available', recordingId } : { availability: 'disabled' });
     } catch (error) {
+      if (isRecordingMemoryCapacityError(error)) await unavailableRunEvidence(evidenceHandle, 'capacity');
       if (body.rootEvidenceHandle) await repository?.childIncomplete(body.rootEvidenceHandle).catch(() => undefined);
       reportRecordingFailure(error, {
         projectId: body.projectId,
