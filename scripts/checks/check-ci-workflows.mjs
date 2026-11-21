@@ -1042,6 +1042,7 @@ for (const [packageName, minimum] of [
   ['curl', '8.23.0-r0'],
   ['libcurl', '8.23.0-r0'],
   ['libxslt', '1.1.43-r4'],
+  ['libxml2', '2.13.9-r3'],
 ]) {
   assert.ok(
     read('deploy/studio-server/images/proxy/Dockerfile').includes(`'${packageName}>=${minimum}'`),
@@ -1137,7 +1138,10 @@ for (const [label, stage] of [
 }
 assert.ok(actorDockerfile.includes(`FROM --platform=$BUILDPLATFORM ${esbuildCompilerImage} AS esbuild-security`));
 assert.ok(actorDockerfile.includes(`FROM ${runtimeNodeImage}`));
-assert.match(actorDockerfile, /apk add --no-cache[^\n]+'libxslt>=1\.1\.43-r4'/);
+const actorPackageInstall = actorDockerfile.match(/^RUN apk add --no-cache[^\n]*/m)?.[0] ?? '';
+for (const floor of ['libxslt>=1.1.43-r4', 'libxml2>=2.13.9-r3', 'libfontenc>=1.1.10-r0']) {
+  assert.ok(actorPackageInstall.includes(`'${floor}'`), `Qualification toolchain must install ${floor}.`);
+}
 assert.match(actorDockerfile, /COPY source\/deploy\/studio-server\/images\/lib\/rebuild-esbuild\.sh/);
 assert.match(actorDockerfile, /sh \/rebuild-esbuild\.sh "\$TARGETARCH"/);
 assert.match(actorDockerfile, /COPY --from=esbuild-security --chown=10001:10001 \/out\/@esbuild/);

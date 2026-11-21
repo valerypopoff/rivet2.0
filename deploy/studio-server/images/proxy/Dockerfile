@@ -2,7 +2,7 @@
 FROM nginx:1.30.7-alpine@sha256:bef154735288bc38d99fac41ae63730684bcc661503673a04a0f9bc526ba8598
 
 # Raising security floors invalidates cached APK layers and refuses vulnerable packages.
-RUN apk add --no-cache 'curl>=8.23.0-r0' 'libcurl>=8.23.0-r0' 'brotli-libs>=1.2.1-r0' 'libexpat>=2.10.0-r0' 'libxslt>=1.1.43-r4' && \
+RUN apk add --no-cache 'curl>=8.23.0-r0' 'libcurl>=8.23.0-r0' 'brotli-libs>=1.2.1-r0' 'libexpat>=2.10.0-r0' 'libxslt>=1.1.43-r4' 'libxml2>=2.13.9-r3' && \
     addgroup -g 10001 -S rivet && \
     adduser -u 10001 -S -D -h /home/rivet -G rivet rivet && \
     mkdir -p /opt/rivet/lib /opt/rivet/proxy /tmp/nginx/conf.d /tmp/nginx/client_temp /tmp/nginx/proxy_temp /tmp/nginx/fastcgi_temp /tmp/nginx/uwsgi_temp /tmp/nginx/scgi_temp && \
