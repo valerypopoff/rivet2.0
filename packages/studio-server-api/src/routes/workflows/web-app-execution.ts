@@ -27,6 +27,7 @@ import { enqueueWorkflowExecutionRecordingPersistence } from './recordings.js';
 import { getWorkflowRecordingCreatedAt } from '../../../../studio-server-shared/workflow-recording-time.js';
 import type { RunEvidenceHandle } from '@valerypopoff/rivet-studio-server-shared/workflow-run-evidence.js';
 import { unavailableRunEvidence } from './run-evidence.js';
+import { recordingMemory, isRecordingMemoryCapacityError } from './recording-memory.js';
 import { deferEvidenceWork } from './recording-evidence-work.js';
 import { trackLLMProfileHealthRecordingOutcome } from '../../llm-profile-health/recording-outcomes.js';
 import {
@@ -456,11 +457,21 @@ export function enqueueExecutionRecording(
 ): void {
   const { project, attachedData, datasetProvider, projectVirtualPath } = executionProject;
   const recorder = recording.recorder;
+  // Do not retain the caller's larger session result (outputs/failure/processor).
+  const { evidenceHandle, evidenceCompletion, status, durationMs, cost, errorMessage } = recording;
 
-  if (!recorder) {
+  if (!recorder || !recordingMemory.retain(recorder, [project, attachedData])) {
+    if (recorder) {
+      recordingMemory.discard(recorder);
+      if (evidenceHandle)
+        void deferEvidenceWork(async () => {
+          await evidenceCompletion;
+          await unavailableRunEvidence(evidenceHandle, 'capacity');
+        });
+    }
     void reportLLMProfileHealthRecordingOutcome(
       options.executionIdentity,
-      recording.evidenceHandle ? 'persistence-failed' : 'disabled',
+      recorder || evidenceHandle ? 'persistence-failed' : 'disabled',
     );
     return;
   }
@@ -478,58 +489,66 @@ export function enqueueExecutionRecording(
     async () => {
       let captureReason: 'capture_incomplete' | 'serialization_failed' = 'capture_incomplete';
       try {
-        await recording.evidenceCompletion;
+        await evidenceCompletion;
         const executedDatasets = shouldSnapshotWorkflowRecordingDatasets()
           ? await datasetProvider.exportDatasetsForProject(project.metadata.id).catch((error) => {
-              if (recording.evidenceHandle) throw error;
+              if (evidenceHandle) throw error;
               reportRecordingFailure(error, diagnostic);
               return [];
             })
           : [];
         captureReason = 'serialization_failed';
-        const recordingSerialized = recorder.serialize();
+        const recordingSerialized = recordingMemory.serialize(recorder, [project, attachedData, executedDatasets]);
         diagnostic.phase = 'persistence';
-        const recordingId = await persistWorkflowExecutionRecordingWithBackend({
-          evidenceHandle: recording.evidenceHandle,
-          createdAt,
-          sourceProject: project,
-          sourceProjectPath: projectVirtualPath,
-          executedProject: project,
-          executedAttachedData: attachedData,
-          executedDatasets,
-          endpointName: options.endpointName,
-          recordingSerialized,
-          runKind: options.runKind,
-          status: recording.status,
-          durationMs: recording.durationMs,
-          cost: recording.cost,
-          errorMessage: recording.errorMessage,
-          executionIdentity: options.executionIdentity,
-          onPersisted: async (recordingId) => {
-            await reportLLMProfileHealthRecordingOutcome(options.executionIdentity, 'available', recordingId);
+        const recordingId = await persistWorkflowExecutionRecordingWithBackend(
+          {
+            evidenceHandle,
+            createdAt,
+            sourceProject: project,
+            sourceProjectPath: projectVirtualPath,
+            executedProject: project,
+            executedAttachedData: attachedData,
+            executedDatasets,
+            endpointName: options.endpointName,
+            recordingSerialized,
+            runKind: options.runKind,
+            status,
+            durationMs,
+            cost,
+            errorMessage,
+            executionIdentity: options.executionIdentity,
+            onPersisted: async (recordingId) => {
+              await reportLLMProfileHealthRecordingOutcome(options.executionIdentity, 'available', recordingId);
+            },
           },
-        });
+          recorder,
+        );
         if (recordingId == null) {
           await reportLLMProfileHealthRecordingOutcome(options.executionIdentity, 'disabled');
         }
       } catch (error) {
         await unavailableRunEvidence(
-          recording.evidenceHandle,
-          diagnostic.phase === 'serialization' ? captureReason : 'persistence_failed',
+          evidenceHandle,
+          isRecordingMemoryCapacityError(error)
+            ? 'capacity'
+            : diagnostic.phase === 'serialization'
+              ? captureReason
+              : 'persistence_failed',
         );
         await reportLLMProfileHealthRecordingOutcome(options.executionIdentity, 'persistence-failed');
         throw error;
       }
     },
     diagnostic,
-    0,
-    { deferredCapture: true, acceptedEvidence: !!recording.evidenceHandle },
+    recordingMemory.retainedBytes(recorder),
+    { deferredCapture: true, acceptedEvidence: !!evidenceHandle, finalize: () => recordingMemory.discard(recorder) },
   );
   if (!accepted) {
-    if (recording.evidenceHandle)
+    recordingMemory.discard(recorder);
+    if (evidenceHandle)
       void deferEvidenceWork(async () => {
-        await recording.evidenceCompletion;
-        await unavailableRunEvidence(recording.evidenceHandle, 'capacity');
+        await evidenceCompletion;
+        await unavailableRunEvidence(evidenceHandle, 'capacity');
       });
     void reportLLMProfileHealthRecordingOutcome(options.executionIdentity, 'queue-dropped');
   }

@@ -26,6 +26,7 @@ import {
   unavailableRunEvidence,
 } from '../routes/workflows/run-evidence.js';
 import type { RunEvidenceHandle } from '@valerypopoff/rivet-studio-server-shared/workflow-run-evidence.js';
+import { recordingMemory, isRecordingMemoryCapacityError } from '../routes/workflows/recording-memory.js';
 
 export async function runScheduledGraph(
   job: ClaimedRun,
@@ -129,7 +130,10 @@ export async function runScheduledGraph(
           ? 'Graph execution failed. Inspect its recording when available.'
           : 'Execution preparation or acceptance failed; the graph was not invoked.';
   } finally {
-    if (!invoked) processor.dispose();
+    if (!invoked) {
+      if (recorder) recordingMemory.discard(recorder);
+      processor.dispose();
+    }
   }
   let recordingId: string | undefined;
   let recordingStatus: ScheduledOccurrence['recordingStatus'] = draft.record ? 'unavailable' : 'off';
@@ -145,43 +149,58 @@ export async function runScheduledGraph(
     try {
       await evidenceCompletion;
       const [project, attached] = loadProjectAndAttachedDataFromString(resolved.projectContents);
-      const recordingSerialized = recorder.serialize();
+      const executedDatasets = shouldSnapshotWorkflowRecordingDatasets()
+        ? await resolved.datasetProvider.exportDatasetsForProject(project.metadata.id)
+        : [];
+      const recordingSerialized = recordingMemory.serialize(recorder, [
+        resolved.projectContents,
+        project,
+        attached,
+        executedDatasets,
+      ]);
       diagnostic.phase = 'persistence';
-      recordingId = await persistWorkflowExecutionRecordingWithBackend({
-        evidenceHandle,
-        createdAt: createdAt ?? getWorkflowRecordingCreatedAt(recorder.events),
-        sourceProject: project,
-        sourceProjectPath: resolved.sourceProjectPath,
-        executedProject: project,
-        executedAttachedData: attached,
-        executedDatasets: shouldSnapshotWorkflowRecordingDatasets()
-          ? await resolved.datasetProvider.exportDatasetsForProject(project.metadata.id)
-          : [],
-        endpointName: `Scheduled: ${occurrence.scheduleId}`,
-        runKind: draft.version,
-        recordingSerialized,
-        status: graphRecordingStatus,
-        durationMs: executionDurationMs,
-        errorMessage: reason,
-        executionIdentity: {
-          surface: 'scheduled',
-          scheduleId: occurrence.scheduleId,
-          scheduleName: draft.name,
-          occurrenceId: occurrence.id,
-          graphId,
-          graphName: project.graphs[graphId]?.metadata?.name,
-          revisionKey: resolved.revisionKey,
-          correlationId: occurrence.id,
+      recordingId = await persistWorkflowExecutionRecordingWithBackend(
+        {
+          evidenceHandle,
+          createdAt: createdAt ?? getWorkflowRecordingCreatedAt(recorder.events),
+          sourceProject: project,
+          sourceProjectPath: resolved.sourceProjectPath,
+          executedProject: project,
+          executedAttachedData: attached,
+          executedDatasets,
+          endpointName: `Scheduled: ${occurrence.scheduleId}`,
+          runKind: draft.version,
+          recordingSerialized,
+          status: graphRecordingStatus,
+          durationMs: executionDurationMs,
+          errorMessage: reason,
+          executionIdentity: {
+            surface: 'scheduled',
+            scheduleId: occurrence.scheduleId,
+            scheduleName: draft.name,
+            occurrenceId: occurrence.id,
+            graphId,
+            graphName: project.graphs[graphId]?.metadata?.name,
+            revisionKey: resolved.revisionKey,
+            correlationId: occurrence.id,
+          },
         },
-      });
+        recorder,
+      );
       if (recordingId) recordingStatus = 'saved';
     } catch (error) {
       await unavailableRunEvidence(
         evidenceHandle,
-        diagnostic.phase === 'serialization' ? 'serialization_failed' : 'persistence_failed',
+        isRecordingMemoryCapacityError(error)
+          ? 'capacity'
+          : diagnostic.phase === 'serialization'
+            ? 'serialization_failed'
+            : 'persistence_failed',
       );
       reportRecordingFailure(error, diagnostic);
       /* Recording failure must never cause graph retry. */
+    } finally {
+      recordingMemory.discard(recorder);
     }
   }
   try {

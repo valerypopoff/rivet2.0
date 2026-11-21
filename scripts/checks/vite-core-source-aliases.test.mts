@@ -5,6 +5,7 @@ import test from 'node:test';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { rivetCoreSourceEntrypoints } from '../../packages/app/scripts/vite-core-source-aliases';
+import { VertexAI } from '../../packages/app/src/utils/browser/vertexAiBrowserStub.js';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const coreDirectory = resolve(repoRoot, 'packages/core');
@@ -75,6 +76,25 @@ for (const [label, configPath] of [
 
       assert.equal(matches.length, 1, `${specifier} should have exactly one active alias in ${label}`);
       assert.equal(matches[0]?.replacement, resolve(coreDirectory, 'src', sourcePath));
+    }
+
+    if (label === 'App') {
+      const vertexAliases = configuredAliases.filter((alias) => aliasMatchesSpecifier(alias, '@google-cloud/vertexai'));
+      assert.equal(vertexAliases.length, 1, 'The browser must have exactly one Vertex credential stub.');
+      assert.equal(
+        vertexAliases[0]?.replacement,
+        resolve(repoRoot, 'packages/app/src/utils/browser/vertexAiBrowserStub.ts'),
+      );
+      assert.throws(
+        () => new VertexAI(),
+        new Error(
+          'Google Vertex AI credential-based execution is not supported in browser builds. Use a Google API key instead.',
+        ),
+      );
+      const coreRequire = createRequire(resolve(coreDirectory, 'package.json'));
+      const resolvedVertex = coreRequire.resolve('@google-cloud/vertexai').replaceAll('\\', '/');
+      assert.match(resolvedVertex, /@google-cloud\/vertexai/);
+      assert.doesNotMatch(resolvedVertex, /vertexAiBrowserStub/);
     }
   });
 }

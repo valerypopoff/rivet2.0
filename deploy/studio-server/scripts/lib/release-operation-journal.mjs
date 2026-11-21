@@ -40,6 +40,15 @@ export function releaseOperationJournalName(release) {
   return `${release.slice(0, 32)}-${createHash('sha256').update(release).digest('hex').slice(0, 8)}-cutover`;
 }
 
+export function assertNoUnfinishedAutoscalerWork(record) {
+  if (
+    record.autoscalingProtocol === 1 &&
+    record.phase === 'complete' &&
+    ['scale', 'target', 'fence', 'fenceRepair', 'removal'].some((field) => record[field] != null)
+  )
+    throw Error('Completed autoscaler journal retains unfinished work; no ownership write was attempted.');
+}
+
 export function journalForReleaseOperation(record, kind, identity, now = Date.now) {
   if (!record) return null;
   const actualKind =

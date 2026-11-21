@@ -1,6 +1,10 @@
 import { Pool, type PoolClient, type PoolConfig } from 'pg';
 import { z } from 'zod';
 import {
+  acquireRecordingStorageLock,
+  RECORDING_STORAGE_LOCK,
+} from '@valerypopoff/rivet-studio-server-bootstrap/recording-storage.mjs';
+import {
   deriveManagedSettingsEncryptionKey,
   encryptManagedSettingsValue,
   decryptManagedSettingsValue,
@@ -65,6 +69,7 @@ export function canProceedAfterRestoreValidationFailure(operation: RestoreOperat
 /** Small durable coordinator. Secrets never enter its public journal. */
 export class LegacyRestoreControl {
   readonly pool: Pool;
+  readonly #recordingLocks = new WeakSet<PoolClient>();
   constructor(
     config: PoolConfig,
     private readonly secret: string,
@@ -233,6 +238,8 @@ export class LegacyRestoreControl {
     try {
       await client.query('SELECT pg_advisory_unlock($1,$2)', [...RESTORE_LOCK]);
       await client.query('SELECT pg_advisory_unlock($1,$2)', [8072, 24005]);
+      if (this.#recordingLocks.delete(client))
+        await client.query('SELECT pg_advisory_unlock_shared($1,$2)', [...RECORDING_STORAGE_LOCK]);
     } catch (error) {
       failed = true;
       throw error;
@@ -241,6 +248,15 @@ export class LegacyRestoreControl {
     }
   }
   async exclusive(client: PoolClient): Promise<boolean> {
+    if (!this.#recordingLocks.has(client)) {
+      try {
+        await acquireRecordingStorageLock(client, 'shared');
+        this.#recordingLocks.add(client);
+      } catch (error) {
+        if ((error as { code?: string }).code === 'recording_storage_busy') return false;
+        throw error;
+      }
+    }
     return Boolean(
       (await client.query('SELECT pg_try_advisory_lock($1,$2) AS acquired', [...RESTORE_LOCK])).rows[0]?.acquired,
     );
@@ -266,8 +282,11 @@ export function restoreBlocksServing(operation: RestoreOperation | null): boolea
 }
 
 /** Serving processes hold a session lock until all producers and stores have disposed. */
-export async function acquireRestoreServingLease(pool: Pool): Promise<() => Promise<void>> {
-  const client = await pool.connect();
+export async function acquireRestoreServingLease(
+  pool: Pool,
+  providedClient?: PoolClient,
+): Promise<() => Promise<void>> {
+  const client = providedClient ?? (await pool.connect());
   try {
     await client.query('SELECT pg_advisory_lock_shared($1,$2)', [...RESTORE_LOCK]);
     const present = (await client.query("SELECT to_regclass('rivet_restore_control.operation') AS name")).rows[0]?.name;
@@ -290,11 +309,11 @@ export async function acquireRestoreServingLease(pool: Pool): Promise<() => Prom
           failed = true;
           throw error;
         } finally {
-          client.release(failed);
+          if (!providedClient) client.release(failed);
         }
       })());
   } catch (error) {
-    client.release(true);
+    if (!providedClient) client.release(true);
     throw error;
   }
 }

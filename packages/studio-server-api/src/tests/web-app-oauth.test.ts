@@ -52,6 +52,16 @@ const OAUTH_ENV_KEYS = [
 
 type LegacyOAuthEnvValues = Partial<Record<typeof OAUTH_ENV_KEYS[number], string | undefined>>;
 
+const oauthCallbackEnv = {
+  OAUTH_AUTHORIZE_URL: 'https://oauth.example.test/authorize',
+  OAUTH_TOKEN_URL: 'https://oauth.example.test/token',
+  OAUTH_USER_URL: 'https://oauth.example.test/profile',
+  OAUTH_CLIENT_ID: 'client-id',
+  OAUTH_CLIENT_SECRET: 'client-secret',
+  OAUTH_CALLBACK_URL: 'http://127.0.0.1/apps/auth/callback',
+  OAUTH_SESSION_SECRET: 'session-secret',
+} satisfies LegacyOAuthEnvValues;
+
 function createMockRequest(headers: Record<string, string> = {}): MockRequest {
   const normalizedHeaders = Object.fromEntries(
     Object.entries(headers).map(([key, value]) => [key.toLowerCase(), value]),
@@ -404,13 +414,7 @@ test('web app dummy OAuth rejects a remote client even when Host is localhost', 
 
 test('web app OAuth callback exchanges code, sets session cookie, and supports allowlists', async () => {
   await withEnv({
-    OAUTH_AUTHORIZE_URL: 'https://oauth.example.test/authorize',
-    OAUTH_TOKEN_URL: 'https://oauth.example.test/token',
-    OAUTH_USER_URL: 'https://oauth.example.test/profile',
-    OAUTH_CLIENT_ID: 'client-id',
-    OAUTH_CLIENT_SECRET: 'client-secret',
-    OAUTH_CALLBACK_URL: 'http://127.0.0.1/apps/auth/callback',
-    OAUTH_SESSION_SECRET: 'session-secret',
+    ...oauthCallbackEnv,
   }, async () => {
     const originalFetch = globalThis.fetch;
     globalThis.fetch = (async (input: RequestInfo | URL) => {
@@ -467,13 +471,7 @@ test('web app OAuth callback exchanges code, sets session cookie, and supports a
 
 test('web app OAuth sessions are rejected after OAuth settings change', async () => {
   await withEnv({
-    OAUTH_AUTHORIZE_URL: 'https://oauth.example.test/authorize',
-    OAUTH_TOKEN_URL: 'https://oauth.example.test/token',
-    OAUTH_USER_URL: 'https://oauth.example.test/profile',
-    OAUTH_CLIENT_ID: 'client-id',
-    OAUTH_CLIENT_SECRET: 'client-secret',
-    OAUTH_CALLBACK_URL: 'http://127.0.0.1/apps/auth/callback',
-    OAUTH_SESSION_SECRET: 'session-secret',
+    ...oauthCallbackEnv,
   }, async () => {
     const originalFetch = globalThis.fetch;
     globalThis.fetch = (async (input: RequestInfo | URL) => {
@@ -542,12 +540,7 @@ test('web app OAuth sessions are rejected after OAuth settings change', async ()
 
 test('web app OAuth sessions are rejected after client secret rotation', async () => {
   await withEnv({
-    OAUTH_AUTHORIZE_URL: 'https://oauth.example.test/authorize',
-    OAUTH_TOKEN_URL: 'https://oauth.example.test/token',
-    OAUTH_USER_URL: 'https://oauth.example.test/profile',
-    OAUTH_CLIENT_ID: 'client-id',
-    OAUTH_CLIENT_SECRET: 'client-secret',
-    OAUTH_CALLBACK_URL: 'http://127.0.0.1/apps/auth/callback',
+    ...oauthCallbackEnv,
     OAUTH_SESSION_SECRET: 'stable-session-secret',
   }, async () => {
     const originalFetch = globalThis.fetch;
@@ -633,13 +626,7 @@ test('web app OAuth sessions without a settings version are rejected', async () 
 
 test('web app OAuth callback returns to the original app when provider errors without state', async () => {
   await withEnv({
-    OAUTH_AUTHORIZE_URL: 'https://oauth.example.test/authorize',
-    OAUTH_TOKEN_URL: 'https://oauth.example.test/token',
-    OAUTH_USER_URL: 'https://oauth.example.test/profile',
-    OAUTH_CLIENT_ID: 'client-id',
-    OAUTH_CLIENT_SECRET: 'client-secret',
-    OAUTH_CALLBACK_URL: 'http://127.0.0.1/apps/auth/callback',
-    OAUTH_SESSION_SECRET: 'session-secret',
+    ...oauthCallbackEnv,
   }, async () => {
     await withOAuthCallbackServer(async (baseUrl) => {
       const redirect = createWebAppOAuthAuthorizationRedirect(
@@ -676,13 +663,7 @@ test('web app OAuth callback treats stale state as invalid when OAuth settings w
 
 test('web app OAuth callback does not create a session after OAuth is disabled', async () => {
   await withEnv({
-    OAUTH_AUTHORIZE_URL: 'https://oauth.example.test/authorize',
-    OAUTH_TOKEN_URL: 'https://oauth.example.test/token',
-    OAUTH_USER_URL: 'https://oauth.example.test/profile',
-    OAUTH_CLIENT_ID: 'client-id',
-    OAUTH_CLIENT_SECRET: 'client-secret',
-    OAUTH_CALLBACK_URL: 'http://127.0.0.1/apps/auth/callback',
-    OAUTH_SESSION_SECRET: 'session-secret',
+    ...oauthCallbackEnv,
   }, async () => {
     await withOAuthCallbackServer(async (baseUrl) => {
       const redirect = createWebAppOAuthAuthorizationRedirect(
@@ -711,13 +692,7 @@ test('web app OAuth callback does not create a session after OAuth is disabled',
 
 test('web app OAuth callback does not create a session after OAuth settings change during sign-in', async () => {
   await withEnv({
-    OAUTH_AUTHORIZE_URL: 'https://oauth.example.test/authorize',
-    OAUTH_TOKEN_URL: 'https://oauth.example.test/token',
-    OAUTH_USER_URL: 'https://oauth.example.test/profile',
-    OAUTH_CLIENT_ID: 'client-id',
-    OAUTH_CLIENT_SECRET: 'client-secret',
-    OAUTH_CALLBACK_URL: 'http://127.0.0.1/apps/auth/callback',
-    OAUTH_SESSION_SECRET: 'session-secret',
+    ...oauthCallbackEnv,
   }, async () => {
     const originalFetch = globalThis.fetch;
     let fetchWasCalled = false;
@@ -769,13 +744,7 @@ test('web app OAuth callback does not create a session after OAuth settings chan
 
 test('web app OAuth callback returns to the original app when profile has no configured email claim', async () => {
   await withEnv({
-    OAUTH_AUTHORIZE_URL: 'https://oauth.example.test/authorize',
-    OAUTH_TOKEN_URL: 'https://oauth.example.test/token',
-    OAUTH_USER_URL: 'https://oauth.example.test/profile',
-    OAUTH_CLIENT_ID: 'client-id',
-    OAUTH_CLIENT_SECRET: 'client-secret',
-    OAUTH_CALLBACK_URL: 'http://127.0.0.1/apps/auth/callback',
-    OAUTH_SESSION_SECRET: 'session-secret',
+    ...oauthCallbackEnv,
   }, async () => {
     const originalFetch = globalThis.fetch;
     globalThis.fetch = (async (input: RequestInfo | URL) => {
@@ -823,13 +792,7 @@ test('web app OAuth callback returns to the original app when profile has no con
 
 test('web app OAuth callback can log the raw profile response for claim discovery', async () => {
   await withEnv({
-    OAUTH_AUTHORIZE_URL: 'https://oauth.example.test/authorize',
-    OAUTH_TOKEN_URL: 'https://oauth.example.test/token',
-    OAUTH_USER_URL: 'https://oauth.example.test/profile',
-    OAUTH_CLIENT_ID: 'client-id',
-    OAUTH_CLIENT_SECRET: 'client-secret',
-    OAUTH_CALLBACK_URL: 'http://127.0.0.1/apps/auth/callback',
-    OAUTH_SESSION_SECRET: 'session-secret',
+    ...oauthCallbackEnv,
     OAUTH_DEBUG_LOG_PROFILE: 'true',
   }, async () => {
     const originalFetch = globalThis.fetch;
@@ -925,14 +888,8 @@ test('web app OAuth logout clears OAuth cookies and returns to the requested app
 
 test('web app OAuth callback supports basic client authentication for strict providers', async () => {
   await withEnv({
-    OAUTH_AUTHORIZE_URL: 'https://oauth.example.test/authorize',
-    OAUTH_TOKEN_URL: 'https://oauth.example.test/token',
-    OAUTH_USER_URL: 'https://oauth.example.test/profile',
-    OAUTH_CLIENT_ID: 'client-id',
-    OAUTH_CLIENT_SECRET: 'client-secret',
-    OAUTH_CALLBACK_URL: 'http://127.0.0.1/apps/auth/callback',
+    ...oauthCallbackEnv,
     OAUTH_CLIENT_AUTH_METHOD: 'basic',
-    OAUTH_SESSION_SECRET: 'session-secret',
   }, async () => {
     const originalFetch = globalThis.fetch;
     let sawTokenRequest = false;

@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { assertImageOrigins } from './component-image-origin.mjs';
 import { releaseToolingSource } from './release-tooling.mjs';
+import { recordingStorageContract, assertRecordingStorageUpgrade } from './recording-storage-contract.mjs';
 import {
   assertHaReleaseEvidence,
   assertRuntimeControlEvidence,
@@ -12,6 +13,22 @@ import {
 export const STUDIO_SERVER_RELEASE_MANIFEST_VERSION = 2;
 export const STUDIO_SERVER_LEGACY_RELEASE_MANIFEST_VERSION = 1;
 export const STUDIO_SERVER_RELEASE_IMAGE_COMPONENTS = ['proxy', 'web', 'api', 'executor'];
+
+/** Like the schema contract, this belongs to the application being built,
+ * not the possibly newer checkout supplying release tooling. */
+export function readRecordingStorageReleaseContract(rootDir) {
+  const file = path.join(rootDir, 'packages/studio-server-bootstrap/recording-storage.mjs');
+  if (!fs.existsSync(file)) return undefined;
+  const source = fs.readFileSync(file, 'utf8');
+  const encoding = source.match(/^export const DEFAULT_MANAGED_RECORDING_ENCODING = '(gzip|br)';$/m)?.[1];
+  const protocol = source.match(/^export const RECORDING_STORAGE_COORDINATION_PROTOCOL = (\d+);$/m)?.[1];
+  if (!encoding || protocol !== '1') throw Error('Unsupported application recording storage contract.');
+  return recordingStorageContract({
+    readableEncodings: ['identity', 'gzip', 'br'],
+    writableEncodings: encoding === 'br' ? ['identity', 'gzip', 'br'] : ['identity', 'gzip'],
+    coordinationProtocol: 1,
+  });
+}
 
 const digestPattern = /^sha256:[a-f0-9]{64}$/;
 const sourceShaPattern = /^[a-f0-9]{40}$/;
@@ -273,6 +290,8 @@ export function assertStudioServerReleaseManifest(manifest, { requirePromoted = 
         : {}),
     },
   };
+  if (manifest.recordingStorage !== undefined)
+    normalized.recordingStorage = recordingStorageContract(manifest.recordingStorage);
   if (evidence.ha) normalized.evidence.ha = assertHaReleaseEvidence(evidence.ha, normalized);
   if (evidence.runtimeControl)
     normalized.evidence.runtimeControl = assertRuntimeControlEvidence(evidence.runtimeControl, normalized);
@@ -431,6 +450,7 @@ export function createStudioServerReleaseManifest({
   createdAt = new Date().toISOString(),
 }) {
   const schema = readManagedWorkflowSchemaReleaseContract(rootDir);
+  const recordingStorage = readRecordingStorageReleaseContract(rootDir);
   const chart = readHelmChartIdentity(rootDir);
   return assertStudioServerReleaseManifest({
     formatVersion: STUDIO_SERVER_RELEASE_MANIFEST_VERSION,
@@ -439,6 +459,7 @@ export function createStudioServerReleaseManifest({
     source,
     chart,
     database: { managedWorkflowSchema: schema },
+    ...(recordingStorage ? { recordingStorage } : {}),
     images,
     ...(imageOrigins ? { imageOrigins } : {}),
     lineage: {
@@ -496,6 +517,7 @@ function releaseValuesFor({ manifest, chart, images, compatibility, migrationJob
         enabled: true,
         manifestDigest: getStudioServerReleaseManifestDigest(manifest, { requirePromoted: true }),
         sourceSha: manifest.source.sha,
+        ...(manifest.recordingStorage ? { recordingStorage: manifest.recordingStorage } : {}),
         ...(manifest.evidence.ha?.protocol === 3 ? { browserContract: manifest.evidence.ha.browserContract } : {}),
         verification: {
           workflow: manifest.evidence.promotion.workflow,
@@ -549,6 +571,7 @@ export function createForwardRollbackHelmValues({ failedRelease, rollbackRelease
     );
   }
   assertPredecessorReferenceMatchesRelease(failed.lineage.predecessor, rollback, 'Requested forward-rollback release');
+  assertRecordingStorageUpgrade(failed.recordingStorage, rollback.recordingStorage);
   const activeSchema = failed.database.managedWorkflowSchema;
   const rollbackSchema = rollback.database.managedWorkflowSchema;
   if (activeSchema.version < rollbackSchema.version) {

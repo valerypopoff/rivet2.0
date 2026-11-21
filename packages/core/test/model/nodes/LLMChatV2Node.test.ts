@@ -1,7 +1,5 @@
 import { describe, it, mock } from 'node:test';
 import { strict as assert } from 'node:assert';
-import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
 import { CHAT_V2_DEFAULT_CREDENTIAL_NAMES } from '../../../src/model/chat-v2/chatV2CredentialNames.js';
 import type { LLMChatV2Node } from '../../../src/model/chat-v2/llmChatV2NodeData.js';
 import { LLMChatV2NodeImpl } from '../../../src/model/nodes/LLMChatV2Node.js';
@@ -2284,20 +2282,67 @@ describe('LLMChatV2NodeImpl', () => {
     assert.equal(getCacheProviderConfig(openAiRuntime).baseURL, undefined);
   });
 
-  it('keeps built-in provider tools on provider-owned endpoints too', () => {
-    const source = readFileSync(
-      fileURLToPath(new URL('../../../src/model/chat-v2/chatV2RuntimeOptions.ts', import.meta.url)),
-      'utf8',
-    );
-    const openAiToolsBlock = source.match(/case 'openai': \{[\s\S]*?case 'google': \{/);
-    const googleToolsBlock = source.match(/case 'google': \{[\s\S]*?case 'anthropic':/);
-
-    assert.ok(openAiToolsBlock);
-    assert.ok(googleToolsBlock);
-    assert.match(openAiToolsBlock[0], /createOpenAI\([\s\S]*baseURL: undefined/);
-    assert.match(googleToolsBlock[0], /createGoogleGenerativeAI\([\s\S]*baseURL: undefined/);
-    assert.doesNotMatch(openAiToolsBlock[0], /baseURL: config\.baseURL/);
-    assert.doesNotMatch(googleToolsBlock[0], /baseURL: config\.baseURL/);
+  it('registers enabled native tools and keeps built-in requests on provider-owned endpoints', async (t) => {
+    const requests: Request[] = [];
+    t.mock.method(globalThis, 'fetch', async (input, init) => {
+      requests.push(new Request(input, init));
+      return new Response(null, { status: 418 });
+    });
+    for (const { provider, model, origin, tools } of [
+      {
+        provider: 'openai',
+        model: 'gpt-5',
+        origin: 'https://api.openai.com',
+        tools: [
+          ['enableOpenAIWebSearch', 'web_search'],
+          ['enableOpenAICodeInterpreter', 'code_interpreter'],
+        ],
+      },
+      {
+        provider: 'google',
+        model: 'gemini-2.5-pro',
+        origin: 'https://generativelanguage.googleapis.com',
+        tools: [
+          ['enableGoogleSearchGrounding', 'googleSearch'],
+          ['enableGoogleUrlContext', 'urlContext'],
+        ],
+      },
+    ] as const) {
+      for (const selected of [[], [0], [1], [0, 1]]) {
+        const node = createNode({
+          provider,
+          model,
+          // Leave the other provider's switches on to detect cross-provider leakage.
+          enableOpenAIWebSearch: true,
+          enableOpenAICodeInterpreter: true,
+          enableGoogleSearchGrounding: true,
+          enableGoogleUrlContext: true,
+          ...Object.fromEntries(tools.map(([flag], index) => [flag, selected.includes(index)])),
+          baseURL: 'https://inactive.example.test/v1',
+          useBaseURLInput: true,
+          customProviderBaseURL: 'https://custom.example.test/v1',
+          retryOnNon200: false,
+        });
+        const requestCount = requests.length;
+        const runtime = await resolveLLMChatV2RuntimeConfig({
+          data: node.data,
+          nodeId: node.chartNode.id,
+          inputs: createPromptInputs(),
+          context: createRuntimeContext({ signal: new AbortController().signal }),
+        });
+        assert.equal(requests.length, requestCount, 'Configuration must not issue a provider request.');
+        await assert.rejects(runtime.runPipeline(runtime.runOptions), { statusCode: 418 });
+        assert.equal(requests.length, requestCount + 1);
+        const request = requests[requestCount]!;
+        assert.equal(new URL(request.url).origin, origin);
+        const body = (await request.json()) as { tools?: Record<string, unknown>[] };
+        const sentTools = (body.tools ?? []).flatMap((tool) =>
+          provider === 'openai' ? [tool.type] : Object.keys(tool),
+        );
+        const expected = tools.filter((_tool, index) => selected.includes(index)).map(([_flag, name]) => name);
+        assert.deepEqual(sentTools.sort(), expected.sort());
+      }
+    }
   });
 
   it('does not reuse the Custom provider base URL as a built-in provider override', async () => {

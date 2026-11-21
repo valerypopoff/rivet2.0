@@ -1,4 +1,5 @@
 import type { WorkflowProjectItem } from './workflow-types';
+import type { RecordingAvailability, RecordingUnavailableReason } from './workflow-run-evidence.js';
 
 /**
  * `editor` is a locally executed graph replay captured by the hosted editor.
@@ -69,6 +70,8 @@ export type WorkflowRecordingInputFilter = {
 };
 
 export type WorkflowRecordingBlobEncoding = 'identity' | 'gzip';
+/** Managed immutable artifacts may use Brotli; legacy filesystem bundles do not. */
+export type WorkflowRecordingArtifactEncoding = WorkflowRecordingBlobEncoding | 'br';
 
 export type WorkflowRecordingRunSummary = {
   /** Browse-only retained child presence; omitted by older servers. Never persisted. */
@@ -85,8 +88,8 @@ export type WorkflowRecordingRunSummary = {
   status: WorkflowRecordingStatus | 'accepted' | 'running' | 'unknown';
   /** Only a committed artifact can be opened. Absent on legacy playable rows. */
   evidence?: {
-    availability: import('./workflow-run-evidence.js').RecordingAvailability;
-    reason?: import('./workflow-run-evidence.js').RecordingUnavailableReason;
+    availability: RecordingAvailability;
+    reason?: RecordingUnavailableReason;
     childCoverage: 'unknown' | 'complete' | 'incomplete';
   };
   durationMs: number;

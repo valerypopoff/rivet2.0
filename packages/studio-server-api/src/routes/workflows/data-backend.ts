@@ -108,6 +108,11 @@ export type WorkflowExecutionDefinition = {
   webAppPolicyInvalidationKey?: string;
   debug?: { cacheStatus: 'hit' | 'miss' | 'bypass'; resolveMs: number; materializeMs: number };
 };
+/** Metadata-only lookup. Loading artifacts and constructing mutable run state is deferred until admission. */
+export type WorkflowPublishedExecutionTarget = {
+  endpointAccess?: WorkflowEndpointAccess;
+  load(): Promise<WorkflowExecutionDefinition | null>;
+};
 export type WorkflowWebAppPolicy = { appId: string; relativePath: string; uiGraphId: string; allowedEmails: string[] };
 export type PersistWorkflowExecutionRecordingOptions = {
   evidenceHandle?: import('@valerypopoff/rivet-studio-server-shared/workflow-run-evidence.js').RunEvidenceHandle;
@@ -235,6 +240,10 @@ export interface WorkflowPublicationRepository {
   ): Promise<WorkflowProjectItem>;
 }
 export interface WorkflowExecutionSources {
+  resolvePublishedExecutionTarget(
+    endpointName: string,
+    requireFreshPointer?: boolean,
+  ): Promise<WorkflowPublishedExecutionTarget | null>;
   loadPublishedExecutionProject(
     endpointName: string,
     requireFreshPointer?: boolean,

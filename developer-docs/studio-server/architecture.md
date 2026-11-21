@@ -193,6 +193,13 @@ replacement. An unconfirmed close requires process recovery, not a blind retry.
 Context shutdown must propagate that failure instead of closing its pool beneath
 an unsettled listener.
 
+Published HTTP endpoints resolve current access metadata before acquiring their
+shared execution permit, then load project/frozen-release artifacts and construct
+per-run state only for admitted requests. Preparation is tracked during shutdown
+and retains its permit through the full background tail. Public managed requests
+still perform one fresh metadata lookup before admission; rejected requests skip
+artifact loading and cloning. See the [admission contract and local checks](./published-endpoint-admission-plan.md).
+
 ## Managed legacy backup restore
 
 `legacy-restore/service.ts` is the singleton control-backend owner for the UI's
@@ -353,6 +360,17 @@ restored runtime caches and private UI environment visibility, then exercises a
 test-owned empty endpoint while checking its restored internal-only access policy.
 `test:legacy-restore-managed` is a focused entry to that same fixture and ownership
 test; the default `test:migration-managed` keeps the full migration negative cases.
+
+## HTTP Call response ownership
+
+Published endpoints, web-app actions and hosted editor runs use the shared
+[Core HTTP Call lifecycle](../CORE-ENGINE.md#http-call-response-lifecycle).
+It releases discarded retry/error replies while retaining their status/header
+evidence. Cleanup adds no awaited work to successful requests, changes no
+admission limit and requires no server flag or database migration. It does not
+change configured retries or establish whether a remote mutation took effect.
+See the [implementation and validation record](http-call-response-cleanup-plan.md)
+for real transport checks and local performance measurements.
 
 ## OpenRouter LLM execution
 
@@ -835,13 +853,17 @@ New S3 revision/recording keys carry an `artifact-v1` descriptor suffix with the
 expected stored SHA-256, stored size, decoded size and encoding. SQL retains the
 whole immutable key; S3 metadata cannot redefine the expected descriptor. Uploads
 use conditional creation and verify existing bytes on an idempotent retry.
-Recordings use the configured gzip/identity policy and report actual stored and
-decoded sizes. Stream reads and decompression enforce a 100 MiB per-artifact bound;
+Managed recording traces default to Brotli quality 4; explicit gzip/identity
+configuration remains supported. Project/dataset snapshots and legacy local
+recording formats retain gzip/identity. All report actual stored and decoded
+sizes. Stream reads and decompression enforce a 100 MiB per-artifact bound;
 oversized or corrupt objects fail closed. Earlier descriptor-free plain-text
 objects remain readable within that bound. Recording input-search workers receive
 the descriptor's encoding. Payload uploads/reads have a five-minute absolute
 deadline in addition to transport timeouts. Reconciliation recognizes both key
-generations.
+generations, including unique recompressed trace names. The source-only
+[recompression tool](recording-brotli-plan.md) uses byte-verified pointer swaps
+and the normal deletion outbox; it does not install a background task.
 
 Managed schema 23 enables shared recording project snapshots. Durable
 recording persistence reuses one verified snapshot for the exact project and attached
@@ -860,10 +882,10 @@ objects stop receiving new references. Schema 23 is a maintenance cutover
 that retires older readers before opening managed storage. See the
 [snapshot sharing plan](recording-snapshot-sharing-plan.md).
 
-The periodic managed maintenance owner automatically compacts historical
-recordings using a durable cursor. The same operation is available as a
-scoped command. It checks a bounded page, compares the
-decoded replay, and verifies the replacement before changing the pointer and
+Historical recording conversion is an optional source-checkout operator
+command, excluded from serving images and normal maintenance. It checks a
+bounded page, compares the decoded replay, and verifies the replacement before
+changing the pointer and
 queuing the original blob in one transaction. It reads no live project
 revisions. The retention owner deletes replaced blobs after checking their
 references. A replay request that encountered a retired key reads the current
@@ -1165,6 +1187,16 @@ stale values.
 Kubernetes stores every App Settings domain as an encrypted, revisioned PostgreSQL row. Control and execution API replicas capture the same immutable settings snapshot at each request boundary, then converge across replicas through PostgreSQL notifications with revision polling as the durable fallback. The editor executor calls its co-located backend API over loopback in Kubernetes and the `api` service in Docker, so environment-overlay saves become available to new runs without a deployment restart or a shared settings volume.
 
 ### Managed app-settings authority
+
+Explicit freshness checks, such as execution-environment reads, share adjacent
+checks only while they are queued and have not started, with at most eight
+callers sharing each check. The bound avoids releasing a whole execution burst
+from one I/O completion. A write or another queued operation breaks that group;
+an already-running check is never reused for a later caller. Every waiting
+request installs the check's exact refreshed snapshot in its own async context,
+including unchanged-file-signature reads.
+Ordinary request-scoped `read()` remains pinned. There is no time-based cache
+or relaxation of backend synchronization and freshness checks.
 
 The typed `VersionedSettingsRepository` keeps one contract across deployment shapes. Fresh/upgraded supported Docker installations use private plaintext SQLite settings with revisioned writes; legacy single-host file mode uses atomic JSON files and a process-local watcher. Kubernetes sets `RIVET_APP_SETTINGS_BACKEND=postgres`: migration 2 creates `app_settings`, each payload is encrypted with AES-256-GCM and authenticated against its domain key and schema version, writes use monotonic compare-and-swap revisions, and API replicas invalidate caches through `LISTEN`/`NOTIFY` plus a five-second revision poll. Notification publication happens after commit and cannot turn a committed settings save into an API failure. A replica acknowledges a newer revision only after its matching repositories refresh successfully, so a transient read or decrypt failure remains retryable by the poller. Schema verification requires the settings table, every column/default, and the cryptographic field-shape constraints. `AsyncLocalStorage` pins one immutable snapshot per HTTP request so a settings update cannot mix old and new policy inside one request.
 

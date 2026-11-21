@@ -3,10 +3,19 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import test from 'node:test';
+import { response as expressResponse, type Response } from 'express';
+import { getActiveHttpExecutionCount } from '../active-http-executions.js';
+import { withAsyncDeadline } from './helpers/workflow-async-process.js';
 import { readJson, waitForRecordingWorkflows, withEnvOverride } from './helpers/workflow-api-harness.js';
 import { createFilesystemWorkflowSuiteHarness } from './helpers/workflow-filesystem-suite-harness.js';
 import { writeWorkflowEndpointAuthSettings } from '../workflow-endpoint-auth-settings.js';
 import { createWorkflowCapacityCapability } from '../workflow-capacity-capability.js';
+import { recordingMemory } from '../routes/workflows/recording-memory.js';
+import {
+  flushWorkflowExecutionRecordingPersistence,
+  initializeWorkflowRecordingQueuePolicy,
+  disposeWorkflowRecordingQueuePolicy,
+} from '../routes/workflows/recordings.js';
 import {
   FilesystemProjectMoveInterruption,
   moveProjectWithSidecars,
@@ -29,6 +38,83 @@ const {
 
 test.beforeEach(resetAndEnsureWorkflowsRoot);
 test.after(cleanupWorkflowSuite);
+
+void test('completed response I/O precedes recording admission while execution remains owned', async (t) => {
+  const created = await workflowMutations.createWorkflowProjectItem('', 'Response first');
+  await workflowMutations.publishWorkflowProjectItem(created.relativePath, { endpointName: 'response-first' });
+  let ioTurn = false;
+  let activeAtIo = 0;
+  const sendJson = expressResponse.json;
+  t.mock.method(expressResponse, 'json', function (this: Response, body: unknown) {
+    const result = sendJson.call(this, body);
+    if (this.req.method === 'POST' && this.req.path.endsWith('/response-first')) {
+      setImmediate(() => {
+        ioTurn = true;
+        activeAtIo = getActiveHttpExecutionCount();
+      });
+    }
+    return result;
+  });
+  let observe!: (value: { ioTurn: boolean; active: number }) => void;
+  const admitted = new Promise<{ ioTurn: boolean; active: number }>((resolve) => {
+    observe = resolve;
+  });
+  const retain = recordingMemory.retain.bind(recordingMemory);
+  t.mock.method(recordingMemory, 'retain', (...args: Parameters<typeof retain>) => {
+    observe({ ioTurn, active: activeAtIo });
+    return retain(...args);
+  });
+  await withEnvOverride('RIVET_RECORDINGS_ENABLED', 'true', () =>
+    withWorkflowExecutionServer(async ({ publishedBaseUrl, apiBaseUrl }) => {
+      const response = await fetch(`${publishedBaseUrl}/response-first`, { method: 'POST' });
+      assert.equal(response.status, 200);
+      await response.arrayBuffer();
+      const seen = await withAsyncDeadline(admitted, 'recording admission');
+      assert.equal(seen.ioTurn, true);
+      assert.ok(seen.active > 0, 'The response turn must retain its execution owner.');
+      await waitForRecordingWorkflows(apiBaseUrl, (entries) => entries[0]?.totalRuns === 1);
+      await flushWorkflowExecutionRecordingPersistence();
+      assert.equal(recordingMemory.snapshot().captures, 0);
+    }),
+  );
+});
+
+void test('recording admission failure preserves the HTTP result and the next recording', async (t) => {
+  const created = await workflowMutations.createWorkflowProjectItem('', 'Capture capacity');
+  await workflowMutations.publishWorkflowProjectItem(created.relativePath, { endpointName: 'capture-capacity' });
+  await withEnvOverride('RIVET_RECORDINGS_ENABLED', 'true', () =>
+    withWorkflowExecutionServer(async ({ apiBaseUrl, publishedBaseUrl }) => {
+      const denied = t.mock.method(recordingMemory, 'createCapturePolicy', () => {
+        throw new Error('capacity');
+      });
+      const post = () => fetch(`${publishedBaseUrl}/capture-capacity`, { method: 'POST' });
+      const first = await post();
+      assert.equal(first.status, 200);
+      await first.arrayBuffer();
+      await flushWorkflowExecutionRecordingPersistence();
+      assert.equal(recordingMemory.snapshot().captures, 0);
+      denied.mock.restore();
+      disposeWorkflowRecordingQueuePolicy();
+      try {
+        const closedQueue = await post();
+        assert.equal(closedQueue.status, 200);
+        await closedQueue.arrayBuffer();
+        await flushWorkflowExecutionRecordingPersistence();
+        assert.equal(recordingMemory.snapshot().captures, 0, 'Rejected queue work must release its capture.');
+        assert.equal(recordingMemory.snapshot().estimatedBytes, 0);
+      } finally {
+        await initializeWorkflowRecordingQueuePolicy();
+      }
+      const second = await post();
+      assert.equal(second.status, 200);
+      await second.arrayBuffer();
+      const history = await waitForRecordingWorkflows(apiBaseUrl, (workflows) => workflows[0]?.totalRuns === 1);
+      assert.equal(history.workflows[0]?.totalRuns, 1);
+      await flushWorkflowExecutionRecordingPersistence();
+      assert.equal(recordingMemory.snapshot().estimatedBytes, 0);
+    }),
+  );
+});
 
 async function writeHeadersContextEchoProject(projectPath: string, projectName: string): Promise<void> {
   const project = rivetNode.loadProjectFromString(workflowFs.createBlankProjectFile(projectName));

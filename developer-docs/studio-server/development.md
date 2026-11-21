@@ -1781,6 +1781,18 @@ Media admission must match the JSON parser (`application/json` and `application/
 
 HTTP body lifecycle regressions live in `src/tests/body-admission.test.ts` in the API package. Test open uploads, not just complete buffers: overflow must return 413 before EOF, and cancellation must detach readers and close decoders before releasing permits. `body-reader.ts` owns bounded receipt; Express parses only the resulting finite stream. Never replace that boundary with a live Express parser, whose error path can drain an upload until EOF.
 
+Reader saturation queues at most 64 paused requests for one second; byte-budget saturation still rejects immediately. Preserve the synchronous fast path, FIFO grant checks, original settings/correlation context, and overall receive deadline. If event-loop work delays both timers, report whichever deadline expired first; a late receive timer must not replace an earlier queue-capacity expiry. The body-reader reports the counted decoded size only after successful parsing and buffer cleanup; middleware commits that smaller reservation only on successful settlement. Keep cancellation/grant races and long-running handler ownership covered. The [body-admission implementation record](http-body-admission-queue-plan.md) contains the local Linux burst, proxy, memory, and latency checks; these larger measurements are separate from deterministic CI regressions.
+
+Keep deadline and discard-boundary checks deterministic with controlled clocks. The default-policy test verifies all 64 waiters and the 999/1000 ms expiry boundary without sleeping. Burst and settings-context tests use a longer test-only admission budget so host scheduling does not become a performance assertion; production timing is measured separately. Real HTTP tests still cover partial uploads, decoding, terminal responses, keep-alive reuse and shutdown. Reuse the common HTTP server harness, bound client requests, handle response errors, and wait for observable upload/queue events instead of arbitrary sleeps. Retain the delayed-response socket test because it verifies Node's actual flush/close behavior beyond the discard deadline.
+
+For large rejected uploads, wait for the existing bounded discard before forwarding a parser error. Otherwise `Connection: close` can reset a client still sending its body, replacing the useful `413` with `ECONNRESET`. Cover the actual web-app preflight/body-limit route and a large upload paused before parsing. Keep the discard bounded at 250 ms, preserve the original request context through the wait, and never delay successful requests on this error-only path.
+
+Use the same error-forwarding path for unsupported media types detected before admission. Those requests need the same bounded discard and terminal response as size or encoding failures. Count declared and decoded `413` rejections once, at middleware settlement; do not also increment the same counter in the admission controller.
+
+Proxy fixtures must use the shipped body-size limit and assert the API's JSON error code, not only the HTTP status. Otherwise nginx's default 1 MiB rejection can make an API size-error test pass without reaching the API.
+
+Authentication and web-app preflight denials also happen before body parsing. Send their terminal responses through `sendRejectedBodyResponse`; simply starting a discard and immediately sending JSON still races large uploads. `closeResponseConnectionAfterFlush` is only preparation for a later error formatter, which must use the same awaited response path. Successful requests do not enter either rejection path. Keep published/latest missing-app responses, authentication decisions, client disconnects during discard, and response-writer failures covered by the real HTTP tests.
+
 ## Project workspace lifecycle regressions
 
 Project-ready assertions must exclude `.project.opening`. Loading placeholders
@@ -1909,20 +1921,20 @@ committing or pushing the source never applies that recovery to a live cluster.
 
 The five private `@valerypopoff/rivet-studio-server-*` workspaces form one
 Studio Server product and use one lockstep package version. Their current
-version is `1.42.0`. `yarn studio-server:verify:repo-structure` rejects version
+version is `1.44.0`. `yarn studio-server:verify:repo-structure` rejects version
 drift between the API, web, executor, shared, and bootstrap manifests.
-This minor release adds frozen endpoint dependencies, History preview, saved
-dependency indicators, and Restore that preserves editable drafts. API, shared
-and web implement the feature. Bootstrap and executor follow product lockstep.
-The [frozen-release guide](workflow-publication.md#frozen-endpoint-releases)
-describes schema 22 and when to enable capture.
+This minor release adds bounded HTTP upload waiting and recording memory
+accounting, with earlier execution admission and bounded settings-check sharing.
+API implements these changes; the other four packages follow product lockstep.
+The [recording latency assessment](recording-latency-repair-plan.md) retains the
+open performance gates; a version bump is not qualification evidence.
 Backend overlap was covered by `1.31.0`; compact HA/autoscaling by `1.30.0`.
 This version update does not enable optional rollout features or establish new
 GKE qualification; see the [performance implementation status](rolling-update-performance-plan.md).
 Bump all five manifests together even when only one workspace has runtime
 changes; run the repository-structure check before
 building a release candidate. See the prepared release matrix in
-[Build and CI](../BUILD-AND-CI.md#prepared-release-versions-2026-11-19) for the
+[Build and CI](../BUILD-AND-CI.md#prepared-release-versions-2026-11-21) for the
 separate desktop, sidecar, documentation and public runtime version decisions.
 
 These private package versions are release metadata, not npm publication or
@@ -1931,16 +1943,16 @@ commit and promoted by immutable OCI digest. The Helm chart's `version` and
 `appVersion` are separate chart metadata and must not be changed merely to
 bump the private workspace manifests.
 
-Reference indexing introduced schema 19; durable recording evidence advances the
-current runtime to schema 20. Keep the chart's ordinary
-`workflowSchema.compatibility` defaults at 20/20 to match
-that build, independently of package versioning. The promoted release launcher
+The current managed runtime uses schema 23 for shared recording snapshots.
+Keep the chart's ordinary `workflowSchema.compatibility` defaults at 23/23,
+independently of package versioning. The promoted release launcher
 still derives exact migration and allowed reader windows from the immutable
 manifest; predecessor compatibility remains a separate contract, not permission
-to leave new-build chart defaults at16. The Kubernetes contract tests exercise
-both an ordinary exact-version migration and a lower serving-only rollback floor.
+to leave new-build chart defaults on an older schema. The Kubernetes contract
+tests exercise both an ordinary exact-version migration and a lower
+serving-only rollback floor.
 
-[Recording durability](recording-durability.md) documents the opt-in acceptance,
+[Recording durability](recording-durability.md) documents acceptance,
 recovery and mixed-version activation rules. An additive schema alone does not
 make an old garbage-collection owner safe for pending handoffs.
 
@@ -2323,7 +2335,7 @@ Operational note:
 - App Settings -> `General` controls trusted-client bypasses. Verified saved client IPs/networks bypass the UI key gate, web-app auth, and workflow endpoint bearer checks. Hostnames and the legacy `RIVET_UI_TOKEN_FREE_HOSTS` env var never authorize access. Forwarding proxy networks are deployment-owned; see [Trusted clients](trusted-clients.md). App Settings -> `Shell execution` controls editor-side allowed-command timeout and captured-output limits, not workflow execution. Proxy settings polling still updates route/timeout configuration, but no longer distributes bypass policy.
 - App Settings -> `Endpoints` controls the published/latest workflow route slugs, the default-on `Authorization: Bearer <RIVET_KEY>` requirement for public workflow endpoint calls, and the nginx HTTP request timeout for `/api/*`, `${RIVET_PUBLISHED_WORKFLOWS_BASE_PATH}`, `${RIVET_PUBLISHED_APPS_BASE_PATH}`, `${RIVET_LATEST_WORKFLOWS_BASE_PATH}`, and `${RIVET_LATEST_APPS_BASE_PATH}`. The auth and timeout values live in the active `workflow-endpoint-auth` and `runtime-limits` domains (SQLite for fresh/upgraded local installations, legacy `settings/workflow-endpoint-auth.json` and `settings/runtime-limits.json` in file mode, or encrypted PostgreSQL in managed mode). The timeout is saved in seconds and defaults to `180`.
 - App Settings -> `Web apps` -> `Button data` controls the largest JSON payload a web-app button may send when running a graph. It is shown in MiB, defaults to `100 MiB`, and is stored as `webAppActionRequestLimitBytes` in the runtime-limits settings domain. Saving updates API-side HTTP parsing immediately. The proxy receives the non-secret limit through its settings source and safely reloads nginx; Kubernetes uses the authenticated internal snapshot while single-host deployments use the file watcher. WebSocket `maxPayload` is captured when an API process starts, so gracefully restart/roll out API pods after active actions complete to apply a changed limit to new sockets. The `1 MiB` to `1 GiB` bound does not override an outer ingress/CDN/body limit.
-- HTTP parsing is route-owned, never application-global: protected control-plane and workflow routes authenticate before decoding, while web-app actions complete their existing route/gate/OAuth/project preflight before decoding. The preflight captures the current action body limit, has a 15-second client deadline, and retains one of its 16 permits until any timed-out storage work settles; do not release that permit merely because the response timed out. The same shared admission controller covers JSON and URL-encoded sign-in forms. The process permits at most four simultaneous body parsers and at most `1 GiB` of body reservations. Unknown-length and compressed requests reserve their full decoded route limit; known identity-encoded requests reserve their declared length. An async handler keeps its parsed-body reservation until its own work settles, even after a client disconnect, while releasing the short-lived parser slot. This admission is separate from graph-run capacity and must remain so. JSON routes reject body-bearing unsupported media types before their handlers run. Do not move a broad JSON or URL-encoded parser above those route boundaries. See `access-and-routing.md` for the complete route inventory, exact limits, error codes, and receive-timeout behavior.
+- HTTP parsing is route-owned, never application-global: protected control-plane and workflow routes authenticate before decoding, while web-app actions complete their existing route/gate/OAuth/project preflight before decoding. The preflight captures the current action body limit, has a 15-second client deadline, and retains one of its 16 permits until any timed-out storage work settles; do not release that permit merely because the response timed out. The same shared admission controller covers JSON and URL-encoded sign-in forms. The process permits at most four simultaneous body parsers and at most `1 GiB` of body reservations. Up to 64 requests can wait one second for a reader; this does not extend their existing receive deadline or queue requests whose byte reservation cannot fit. Unknown-length and compressed requests initially reserve their full decoded route limit; known identity-encoded requests reserve their declared length. Successful parsing reduces the charge to the counted decoded bytes. An async handler keeps that reservation until its own work settles, even after a client disconnect, while releasing the short-lived parser slot. This admission is separate from graph-run capacity and must remain so. JSON routes reject body-bearing unsupported media types before their handlers run. Do not move a broad JSON or URL-encoded parser above those route boundaries. See `access-and-routing.md` for the complete route inventory, exact limits, error codes, and receive-timeout behavior.
 - App Settings -> `Docker` controls how long the npm Docker launchers wait for Compose services to become healthy. The saved value is in seconds and defaults to `1200` when the settings file or a running container is unavailable. Kubernetes does not use this setting.
 - Storage/database `.env` values are ignored by the Docker API/executor runtime. Use the Storage tab for workflow/runtime-library storage and database settings; in object-storage mode `RIVET_RUNTIME_LIBRARIES_ROOT` remains only a local cache/workspace
 - optional managed runtime-library readiness tuning uses:

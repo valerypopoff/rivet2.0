@@ -55,6 +55,12 @@ import {
 } from './lib/online-editor-adoption-receipt.mjs';
 import { openOnlineEditorRestoreGuard } from './lib/online-editor-restore-guard.mjs';
 import { releaseOperationJournalName } from './lib/release-operation-journal.mjs';
+import {
+  assertRecordingStorageUpgrade,
+  assertRecordingCheckpointReaders,
+  recordingStorageContract,
+} from './lib/recording-storage-contract.mjs';
+import { assertRecordingTransitionGuard } from './lib/recording-transition-guard.mjs';
 import { alignSettledExecutionPoolResources } from './lib/execution-pool-resources.mjs';
 import {
   readMaintenancePlan,
@@ -317,6 +323,7 @@ function commandLine(program, args) {
 }
 
 async function run(program, args, { capture = false, allowFailure = false, input } = {}) {
+  if (recordingTransitionIdentity) await assertRecordingTransitionGuard(recordingTransitionIdentity);
   // Pin every operation, including diagnostics and maintenance cutover, to the
   // selected context. Never change the operator's current kubeconfig context.
   const context = selectedContext;
@@ -371,6 +378,7 @@ async function run(program, args, { capture = false, allowFailure = false, input
 }
 
 let selectedContext;
+let recordingTransitionIdentity;
 let selectedKubectl;
 let selectedHelm;
 let failureArtifactsDirectory;
@@ -1239,7 +1247,25 @@ async function main() {
         'The installed release does not match the candidate or its certified predecessor. Refuse a stale or sibling rollout.',
       );
     const cutover = options.has('--maintenance-cutover') || options.has('--resume-cutover');
+    if (exists)
+      assertRecordingStorageUpgrade(installed?.release?.production?.recordingStorage, manifest.recordingStorage, {
+        maintenance: cutover,
+      });
     const haRollout = haRequested && exists && installed?.ha?.enabled && !cutover;
+    const recordingCoordinationRequired =
+      exists &&
+      (manifest.recordingStorage?.coordinationProtocol === 1 ||
+        installed?.release?.production?.recordingStorage?.coordinationProtocol === 1);
+    if (
+      recordingCoordinationRequired &&
+      !haRollout &&
+      !cutover &&
+      !options.has('--preflight-only') &&
+      !options.has('--dry-run')
+    )
+      throw Error(
+        'Recording storage coordination requires a journaled HA rollout or explicit --maintenance-cutover. Ordinary non-HA Helm updates cannot fence an interrupted operation.',
+      );
     const controlTransition = options.has('--ha-control-plane-transition');
     if (
       haRollout &&
@@ -1411,6 +1437,18 @@ async function main() {
           );
         }
       }
+      if (recordingCoordinationRequired) {
+        recordingTransitionIdentity = { release, namespace, context: selectedContext };
+        const guard = await assertRecordingTransitionGuard(recordingTransitionIdentity);
+        const requiredEncodings = [
+          ...new Set([
+            ...(guard.requiredEncodings ?? []),
+            ...recordingStorageContract(installed?.release?.production?.recordingStorage).writableEncodings,
+          ]),
+        ];
+        assertRecordingCheckpointReaders(requiredEncodings, manifest.recordingStorage);
+        if (workflowContext) workflowContext.requiredRecordingEncodings = requiredEncodings;
+      }
       const preflightApproval = maintenance
         ? { ...deploymentPolicy, policy: { ...deploymentPolicy.policy, backup: maintenance.plan.backup } }
         : deploymentPolicy;
@@ -1455,6 +1493,18 @@ async function main() {
       );
       return;
     }
+    if (recordingCoordinationRequired) {
+      recordingTransitionIdentity = { release, namespace, context: selectedContext };
+      const guard = await assertRecordingTransitionGuard(recordingTransitionIdentity);
+      const requiredEncodings = [
+        ...new Set([
+          ...(guard.requiredEncodings ?? []),
+          ...recordingStorageContract(installed?.release?.production?.recordingStorage).writableEncodings,
+        ]),
+      ];
+      assertRecordingCheckpointReaders(requiredEncodings, manifest.recordingStorage);
+      if (workflowContext) workflowContext.requiredRecordingEncodings = requiredEncodings;
+    }
     const outcome = await executeDeploymentWorkflow({
       approval: deploymentPolicy,
       context: workflowContext,
@@ -1480,7 +1530,15 @@ async function main() {
           backup,
           checkBaseline: assertInstalledBaseline,
           captureRecovery: maintenance
-            ? (context) => captureMaintenanceCheckpoint(maintenance, context, { artifactsDir, timeoutMs })
+            ? (context) =>
+                captureMaintenanceCheckpoint(
+                  maintenance,
+                  {
+                    ...context,
+                    requiredRecordingEncodings: workflowContext?.requiredRecordingEncodings,
+                  },
+                  { artifactsDir, timeoutMs },
+                )
             : workflowContext
               ? (context) =>
                   runDeploymentStage(

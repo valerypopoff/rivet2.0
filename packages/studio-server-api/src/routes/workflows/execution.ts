@@ -1,9 +1,10 @@
 import { performance } from 'node:perf_hooks';
+import { setImmediate as yieldToIo } from 'node:timers/promises';
 import { Router, type NextFunction, type Request, type Response } from 'express';
 import { registerActiveHttpExecution } from '../../active-http-executions.js';
 import { asyncHandler } from '../../utils/asyncHandler.js';
 import { badRequest, createHttpError } from '../../utils/httpError.js';
-import { closeResponseConnectionAfterFlush } from '../../middleware/body-admission.js';
+import { sendRejectedBodyResponse } from '../../middleware/body-admission.js';
 import { createJsonBodyParser } from '../../middleware/body-parsers.js';
 import { normalizeStoredEndpointName } from './endpoint-names.js';
 import { createManagedCodeRunnerTelemetry } from '../../runtime-libraries/managed-code-runner.js';
@@ -12,7 +13,7 @@ import { getRequestCorrelationId } from '../../request-correlation.js';
 import { parseLatestEndpointSegment } from '@valerypopoff/rivet2-core';
 import { readWorkflowEndpointAuthSettingsSync } from '../../workflow-endpoint-auth-settings.js';
 import { isWorkflowCapacityCapabilityValid } from '../../workflow-capacity-capability.js';
-import { resolveLatestExecutionProject, resolvePublishedExecutionProject } from './storage-backend.js';
+import { resolveLatestExecutionProject, resolvePublishedExecutionTarget } from './storage-backend.js';
 import { getWorkflowExecutionRecorderOptions, isWorkflowRecordingEnabled } from './recordings-config.js';
 import type { WorkflowRecordingExecutionIdentity } from '@valerypopoff/rivet-studio-server-shared/workflow-recording-types.js';
 import { createHostedProcessor } from './hosted-processor.js';
@@ -159,8 +160,7 @@ function authorizePublishedWorkflowBeforeBody(req: Request, res: Response, next:
     requirePublishedWorkflowApiKey(req, { capacityEndpointName: endpointName });
     next();
   } catch (error) {
-    closeResponseConnectionAfterFlush(res, req);
-    sendWorkflowErrorWithDuration(res, error, performance.now());
+    sendRejectedBodyResponse(req, res, () => sendWorkflowErrorWithDuration(res, error, performance.now()));
   }
 }
 
@@ -173,8 +173,7 @@ function authorizeLatestWorkflowBeforeBody(req: Request, res: Response, next: Ne
     requirePublishedWorkflowApiKey(req);
     next();
   } catch (error) {
-    closeResponseConnectionAfterFlush(res, req);
-    sendWorkflowErrorWithDuration(res, error, performance.now());
+    sendRejectedBodyResponse(req, res, () => sendWorkflowErrorWithDuration(res, error, performance.now()));
   }
 }
 
@@ -238,6 +237,10 @@ async function executeWorkflowEndpoint(
   });
   const failure = snapshot.failure;
   const executionDurationMs = snapshot.durationMs;
+  // Keep the execution permit while completed-response I/O gets a turn before
+  // the settled capture is inspected and admitted to the persistence queue.
+  if (snapshot.recorder && !snapshot.recorder.captureDiscarded && res.writableEnded && !res.destroyed)
+    await yieldToIo();
   enqueueExecutionRecording(executionProject, snapshot, {
     endpointName: options.endpointName,
     runKind: options.runKind,
@@ -274,23 +277,34 @@ async function handlePublishedWorkflowRequest(
     }
     // Public access must reflect the committed policy even before another replica
     // receives its asynchronous cache invalidation notification.
-    const executionProject = await resolvePublishedExecutionProject(endpointName, !options.internalRoute);
-    if (!executionProject || (!options.internalRoute && executionProject.endpointAccess === 'internal')) {
+    const target = await resolvePublishedExecutionTarget(endpointName, !options.internalRoute);
+    if (!target || (!options.internalRoute && target.endpointAccess === 'internal')) {
       sendJsonWithDuration(res, 404, { error: 'Published workflow not found' }, requestStartedAt);
       return;
     }
 
     const permit = acquirePublishedExecutionPermit('workflow-endpoint');
-    const activeExecution = registerActiveHttpExecution();
     try {
-      await executeWorkflowEndpoint(executionProject, requestStartedAt, req, res, {
-        abortSignal: activeExecution.signal,
-        enableRemoteDebugger: false,
-        endpointName,
-        runKind: 'published',
-      });
+      const activeExecution = registerActiveHttpExecution();
+      try {
+        const executionProject = await target.load();
+        // Loading can retry after a publication/access change. Never execute a
+        // target that disappeared or became private during preparation.
+        if (!executionProject || (!options.internalRoute && executionProject.endpointAccess === 'internal')) {
+          sendJsonWithDuration(res, 404, { error: 'Published workflow not found' }, requestStartedAt);
+          return;
+        }
+        activeExecution.signal.throwIfAborted();
+        await executeWorkflowEndpoint(executionProject, requestStartedAt, req, res, {
+          abortSignal: activeExecution.signal,
+          enableRemoteDebugger: false,
+          endpointName,
+          runKind: 'published',
+        });
+      } finally {
+        activeExecution.release();
+      }
     } finally {
-      activeExecution.release();
       permit.release();
     }
   } catch (error) {

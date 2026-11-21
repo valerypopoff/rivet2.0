@@ -194,7 +194,14 @@ export function createManagedWorkflowRevisionFactory(options: {
         options.blobStore.putArtifact
           ? prepareManagedTextArtifact(key, text, policy.compression === 'gzip', policy.gzipLevel)
           : null;
-      const recording = await prepare(recordingBlobKey, artifacts.recording);
+      const recording = options.blobStore.putArtifact
+        ? await prepareManagedTextArtifact(
+            recordingBlobKey,
+            artifacts.recording,
+            policy.managedTraceEncoding ?? policy.compression,
+            policy.gzipLevel,
+          )
+        : null;
       const project = await prepare(replayProjectBlobKey, artifacts.replayProject);
       const dataset =
         replayDatasetBlobKey !== null && artifacts.replayDataset != null

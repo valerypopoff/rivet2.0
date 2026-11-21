@@ -60,6 +60,31 @@ That file re-exports:
 
 For refactors, `exports.ts` is the API contract that downstream packages rely on. Downstream package code should import core through `@valerypopoff/rivet2-core`; it should not import `packages/core/src/...` files directly. The shared ESLint config enforces that boundary. When app presentation or another package needs to mirror runtime semantics, such as interpolation token parsing, warning-port handling, JS-list callback source interpolation, Gentrace app-facing utilities, `RivetUIContext`, tokenizer implementations, or project-reference loading, the shared contract should be exported intentionally from core instead of reaching into the source tree.
 
+## HTTP Call Response Lifecycle
+
+`HttpCallNodeImpl.process` owns at most one unconsumed Fetch response. It records
+ownership as soon as Fetch resolves, before collecting attempt headers. A retry
+discards that response before the cooldown; terminal cleanup discards any response
+left by status rejection, metadata callbacks or a failed body read. Successful
+`text()` and `blob()` reads clear ownership before JSON parsing or byte conversion.
+The final response is still consumed normally when fail-on-non-2XX is disabled.
+
+Discard clears ownership first and requests body cancellation once, without
+awaiting it. Cancellation errors cannot replace the node outcome. Locked streams
+are not stolen from their reader; native Fetch abort/read failures close their own
+transport. Custom Fetch implementations remain responsible for their own readers.
+The success path adds no storage access, timer, body copy or awaited cleanup.
+
+`HttpCallNode.lifecycle.test.ts` counts explicit cancellation calls (including
+repeated cancellation of an already-closed stream), and covers exceptional exits,
+independent calls, and real loopback response closure before fixture teardown.
+Its abort case enables caught failures to prove cancellation still propagates.
+Response-contract tests compare full outputs and include non-UTF-8 binary bytes.
+The browser HTTP failure-header test observes the editor's own frame and verifies
+cancellation while preserving attempt headers in compact and expanded outputs.
+The [implementation and validation record](./studio-server/http-call-response-cleanup-plan.md)
+documents fault checks, transport release and the measured local performance limits.
+
 ## Runtime Logging And Diagnostics
 
 Runtime code must not log raw graph values by default.
@@ -151,6 +176,23 @@ Timing starts after the awaited `nodeStart` event and ends when the node succeed
 Subgraph node `duration` is a graph-boundary wall-clock metric around the child `processGraph(...)` call, not the sum of the child nodes' `durationMs`. In Remote Debugger runs it can include awaited lifecycle listener and transport work, including display-safe debugger serialization, while child node `durationMs` excludes the awaited `nodeStart` and terminal event listener work around each node. Keep this distinction: changing Subgraph `duration` to a cosmetic child-duration sum would hide real graph-boundary overhead and would diverge from existing output semantics.
 
 Recordings preserve incoming `durationMs` and `splitRunDurationMs` when present. [`RecordingPlayer`](../packages/core/src/model/RecordingPlayer.ts) can also derive replay-only legacy aggregate durations from existing recorded `nodeStart.ts` and terminal event `ts` values; that fallback is not used for live remote-debugger traffic where receive timing would be misleading. During playback it also exposes each original `RecordedEvent.ts` as transient `replayRecordedAt` provenance. That metadata lets the editor show the historical root duration without slowing playback, and `ExecutionRecorder` never serializes it into a replay-recorded recording.
+
+Hosts may supply `ExecutionRecorderOptions.createCapturePolicy` to account for
+retained replay data. Refusing an event discards the replay without cancelling
+the processor or its terminal observation. `captureDiscarded` makes that state
+explicit; `serialize()` and `serializeStream()` reject discarded captures rather
+than publishing an empty successful replay. `discard()` releases host accounting
+and retained events. Default recorders keep their existing behavior.
+Processor/socket attachment failures detach partial listeners, discard the
+capture and preserve the original setup error. Callers may still dispose the
+recorder afterward; capture-policy release remains idempotent. The v1
+codec memoizes repeated string hashes within one serialization. Its 32-bit
+FNV-1a path uses equivalent integer arithmetic, retaining the original BigInt
+result and UTF-8 encoding; other hash widths and buffered encoding stay unchanged.
+Object traversal reuses copied entries without changing getter order or treating
+`__proto__` as a prototype setter. Persisted hash keys and assets are unchanged. See the
+[server recording-memory implementation](studio-server/recording-memory-and-serialization-plan.md)
+for server limits and ownership.
 
 `GraphProcessor` also has an off-by-default runtime profiler hook used by Node
 benchmark attribution. It records coarse diagnostic buckets such as
@@ -2250,6 +2292,12 @@ Core includes execution recording support under `recording/` and exports:
 - replay support used by `GraphProcessor.replayRecording(...)`
 
 The app relies on this for execution replay and recording-driven UX.
+
+The v1 string table is updated in codec traversal order, including repeated
+visits to aliased objects. Preserve that order during optimizations: colliding
+hashes use the last encountered value. The regression fixture covers an
+`A, B, A` encounter through the same source object; transformed values must not
+be written back into that source or reused as if they were its original values.
 
 Current replay/parity invariants:
 

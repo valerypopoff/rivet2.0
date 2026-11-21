@@ -60,6 +60,8 @@ type SettingsRequestStore = Map<VersionedSettingsRepository<unknown>, SettingsSn
 const repositories = new Set<VersionedSettingsRepository<unknown>>();
 const requestRepositories = new Set<VersionedSettingsRepository<unknown>>();
 const requestSettingsStorage = new AsyncLocalStorage<SettingsRequestStore>();
+// Limit callers released by a single shared freshness check.
+const MAX_QUEUED_FRESHNESS_CALLERS = 8;
 let settingsPollTimer: NodeJS.Timeout | undefined;
 let sharedBackend: AppSettingsBackend | null = null;
 let sharedBackendInitialization: Promise<void> | null = null;
@@ -164,6 +166,7 @@ export class VersionedSettingsRepository<T> {
   readonly #fileSignatures = new Map<string, string>();
   readonly #listeners = new Set<(snapshot: SettingsSnapshot<T>) => void>();
   readonly #operationQueues = new Map<string, Promise<unknown>>();
+  readonly #queuedFreshnessChecks = new Map<string, { promise: Promise<SettingsSnapshot<T>>; callers: number }>();
   readonly #sharedRevisions = new Map<string, bigint>();
 
   constructor(readonly descriptor: SettingsRepositoryDescriptor<T>) {
@@ -232,23 +235,38 @@ export class VersionedSettingsRepository<T> {
 
   async refreshIfChanged(): Promise<void> {
     const settingsPath = this.descriptor.getPath();
-    await this.#enqueueOperation(settingsPath, async () => {
-      if (sharedBackend) {
-        await this.#refreshManagedNow(settingsPath);
-        return;
-      }
+    const queued = this.#queuedFreshnessChecks.get(settingsPath);
+    let refresh: Promise<SettingsSnapshot<T>>;
+    if (queued && queued.callers < MAX_QUEUED_FRESHNESS_CALLERS) {
+      queued.callers++;
+      refresh = queued.promise;
+    } else {
+      refresh = this.#enqueueOperation(settingsPath, async () => {
+        // Share only checks that have not started: each caller still gets an
+        // authoritative check begun after its call, with writes kept in order.
+        if (this.#queuedFreshnessChecks.get(settingsPath)?.promise === refresh)
+          this.#queuedFreshnessChecks.delete(settingsPath);
+        if (sharedBackend) return this.#refreshManagedNow(settingsPath);
 
-      try {
-        const signature = await this.#readFileSignature(settingsPath);
-        if (this.#fileSignatures.get(settingsPath) === signature && !this.#errors.has(settingsPath)) {
-          return;
+        try {
+          const signature = await this.#readFileSignature(settingsPath);
+          const cached = this.#cache.get(settingsPath);
+          if (cached && this.#fileSignatures.get(settingsPath) === signature && !this.#errors.has(settingsPath))
+            return cached;
+          return await this.#refreshNow(settingsPath);
+        } catch (error) {
+          this.#errors.set(settingsPath, error);
+          throw error;
         }
-        await this.#refreshNow(settingsPath);
-      } catch (error) {
-        this.#errors.set(settingsPath, error);
-        throw error;
-      }
-    });
+      });
+      this.#queuedFreshnessChecks.set(settingsPath, { promise: refresh, callers: 1 });
+    }
+    const snapshot = await refresh;
+    // The shared operation runs in its first caller's context. Install its
+    // exact revision in every caller, including unchanged-signature reads.
+    requestSettingsStorage
+      .getStore()
+      ?.set(this as VersionedSettingsRepository<unknown>, snapshot as SettingsSnapshot<unknown>);
   }
 
   async update(updateValue: (current: Readonly<T>) => T, expectedRevision?: string): Promise<SettingsSnapshot<T>> {
@@ -303,9 +321,11 @@ export class VersionedSettingsRepository<T> {
     this.#sharedRevisions.clear();
     this.#listeners.clear();
     this.#operationQueues.clear();
+    this.#queuedFreshnessChecks.clear();
   }
 
   #enqueueOperation<R>(settingsPath: string, operation: () => Promise<R>): Promise<R> {
+    this.#queuedFreshnessChecks.delete(settingsPath);
     const previousOperation = this.#operationQueues.get(settingsPath) ?? Promise.resolve();
     const nextOperation = previousOperation.catch(() => undefined).then(operation);
     this.#operationQueues.set(settingsPath, nextOperation);

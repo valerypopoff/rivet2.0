@@ -11,7 +11,7 @@ import {
   type ResolvedSubgraphProject,
 } from '@valerypopoff/rivet2-node';
 import type { WorkflowProjectPathMove } from '@valerypopoff/rivet-studio-server-shared/workflow-types.js';
-import type { WorkflowExecutionDefinition, WorkflowWebAppAccessPolicy as WebAppAccessPolicy } from './data-backend.js';
+import type { WorkflowExecutionDefinition, WorkflowPublishedExecutionTarget, WorkflowWebAppAccessPolicy as WebAppAccessPolicy } from './data-backend.js';
 import { createHttpError } from '../../utils/httpError.js';
 import { getWorkflowsRoot } from '../../security.js';
 import {
@@ -176,6 +176,22 @@ export function invalidateFilesystemExecutionMove(movedProjectPaths: WorkflowPro
   markFilesystemExecutionStructureDirty(
     movedProjectPaths.flatMap(({ fromAbsolutePath, toAbsolutePath }) => [fromAbsolutePath, toAbsolutePath]),
   );
+}
+
+export async function resolveLegacyPublishedExecutionTarget(
+  endpointName: string,
+): Promise<WorkflowPublishedExecutionTarget | null> {
+  const target = await withFilesystemWorkflowStorageRead(() =>
+    loadFilesystemWithMissingRootRetry((root) =>
+      getFilesystemExecutionCache().resolvePublishedExecutionTarget(root, endpointName),
+    ),
+  );
+  return target && {
+    endpointAccess: target.endpointAccess,
+    load: () => withFilesystemWorkflowStorageRead(() =>
+      loadFilesystemWithMissingRootRetry(() => target.load()),
+    ),
+  };
 }
 
 export function resolveLegacyPublishedExecutionProject(

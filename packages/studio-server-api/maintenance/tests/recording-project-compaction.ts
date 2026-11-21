@@ -8,15 +8,16 @@ import { promisify } from 'node:util';
 import { setTimeout as delay } from 'node:timers/promises';
 import { deserializeProject, serializeProject } from '@valerypopoff/rivet2-core/serialization';
 import type { DataId, GraphId, Project } from '@valerypopoff/rivet2-core';
-import { createPostgresAppSettingsBackendFromEnv } from '../../app-settings/managed-settings-store.js';
-import { getDeploymentStorageSettingsPath } from '../../deployment-storage-settings.js';
-import { ManagedArtifactIntegrityError } from '../../routes/workflows/managed/artifact-descriptor.js';
-import { isRecordingProjectSnapshotKey } from '../../routes/workflows/managed/blob-store.js';
-import { createManagedWorkflowContext, type ManagedWorkflowContext } from '../../routes/workflows/managed/context.js';
-import { compactRecordingProjectSnapshots } from '../../routes/workflows/managed/recording-project-compaction.js';
-import { createManagedWorkflowRecordingService } from '../../routes/workflows/managed/recordings.js';
-import type { ManagedWorkflowStorageConfig } from '../../routes/workflows/storage-config.js';
-import { withAsyncDeadline } from './workflow-async-process.js';
+import { createPostgresAppSettingsBackendFromEnv } from '../../src/app-settings/managed-settings-store.js';
+import { getDeploymentStorageSettingsPath } from '../../src/deployment-storage-settings.js';
+import { captureRestoreObjects, type RestoreObject } from '../../src/legacy-restore/scope.js';
+import { ManagedArtifactIntegrityError } from '../../src/routes/workflows/managed/artifact-descriptor.js';
+import { isRecordingProjectSnapshotKey } from '../../src/routes/workflows/managed/blob-store.js';
+import type { ManagedWorkflowContext } from '../../src/routes/workflows/managed/context.js';
+import { compactRecordingProjectSnapshots } from '../recording-project-compaction.js';
+import { createManagedWorkflowRecordingService } from '../../src/routes/workflows/managed/recordings.js';
+import type { ManagedWorkflowStorageConfig } from '../../src/routes/workflows/storage-config.js';
+import { withAsyncDeadline } from '../../src/tests/helpers/workflow-async-process.js';
 
 const runChild = promisify(execFile);
 type Batch = Awaited<ReturnType<typeof compactRecordingProjectSnapshots>>;
@@ -30,6 +31,7 @@ export async function verifyHistoricalRecordingCompaction(
     storageConfig: ManagedWorkflowStorageConfig;
     count: number;
     compiledCommand?: boolean;
+    copyBackup: (objects: RestoreObject[]) => Promise<ManagedWorkflowContext>;
     traffic?: { run: () => Promise<number>; settle: () => Promise<void> };
   },
 ) {
@@ -74,10 +76,10 @@ export async function verifyHistoricalRecordingCompaction(
   const command = config.compiledCommand
     ? [
         fileURLToPath(
-          new URL('../../../dist/studio-server-api/src/scripts/compact-recording-projects.js', import.meta.url),
+          new URL('../../dist/studio-server-api/maintenance/compact-recording-projects.js', import.meta.url),
         ),
       ]
-    : [...process.execArgv, fileURLToPath(new URL('../../scripts/compact-recording-projects.ts', import.meta.url))];
+    : [...process.execArgv, fileURLToPath(new URL('../compact-recording-projects.ts', import.meta.url))];
   const startBatch = (limit: number, after: string, childEnv: NodeJS.ProcessEnv = env) =>
     runChild(process.execPath, [...command, '--limit', String(limit), '--after', after, '--workflow-id', workflowId], {
       env: childEnv,
@@ -213,10 +215,10 @@ export async function verifyHistoricalRecordingCompaction(
     );
     assert.equal(expired.rowCount, 1, 'An unused upload must have a durable cleanup entry.');
   };
-  await startBlockedBatches(1, ['rivet-compaction-crash'], async ([batch]) => {
+  void (await startBlockedBatches(1, ['rivet-compaction-crash'], async ([batch]) => {
     assert.equal(batch.child.kill('SIGKILL'), true);
     await assert.rejects(batch, { signal: 'SIGKILL' });
-  });
+  }));
   const orphan = [...(await inventory()).keys()].filter(isRecordingProjectSnapshotKey);
   assert.equal(orphan.length, 1, 'The interrupted upload reached object storage.');
   assert.equal(await replayKey(first), originalKey);
@@ -381,88 +383,24 @@ export async function verifyHistoricalRecordingCompaction(
     })}`,
   );
 
-  // Exercise the real serving context's timer without changing any launch
-  // settings. This database belongs to the fixture.
-  const autoPrefix = 'zz-recording-compaction-';
-  const autoIds = Array.from(
-    { length: traffic ? config.count : 1 },
-    (_, index) => autoPrefix + String(index).padStart(4, '0'),
+  // This tool uses the same persisted format as new shared recordings. Verify
+  // its result and the retained, inert checkpoint through the real backup path.
+  const restoreObjects = await captureRestoreObjects(pool, config.storageConfig);
+  assert.equal(
+    restoreObjects.filter((object) => object.key === config.storageConfig.objectStoragePrefix + sharedKey).length,
+    1,
   );
-  const autoId = autoIds[0]!;
-  const autoHeld = autoPrefix + 'held';
-  for (const id of [...autoIds, autoHeld]) {
-    await seed(
-      id,
-      serializeProject(
-        { ...project, metadata: { ...project.metadata, id: id as Project['metadata']['id'] } },
-        { fixture: 'automatic' },
-      ) as string,
-    );
-  }
-  await pool.query(
-    `INSERT INTO workflow_run_evidence (run_id,workflow_id,token,created_at,lease_until,upload_until,state,availability,input_json)
-     VALUES ($1,$2,'fixture',NOW(),NOW(),NOW()+INTERVAL '1 hour','succeeded','available','{}'::jsonb)`,
-    [autoHeld, workflowId],
-  );
-  await pool.query(
-    'INSERT INTO workflow_recording_project_compaction (singleton,next_after,resume_at) VALUES (TRUE,$1,NOW())',
-    [autoPrefix],
-  );
-  await pool.query("DELETE FROM managed_maintenance_leases WHERE lease_name='managed-workflow-maintenance'");
-  const automatic = createManagedWorkflowContext(config.storageConfig);
-  automatic.maintenance.config.intervalMs = 50;
-  const lastAutoId = autoIds.at(-1)!;
-  const lastAutoKey = await replayKey(lastAutoId);
-  const heldAutoKey = await replayKey(autoHeld);
-  const waitForAutomatic = async (id: string, retiredKey: string) => {
-    const deadline = Date.now() + 10_000;
-    for (;;) {
-      const checkpoint = (
-        await pool.query('SELECT next_after,resume_at>NOW() AS complete FROM workflow_recording_project_compaction')
-      ).rows[0];
-      if (
-        checkpoint?.complete &&
-        isRecordingProjectSnapshotKey(await replayKey(id)) &&
-        !(await blobStore.exists!(retiredKey))
-      )
-        return;
-      assert.ok(Date.now() < deadline, 'Periodic compaction must publish the replay and persist its progress.');
-      await delay(20);
-    }
-  };
+  assert.ok(!restoreObjects.some((object) => object.key === config.storageConfig.objectStoragePrefix + originalKey));
+  const checkpointSql = 'SELECT next_after,resume_at FROM workflow_recording_project_compaction WHERE singleton';
+  const checkpoint = (await pool.query(checkpointSql)).rows;
+  const restored = await config.copyBackup(restoreObjects);
   try {
-    await automatic.initialize();
-    let complete = false;
-    const compacting = waitForAutomatic(lastAutoId, lastAutoKey).finally(() => {
-      complete = true;
-    });
-    void compacting.catch(() => undefined);
-    if (traffic) {
-      while (!complete && !isRecordingProjectSnapshotKey(await replayKey(autoId))) await delay(5);
-      const during = await sampleTraffic(() => !complete);
-      assert.ok(during.length > 0, 'Endpoint samples must overlap periodic compaction.');
-      console.log(
-        `LOCAL_AUTOMATIC_COMPACTION_ENDPOINT_LATENCY ${JSON.stringify({ idle: summarizeLatency(baseline), during: summarizeLatency(during) })}`,
-      );
-    }
-    await compacting;
-    assert.equal(isRecordingProjectSnapshotKey(await replayKey(autoHeld)), false);
-    assert.equal(await blobStore.exists!(heldAutoKey), true);
-    await pool.query("UPDATE workflow_run_evidence SET upload_until=NOW()-INTERVAL '1 second' WHERE run_id=$1", [
-      autoHeld,
-    ]);
-    await pool.query('UPDATE workflow_recording_project_compaction SET resume_at=NOW()');
-    await waitForAutomatic(autoHeld, heldAutoKey);
-    assert.equal(await replayKey(autoHeld), await replayKey(autoId));
-    const [replay, attached] = deserializeProject(await fetchArtifact(autoHeld, 'replay-project'));
-    assert.equal(replay.metadata.id, autoHeld);
-    assert.deepEqual(attached, { fixture: 'automatic' });
+    const reader = createManagedWorkflowRecordingService({ context: restored });
+    assert.equal(await reader.readWorkflowRecordingArtifact(first, 'replay-project'), sharedContents);
+    assert.equal(await reader.readWorkflowRecordingArtifact(first, 'replay-dataset'), dataset);
+    assert.equal(await reader.readWorkflowRecordingArtifact(first, 'recording'), trace);
+    assert.deepEqual((await restored.pool.query(checkpointSql)).rows, checkpoint);
   } finally {
-    await automatic.dispose();
-    await pool.query("DELETE FROM managed_maintenance_leases WHERE lease_name='managed-workflow-maintenance'");
+    await restored.dispose();
   }
-  console.log(
-    'Managed maintenance compacted existing recordings and revisited a held capture without activation settings.',
-  );
-  return { recordingId: first, originalKey, sharedKey, sharedContents, trace, dataset };
 }

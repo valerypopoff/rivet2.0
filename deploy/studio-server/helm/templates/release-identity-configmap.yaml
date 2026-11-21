@@ -23,4 +23,7 @@ data:
   chart-content-digest: {{ .Values.release.production.chart.contentDigest | quote }}
   managed-workflow-schema-version: {{ .Values.release.production.database.managedWorkflowSchemaVersion | quote }}
   images.json: {{ $images | toJson | quote }}
+  {{- with .Values.release.production.recordingStorage }}
+  recording-storage.json: {{ . | toJson | quote }}
+  {{- end }}
 {{- end }}

@@ -17,6 +17,65 @@ const recordingEnvKeys = [
   'RIVET_APP_DATA_ROOT',
 ] as const;
 
+for (const asynchronous of [false, true])
+  void test(`recording jobs allow fresh I/O after ${asynchronous ? 'asynchronous' : 'synchronous'} writes`, async () => {
+    const store = createStore({
+      rebuildIndex: async () => {},
+      cleanupStorage: async () => {},
+      setSchemaVersion: async () => {},
+      resetDatabaseForTests: async () => {},
+      maxPendingWrites: 3,
+    });
+    const calls: string[] = [];
+    for (let index = 1; index <= 3; index++) {
+      assert.equal(
+        store.enqueuePersistence(
+          async () => {
+            if (index === 1 && asynchronous) await waitForImmediate();
+            calls.push(String(index));
+            if (index === 1) setImmediate(() => calls.push('I/O'));
+          },
+          undefined,
+          0,
+          { acceptedEvidence: true },
+        ),
+        true,
+      );
+    }
+    await store.flush();
+    assert.deepEqual(calls, ['1', 'I/O', '2', '3']);
+  });
+
+void test('discarding pending queue work finalizes its payload exactly once without starting it', async () => {
+  const store = createStore({
+    rebuildIndex: async () => {},
+    cleanupStorage: async () => {},
+    setSchemaVersion: async () => {},
+    resetDatabaseForTests: async () => {},
+    maxPendingWrites: 1,
+  });
+  let finalized = 0;
+  assert.equal(
+    store.enqueuePersistence(
+      async () => {
+        assert.fail('Cancelled job must not run');
+      },
+      undefined,
+      100,
+      {
+        acceptedEvidence: true,
+        finalize: () => {
+          finalized++;
+        },
+      },
+    ),
+    true,
+  );
+  await store.resetForTests();
+  await store.resetForTests();
+  assert.equal(finalized, 1);
+});
+
 function createWorkflowRecordingStore(options: Parameters<typeof createStore>[0]) {
   return createStore({ ...options, maxPendingWrites: readWorkflowRecordingLimitSettings().maxPendingWrites });
 }
@@ -561,26 +620,45 @@ test('recording diagnostics cannot throw when the logger fails', (t) => {
   assert.doesNotThrow(() => reportRecordingFailure(new Error('notification failed')));
 });
 
-test('failed error reporting cannot interrupt the next accepted recording', async (t) => {
+void test('failed writes, reporting and finalizers cannot interrupt the next accepted recording or its cleanup', async (t) => {
   const store = createStore({ ...storageCallbacks, maxPendingWrites: 2 });
   t.mock.method(console, 'error', () => {
     throw new Error('logging failed');
   });
   let saved = 0;
+  const finalized: string[] = [];
   assert.equal(
-    store.enqueuePersistence(async () => {
-      throw new Error('write failed');
-    }),
+    store.enqueuePersistence(
+      async () => {
+        throw new Error('write failed');
+      },
+      undefined,
+      0,
+      {
+        finalize: () => {
+          finalized.push('failed');
+          throw new Error('finalizer failed');
+        },
+      },
+    ),
     true,
   );
   assert.equal(
-    store.enqueuePersistence(async () => {
-      saved++;
-    }),
+    store.enqueuePersistence(
+      async () => {
+        saved++;
+      },
+      undefined,
+      0,
+      { finalize: () => finalized.push('saved') },
+    ),
     true,
   );
   await store.flush();
   assert.equal(saved, 1);
+  assert.deepEqual(finalized, ['failed', 'saved']);
+  await store.flush();
+  assert.deepEqual(finalized, ['failed', 'saved'], 'Settled jobs must be finalized exactly once.');
   assert.equal(store.getPersistenceMetrics().pendingWrites, 0);
 });
 

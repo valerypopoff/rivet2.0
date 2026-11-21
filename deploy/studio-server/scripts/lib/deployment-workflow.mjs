@@ -206,6 +206,13 @@ export async function runDeploymentStage(
     report = await verifyRecoveryReceipt(receipt, directory, request, { now });
   } else if (stage === 'preflight') {
     if (
+      context.requiredRecordingEncodings &&
+      (receipt.checks?.recordingStorage?.passed !== true ||
+        receipt.checks.recordingStorage.observed !== true ||
+        typeof receipt.checks.recordingStorage.evidence !== 'string')
+    )
+      throw Error('Recording codec preflight is missing. Update the reviewed adapter before maintenance.');
+    if (
       receipt.kind !== 'rivet-deployment-preflight' ||
       receipt.passed !== true ||
       !['dependencies', 'capacity'].every(
@@ -223,6 +230,11 @@ export async function runDeploymentStage(
         throw Error('Deployment preflight evidence is empty.');
     }
     report = { verified: true, requestId, checks: ['dependencies', 'capacity'] };
+    if (
+      context.requiredRecordingEncodings &&
+      !(await fs.stat(await regular(directory, receipt.checks.recordingStorage.evidence))).size
+    )
+      throw Error('Recording codec preflight evidence is empty.');
   } else {
     const checks =
       stage === 'long-probe-cutoff'

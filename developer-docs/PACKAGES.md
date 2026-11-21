@@ -2,6 +2,30 @@
 
 > Detailed package-by-package reference for the current monorepo.
 
+## Version update 2026-11-21 — bounded recording memory and request admission
+
+All runtime tracks last changed versions in `4c4d7b934`; Docs last changed in
+`385c0441a`. This review covers subsequent changes through `33623f74f`.
+
+| Packages | Version | Changes since the last bump |
+| --- | --- | --- |
+| Core, Node, CLI, Evaluations | `2.33.0` → `2.34.0` | Core adds optional host capture accounting and explicit recording discard APIs, preserves recording formats, improves serialization, and releases unused HTTP response bodies. Node, CLI and Evaluations follow the required public npm family version. |
+| All five Studio Server packages | `1.43.0` → `1.44.0` | API adds bounded HTTP upload waiting and recording capture accounting, reserves execution capacity before expensive preparation, and bounds sharing of settings checks. Web has test changes; web, bootstrap, executor and shared follow the product version. |
+| App | `2.39.1` → `2.39.2` | Rebuilds Desktop with the updated Core; package-local changes are test consolidation. |
+| App Executor | `2.24.1` → `2.24.2` | Rebuilds the bundled executor with the updated Core; no package-local implementation changes. |
+| Docs | `2.32.0` → `2.33.0` | Adds guidance for bounded upload admission and HTTP response-body cleanup. |
+
+The public API additions and Server capabilities warrant minor releases;
+Desktop and its executor are compatible runtime rebuilds. Tauri/Cargo metadata
+and the CLI Docker fallback follow their owning manifests. Existing
+`workspace:^` dependency ranges remain valid. This version update adds no
+dependency, recording-format, managed-schema or Helm metadata change.
+
+See [release preparation](BUILD-AND-CI.md#prepared-release-versions-2026-11-21)
+for checks. Version preparation does not close the recording
+[performance gate](studio-server/recording-latency-repair-plan.md) or imply
+publication or deployment.
+
 ## Version update 2026-11-20 — shared recording snapshots
 
 App and Studio Server last changed versions in `385c0441a`. The public npm

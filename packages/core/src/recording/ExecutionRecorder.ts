@@ -65,7 +65,16 @@ const toRecordedEventMap: {
       },
       execution,
     ),
-  nodeFinish: ({ node, outputs, processId, resultOrigin, durationMs, splitRunDurationMs, streamingWatchTerminal, execution }) =>
+  nodeFinish: ({
+    node,
+    outputs,
+    processId,
+    resultOrigin,
+    durationMs,
+    splitRunDurationMs,
+    streamingWatchTerminal,
+    execution,
+  }) =>
     withExecution(
       withDuration(
         {
@@ -80,7 +89,17 @@ const toRecordedEventMap: {
       ),
       execution,
     ),
-  nodeError: ({ node, error, processId, outputs, splitOutputs, resultOrigin, durationMs, splitRunDurationMs, execution }) =>
+  nodeError: ({
+    node,
+    error,
+    processId,
+    outputs,
+    splitOutputs,
+    resultOrigin,
+    durationMs,
+    splitRunDurationMs,
+    execution,
+  }) =>
     withExecution(
       withDuration(
         {
@@ -249,6 +268,11 @@ function isRecordedTimestamp(value: unknown): value is number {
 export type ExecutionRecorderOptions = {
   includePartialOutputs?: boolean;
   includeTrace?: boolean;
+  /** Optional host accounting. Each recorder owns a separate capture lease. */
+  createCapturePolicy?: (recorder: ExecutionRecorder) => {
+    retain(event: RecordedEvents): boolean;
+    release(): void;
+  };
 };
 
 export type SocketRecordingOptions = {
@@ -288,20 +312,22 @@ function mapValuesDeep(obj: any, fn: (value: any) => any): any {
   }
 
   if (isPlainObject(obj)) {
-    return Object.fromEntries(
-      Object.entries(obj).map(([key, value]) => {
-        if (isPlainObject(value) || Array.isArray(value)) {
-          return [key, mapValuesDeep(value, fn)];
-        }
-        return [key, fn(value)];
-      }),
-    );
+    // Read the properties before recursing, preserving accessor order. Reuse
+    // these copied entries instead of allocating a second array of key/value
+    // pairs. fromEntries also keeps __proto__ an ordinary own property.
+    const entries = Object.entries(obj);
+    for (const entry of entries) {
+      const value = entry[1];
+      entry[1] = isPlainObject(value) || Array.isArray(value) ? mapValuesDeep(value, fn) : fn(value);
+    }
+    return Object.fromEntries(entries);
   }
 
   return fn(obj);
 }
 
 function serializeToObject(recording: Recording) {
+  const stringHashes = new Map<string, string>();
   const serialized: SerializedRecording = {
     version: 1,
     recording,
@@ -324,9 +350,13 @@ function serializeToObject(recording: Recording) {
       }
     }
 
-    if (typeof val === 'string' && !val.startsWith('$ASSET:') && val.length > 30) {
-      const hash = fnv1a(val, { size: 32 });
-      serialized.strings[`${hash}`] = val;
+    if (typeof val === 'string' && val.length > 30 && !val.startsWith('$ASSET:')) {
+      let hash = stringHashes.get(val);
+      if (hash === undefined) {
+        hash = String(fnv1a(val, { size: 32 }));
+        stringHashes.set(val, hash);
+      }
+      serialized.strings[hash] = val;
       return `$STRING:${hash}`;
     }
 
@@ -371,12 +401,50 @@ export class ExecutionRecorder {
 
   readonly #includePartialOutputs: boolean;
   readonly #includeTrace: boolean;
+  #capturePolicy?: ReturnType<NonNullable<ExecutionRecorderOptions['createCapturePolicy']>>;
+  #captureDiscarded = false;
 
   constructor(options: ExecutionRecorderOptions = {}) {
     this.#emitter = new Emittery();
     this.#emitter.bindMethods(this as unknown as Record<string, unknown>, ['on', 'off', 'once']);
     this.#includePartialOutputs = options.includePartialOutputs ?? false;
     this.#includeTrace = options.includeTrace ?? false;
+    try {
+      this.#capturePolicy = options.createCapturePolicy?.(this);
+    } catch {
+      this.#captureDiscarded = true;
+    }
+  }
+
+  get captureDiscarded(): boolean {
+    return this.#captureDiscarded;
+  }
+
+  /** Release replay data, without cancelling the graph or its terminal listener. */
+  discard(): void {
+    this.#captureDiscarded = true;
+    this.#events.length = 0;
+    const policy = this.#capturePolicy;
+    this.#capturePolicy = undefined;
+    try {
+      policy?.release();
+    } catch {
+      /* Recording accounting cannot fail a graph. */
+    }
+  }
+
+  #append(event: RecordedEvents): void {
+    if (this.#captureDiscarded) return;
+    try {
+      if (this.#capturePolicy && !this.#capturePolicy.retain(event)) {
+        this.discard();
+        return;
+      }
+    } catch {
+      this.discard();
+      return;
+    }
+    this.#events.push(event);
   }
 
   on: Emittery<ExecutionRecorderEvents>['on'] = undefined!;
@@ -384,16 +452,17 @@ export class ExecutionRecorder {
   once: Emittery<ExecutionRecorderEvents>['once'] = undefined!;
 
   recordSocket(channel: SocketRecordingChannel, options: SocketRecordingOptions = {}) {
-    return new Promise<void>((resolve) => {
-      this.recordingId = nanoid() as RecordingId;
-
+    return new Promise<void>((resolve, reject) => {
       let settled = false;
-      const finish = (emitFinishedRecording: boolean) => {
-        if (settled) return;
-        settled = true;
+      const detach = () => {
         channel.removeEventListener('message', listener);
         channel.removeEventListener('close', onClose);
         options.signal?.removeEventListener('abort', onOwnerDisposed);
+      };
+      const finish = (emitFinishedRecording: boolean) => {
+        if (settled) return;
+        settled = true;
+        detach();
         if (emitFinishedRecording) {
           emitDetached(this.#emitter, 'finish', {
             recording: this.getRecording(),
@@ -408,7 +477,11 @@ export class ExecutionRecorder {
       const listener = (event: Event) => {
         let payload: { message?: unknown; data?: unknown; requestId?: unknown };
         try {
-          payload = JSON.parse((event as MessageEvent).data) as { message?: unknown; data?: unknown; requestId?: unknown };
+          payload = JSON.parse((event as MessageEvent).data) as {
+            message?: unknown;
+            data?: unknown;
+            requestId?: unknown;
+          };
         } catch {
           // A debugger socket can carry control-plane payloads alongside graph
           // events. They are not part of a replayable graph recording.
@@ -436,71 +509,99 @@ export class ExecutionRecorder {
           return;
         }
 
-        this.#events.push(toRecordedEvent(message, data as never) as RecordedEvents);
+        if (!this.#captureDiscarded) this.#append(toRecordedEvent(message, data as never) as RecordedEvents);
 
         if (isSocketRecordingTerminalEvent(message)) {
           finish(true);
         }
       };
 
-      if (options.signal?.aborted) {
-        onOwnerDisposed();
-        return;
-      }
-      channel.addEventListener('message', listener);
-      channel.addEventListener('close', onClose, { once: true });
-      options.signal?.addEventListener('abort', onOwnerDisposed, { once: true });
+      try {
+        this.recordingId = nanoid() as RecordingId;
+        if (options.signal?.aborted) {
+          onOwnerDisposed();
+          return;
+        }
+        channel.addEventListener('message', listener);
+        channel.addEventListener('close', onClose, { once: true });
+        options.signal?.addEventListener('abort', onOwnerDisposed, { once: true });
 
-      if (channel.readyState === CLOSED_WEBSOCKET_READY_STATE) {
-        onClose();
+        if (channel.readyState === CLOSED_WEBSOCKET_READY_STATE) onClose();
+      } catch (error) {
+        settled = true;
+        try {
+          detach();
+        } catch {
+          /* Keep the original setup failure and release capture ownership. */
+        }
+        this.discard();
+        reject(error);
       }
     });
   }
 
-  record(processor: GraphProcessor): (terminal?:
-    | { type: 'done'; results: ProcessEvents['done']['results'] }
-    | { type: 'error'; error: ProcessEvents['error']['error'] }
+  record(
+    processor: GraphProcessor,
+  ): (
+    terminal?:
+      | { type: 'done'; results: ProcessEvents['done']['results'] }
+      | { type: 'error'; error: ProcessEvents['error']['error'] },
   ) => void {
-    this.recordingId = nanoid() as RecordingId;
-    const recordingProjectScope = processor.recordingProjectScope;
+    let unsubscribeAny: (() => void) | undefined;
+    let unsubscribeFinish: (() => void) | undefined;
     let settled = false;
     const finish = () => {
       if (settled) return;
       settled = true;
-      unsubscribeAny();
-      unsubscribeFinish();
+      unsubscribeAny?.();
+      unsubscribeFinish?.();
       emitDetached(this.#emitter, 'finish', {
         recording: this.getRecording(),
       });
     };
 
-    const unsubscribeAny = processor.onAny((event: keyof ProcessEvents, data: ProcessEvents[keyof ProcessEvents]) => {
-      if (settled || event === 'finish') {
-        return;
-      }
-      if (this.#includePartialOutputs === false && event === 'partialOutput') {
-        return;
-      }
+    try {
+      this.recordingId = nanoid() as RecordingId;
+      const recordingProjectScope = processor.recordingProjectScope;
+      unsubscribeAny = processor.onAny((event: keyof ProcessEvents, data: ProcessEvents[keyof ProcessEvents]) => {
+        if (settled || event === 'finish') {
+          return;
+        }
+        if (this.#includePartialOutputs === false && event === 'partialOutput') {
+          return;
+        }
 
-      if (this.#includeTrace === false && event === 'trace') {
-        return;
-      }
+        if (this.#includeTrace === false && event === 'trace') {
+          return;
+        }
 
-      const eventScope = getEventProjectScope(data);
-      if (eventScope !== undefined && eventScope !== recordingProjectScope) {
-        return;
-      }
+        const eventScope = getEventProjectScope(data);
+        if (eventScope !== undefined && eventScope !== recordingProjectScope) {
+          return;
+        }
 
-      this.#events.push(toRecordedEvent(event, data as never) as RecordedEvents);
-    });
-    const unsubscribeFinish = processor.on('finish', finish);
+        if (!this.#captureDiscarded) this.#append(toRecordedEvent(event, data as never) as RecordedEvents);
+      });
+      unsubscribeFinish = processor.on('finish', finish);
+    } catch (error) {
+      settled = true;
+      try {
+        unsubscribeAny?.();
+      } catch {
+        /* Keep the original setup failure and release capture ownership. */
+      }
+      this.discard();
+      throw error;
+    }
     // Child processors have graph terminals but no root-level done/finish.
     // Their owner calls this after processGraph settles to make a standalone,
     // replayable recording without changing the live event stream.
     return (terminal) => {
       if (settled) return;
-      if (terminal?.type === 'done') this.#events.push(toRecordedEvent('done', { results: terminal.results }));
-      if (terminal?.type === 'error') this.#events.push(toRecordedEvent('error', { error: terminal.error }));
+      if (!this.#captureDiscarded && terminal?.type === 'done')
+        this.#append(toRecordedEvent('done', { results: terminal.results }));
+      if (!this.#captureDiscarded && terminal?.type === 'error')
+        this.#append(toRecordedEvent('error', { error: terminal.error }));
       finish();
     };
   }
@@ -547,10 +648,12 @@ export class ExecutionRecorder {
   }
 
   serialize() {
+    if (this.#captureDiscarded) throw new Error('Recording capture is unavailable.');
     return JSON.stringify(serializeToObject(this.getRecording()));
   }
 
   serializeStream() {
+    if (this.#captureDiscarded) throw new Error('Recording capture is unavailable.');
     return stringifyJsonStream(serializeToObject(this.getRecording()));
   }
 }

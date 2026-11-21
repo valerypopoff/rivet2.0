@@ -11,17 +11,14 @@ export function parseBoundedBody(
   next: NextFunction,
   limit: number,
   signal: AbortSignal,
-  markBodyReceived: () => void,
+  markBodyReceived: (decodedBytes?: number) => void,
 ): void {
-  void receive().then(
-    () => {
-      markBodyReceived();
-      next();
-    },
-    next,
-  );
+  void receive().then((decodedBytes) => {
+    markBodyReceived(decodedBytes);
+    next();
+  }, next);
 
-  async function receive(): Promise<void> {
+  async function receive(): Promise<number> {
     signal.throwIfAborted();
     // Authorization may have awaited storage after the client disconnected.
     // Those stream events will not be replayed to newly installed listeners.
@@ -59,7 +56,8 @@ export function parseBoundedBody(
           decoder.destroy();
         } else done();
       };
-      const fail = (error: Error) => finish(createHttpError(400, error.message, { expose: true, closeConnection: true }));
+      const fail = (error: Error) =>
+        finish(createHttpError(400, error.message, { expose: true, closeConnection: true }));
       const abort = () => finish(signal.reason);
       const end = () => finish();
       const data = (chunk: Buffer) => {
@@ -75,6 +73,7 @@ export function parseBoundedBody(
       signal.addEventListener('abort', abort, { once: true });
       if (signal.aborted) abort();
       else if (decoder) req.pipe(decoder);
+      else req.resume();
     });
     signal.throwIfAborted();
     // Keep Express's JSON charset/primitive and form semantics, but give it a
@@ -87,12 +86,15 @@ export function parseBoundedBody(
       ? express.urlencoded({ extended: false, limit })
       : express.json({ limit, strict: false, type: ['application/json', 'application/*+json'] });
     try {
-      await new Promise<void>((resolve, reject) => parser(input, res, (error?: unknown) => error ? reject(error) : resolve()));
+      await new Promise<void>((resolve, reject) =>
+        parser(input, res, (error?: unknown) => (error ? reject(error) : resolve())),
+      );
       signal.throwIfAborted();
       req.body = input.body;
     } finally {
       input.destroy();
       chunks.length = 0;
     }
+    return size;
   }
 }

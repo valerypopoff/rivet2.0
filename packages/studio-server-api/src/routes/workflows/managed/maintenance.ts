@@ -46,6 +46,7 @@ export type ManagedObjectDeletionReason =
   | 'workflow-recording-deletion'
   | 'workflow-recording-retention'
   | 'workflow-recording-snapshot-retention'
+  | 'workflow-recording-recompression'
   | 'workflow-stale-upload-reconciliation';
 
 const EXPLICIT_WORKFLOW_DELETION_REASONS = new Set<ManagedObjectDeletionReason>([
@@ -54,6 +55,7 @@ const EXPLICIT_WORKFLOW_DELETION_REASONS = new Set<ManagedObjectDeletionReason>(
   'workflow-recording-deletion',
   'workflow-recording-retention',
   'workflow-recording-snapshot-retention',
+  'workflow-recording-recompression',
 ]);
 
 export function isManagedObjectDeletionReason(value: string): value is ManagedObjectDeletionReason {
@@ -220,7 +222,7 @@ export function createManagedWorkflowMaintenance(options: {
   const config = options.config ?? getManagedWorkflowMaintenanceConfig();
   const holderId = options.holderId?.trim() || randomUUID();
   const logger = options.logger ?? console;
-  const tasks = new Map<string, { run: ManagedWorkflowMaintenanceTask; periodicOnly: boolean }>();
+  const tasks = new Map<string, ManagedWorkflowMaintenanceTask>();
   let timer: NodeJS.Timeout | undefined;
   let initialized = false;
   let disposed = false;
@@ -491,7 +493,7 @@ export function createManagedWorkflowMaintenance(options: {
     );
   };
 
-  const runOnce = async (periodic: boolean): Promise<void> => {
+  const runOnce = async (): Promise<void> => {
     if (!config.enabled || disposed) return;
 
     const attemptedAtMs = Date.now();
@@ -503,9 +505,8 @@ export function createManagedWorkflowMaintenance(options: {
 
       let taskFailed = false;
       for (const [name, task] of [...tasks.entries()].sort(([left], [right]) => left.localeCompare(right))) {
-        if (task.periodicOnly && !periodic) continue;
         try {
-          await task.run(lease);
+          await task(lease);
         } catch (error) {
           if (error instanceof ManagedWorkflowMaintenanceLeaseLostError) {
             outcome = 'lease_lost';
@@ -537,19 +538,19 @@ export function createManagedWorkflowMaintenance(options: {
   const schedule = (): void => {
     if (!config.enabled || disposed) return;
     timer = setTimeout(() => {
-      void requestRun(true);
+      void requestRun();
     }, config.intervalMs);
     timer.unref();
   };
 
-  const requestRun = (periodic = false): Promise<void> => {
+  const requestRun = (): Promise<void> => {
     if (!config.enabled || disposed) return Promise.resolve();
     if (timer) {
       clearTimeout(timer);
       timer = undefined;
     }
     if (!running) {
-      running = runOnce(periodic)
+      running = runOnce()
         .catch((error) => {
           logger.error(
             '[managed-maintenance] Durable maintenance pass failed; the next scheduled pass will retry.',
@@ -568,14 +569,10 @@ export function createManagedWorkflowMaintenance(options: {
     get config() {
       return config;
     },
-    registerTask(
-      name: string,
-      task: ManagedWorkflowMaintenanceTask,
-      { periodicOnly = false }: { periodicOnly?: boolean } = {},
-    ): () => void {
+    registerTask(name: string, task: ManagedWorkflowMaintenanceTask): () => void {
       if (!name.trim()) throw new Error('Managed maintenance task names must not be empty.');
       if (tasks.has(name)) throw new Error(`Managed maintenance task ${JSON.stringify(name)} is already registered.`);
-      tasks.set(name, { run: task, periodicOnly });
+      tasks.set(name, task);
       return () => tasks.delete(name);
     },
     async enqueueObjectDeletions(
@@ -596,7 +593,7 @@ export function createManagedWorkflowMaintenance(options: {
       initialized = true;
       schedule();
     },
-    requestRun: () => requestRun(),
+    requestRun,
     async runNow(): Promise<void> {
       await requestRun();
     },

@@ -334,66 +334,19 @@ function assertInterpolationRenamePreservesConnection({
 }
 
 test('renamed interpolation input keeps the live incoming connection', () => {
-  const targetNode = makeTextNode('target', '{{foo}}');
-  const sourceNode = makeTextNode('source', 'source');
-  const connection = makeConnection({
-    inputNodeId: targetNode.id,
-    inputId: 'foo' as PortId,
-    outputNodeId: sourceNode.id,
+  assertInterpolationRenamePreservesConnection({
+    targetNode: makeTextNode('target', '{{foo}}'),
+    newData: { text: '{{bar}}' },
   });
-
-  const result = reconcileNodeEditConnections({
-    nodeId: targetNode.id,
-    newNode: {
-      data: {
-        ...(targetNode.data as Record<string, unknown>),
-        text: '{{bar}}',
-      },
-    },
-    nodes: [sourceNode, targetNode],
-    liveConnections: [connection],
-    recoverableConnections: [],
-    project,
-    referencedProjects: {},
-    projectNodeRegistry: registry,
-  });
-
-  assert.deepEqual(result.nextConnections, [
-    {
-      ...connection,
-      inputId: 'bar' as PortId,
-    },
-  ]);
-  assert.deepEqual(result.nextRecoverableConnections, []);
 });
 
 test('changing an interpolation path keeps the base input connection', () => {
-  const targetNode = makeTextNode('target', '{{record.profile.name}}');
-  const sourceNode = makeTextNode('source', 'source');
-  const connection = makeConnection({
-    inputNodeId: targetNode.id,
-    inputId: 'record' as PortId,
-    outputNodeId: sourceNode.id,
+  assertInterpolationRenamePreservesConnection({
+    targetNode: makeTextNode('target', '{{record.profile.name}}'),
+    newData: { text: '{{record.profile.email}}' },
+    oldInputId: 'record' as PortId,
+    newInputId: 'record' as PortId,
   });
-
-  const result = reconcileNodeEditConnections({
-    nodeId: targetNode.id,
-    newNode: {
-      data: {
-        ...(targetNode.data as Record<string, unknown>),
-        text: '{{record.profile.email}}',
-      },
-    },
-    nodes: [sourceNode, targetNode],
-    liveConnections: [connection],
-    recoverableConnections: [],
-    project,
-    referencedProjects: {},
-    projectNodeRegistry: registry,
-  });
-
-  assert.deepEqual(result.nextConnections, [connection]);
-  assert.deepEqual(result.nextRecoverableConnections, []);
 });
 
 test('renamed interpolation input does not rename a recoverable connection after the old port disappeared', () => {
@@ -455,41 +408,12 @@ test('recoverable interpolation input does not restore to a new prefix token', (
 });
 
 test('renamed interpolation input keeps live connections across consecutive merged edits', () => {
-  const targetNode = makeTextNode('target', '{{aa}}');
-  const sourceNode = makeTextNode('source', 'source');
-  const originalConnection = makeConnection({
-    inputNodeId: targetNode.id,
-    inputId: 'a' as PortId,
-    outputNodeId: sourceNode.id,
+  assertInterpolationRenamePreservesConnection({
+    targetNode: makeTextNode('target', '{{aa}}'),
+    newData: { text: '{{aaa}}' },
+    oldInputId: 'aa' as PortId,
+    newInputId: 'aaa' as PortId,
   });
-  const currentConnection = {
-    ...originalConnection,
-    inputId: 'aa' as PortId,
-  };
-
-  const result = reconcileNodeEditConnections({
-    nodeId: targetNode.id,
-    newNode: {
-      data: {
-        ...(targetNode.data as Record<string, unknown>),
-        text: '{{aaa}}',
-      },
-    },
-    nodes: [sourceNode, targetNode],
-    liveConnections: [currentConnection],
-    recoverableConnections: [],
-    project,
-    referencedProjects: {},
-    projectNodeRegistry: registry,
-  });
-
-  assert.deepEqual(result.nextConnections, [
-    {
-      ...currentConnection,
-      inputId: 'aaa' as PortId,
-    },
-  ]);
-  assert.deepEqual(result.nextRecoverableConnections, []);
 });
 
 test('renamed interpolation input rewrites only the changed port in a multi-token node', () => {
@@ -541,37 +465,10 @@ test('renamed interpolation input rewrites only the changed port in a multi-toke
 });
 
 test('renamed interpolation input works for same-id token nodes beyond Text', () => {
-  const targetNode = makeObjectNode('target', '{"value":"{{foo}}"}');
-  const sourceNode = makeTextNode('source', 'source');
-  const connection = makeConnection({
-    inputNodeId: targetNode.id,
-    inputId: 'foo' as PortId,
-    outputNodeId: sourceNode.id,
+  assertInterpolationRenamePreservesConnection({
+    targetNode: makeObjectNode('target', '{"value":"{{foo}}"}'),
+    newData: { jsonTemplate: '{"value":"{{bar}}"}' },
   });
-
-  const result = reconcileNodeEditConnections({
-    nodeId: targetNode.id,
-    newNode: {
-      data: {
-        ...(targetNode.data as Record<string, unknown>),
-        jsonTemplate: '{"value":"{{bar}}"}',
-      },
-    },
-    nodes: [sourceNode, targetNode],
-    liveConnections: [connection],
-    recoverableConnections: [],
-    project,
-    referencedProjects: {},
-    projectNodeRegistry: registry,
-  });
-
-  assert.deepEqual(result.nextConnections, [
-    {
-      ...connection,
-      inputId: 'bar' as PortId,
-    },
-  ]);
-  assert.deepEqual(result.nextRecoverableConnections, []);
 });
 
 test('renamed interpolation input works for all same-id marked node families', () => {
@@ -629,37 +526,12 @@ test('renamed interpolation input works for plugin nodes that use the interpolat
 });
 
 test('renamed interpolation input works for prefixed token ports', () => {
-  const targetNode = makeToolNode('target', '{"type":"object","properties":{"foo":{"default":"{{foo}}"}}}');
-  const sourceNode = makeTextNode('source', 'source');
-  const connection = makeConnection({
-    inputNodeId: targetNode.id,
-    inputId: 'input-foo' as PortId,
-    outputNodeId: sourceNode.id,
+  assertInterpolationRenamePreservesConnection({
+    targetNode: makeToolNode('target', '{"type":"object","properties":{"foo":{"default":"{{foo}}"}}}'),
+    newData: { schema: '{"type":"object","properties":{"bar":{"default":"{{bar}}"}}}' },
+    oldInputId: 'input-foo' as PortId,
+    newInputId: 'input-bar' as PortId,
   });
-
-  const result = reconcileNodeEditConnections({
-    nodeId: targetNode.id,
-    newNode: {
-      data: {
-        ...(targetNode.data as Record<string, unknown>),
-        schema: '{"type":"object","properties":{"bar":{"default":"{{bar}}"}}}',
-      },
-    },
-    nodes: [sourceNode, targetNode],
-    liveConnections: [connection],
-    recoverableConnections: [],
-    project,
-    referencedProjects: {},
-    projectNodeRegistry: registry,
-  });
-
-  assert.deepEqual(result.nextConnections, [
-    {
-      ...connection,
-      inputId: 'input-bar' as PortId,
-    },
-  ]);
-  assert.deepEqual(result.nextRecoverableConnections, []);
 });
 
 test('interpolation input rename does not rewrite when the old port still exists', () => {

@@ -136,12 +136,14 @@ parallel files contribute their total case work, not their shorter wall time.
 The earlier completed run also supplies the two cases interrupted in the later
 run. These measurements are scheduling estimates, not runtime guarantees.
 
-The selected suite now has 40 specs, including Bus ordering and Passthrough
-port-label regressions, in four independent jobs with two browser workers each.
-The original 38-spec work estimates come from the hosted runs above; the two
-added specs use conservative local-work hints pending hosted timing refresh.
-Combined work estimates are 995-1,000 seconds per shard. The shard contract checks
-exact-once coverage, balanced weights and a
+The November 21, 2026 local inventory has 394 cases in 42 selected specs, in four
+independent jobs with two browser workers each. The authoritative selection and
+weights live in [editor-test-shards.mjs](../../scripts/ci/editor-test-shards.mjs).
+The original 38-spec estimates come from the hosted runs above; later additions
+include Bus ordering, Passthrough labels, published history and graph-call paths,
+with local-work hints pending hosted timing refresh. Current combined work
+estimates are 1,015-1,025 seconds per shard, not measured elapsed times. The shard
+contract checks exact-once coverage, balanced weights and a
 75% work budget against the existing 12-minute/two-worker step limit (1,080
 seconds). This leaves room for setup, serial tails and runner variation; increasing
 the suite requires reviewing that headroom rather than merely keeping equal sums.

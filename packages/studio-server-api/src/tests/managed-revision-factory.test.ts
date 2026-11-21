@@ -5,6 +5,65 @@ import { Pool } from 'pg';
 import { createManagedWorkflowRevisionFactory } from '../routes/workflows/managed/revision-factory.js';
 import type { RecordingInsertRowData } from '../routes/workflows/managed/types.js';
 import { createBlankProjectFile } from '../routes/workflows/fs-helpers.js';
+import {
+  DEFAULT_MANAGED_RECORDING_ENCODING,
+  recordingStorageCapabilities,
+} from '@valerypopoff/rivet-studio-server-bootstrap/recording-storage.mjs';
+import {
+  assertLegacyRecordingCompression,
+  getWorkflowRecordingRuntimeConfig,
+} from '../routes/workflows/recordings-config.js';
+import {
+  decodeManagedArtifact,
+  type ManagedArtifactDescriptor,
+} from '../routes/workflows/managed/artifact-descriptor.js';
+
+test('managed trace codec selection preserves auxiliary and legacy compression policies', async () => {
+  const previous = process.env.RIVET_RECORDINGS_COMPRESS;
+  try {
+    for (const choice of [undefined, 'br', 'gzip', 'identity']) {
+      if (choice === undefined) delete process.env.RIVET_RECORDINGS_COMPRESS;
+      else process.env.RIVET_RECORDINGS_COMPRESS = choice;
+      if (choice === 'br' && !recordingStorageCapabilities().writableEncodings.includes('br')) {
+        assert.throws(getWorkflowRecordingRuntimeConfig, /reader|writ|support/i);
+        continue;
+      }
+      const policy = getWorkflowRecordingRuntimeConfig();
+      assert.equal(policy.managedTraceEncoding, choice ?? DEFAULT_MANAGED_RECORDING_ENCODING);
+      assert.equal(policy.compression, choice === 'identity' ? 'identity' : 'gzip');
+      const artifacts: ManagedArtifactDescriptor[] = [];
+      const factory = createManagedWorkflowRevisionFactory({
+        blobStore: {
+          putArtifact: async (descriptor: ManagedArtifactDescriptor, bytes: Uint8Array) => {
+            artifacts.push(descriptor);
+            assert.ok(['trace', 'project', 'dataset'].includes(await decodeManagedArtifact(bytes, descriptor)));
+          },
+        } as never,
+        queueObjectDeletions: async () => 0,
+      });
+      await factory.uploadRecordingBlobs(
+        'project',
+        'codec',
+        { recording: 'trace', replayProject: 'project', replayDataset: 'dataset' },
+        'codec test',
+      );
+      assert.equal(
+        artifacts.find((item) => item.key.includes('/recording.'))!.encoding,
+        choice ?? DEFAULT_MANAGED_RECORDING_ENCODING,
+      );
+      assert.ok(
+        artifacts.filter((item) => item.key.includes('/replay.')).every((item) => item.encoding === policy.compression),
+      );
+      if (choice === 'br') assert.throws(assertLegacyRecordingCompression, /Brotli|managed|br/i);
+      else assert.doesNotThrow(assertLegacyRecordingCompression);
+    }
+    process.env.RIVET_RECORDINGS_COMPRESS = ' BR ';
+    assert.throws(assertLegacyRecordingCompression, /Brotli|managed|br/i);
+  } finally {
+    if (previous === undefined) delete process.env.RIVET_RECORDINGS_COMPRESS;
+    else process.env.RIVET_RECORDINGS_COMPRESS = previous;
+  }
+});
 
 test('revision attachment stores reference metadata atomically and invalid projects stay saveable', async () => {
   const factory = createManagedWorkflowRevisionFactory({

@@ -1380,15 +1380,20 @@ The legacy `RIVET_RECORDINGS_MAX_PENDING_WRITES`, `RIVET_RECORDINGS_MAX_RUNS_PER
 
 The remaining recording behavior is controlled by env vars:
 
-| Variable                                   | Purpose                                                     | Default |
-| ------------------------------------------ | ----------------------------------------------------------- | ------- |
-| `RIVET_RECORDINGS_ENABLED`                 | Enable workflow recording persistence                       | `true`  |
-| `RIVET_RECORDINGS_COMPRESS`                | Blob encoding (`gzip` or `identity`)                        | `gzip`  |
-| `RIVET_RECORDINGS_GZIP_LEVEL`              | Gzip compression level                                      | `4`     |
-| `RIVET_RECORDINGS_INCLUDE_PARTIAL_OUTPUTS` | Include partial outputs in recorder payloads                | `false` |
-| `RIVET_RECORDINGS_INCLUDE_TRACE`           | Include trace data in recorder payloads                     | `false` |
-| `RIVET_RECORDINGS_DATASET_MODE`            | Dataset snapshot mode (`none` or `all`)                     | `none`  |
-| `RIVET_RECORDINGS_MAX_TOTAL_BYTES`         | Global compressed-byte cap across recordings (`0` disables) | `0`     |
+| Variable                                   | Purpose                                                           | Default                      |
+| ------------------------------------------ | ----------------------------------------------------------------- | ---------------------------- |
+| `RIVET_RECORDINGS_ENABLED`                 | Enable workflow recording persistence                             | `true`                       |
+| `RIVET_RECORDINGS_COMPRESS`                | Trace encoding (`br`, `gzip` or `identity`; `br` is managed-only) | Managed: `br`; local: `gzip` |
+| `RIVET_RECORDINGS_GZIP_LEVEL`              | Gzip compression level                                            | `4`                          |
+| `RIVET_RECORDINGS_INCLUDE_PARTIAL_OUTPUTS` | Include partial outputs in recorder payloads                      | `false`                      |
+| `RIVET_RECORDINGS_INCLUDE_TRACE`           | Include trace data in recorder payloads                           | `false`                      |
+| `RIVET_RECORDINGS_DATASET_MODE`            | Dataset snapshot mode (`none` or `all`)                           | `none`                       |
+| `RIVET_RECORDINGS_MAX_TOTAL_BYTES`         | Global compressed-byte cap across recordings (`0` disables)       | `0`                          |
+
+Managed Brotli uses fixed quality 4 and leaves shared project and dataset
+compression unchanged. The [Brotli rollout and recompression procedure](recording-brotli-plan.md)
+requires compatible readers before new encodings are written; it adds no
+activation environment flag or automatic retrospective job.
 
 Operational defaults are intentionally conservative:
 

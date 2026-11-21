@@ -83,7 +83,7 @@ function createMaintenanceLogger() {
   };
 }
 
-test('periodic maintenance stays outside the immediate startup pass', async (t) => {
+test('maintenance runs tasks immediately and on schedule, coalesces overlapping requests and stops on disposal', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
   const maintenance = createManagedWorkflowMaintenance({
     pool: {
@@ -94,17 +94,22 @@ test('periodic maintenance stays outside the immediate startup pass', async (t) 
     blobStore: {} as never,
     config: { enabled: true, intervalMs: 60_000, leaseMs: 60_000, batchSize: 1 },
   });
-  let periodicRuns = 0;
-  maintenance.registerTask('compaction', async () => void periodicRuns++, { periodicOnly: true });
+  let runs = 0;
+  maintenance.registerTask('retention', async () => void runs++);
   try {
+    await maintenance.initialize();
+    assert.equal(runs, 0);
     await maintenance.runNow();
-    assert.equal(periodicRuns, 0);
+    assert.equal(runs, 1);
     t.mock.timers.tick(60_000);
     await maintenance.runNow();
-    assert.equal(periodicRuns, 1);
+    assert.equal(runs, 2);
   } finally {
     await maintenance.dispose();
   }
+  t.mock.timers.tick(60_000);
+  await maintenance.runNow();
+  assert.equal(runs, 2);
 });
 
 test('managed maintenance claims an orphaned key once and marks it completed after object deletion', async () => {

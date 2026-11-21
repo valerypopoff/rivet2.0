@@ -470,6 +470,16 @@ export function createRecordingBlobKey(
   return createManagedWorkflowBlobKey(workflowId, 'recordings', recordingId, fileName);
 }
 
+/** A failed rewrite can never reserve the physical key of a later attempt. */
+export function createRecordingTraceGenerationKey(workflowId: string, recordingId: string): string {
+  return createManagedWorkflowBlobKey(
+    workflowId,
+    'recordings',
+    recordingId,
+    `recording.${randomUUID()}.rivet-recording`,
+  );
+}
+
 const REPLAY_SNAPSHOT_COLLECTION = 'recording-project-snapshots';
 
 export function createRecordingProjectSnapshotKey(workflowId: string): string {
@@ -508,6 +518,7 @@ export function isManagedWorkflowArtifactObjectKey(key: string): boolean {
       /^replay\.rivet-project\.artifact-v1\.[a-f0-9]{64}\.\d+\.\d+\.(identity|gzip)$/.test(storedFileName!)) ||
     (collection === 'recordings' &&
       (fileName === 'recording.rivet-recording' ||
+        /^recording\.[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}\.rivet-recording$/.test(fileName!) ||
         fileName === 'replay.rivet-project' ||
         fileName === 'replay.rivet-data'))
   );

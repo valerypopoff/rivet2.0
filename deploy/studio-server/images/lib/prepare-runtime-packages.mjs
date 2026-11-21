@@ -33,10 +33,12 @@ export async function prepareRuntimePackages(sourceRoot, destination, profile) {
     } else {
       await fs.cp(path.join(source, 'dist'), path.join(target, 'dist'), {
         recursive: true,
-        // API tsc emits tests alongside runtime code; they are only CI inputs.
-        filter: (entry) =>
-          workspace !== 'studio-server-api' ||
-          !path.relative(path.join(source, 'dist'), entry).split(path.sep).includes('tests'),
+        // Full development builds include tests and operator-only tools.
+        filter: (entry) => {
+          if (workspace !== 'studio-server-api') return true;
+          const parts = path.relative(path.join(source, 'dist'), entry).split(path.sep);
+          return !parts.includes('tests') && !(parts[0] === 'studio-server-api' && parts[1] === 'maintenance');
+        },
       });
     }
     // Yarn's node-modules linker may keep non-hoisted versions here. Preserve

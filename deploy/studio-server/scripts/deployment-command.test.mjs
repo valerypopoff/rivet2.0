@@ -5,6 +5,7 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createHash, randomUUID } from 'node:crypto';
 import { execFileSync, spawn } from 'node:child_process';
+import { Worker } from 'node:worker_threads';
 import { tmpdir } from 'node:os';
 import { parse, parseAllDocuments } from 'yaml';
 import { resolveHelmBinOrThrow } from './lib/k8s-tools.mjs';
@@ -75,7 +76,7 @@ let out={...r,passed:true};
 if(state.fault==='wrongInstallation')out.release='another-release';
 if(r.stage==='backup'){
  out={...out,kind:r.consistency==='online'?'rivet-recovery-checkpoint':'rivet-frozen-recovery-checkpoint',capturedAt:new Date().toISOString(),
- databaseRestoreVerified:true,objectReferencesCovered:true,encryptionKeysRecoverable:true,unrelatedDataExcluded:true,artifacts:[]};
+ databaseRestoreVerified:true,objectReferencesCovered:true,encryptionKeysRecoverable:true,unrelatedDataExcluded:true,recordingEncodings:r.requiredRecordingEncodings,artifacts:[]};
  for(const role of ['database','objects','keys','verification']){const data='synthetic fixture '+role;await fs.writeFile(path.join(directory,role),data);
  out.artifacts.push({role,path:role,sha256:'sha256:'+createHash('sha256').update(data).digest('hex')});}
 }else if(r.stage==='migration-validation'||r.stage==='migration-preflight'){
@@ -91,7 +92,7 @@ if(r.stage==='backup'){
   const file=path.join(r.checkpointDirectory,'receipt.json'), changed=JSON.parse(await fs.readFile(file,'utf8'));
   changed.formatVersion=999;await fs.writeFile(file,JSON.stringify(changed));
  }
-}else{out.kind=r.stage==='preflight'?'rivet-deployment-preflight':'rivet-deployment-acceptance';out.checks={};for(const name of (r.stage==='preflight'?['dependencies','capacity']:r.stage==='backend'?['developerApi','editorSession']:['workflow','webApp','remoteDebugger'])){
+}else{out.kind=r.stage==='preflight'?'rivet-deployment-preflight':'rivet-deployment-acceptance';out.checks={};for(const name of (r.stage==='preflight'?['dependencies','capacity',...(r.requiredRecordingEncodings?['recordingStorage']:[])]:r.stage==='backend'?['developerApi','editorSession']:['workflow','webApp','remoteDebugger'])){
  await fs.writeFile(path.join(directory,name),'synthetic application journey');out.checks[name]={passed:true,observed:true,evidence:name};}}
 await fs.writeFile(receipt,JSON.stringify(out));`;
 
@@ -113,7 +114,7 @@ test('deployment fixtures initialize an absent artifacts directory and remain is
   }
 });
 
-async function fixture(t, mode, fault, schemaChange = false) {
+async function fixture(t, mode, fault, schemaChange = false, recordingCoordination = true) {
   const adoptionStage = mode.startsWith('adoption-') ? mode.slice('adoption-'.length) : null;
   const directory = await createFixtureDirectory(root);
   t.after(async () => {
@@ -129,6 +130,11 @@ async function fixture(t, mode, fault, schemaChange = false) {
   const schema = 'packages/studio-server-api/src/routes/workflows/managed/schema-migrations.ts';
   await fs.mkdir(path.dirname(path.join(directory, schema)), { recursive: true });
   await fs.copyFile(path.join(root, schema), path.join(directory, schema));
+  if (recordingCoordination) {
+    const recordingContract = 'packages/studio-server-bootstrap/recording-storage.mjs';
+    await fs.mkdir(path.dirname(path.join(directory, recordingContract)), { recursive: true });
+    await fs.copyFile(path.join(root, recordingContract), path.join(directory, recordingContract));
+  }
   await fs.writeFile(path.join(directory, '.gitignore'), 'artifacts/\n.data/\nbin/\n');
   const git = (args) => execFileSync('git', args, { cwd: directory, encoding: 'utf8', windowsHide: true });
   git(['init', '--quiet']);
@@ -425,6 +431,21 @@ async function fixture(t, mode, fault, schemaChange = false) {
     RIVET_K8S_HELM_BIN: path.join(bin, 'helm.exe'),
     RIVET_K8S_KUBECTL_BIN: path.join(bin, 'kubectl.exe'),
   };
+  const recordingGuard = new Worker(new URL('./fixtures/recording-transition-guard.mjs', import.meta.url), {
+    workerData: { protocol: 1, release: 'rivet', namespace: 'fixture', context: 'fixture-context' },
+  });
+  env.RIVET_RECORDING_TRANSITION_GUARD = await new Promise((resolve, reject) => {
+    recordingGuard.once('message', resolve);
+    recordingGuard.once('error', reject);
+  });
+  t.after(
+    () =>
+      new Promise((resolve, reject) => {
+        recordingGuard.once('exit', resolve);
+        recordingGuard.once('error', reject);
+        recordingGuard.postMessage('close');
+      }),
+  );
   const tool = path.join(directory, 'deploy/studio-server/scripts/fixtures/deployment-command-tool.mjs');
   execFileSync(
     process.execPath,
@@ -631,7 +652,8 @@ describe('isolated deployment command journeys', { concurrency: 3 }, () => {
     'acceptance-only can finish the original bound observer without another deployment or backup',
     { timeout: 330000 },
     async (t) => {
-      const f = await fixture(t, 'direct', 'boundObserver');
+      // Preserve the original direct-Helm acceptance flow; coordinated releases use a journaled route.
+      const f = await fixture(t, 'direct', 'boundObserver', false, false);
       const expected = ['--expected-installed-settings-digest', installedSettingsDigest((await f.state()).installed)];
       const deployed = await f.invoke(expected);
       assert.equal(deployed.code, 1, deployed.stdout + deployed.stderr);
@@ -1202,7 +1224,7 @@ describe('isolated deployment command journeys', { concurrency: 3 }, () => {
     'real non-HA deployment uses the shared Helm command without automatic schema rollback',
     { timeout: 660000 },
     async (t) => {
-      const f = await fixture(t, 'direct', null);
+      const f = await fixture(t, 'direct', null, false, false); // Legacy release without codec coordination.
       const result = await f.invoke();
       assert.equal(result.code, 0, result.stdout + result.stderr);
       const upgrades = (await f.calls()).filter((r) => r.kind === 'helm' && r.args[0] === 'upgrade');
@@ -1216,6 +1238,19 @@ describe('isolated deployment command journeys', { concurrency: 3 }, () => {
       );
     },
   );
+
+  test('coordinated recording storage refuses an unjournaled non-HA update before mutation', async (t) => {
+    const f = await fixture(t, 'direct', null);
+    const result = await f.invoke();
+    assert.equal(result.code, 1, result.stdout + result.stderr);
+    assert.match(result.stderr, /journaled HA rollout or explicit --maintenance-cutover/);
+    assert.ok(
+      !(await f.calls()).some((call) =>
+        ['upgrade', 'create', 'replace', 'delete', 'patch', 'scale'].includes(call.args[0]),
+      ),
+    );
+    await assert.rejects(fs.stat(path.join(f.directory, 'adapters.ndjson')), { code: 'ENOENT' });
+  });
 
   test(
     'real deployment failure preserves its journal receipt when Helm diagnostic export also fails',

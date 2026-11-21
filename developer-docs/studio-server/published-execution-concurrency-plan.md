@@ -1,5 +1,17 @@
 # Live published-execution concurrency
 
+The [HTTP body-admission implementation](http-body-admission-queue-plan.md)
+handles short upload bursts before workflow execution. Its reader, queue and
+input-memory limits remain separate from this live execution setting.
+
+[Published HTTP endpoint admission](published-endpoint-admission-plan.md) reserves
+the shared permit after current access checks and before project preparation.
+The active count includes preparation and the full accepted background tail.
+
+The [HTTP callback capacity plan](http-callback-capacity-plan.md) covers the
+separate receiving-service capacity required when an application calls Rivet
+and a workflow calls that application back. It preserves this live setting.
+
 Status: implemented locally on November 17, 2026; release acceptance is pending.
 No cloud test, production deployment or live configuration change was made for
 this feature. The requirements below are retained as the implementation contract.

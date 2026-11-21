@@ -22,12 +22,9 @@ for (const key of envKeys) {
   previousEnv.set(key, process.env[key]);
 }
 
-const {
-  tempRoot,
-  workflowsRoot,
-  recordingsRoot,
-  appDataRoot,
-} = await createWorkflowTestRoots('rivet-filesystem-recordings-root-');
+const { tempRoot, workflowsRoot, recordingsRoot, appDataRoot } = await createWorkflowTestRoots(
+  'rivet-filesystem-recordings-root-',
+);
 
 process.env.RIVET_WORKSPACE_ROOT = tempRoot;
 process.env.RIVET_WORKFLOWS_ROOT = workflowsRoot;
@@ -36,7 +33,9 @@ process.env.RIVET_APP_DATA_ROOT = appDataRoot;
 process.env.RIVET_STORAGE_MODE = 'filesystem';
 
 const workflowFs = await import('../routes/workflows/fs-helpers.js');
-const workflowMutations = createReviewedFilesystemMutationFixtures(await import('../routes/workflows/workflow-mutations.js'));
+const workflowMutations = createReviewedFilesystemMutationFixtures(
+  await import('../routes/workflows/workflow-mutations.js'),
+);
 const workflowRecordings = await import('../routes/workflows/recordings.js');
 const workflowRecordingDb = await import('../routes/workflows/recordings-db.js');
 const { writeRunRecordingsSettings } = await import('../routes/workflows/recordings-config.js');
@@ -68,7 +67,16 @@ test.after(async () => {
 test('workflow and recordings roots initialize separately', async () => {
   await fs.rm(recordingsRoot, { recursive: true, force: true });
   await workflowFs.ensureWorkflowsRoot();
-  await workflowRecordings.initializeWorkflowRecordingStorage(workflowsRoot);
+  const previousCodec = process.env.RIVET_RECORDINGS_COMPRESS;
+  try {
+    // A managed Brotli target may still read an old filesystem recording source.
+    process.env.RIVET_RECORDINGS_COMPRESS = 'br';
+    workflowRecordings.enableWorkflowRecordingMigrationCopyMode();
+    await workflowRecordings.initializeWorkflowRecordingStorage(workflowsRoot);
+  } finally {
+    if (previousCodec === undefined) delete process.env.RIVET_RECORDINGS_COMPRESS;
+    else process.env.RIVET_RECORDINGS_COMPRESS = previousCodec;
+  }
 
   assert.equal(await workflowFs.pathExists(path.join(workflowsRoot, '.published')), true);
   assert.equal(await workflowFs.pathExists(path.join(workflowsRoot, '.recordings')), false);
@@ -215,7 +223,10 @@ test('recordings catalog reuses cached project IDs without reopening unpublished
 
   for (let attempt = 0; attempt < 2; attempt++) {
     const catalog = await workflowRecordings.listWorkflowRecordingWorkflows(workflowsRoot);
-    assert.deepEqual(catalog.workflows.map((workflow) => workflow.workflowId), [published.projectMetadataId]);
+    assert.deepEqual(
+      catalog.workflows.map((workflow) => workflow.workflowId),
+      [published.projectMetadataId],
+    );
     assert.equal(catalog.workflows[0]?.totalRuns, 0);
     assert.equal(catalog.workflows[0]?.project.settings.status, 'published');
     assert.equal(catalog.workflows[0]?.project.stats, undefined);
@@ -246,7 +257,10 @@ test('recordings catalog resolves project identity when metadata cache writes ar
 
   for (code of ['EROFS', 'EACCES']) {
     const catalog = await workflowRecordings.listWorkflowRecordingWorkflows(workflowsRoot);
-    assert.deepEqual(catalog.workflows.map((workflow) => workflow.workflowId), [published.projectMetadataId]);
+    assert.deepEqual(
+      catalog.workflows.map((workflow) => workflow.workflowId),
+      [published.projectMetadataId],
+    );
     await assert.rejects(fs.stat(cachePath), { code: 'ENOENT' });
   }
   assert.equal(deniedWrites, 2);
@@ -365,7 +379,11 @@ test('recordings catalog refreshes source and dataset revisions while preserving
     if (change === 'project') {
       await fs.appendFile(created.absolutePath, '\n# changed draft\n', 'utf8');
     } else {
-      await fs.writeFile(workflowFs.getWorkflowDatasetPath(created.absolutePath), rivetNode.serializeDatasets([]), 'utf8');
+      await fs.writeFile(
+        workflowFs.getWorkflowDatasetPath(created.absolutePath),
+        rivetNode.serializeDatasets([]),
+        'utf8',
+      );
     }
     reads.length = 0;
     const catalog = await workflowRecordings.listWorkflowRecordingWorkflows(workflowsRoot);
@@ -459,7 +477,10 @@ test('recording bundle index insertion rolls back the workflow row when the run 
   );
 
   const indexedWorkflows = await workflowRecordingDb.listWorkflowRecordingWorkflowStatsRows();
-  assert.equal(indexedWorkflows.some((workflow) => workflow.workflowId === workflowId), false);
+  assert.equal(
+    indexedWorkflows.some((workflow) => workflow.workflowId === workflowId),
+    false,
+  );
 });
 
 test('recording index rebuild keeps workflow metadata from the newest bundle', async () => {
@@ -472,29 +493,33 @@ test('recording index rebuild keeps workflow metadata from the newest bundle', a
   ): Promise<void> => {
     const bundlePath = path.join(workflowRoot, bundleName);
     await fs.mkdir(bundlePath, { recursive: true });
-    await fs.writeFile(path.join(bundlePath, 'metadata.json'), `${JSON.stringify({
-      version: 2,
-      id: bundleName,
-      workflowId,
-      sourceProjectMetadataId: workflowId,
-      sourceProjectName,
-      sourceProjectPath: path.join(workflowsRoot, `${sourceProjectName}.rivet-project`),
-      sourceProjectRelativePath: `${sourceProjectName}.rivet-project`,
-      endpointNameAtExecution: 'metadata-order',
-      createdAt,
-      cost: bundleName === 'a-newer' ? { status: 'complete', knownCostUsd: 0.125 } : undefined,
-      runKind: 'published',
-      status: 'succeeded',
-      durationMs: 1,
-      encoding: 'identity',
-      hasReplayDataset: false,
-      recordingCompressedBytes: 1,
-      recordingUncompressedBytes: 1,
-      projectCompressedBytes: 1,
-      projectUncompressedBytes: 1,
-      datasetCompressedBytes: 0,
-      datasetUncompressedBytes: 0,
-    })}\n`, 'utf8');
+    await fs.writeFile(
+      path.join(bundlePath, 'metadata.json'),
+      `${JSON.stringify({
+        version: 2,
+        id: bundleName,
+        workflowId,
+        sourceProjectMetadataId: workflowId,
+        sourceProjectName,
+        sourceProjectPath: path.join(workflowsRoot, `${sourceProjectName}.rivet-project`),
+        sourceProjectRelativePath: `${sourceProjectName}.rivet-project`,
+        endpointNameAtExecution: 'metadata-order',
+        createdAt,
+        cost: bundleName === 'a-newer' ? { status: 'complete', knownCostUsd: 0.125 } : undefined,
+        runKind: 'published',
+        status: 'succeeded',
+        durationMs: 1,
+        encoding: 'identity',
+        hasReplayDataset: false,
+        recordingCompressedBytes: 1,
+        recordingUncompressedBytes: 1,
+        projectCompressedBytes: 1,
+        projectUncompressedBytes: 1,
+        datasetCompressedBytes: 0,
+        datasetUncompressedBytes: 0,
+      })}\n`,
+      'utf8',
+    );
   };
 
   // Directory order intentionally scans the newer bundle first and the older
@@ -555,14 +580,18 @@ test('filesystem recording persistence writes bundles under the configured recor
   });
 
   assert.equal(recordingId, callbackRecordingId);
-  const bundleDirectories = (await fs.readdir(projectRecordingsRoot, { withFileTypes: true }))
-    .filter((entry) => entry.isDirectory() && !entry.name.startsWith('.'));
+  const bundleDirectories = (await fs.readdir(projectRecordingsRoot, { withFileTypes: true })).filter(
+    (entry) => entry.isDirectory() && !entry.name.startsWith('.'),
+  );
 
   assert.equal(bundleDirectories.length, 1);
   const bundlePath = path.join(projectRecordingsRoot, bundleDirectories[0]!.name);
   const bundleFiles = await fs.readdir(bundlePath);
   assert.equal(bundleFiles.includes('metadata.json'), true);
-  assert.equal(bundleFiles.some((fileName) => fileName.endsWith('.tmp')), false);
+  assert.equal(
+    bundleFiles.some((fileName) => fileName.endsWith('.tmp')),
+    false,
+  );
   assert.equal(await workflowFs.pathExists(path.join(workflowsRoot, '.recordings')), false);
   assert.equal(projectRecordingsRoot.startsWith(recordingsRoot), true);
 });
@@ -651,9 +680,7 @@ test('recording index replacement is atomic and rejects a stale concurrent scan'
   const [existingRun] = await workflowRecordingDb.listWorkflowRecordingRunRowsForWorkflow(workflowId);
   assert.ok(existingRun);
 
-  await assert.rejects(
-    workflowRecordingDb.replaceWorkflowRecordingIndex([], [existingRun]),
-  );
+  await assert.rejects(workflowRecordingDb.replaceWorkflowRecordingIndex([], [existingRun]));
 
   const workflows = await workflowRecordingDb.listWorkflowRecordingWorkflowStatsRows();
   let runs = await workflowRecordingDb.listWorkflowRecordingRunRowsForWorkflow(workflowId);
@@ -667,16 +694,17 @@ test('recording index replacement is atomic and rejects a stale concurrent scan'
     ...existingRun,
     id: 'concurrent-recording-index-write',
   });
-  const replaced = await workflowRecordingDb.replaceWorkflowRecordingIndex(
-    [workflows[0]!],
-    [existingRun],
-    { expectedRevision: scanRevision },
-  );
+  const replaced = await workflowRecordingDb.replaceWorkflowRecordingIndex([workflows[0]!], [existingRun], {
+    expectedRevision: scanRevision,
+  });
 
   assert.equal(replaced, false);
   runs = await workflowRecordingDb.listWorkflowRecordingRunRowsForWorkflow(workflowId);
   assert.equal(runs.length, 2);
-  assert.equal(runs.some((run) => run.id === 'concurrent-recording-index-write'), true);
+  assert.equal(
+    runs.some((run) => run.id === 'concurrent-recording-index-write'),
+    true,
+  );
 });
 
 test('recordings drift repair detects swapped bundle rows when counts stay equal', async () => {
@@ -852,7 +880,10 @@ test('recordings listing does not repeat an unrepairable drift rebuild on every 
   assert.equal(indexedWorkflows[0]?.workflowId, loadedProject.metadata.id);
   assert.equal(indexedWorkflows[0]?.totalRuns, 1);
   assert.equal(indexedWorkflows[0]?.updatedAt, sentinelUpdatedAt);
-  assert.equal(warnings.some((args) => String((args as unknown[])[0] ?? '').includes('Recording index repair did not converge')), true);
+  assert.equal(
+    warnings.some((args) => String((args as unknown[])[0] ?? '').includes('Recording index repair did not converge')),
+    true,
+  );
 });
 
 test('recordings cleanup tolerates a permission failure deleting one stale bundle', async (t) => {
@@ -916,10 +947,7 @@ test('recordings cleanup tolerates a permission failure deleting one stale bundl
     console.error = originalConsoleError;
   });
 
-  t.mock.method(fs, 'rm', async (
-    targetPath: Parameters<typeof fs.rm>[0],
-    options?: Parameters<typeof fs.rm>[1],
-  ) => {
+  t.mock.method(fs, 'rm', async (targetPath: Parameters<typeof fs.rm>[0], options?: Parameters<typeof fs.rm>[1]) => {
     if (String(targetPath) === run.bundlePath) {
       const error = new Error(`EACCES: permission denied, rmdir '${run.bundlePath}'`) as Error & { code?: string };
       error.code = 'EACCES';

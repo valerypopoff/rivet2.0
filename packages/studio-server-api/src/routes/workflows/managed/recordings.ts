@@ -52,6 +52,7 @@ import {
   createWorkflowRecordingInputAfter,
   filterRecordingInputWindows,
   isRequestIdInputFilter,
+  matchesWorkflowRecordingInputFilter,
   observeRecordingInputQuery,
   parseWorkflowRecordingInputAfter,
 } from '../recording-input-filter.js';
@@ -236,6 +237,43 @@ function getStoredByteLength(key: string | null, text: string | null | undefined
   return key ? parseManagedArtifactDescriptor(key)?.storedBytes ?? getUtf8ByteLength(text) : 0;
 }
 
+async function readManagedRecordingInput(
+  row: RecordingInputCandidate,
+  inputFilter: WorkflowRecordingInputFilter,
+  blobStore: ManagedWorkflowBlobStore,
+  signal?: AbortSignal,
+) {
+  const key = row.recording_blob_key;
+  return workflowRecordingInputCache.getOrLoad(
+    getManagedRecordingInputCacheKey(blobStore, key),
+    async (cacheSignal) => {
+      const descriptor = blobStore.getBytes ? parseManagedArtifactDescriptor(key) : null;
+      return {
+        kind: 'artifact' as const,
+        bytes: blobStore.getBytes
+          ? await blobStore.getBytes(key, { signal: cacheSignal })
+          : Buffer.from(await blobStore.getText(key, { signal: cacheSignal }), 'utf8'),
+        encoding: descriptor?.encoding ?? 'identity',
+        ...(descriptor ? { decodedBytes: descriptor.decodedBytes } : {}),
+      };
+    },
+    signal,
+    Math.max(row.recording_compressed_bytes, row.recording_uncompressed_bytes) * 6,
+    {
+      requestIdOnly: isRequestIdInputFilter(inputFilter),
+      immutable: !!blobStore.getBytes && parseManagedArtifactDescriptor(key) != null,
+    },
+  );
+}
+
+function sameRecordingIdentity(left: RecordingInputCandidate, right: RecordingInputCandidate): boolean {
+  return (
+    left.recording_id === right.recording_id &&
+    left.workflow_id === right.workflow_id &&
+    getRecordingCursorCreatedAt(left) === getRecordingCursorCreatedAt(right)
+  );
+}
+
 async function filterManagedRecordingRowsByInput(
   loadWindow: (after: string | undefined, offset: number, limit: number) => Promise<RecordingInputCandidate[]>,
   workflowId: string,
@@ -248,34 +286,25 @@ async function filterManagedRecordingRowsByInput(
   pageSize: number,
   signal?: AbortSignal,
   includeSubgraphRuns = false,
+  reload?: (row: RecordingInputCandidate, signal: AbortSignal) => Promise<RecordingInputCandidate | null | undefined>,
 ) {
-  return filterRecordingInputWindows(
+  const replacements = new Map<string, RecordingInputCandidate>();
+  const result = await filterRecordingInputWindows(
     inputFilter,
     loadWindow,
-    (row, readSignal) =>
-      workflowRecordingInputCache.getOrLoad(
-        getManagedRecordingInputCacheKey(blobStore, row.recording_blob_key),
-        async (cacheSignal) => {
-          const descriptor = blobStore.getBytes ? parseManagedArtifactDescriptor(row.recording_blob_key) : null;
-          return {
-            kind: 'artifact' as const,
-            bytes: blobStore.getBytes
-              ? await blobStore.getBytes(row.recording_blob_key, { signal: cacheSignal })
-              : // Compatibility for a third-party store compiled against the prior
-                // text-only interface. Built-in stores always provide bytes; this
-                // fallback retains cancellation and never changes match semantics.
-                Buffer.from(await blobStore.getText(row.recording_blob_key, { signal: cacheSignal }), 'utf8'),
-            encoding: descriptor?.encoding ?? 'identity',
-            ...(descriptor ? { decodedBytes: descriptor.decodedBytes } : {}),
-          };
-        },
-        readSignal,
-        Math.max(row.recording_compressed_bytes, row.recording_uncompressed_bytes) * 6,
-        {
-          requestIdOnly: isRequestIdInputFilter(inputFilter),
-          immutable: !!blobStore.getBytes && parseManagedArtifactDescriptor(row.recording_blob_key) != null,
-        },
-      ),
+    async (row, readSignal) => {
+      try {
+        return await readManagedRecordingInput(row, inputFilter, blobStore, readSignal);
+      } catch (error) {
+        if (!reload || !isMissingManagedWorkflowObject(error)) throw error;
+        const current = await reload(row, readSignal);
+        if (!current || !sameRecordingIdentity(row, current)) return { exists: false, value: undefined };
+        if (current.recording_blob_key === row.recording_blob_key) throw error;
+        const input = await readManagedRecordingInput(current, inputFilter, blobStore, readSignal);
+        replacements.set(row.recording_id, current);
+        return input;
+      }
+    },
     {
       inputCursor: inputAfterCursor?.legacyCursor ?? inputCursor,
       inputAfter,
@@ -292,6 +321,7 @@ async function filterManagedRecordingRowsByInput(
       signal,
     },
   );
+  return { ...result, rows: result.rows.map((row) => replacements.get(row.recording_id) ?? row) };
 }
 
 export function createManagedWorkflowRecordingService(options: ManagedWorkflowRecordingServiceDependencies) {
@@ -779,29 +809,39 @@ export function createManagedWorkflowRecordingService(options: ManagedWorkflowRe
           ),
         );
       };
-      const filteredPage = inputFilter
-        ? await filterManagedRecordingRowsByInput(
-            loadWindow,
-            workflowId,
-            statusFilter,
-            inputFilter,
-            deps.blobStore,
-            inputCursor,
-            inputAfterCursor,
-            inputAfter,
-            normalizedPageSize,
-            signal,
-            includeSubgraphRuns,
-          )
-        : null;
-      let pageRows: RecordingRow[];
-      if (filteredPage) {
-        const selected = filteredPage.rows;
-        const hydrated = selected.length
-          ? await timedRead('matches', () =>
-              deps.queryRows<RecordingRow>(
-                deps.pool,
-                `WITH recording_matches AS MATERIALIZED (
+      for (let sourceAttempt = 0; ; sourceAttempt++) {
+        const filteredPage = inputFilter
+          ? await filterManagedRecordingRowsByInput(
+              loadWindow,
+              workflowId,
+              statusFilter,
+              inputFilter,
+              deps.blobStore,
+              inputCursor,
+              inputAfterCursor,
+              inputAfter,
+              normalizedPageSize,
+              signal,
+              includeSubgraphRuns,
+              (row, readSignal) =>
+                deps.queryOne<RecordingInputCandidate>(
+                  deps.pool,
+                  `SELECT recording_id,workflow_id,created_at,status,execution_surface,recording_blob_key,recording_compressed_bytes,recording_uncompressed_bytes,
+                TO_CHAR(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS recording_cursor_created_at
+               FROM workflow_recordings WHERE recording_id=$1`,
+                  [row.recording_id],
+                  readSignal,
+                ),
+            )
+          : null;
+        let pageRows: RecordingRow[];
+        if (filteredPage) {
+          const selected = filteredPage.rows;
+          const hydrated = selected.length
+            ? await timedRead('matches', () =>
+                deps.queryRows<RecordingRow>(
+                  deps.pool,
+                  `WITH recording_matches AS MATERIALIZED (
             SELECT ${deps.recordingColumns},
               TO_CHAR(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS recording_cursor_created_at
             FROM workflow_recordings
@@ -809,58 +849,83 @@ export function createManagedWorkflowRecordingService(options: ManagedWorkflowRe
           )
           SELECT recording_matches.*, ${recordingHasSubRunsSql('managed', 'recording_matches')} AS has_sub_runs
           FROM recording_matches`,
-                [workflowId, selected.map((row) => row.recording_id)],
-                signal,
-              ),
-            )
-          : [];
-        const byId = new Map(hydrated.map((row) => [row.recording_id, row]));
-        // Preserve scanner order and its consumed boundary even if a row was
-        // removed/replaced between matching and decoration. Never show a match
-        // evaluated against a different artifact or timestamp.
-        pageRows = selected.flatMap((candidate) => {
-          const row = byId.get(candidate.recording_id);
-          return row &&
-            row.recording_blob_key === candidate.recording_blob_key &&
-            getRecordingCursorCreatedAt(row) === getRecordingCursorCreatedAt(candidate)
-            ? [row]
+                  [workflowId, selected.map((row) => row.recording_id)],
+                  signal,
+                ),
+              )
             : [];
-        });
-      } else {
-        // Ordinary browsing selects the full projection in loadWindow.
-        pageRows = (await loadWindow(undefined, offset, normalizedPageSize)) as RecordingRow[];
+          const byId = new Map(hydrated.map((row) => [row.recording_id, row]));
+          // Preserve scanner order and its consumed boundary even if a row was
+          // removed/replaced between matching and decoration. Never show a match
+          // evaluated against a different artifact or timestamp.
+          pageRows = [];
+          const changed: RecordingRow[] = [];
+          let retrySource = false;
+          for (const candidate of selected) {
+            const row = byId.get(candidate.recording_id);
+            if (!row || !sameRecordingIdentity(row, candidate)) continue;
+            if (row.recording_blob_key !== candidate.recording_blob_key) {
+              const input = await readManagedRecordingInput(row, inputFilter!, deps.blobStore, signal);
+              if (!input?.exists || !matchesWorkflowRecordingInputFilter(input.value, inputFilter!)) {
+                retrySource = true;
+                break;
+              }
+              changed.push(row);
+            }
+            pageRows.push(row);
+          }
+          if (changed.length) {
+            const checked = await deps.queryRows<Pick<RecordingRow, 'recording_id' | 'recording_blob_key'>>(
+              deps.pool,
+              'SELECT recording_id,recording_blob_key FROM workflow_recordings WHERE recording_id=ANY($1::text[])',
+              [changed.map((row) => row.recording_id)],
+              signal,
+            );
+            const keys = new Map(checked.map((row) => [row.recording_id, row.recording_blob_key]));
+            retrySource ||= changed.some((row) => keys.get(row.recording_id) !== row.recording_blob_key);
+          }
+          if (retrySource) {
+            if (sourceAttempt === 0) continue;
+            throw createHttpError(409, 'Recording sources changed during search. Retry this page.', {
+              code: 'recording_source_changed',
+            });
+          }
+        } else {
+          // Ordinary browsing selects the full projection in loadWindow.
+          pageRows = (await loadWindow(undefined, offset, normalizedPageSize)) as RecordingRow[];
+        }
+        const totalRuns =
+          scopeCounts && runScope !== 'families'
+            ? statusFilter === 'failed'
+              ? scopeCounts.failedRuns + scopeCounts.suspiciousRuns
+              : scopeCounts.totalRuns
+            : countRow?.total_runs ?? 0;
+
+        const runs = pageRows.map((row) => ({
+          ...toRunSummary(row),
+          ...(runScope === 'families' && row.execution_surface === 'subgraph_project'
+            ? { familyContext: true as const }
+            : {}),
+        }));
+
+        return {
+          workflowId,
+          scopeCounts,
+          page: normalizedPage,
+          pageSize: normalizedPageSize,
+          totalRuns: filteredPage ? pageRows.length : totalRuns,
+          totalRunsExact: filteredPage
+            ? filteredPage.totalRunsExact && pageRows.length === filteredPage.rows.length
+            : true,
+          hasMore: filteredPage?.hasMore ?? normalizedPage * normalizedPageSize < totalRuns,
+          nextInputCursor: filteredPage?.nextInputCursor,
+          inputSearchAnalyzedRuns: filteredPage?.analyzedRuns,
+          nextInputAfter: filteredPage?.nextInputAfter,
+          statusFilter,
+          inputFilter,
+          runs,
+        };
       }
-      const totalRuns =
-        scopeCounts && runScope !== 'families'
-          ? statusFilter === 'failed'
-            ? scopeCounts.failedRuns + scopeCounts.suspiciousRuns
-            : scopeCounts.totalRuns
-          : countRow?.total_runs ?? 0;
-
-      const runs = pageRows.map((row) => ({
-        ...toRunSummary(row),
-        ...(runScope === 'families' && row.execution_surface === 'subgraph_project'
-          ? { familyContext: true as const }
-          : {}),
-      }));
-
-      return {
-        workflowId,
-        scopeCounts,
-        page: normalizedPage,
-        pageSize: normalizedPageSize,
-        totalRuns: filteredPage ? pageRows.length : totalRuns,
-        totalRunsExact: filteredPage
-          ? filteredPage.totalRunsExact && pageRows.length === filteredPage.rows.length
-          : true,
-        hasMore: filteredPage?.hasMore ?? normalizedPage * normalizedPageSize < totalRuns,
-        nextInputCursor: filteredPage?.nextInputCursor,
-        inputSearchAnalyzedRuns: filteredPage?.analyzedRuns,
-        nextInputAfter: filteredPage?.nextInputAfter,
-        statusFilter,
-        inputFilter,
-        runs,
-      };
     },
 
     async listWorkflowRunStatisticsCatalog(
@@ -917,7 +982,17 @@ export function createManagedWorkflowRecordingService(options: ManagedWorkflowRe
       if (!row) {
         throw createHttpError(404, 'Recording not found');
       }
-      if (artifact === 'recording') return deps.blobStore.getText(row.recording_blob_key);
+      if (artifact === 'recording') {
+        try {
+          return await deps.blobStore.getText(row.recording_blob_key);
+        } catch (error) {
+          if (!isMissingManagedWorkflowObject(error)) throw error;
+          const latest = await readRow();
+          if (latest?.workflow_id === row.workflow_id && latest.recording_blob_key !== row.recording_blob_key)
+            return deps.blobStore.getText(latest.recording_blob_key);
+          throw error;
+        }
+      }
       if (artifact === 'replay-dataset') {
         if (!row.replay_dataset_blob_key) throw createHttpError(404, 'Replay dataset not found');
         return deps.blobStore.getText(row.replay_dataset_blob_key);

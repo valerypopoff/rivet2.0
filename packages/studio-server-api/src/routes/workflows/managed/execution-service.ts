@@ -16,6 +16,7 @@ import type { Pool } from 'pg';
 
 import { createHttpError } from '../../../utils/httpError.js';
 import { normalizeWorkflowEndpointLookupName } from '../endpoint-names.js';
+import type { WorkflowPublishedExecutionTarget } from '../data-backend.js';
 import { getManagedWorkflowProjectVirtualPath, resolveManagedWorkflowRelativeReference } from '../virtual-paths.js';
 import {
   type ManagedWorkflowExecutionInvalidationController,
@@ -70,6 +71,15 @@ type ManagedExecutionSource = Omit<ManagedExecutionProjectResult, 'project' | 'a
   workflowId: string;
   materialization: ManagedRevisionMaterializationCacheEntry;
 };
+type EndpointLoadOptions = {
+  forceBypassPointerCache?: boolean;
+  allowPointerFallback?: boolean;
+  remainingInvalidationRetries?: number;
+};
+type ManagedExecutionTarget = {
+  endpointAccess: ManagedExecutionProjectResult['endpointAccess'];
+  load(coalesceSource?: boolean): Promise<ManagedExecutionSource | null>;
+};
 
 export class ManagedWorkflowExecutionService {
   readonly #pool: Pool;
@@ -102,6 +112,7 @@ export class ManagedWorkflowExecutionService {
     lookupName: string,
   ) => Promise<ManagedWebAppAccessPolicy | null>;
   readonly #endpointLoadInflight = new Map<string, Promise<ManagedExecutionSource | null>>();
+  readonly #endpointTargetInflight = new Map<string, Promise<ManagedExecutionTarget | null>>();
   readonly #revisionMaterializationInflight = new Map<string, Promise<ManagedRevisionMaterializationCacheEntry>>();
 
   constructor(dependencies: ManagedWorkflowExecutionServiceDependencies) {
@@ -122,6 +133,19 @@ export class ManagedWorkflowExecutionService {
     requireFreshPointer = false,
   ): Promise<ManagedExecutionProjectResult | null> {
     return this.#loadExecutionProjectByEndpoint('published', endpointName, requireFreshPointer);
+  }
+
+  async resolvePublishedExecutionTarget(
+    endpointName: string,
+    requireFreshPointer = false,
+  ): Promise<WorkflowPublishedExecutionTarget | null> {
+    const target = await this.#resolveExecutionTarget('published', normalizeWorkflowEndpointLookupName(endpointName), {
+      forceBypassPointerCache: requireFreshPointer,
+    });
+    return target && {
+      endpointAccess: target.endpointAccess,
+      load: async () => this.#materializeExecutionProject(await target.load()),
+    };
   }
 
   async loadLatestExecutionProject(
@@ -283,12 +307,38 @@ export class ManagedWorkflowExecutionService {
   async #loadExecutionProjectByEndpointOnce(
     runKind: ManagedWorkflowRunKind,
     lookupName: string,
-    options: {
-      forceBypassPointerCache?: boolean;
-      allowPointerFallback?: boolean;
-      remainingInvalidationRetries?: number;
-    } = {},
+    options: EndpointLoadOptions = {},
   ): Promise<ManagedExecutionSource | null> {
+    const target = await this.#resolveExecutionTarget(runKind, lookupName, options);
+    // Full-source callers and invalidation retries already own their load.
+    // Joining that entry here would make it wait on its own promise.
+    return target ? target.load(false) : null;
+  }
+
+  #resolveExecutionTarget(
+    runKind: ManagedWorkflowRunKind,
+    lookupName: string,
+    options: EndpointLoadOptions = {},
+  ): Promise<ManagedExecutionTarget | null> {
+    // Public requests must never join a lookup begun before an access change.
+    if (options.forceBypassPointerCache) return this.#resolveExecutionTargetOnce(runKind, lookupName, options);
+    const { anyGeneration } = this.#invalidationController.captureResolveSnapshot();
+    const key = `${runKind}:${lookupName}:${anyGeneration}`;
+    const pending = this.#endpointTargetInflight.get(key);
+    if (pending) return pending;
+    // Share only metadata, never start artifacts for a request awaiting admission.
+    // Full-source coalescing above retains its longer artifact-loading lifetime.
+    const lookup = this.#resolveExecutionTargetOnce(runKind, lookupName, options)
+      .finally(() => this.#endpointTargetInflight.delete(key));
+    this.#endpointTargetInflight.set(key, lookup);
+    return lookup;
+  }
+
+  async #resolveExecutionTargetOnce(
+    runKind: ManagedWorkflowRunKind,
+    lookupName: string,
+    options: EndpointLoadOptions,
+  ): Promise<ManagedExecutionTarget | null> {
     const remainingInvalidationRetries =
       options.remainingInvalidationRetries ?? MANAGED_WORKFLOW_EXECUTION_INVALIDATION_RETRY_LIMIT;
     const resolveSnapshot = this.#invalidationController.captureResolveSnapshot();
@@ -314,7 +364,7 @@ export class ManagedWorkflowExecutionService {
           this.#invalidationController.shouldRetryAfterResolve(resolveSnapshot, null) &&
           remainingInvalidationRetries > 0
         ) {
-          return this.#loadExecutionProjectByEndpointOnce(runKind, lookupName, {
+          return this.#resolveExecutionTarget(runKind, lookupName, {
             forceBypassPointerCache: true,
             remainingInvalidationRetries: remainingInvalidationRetries - 1,
           });
@@ -329,7 +379,7 @@ export class ManagedWorkflowExecutionService {
 
       if (this.#invalidationController.shouldRetryAfterResolve(resolveSnapshot, pointer.workflowId)) {
         if (remainingInvalidationRetries > 0) {
-          return this.#loadExecutionProjectByEndpointOnce(runKind, lookupName, {
+          return this.#resolveExecutionTarget(runKind, lookupName, {
             forceBypassPointerCache: true,
             remainingInvalidationRetries: remainingInvalidationRetries - 1,
           });
@@ -344,71 +394,94 @@ export class ManagedWorkflowExecutionService {
     }
 
     const resolveMs = Math.max(0, Math.round(performance.now() - resolveStartedAt));
-    this.#invalidationController.beginWorkflowLoad(pointer.workflowId);
-    try {
-      const materializeStartedAt = performance.now();
-
-      const release = pointer.releaseId
-        ? await this.#loadReadyRelease(pointer.releaseId, pointer.workflowId, pointer.revisionId)
-        : undefined;
-      let materialization: ManagedRevisionMaterializationCacheEntry;
+    const selectedPointer = pointer;
+    const retryIfChanged = () => this.#retryAfterInvalidation(
+      resolveSnapshot,
+      selectedPointer.workflowId,
+      workflowSnapshot,
+      remainingInvalidationRetries,
+      (nextRetries) => this.#loadExecutionProjectByEndpointOnce(runKind, lookupName, {
+        forceBypassPointerCache: true,
+        remainingInvalidationRetries: nextRetries,
+      }),
+      'Workflow endpoint changed while loading. Retry the request.',
+    );
+    const loadSource = async (): Promise<ManagedExecutionSource | null> => {
+      const pointer = selectedPointer;
+      const retryBeforeLoad = retryIfChanged();
+      if (retryBeforeLoad) return retryBeforeLoad;
+      this.#invalidationController.beginWorkflowLoad(pointer.workflowId);
       try {
-        materialization = release?.root ?? (await this.#getOrLoadRevisionMaterialization(pointer.revisionId, revision));
-      } catch (error) {
-        const isMissingRevision =
-          typeof error === 'object' &&
-          error != null &&
-          'status' in error &&
-          Number((error as { status?: unknown }).status) === 404;
+        const materializeStartedAt = performance.now();
 
-        if (cachedPointer && options.allowPointerFallback !== false && isMissingRevision) {
-          this.#invalidationController.markWorkflowChanged(pointer.workflowId);
-          return this.#loadExecutionProjectByEndpointOnce(runKind, lookupName, {
-            forceBypassPointerCache: true,
-            allowPointerFallback: false,
-            remainingInvalidationRetries,
-          });
+        let release: ReadyEndpointRelease | undefined;
+        let materialization: ManagedRevisionMaterializationCacheEntry;
+        try {
+          release = pointer.releaseId
+            ? await this.#loadReadyRelease(pointer.releaseId, pointer.workflowId, pointer.revisionId)
+            : undefined;
+          materialization = release?.root ?? (await this.#getOrLoadRevisionMaterialization(pointer.revisionId, revision));
+        } catch (error) {
+          const retryAfterFailure = retryIfChanged();
+          if (retryAfterFailure) return retryAfterFailure;
+          const isMissingRevision =
+            typeof error === 'object' &&
+            error != null &&
+            'status' in error &&
+            Number((error as { status?: unknown }).status) === 404;
+
+          if (cachedPointer && options.allowPointerFallback !== false && isMissingRevision) {
+            this.#invalidationController.markWorkflowChanged(pointer.workflowId);
+            return this.#loadExecutionProjectByEndpointOnce(runKind, lookupName, {
+              forceBypassPointerCache: true,
+              allowPointerFallback: false,
+              remainingInvalidationRetries,
+            });
+          }
+
+          throw error;
         }
 
-        throw error;
-      }
+        const retryAfterMaterialize = retryIfChanged();
+        if (retryAfterMaterialize) {
+          return retryAfterMaterialize;
+        }
 
-      const retryAfterMaterialize = this.#retryAfterMaterialize(
-        resolveSnapshot,
-        pointer.workflowId,
-        workflowSnapshot,
-        remainingInvalidationRetries,
-        (nextRetries) =>
-          this.#loadExecutionProjectByEndpointOnce(runKind, lookupName, {
-            forceBypassPointerCache: true,
-            remainingInvalidationRetries: nextRetries,
-          }),
-        'Workflow endpoint changed while loading. Retry the request.',
-      );
-      if (retryAfterMaterialize) {
-        return retryAfterMaterialize;
+        return {
+          workflowId: pointer.workflowId,
+          materialization,
+          release,
+          projectVirtualPath: getManagedWorkflowProjectVirtualPath(pointer.relativePath),
+          revisionKey: `managed:${pointer.revisionId}`,
+          endpointAccess: pointer.endpointAccess,
+          webAppUiGraphId: pointer.webAppUiGraphId,
+          webAppAllowedEmails: pointer.webAppAllowedEmails,
+          webAppBindingId: pointer.webAppId == null ? undefined : `managed:${pointer.webAppId}`,
+          webAppPolicyInvalidationKey: pointer.webAppId == null ? undefined : `managed:${pointer.workflowId}`,
+          debug: {
+            cacheStatus,
+            resolveMs,
+            materializeMs: Math.max(0, Math.round(performance.now() - materializeStartedAt)),
+          },
+        };
+      } finally {
+        this.#invalidationController.endWorkflowLoad(pointer.workflowId);
       }
-
-      return {
-        workflowId: pointer.workflowId,
-        materialization,
-        release,
-        projectVirtualPath: getManagedWorkflowProjectVirtualPath(pointer.relativePath),
-        revisionKey: `managed:${pointer.revisionId}`,
-        endpointAccess: pointer.endpointAccess,
-        webAppUiGraphId: pointer.webAppUiGraphId,
-        webAppAllowedEmails: pointer.webAppAllowedEmails,
-        webAppBindingId: pointer.webAppId == null ? undefined : `managed:${pointer.webAppId}`,
-        webAppPolicyInvalidationKey: pointer.webAppId == null ? undefined : `managed:${pointer.workflowId}`,
-        debug: {
-          cacheStatus,
-          resolveMs,
-          materializeMs: Math.max(0, Math.round(performance.now() - materializeStartedAt)),
-        },
-      };
-    } finally {
-      this.#invalidationController.endWorkflowLoad(pointer.workflowId);
-    }
+    };
+    return {
+      endpointAccess: selectedPointer.endpointAccess,
+      load: (coalesceSource = true) => {
+        if (!coalesceSource || options.forceBypassPointerCache) return loadSource();
+        // Reuse the full-source owner even when later requests have completed
+        // separate metadata lookups. Public fresh loads never join older work.
+        const key = `${runKind}:${lookupName}:${resolveSnapshot.anyGeneration}`;
+        const pending = this.#endpointLoadInflight.get(key);
+        if (pending) return pending;
+        const load = loadSource().finally(() => this.#endpointLoadInflight.delete(key));
+        this.#endpointLoadInflight.set(key, load);
+        return load;
+      },
+    };
   }
 
   async #loadReadyRelease(releaseId: string, workflowId: string, revisionId: string) {
@@ -417,8 +490,8 @@ export class ManagedWorkflowExecutionService {
     const key = JSON.stringify([releaseId, workflowId, revisionId]);
     const pending = this.#releaseLoads.get(key);
     if (pending) return pending;
-    // Full captures are larger than the old pre-admission root read. Bound
-    // distinct cold loads while allowing duplicate requests to share one.
+    // Bound distinct cold captures independently of execution admission, while
+    // allowing duplicate requests to share one artifact load.
     if (this.#releaseLoads.size >= 4)
       throw createHttpError(503, 'Captured endpoint revisions are busy loading. Try again shortly.');
     const blobStore = this.#blobStore;
@@ -433,7 +506,7 @@ export class ManagedWorkflowExecutionService {
     return load;
   }
 
-  #retryAfterMaterialize<T>(
+  #retryAfterInvalidation<T>(
     resolveSnapshot: ManagedExecutionResolveSnapshot,
     workflowId: string,
     workflowSnapshot: ReturnType<ManagedWorkflowExecutionInvalidationController['captureWorkflowSnapshot']> | null,
@@ -545,7 +618,7 @@ export class ManagedWorkflowExecutionService {
     this.#invalidationController.beginWorkflowLoad(workflow.workflow_id);
     try {
       const materialization = await this.#getOrLoadRevisionMaterialization(revisionId, null);
-      const retryAfterMaterialize = this.#retryAfterMaterialize(
+      const retryAfterMaterialize = this.#retryAfterInvalidation(
         resolveSnapshot,
         workflow.workflow_id,
         workflowSnapshot,

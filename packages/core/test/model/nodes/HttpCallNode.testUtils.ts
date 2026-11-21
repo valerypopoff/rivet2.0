@@ -26,14 +26,10 @@ const expectedTextRequestFailedOutputs: Outputs = {
   requestFailed: { type: 'boolean', value: true },
 };
 
-export const createNode = (data: Partial<HttpCallNode['data']>) =>
-  new HttpCallNodeImpl({
-    ...HttpCallNodeImpl.create(),
-    data: {
-      ...HttpCallNodeImpl.create().data,
-      ...data,
-    },
-  });
+export const createNode = (data: Partial<HttpCallNode['data']>) => {
+  const node = HttpCallNodeImpl.create();
+  return new HttpCallNodeImpl({ ...node, data: { ...node.data, ...data } });
+};
 
 export const createContext = ({
   executor = 'nodejs',
@@ -73,11 +69,10 @@ export const assertCaughtTextRequestFailure = (outputs: Outputs, expectedErrorPa
   }
 };
 
-export const assertStringArrayOutputMatches = (outputs: Outputs, portId: PortId, expectedErrorParts: RegExp[][]) => {
+const assertStringArrayOutputMatches = (outputs: Outputs, portId: PortId, expectedErrorParts: RegExp[][]) => {
   const output = outputs[portId];
 
-  assert.equal(output?.type, 'string[]');
-  assert.ok(output?.type === 'string[]');
+  assert.ok(output?.type === 'string[]', `Expected ${portId} to be a string[] output`);
   assert.equal(output.value.length, expectedErrorParts.length);
 
   expectedErrorParts.forEach((errorParts, index) => {

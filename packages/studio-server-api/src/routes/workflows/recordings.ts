@@ -1,4 +1,5 @@
 import fs from 'node:fs/promises';
+import { recordingMemory } from './recording-memory.js';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import {
@@ -52,8 +53,16 @@ import {
   type WorkflowRecordingRunRow,
 } from './recordings-db.js';
 import { createWorkflowRecordingStore, type RecordingQueueAdmission } from './recordings-store.js';
-import { notifyRecordingPersisted, type RecordingDiagnosticContext } from './recording-diagnostics.js';
-import { getWorkflowRecordingRuntimeConfig, isWorkflowRecordingEnabled } from './recordings-config.js';
+import {
+  notifyRecordingPersisted,
+  reportRecordingFailure,
+  type RecordingDiagnosticContext,
+} from './recording-diagnostics.js';
+import {
+  assertLegacyRecordingCompression,
+  getWorkflowRecordingRuntimeConfig,
+  isWorkflowRecordingEnabled,
+} from './recordings-config.js';
 import {
   ensureWorkflowRecordingsRoot,
   getWorkflowRecordingBundlePath,
@@ -166,7 +175,14 @@ export function enqueueWorkflowExecutionRecordingPersistence(
   retainedBytes = 0,
   admission?: RecordingQueueAdmission,
 ): boolean {
-  return workflowRecordingStore.enqueuePersistence(task, context, retainedBytes, admission);
+  try {
+    return workflowRecordingStore.enqueuePersistence(task, context, retainedBytes, admission);
+  } catch (error) {
+    // Callers keep ownership of rejected captures. A closed/stale policy must
+    // follow that same path without replacing the already-known graph outcome.
+    reportRecordingFailure(error, { ...context, phase: 'admission' });
+    return false;
+  }
 }
 
 export function initializeWorkflowRecordingQueuePolicy(): Promise<void> {
@@ -184,7 +200,7 @@ export async function flushWorkflowExecutionRecordingPersistence(): Promise<void
 
 /** A process-local queue snapshot; it never performs I/O during a metrics scrape. */
 export function getWorkflowExecutionRecordingPersistenceMetrics() {
-  return workflowRecordingStore.getPersistenceMetrics();
+  return { ...workflowRecordingStore.getPersistenceMetrics(), memory: recordingMemory.snapshot() };
 }
 
 function toWorkflowRecordingRunSummary(row: WorkflowRecordingRunRow): WorkflowRecordingRunSummary {
@@ -426,6 +442,7 @@ export async function flushWorkflowRecordingIndexRepairForTests(): Promise<void>
 }
 
 export async function initializeWorkflowRecordingStorage(root?: string): Promise<void> {
+  if (!migrationCopyMode) assertLegacyRecordingCompression();
   const recordingsRoot = await ensureWorkflowRecordingsRoot(root);
   await workflowRecordingStore.ensureStorage(recordingsRoot, { skipCleanup: migrationCopyMode });
   lastIndexRepairStartedAt = Date.now();
@@ -745,6 +762,7 @@ export async function deleteWorkflowRecording(root: string, recordingId: string)
 export async function persistWorkflowExecutionRecording(
   options: PersistWorkflowExecutionRecordingOptions,
 ): Promise<string | undefined> {
+  assertLegacyRecordingCompression();
   if (!isWorkflowRecordingEnabled()) {
     return undefined;
   }
@@ -944,6 +962,7 @@ export async function resetWorkflowRecordingStorageForTests(): Promise<void> {
   lastIndexRepairStartedAt = 0;
   unresolvedWorkflowRecordingDriftSignature = null;
   await workflowRecordingStore.resetForTests();
+  migrationCopyMode = false;
 }
 
 export async function getWorkflowRecordingStorageSchemaVersion(): Promise<string | null> {

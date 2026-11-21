@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { parseAllDocuments } from 'yaml';
-import { journalForReleaseOperation } from './release-operation-journal.mjs';
+import { assertNoUnfinishedAutoscalerWork, journalForReleaseOperation } from './release-operation-journal.mjs';
 import { verifyRecoveryReceipt, verifyRetainedMaintenanceMigration } from './maintenance-deployment-plan.mjs';
 import { releaseReplicaBounds } from './kubernetes-release-settlement.mjs';
 
@@ -64,12 +64,7 @@ export async function readAvailableReleaseJournal({
       )
         throw Error('Release operation journal owner changed during admission.');
     }
-    if (
-      observed.autoscalingProtocol === 1 &&
-      observed.phase === 'complete' &&
-      ['scale', 'target', 'fence', 'fenceRepair', 'removal'].some((field) => observed[field] != null)
-    )
-      throw Error('Completed autoscaler journal retains unfinished work; no ownership write was attempted.');
+    assertNoUnfinishedAutoscalerWork(observed);
     if (observed.autoscalingProtocol === 1 && kind !== 'autoscaling') {
       const controller = journalForReleaseOperation(observed, 'autoscaling', { release, namespace }, now);
       if (controller.phase === 'complete' && controller.leaseExpiresAt > now()) {

@@ -3,27 +3,28 @@ import { Pool } from 'pg';
 import {
   createPostgresAppSettingsBackendFromEnv,
   isPostgresAppSettingsBackendEnabled,
-} from '../app-settings/managed-settings-store.js';
-import { deploymentStorageSettingsRepository } from '../deployment-storage-settings.js';
-import { acquireRestoreServingLease } from '../legacy-restore/control.js';
-import { S3ManagedWorkflowBlobStore } from '../routes/workflows/managed/blob-store.js';
-import { getManagedDbPoolConfig } from '../routes/workflows/managed/db.js';
+} from '../src/app-settings/managed-settings-store.js';
+import { deploymentStorageSettingsRepository } from '../src/deployment-storage-settings.js';
+import { acquireRestoreServingLease } from '../src/legacy-restore/control.js';
+import { S3ManagedWorkflowBlobStore } from '../src/routes/workflows/managed/blob-store.js';
+import { getManagedDbPoolConfig } from '../src/routes/workflows/managed/db.js';
 import {
   createManagedWorkflowMaintenance,
   getManagedWorkflowMaintenanceConfig,
-} from '../routes/workflows/managed/maintenance.js';
-import { compactRecordingProjectSnapshots } from '../routes/workflows/managed/recording-project-compaction.js';
+} from '../src/routes/workflows/managed/maintenance.js';
+import { compactRecordingProjectSnapshots } from './recording-project-compaction.js';
 import {
   CURRENT_MANAGED_WORKFLOW_SCHEMA_VERSION,
   verifyManagedWorkflowSchema,
-} from '../routes/workflows/managed/schema-migrations.js';
-import { createManagedWorkflowTransactionRunner } from '../routes/workflows/managed/transactions.js';
+} from '../src/routes/workflows/managed/schema-migrations.js';
+import { createManagedWorkflowTransactionRunner } from '../src/routes/workflows/managed/transactions.js';
 import {
   getManagedWorkflowStorageConfig,
   getManagedWorkflowStorageConfigFromSettings,
-} from '../routes/workflows/storage-config.js';
-import { isRecordingCompactionPaused } from '../routes/workflows/recording-compaction-maintenance.js';
-import { assertVmMigrationTargetMayServe } from '../vm-migration-target-gate.js';
+} from '../src/routes/workflows/storage-config.js';
+import { isReleaseMaintenanceActive } from '../src/release-maintenance.js';
+import { isVmMigrationMaintenanceActive } from '../src/vm-migration-maintenance.js';
+import { assertVmMigrationTargetMayServe } from '../src/vm-migration-target-gate.js';
 
 async function readStorageConfig() {
   if (!isPostgresAppSettingsBackendEnabled()) return getManagedWorkflowStorageConfig();
@@ -62,7 +63,7 @@ async function main() {
     process.exitCode = 1;
     return;
   }
-  if (isRecordingCompactionPaused()) {
+  if (isReleaseMaintenanceActive() || isVmMigrationMaintenanceActive()) {
     console.error('Recording compaction requires serving mode.');
     process.exitCode = 1;
     return;

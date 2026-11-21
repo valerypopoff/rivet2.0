@@ -94,7 +94,10 @@ void test('metrics registry renders only finite, fixed-label metric families', (
     maxReservedBytes: 1024,
     reservedBytes: 512,
     retainedBodies: 1,
+    queuedRequests: 3,
+    maxQueuedRequests: 64,
   });
+  metrics.observeHttpBodyAdmissionWait(100, 'admitted');
   metrics.recordHttpBodyAdmission('capacity_exceeded');
   metrics.recordHostedEvaluationSubmission('accepted');
   metrics.recordHostedEvaluationSubmission('outstanding_capacity_exceeded');
@@ -171,6 +174,9 @@ void test('metrics registry renders only finite, fixed-label metric families', (
   assert.match(rendered, /rivet_http_body_admission_active_parsers\{profile="execution"\} 2/);
   assert.match(rendered, /rivet_http_body_admission_retained_bodies\{profile="execution"\} 1/);
   assert.match(rendered, /rivet_http_body_admission_reserved_bytes\{profile="execution"\} 512/);
+  assert.match(rendered, /rivet_http_body_admission_queued_requests\{profile="execution"\} 3/);
+  assert.match(rendered, /rivet_http_body_admission_queue_limit\{profile="execution"\} 64/);
+  assert.match(rendered, /rivet_http_body_admission_wait_seconds_count\{outcome="admitted",profile="execution"\} 1/);
   assert.match(
     rendered,
     /rivet_http_body_admission_rejections_total\{outcome="capacity_exceeded",profile="execution"\} 1/,
@@ -281,11 +287,18 @@ void test('recording queue counts remain visible when its policy is absent witho
   const metrics = new StudioMetrics({ enabled: true, profile: 'execution' });
   metrics.setWorkflowRecordingPersistence({ activeWrites: 0, pendingWrites: 0, maxPendingWrites: 3 });
   assert.match(metrics.render(), /rivet_workflow_recording_persistence_queue_limit\{profile="execution"\} 3/);
-  metrics.setWorkflowRecordingPersistence({ activeWrites: 1, pendingWrites: 2, maxPendingWrites: null });
+  metrics.setWorkflowRecordingPersistence({
+    activeWrites: 1,
+    pendingWrites: 2,
+    maxPendingWrites: null,
+    memory: { estimatedBytes: 123, captures: 2, rejections: 3, maxBytes: 456 },
+  });
   const rendered = metrics.render();
   assert.match(rendered, /rivet_workflow_recording_persistence_queue_depth\{profile="execution"\} 2/);
   assert.match(rendered, /rivet_workflow_recording_persistence_active_writes\{profile="execution"\} 1/);
   assert.doesNotMatch(rendered, /rivet_workflow_recording_persistence_queue_limit/);
+  assert.match(rendered, /rivet_workflow_recording_memory_estimated_bytes\{profile="execution"\} 123/);
+  assert.match(rendered, /rivet_workflow_recording_memory_rejections\{profile="execution"\} 3/);
 });
 
 void test('enabled metrics endpoint is pull-only and does not instrument its own scrape', async () => {

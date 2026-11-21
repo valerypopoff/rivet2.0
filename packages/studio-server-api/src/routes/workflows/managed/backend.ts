@@ -523,6 +523,11 @@ export class ManagedWorkflowBackend implements WorkflowDataBackend {
     return this.#executionService.loadPublishedExecutionProject(endpointName, requireFreshPointer);
   }
 
+  async resolvePublishedExecutionTarget(endpointName: string, requireFreshPointer = false) {
+    await this.initialize();
+    return this.#executionService.resolvePublishedExecutionTarget(endpointName, requireFreshPointer);
+  }
+
   async loadLatestExecutionProject(
     endpointName: string,
     requireFreshPointer = false,

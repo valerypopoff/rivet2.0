@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { Pool } from 'pg';
+import type { WorkflowExecutionDefinition } from '../routes/workflows/data-backend.js';
 import {
   loadProjectAndAttachedDataFromString,
   serializeProject,
@@ -146,6 +147,7 @@ function createExecutionServiceFixture(options: {
   });
 
   return {
+    context,
     cache,
     controller,
     listener,
@@ -196,6 +198,396 @@ type ManagedWorkflowExecutionContextFixture = Pick<
     ): Promise<{ contents: string; datasetsContents: string | null }>;
   };
 };
+
+test('published admission lookup defers cold reads and warm clones without a second DB lookup on load', async (t) => {
+  const fixture = createExecutionServiceFixture({});
+  await fixture.controller.initialize();
+  t.after(() => fixture.controller.dispose());
+  const materialize = t.mock.method(fixture.cache.parsedDefinitions, 'materialize');
+  const cold = await fixture.service.resolvePublishedExecutionTarget('hello-world', true);
+  assert.ok(cold);
+  assert.equal(fixture.resolveCount, 1);
+  assert.equal(fixture.readRevisionContentsCount, 0);
+  assert.equal(materialize.mock.callCount(), 0);
+  assert.ok(await cold.load());
+  assert.equal(fixture.resolveCount, 1);
+  assert.equal(fixture.readRevisionContentsCount, 1);
+  assert.equal(materialize.mock.callCount(), 1);
+
+  const warm = await Promise.all(Array.from({ length: 64 }, () =>
+    fixture.service.resolvePublishedExecutionTarget('hello-world', true)));
+  assert.ok(warm.every(Boolean));
+  assert.equal(fixture.resolveCount, 65, 'Each public lookup checks current committed access.');
+  assert.equal(fixture.readRevisionContentsCount, 1);
+  assert.equal(materialize.mock.callCount(), 1, 'Discarding warm targets must not clone projects.');
+  assert.ok(await warm[0]!.load());
+  assert.equal(fixture.resolveCount, 65);
+  assert.equal(materialize.mock.callCount(), 2);
+});
+
+test('published admission lookup checks private and missing endpoints without loading artifacts', async (t) => {
+  let exists = true;
+  const fixture = createExecutionServiceFixture({
+    resolveExecutionPointerFromDatabase: async () => exists ? {
+      pointer: {
+        workflowId: 'workflow-a', relativePath: 'Managed Cache.rivet-project',
+        revisionId: 'revision-a', endpointAccess: 'internal', releaseId: 'captured-release',
+      },
+      revision: fixture.revision,
+    } : null,
+  });
+  await fixture.controller.initialize();
+  t.after(() => fixture.controller.dispose());
+  const target = await fixture.service.resolvePublishedExecutionTarget('private', true);
+  assert.equal(target?.endpointAccess, 'internal');
+  assert.equal(fixture.readRevisionContentsCount, 0);
+  // No blob store exists in this fixture. Even a captured release is not read
+  // until an admitted caller asks to load it.
+  await assert.rejects(target!.load(), /cannot read the captured endpoint revision/);
+  exists = false;
+  assert.equal(await fixture.service.resolvePublishedExecutionTarget('missing', true), null);
+  assert.equal(fixture.resolveCount, 2);
+  assert.equal(fixture.readRevisionContentsCount, 0);
+});
+
+test('publication/access invalidation between admission lookup and load is rechecked', async (t) => {
+  for (const changed of ['private', 'unpublished'] as const) {
+    let invalidated = false;
+    const fixture = createExecutionServiceFixture({
+      resolveExecutionPointerFromDatabase: async () => invalidated && changed === 'unpublished' ? null : {
+        pointer: {
+          workflowId: 'workflow-a', relativePath: 'Managed Cache.rivet-project', revisionId: 'revision-a',
+          endpointAccess: invalidated ? 'internal' : 'public',
+        },
+        revision: fixture.revision,
+      },
+    });
+    await fixture.controller.initialize();
+    t.after(() => fixture.controller.dispose());
+    const target = await fixture.service.resolvePublishedExecutionTarget('hello-world', true);
+    assert.equal(target?.endpointAccess, 'public');
+    invalidated = true;
+    fixture.controller.markWorkflowChanged('workflow-a');
+    const loaded = await target!.load();
+    assert.equal(loaded?.endpointAccess ?? null, changed === 'private' ? 'internal' : null);
+    assert.equal(fixture.resolveCount, 2);
+  }
+});
+
+test('invalidation during admission lookup retries metadata only', async (t) => {
+  let first = true;
+  const fixture = createExecutionServiceFixture({
+    resolveExecutionPointerFromDatabase: async () => {
+      const stale = first;
+      first = false;
+      if (stale) fixture.controller.markWorkflowChanged('workflow-a');
+      return {
+        pointer: {
+          workflowId: 'workflow-a', relativePath: 'Managed Cache.rivet-project', revisionId: 'revision-a',
+          endpointAccess: stale ? 'public' : 'internal',
+        },
+        revision: fixture.revision,
+      };
+    },
+  });
+  await fixture.controller.initialize();
+  t.after(() => fixture.controller.dispose());
+  assert.equal((await fixture.service.resolvePublishedExecutionTarget('hello-world', true))?.endpointAccess, 'internal');
+  assert.equal(fixture.resolveCount, 2);
+  assert.equal(fixture.readRevisionContentsCount, 0);
+});
+
+test('cacheable admission lookups share a cold metadata read without starting artifact loads', async (t) => {
+  const resolved = createDeferred<ManagedExecutionPointerLookupResult>();
+  const fixture = createExecutionServiceFixture({ resolveExecutionPointerFromDatabase: () => resolved.promise });
+  await fixture.controller.initialize();
+  t.after(() => fixture.controller.dispose());
+  const pending = Array.from({ length: 32 }, () => fixture.service.resolvePublishedExecutionTarget('cold-endpoint'));
+  try {
+    assert.equal(fixture.resolveCount, 1);
+    assert.equal(fixture.readRevisionContentsCount, 0);
+  } finally {
+    resolved.resolve({
+      pointer: {
+        workflowId: fixture.workflow.workflow_id, relativePath: fixture.workflow.relative_path,
+        revisionId: fixture.revision.revision_id,
+      },
+      revision: fixture.revision,
+    });
+    const targets = await Promise.all(pending);
+    assert.ok(targets.every(Boolean));
+    assert.equal(fixture.readRevisionContentsCount, 0);
+    const loaded = await Promise.all(targets.map((target) => target!.load()));
+    assert.equal(fixture.readRevisionContentsCount, 1);
+    assert.equal(new Set(loaded.map((result) => result!.project)).size, 32);
+  }
+});
+
+test('deferred lookup sharing respects fresh access and invalidation generations', async (t) => {
+  for (const fresh of [false, true]) {
+    const firstLookup = createDeferred<ManagedExecutionPointerLookupResult>();
+    let invocation = 0;
+    const fixture = createExecutionServiceFixture({
+      resolveExecutionPointerFromDatabase: () => ++invocation === 1 ? firstLookup.promise : Promise.resolve({
+        pointer: {
+          workflowId: 'workflow-a', relativePath: 'Managed Cache.rivet-project',
+          revisionId: 'revision-a', endpointAccess: 'internal',
+        },
+        revision: fixture.revision,
+      }),
+    });
+    await fixture.controller.initialize();
+    t.after(() => fixture.controller.dispose());
+    const earlier = fixture.service.resolvePublishedExecutionTarget('hello-world');
+    try {
+      if (!fresh) fixture.controller.markWorkflowChanged('workflow-a');
+      const current = fixture.service.resolvePublishedExecutionTarget('hello-world', fresh);
+      assert.equal(fixture.resolveCount, 2);
+      assert.equal((await current)?.endpointAccess, 'internal');
+    } finally {
+      firstLookup.resolve({
+        pointer: {
+          workflowId: 'workflow-a', relativePath: 'Managed Cache.rivet-project',
+          revisionId: 'revision-a', endpointAccess: 'public',
+        },
+        revision: fixture.revision,
+      });
+      assert.equal((await earlier)?.endpointAccess, fresh ? 'public' : 'internal');
+    }
+    assert.equal(fixture.readRevisionContentsCount, 0);
+  }
+});
+
+test('a failed shared metadata lookup is released without replaying it', async (t) => {
+  const failure = new Error('Metadata temporarily unavailable');
+  let invocation = 0;
+  const fixture = createExecutionServiceFixture({
+    resolveExecutionPointerFromDatabase: async () => {
+      if (++invocation === 1) throw failure;
+      return {
+        pointer: {
+          workflowId: 'workflow-a', relativePath: 'Managed Cache.rivet-project', revisionId: 'revision-a',
+        },
+        revision: fixture.revision,
+      };
+    },
+  });
+  await fixture.controller.initialize();
+  t.after(() => fixture.controller.dispose());
+  const pending = Promise.allSettled(Array.from({ length: 2 }, () =>
+    fixture.service.resolvePublishedExecutionTarget('hello-world')));
+  for (const result of await pending) {
+    assert.equal(result.status, 'rejected');
+    if (result.status === 'rejected') assert.equal(result.reason, failure);
+  }
+  assert.equal(fixture.resolveCount, 1, 'Failure must not automatically retry the lookup.');
+  assert.ok(await fixture.service.resolvePublishedExecutionTarget('hello-world'));
+  assert.equal(fixture.resolveCount, 2, 'The next request must be able to recover.');
+  assert.equal(fixture.readRevisionContentsCount, 0);
+});
+
+test('shared admission targets retain source-load sharing across an access-change retry', async (t) => {
+  for (const mode of ['full', 'deferred', 'staggered'] as const) {
+    const readStarted = createDeferred<void>();
+    const allLoadsStarted = createDeferred<void>();
+    const finishRead = createDeferred<void>();
+    let changed = false;
+    const fixture = createExecutionServiceFixture({
+      resolveExecutionPointerFromDatabase: async () => ({
+        pointer: {
+          workflowId: 'workflow-a', relativePath: 'Managed Cache.rivet-project', revisionId: 'revision-a',
+          endpointAccess: changed ? 'internal' : 'public',
+        },
+        revision: fixture.revision,
+      }),
+      readRevisionContents: async () => {
+        readStarted.resolve();
+        await finishRead.promise;
+        return { contents: fixture.projectContents, datasetsContents: null };
+      },
+    });
+    await fixture.controller.initialize();
+    t.after(() => fixture.controller.dispose());
+    const pending = (async () => {
+      const loads: Array<Promise<WorkflowExecutionDefinition | null>> = [];
+      if (mode === 'full') {
+        loads.push(...Array.from({ length: 32 }, () => fixture.service.loadPublishedExecutionProject('hello-world')));
+      } else if (mode === 'deferred') {
+        const targets = await Promise.all(Array.from({ length: 32 }, () =>
+          fixture.service.resolvePublishedExecutionTarget('hello-world')));
+        loads.push(...targets.map((target) => target!.load()));
+      } else {
+        // Later requests reach separate metadata targets while the first read
+        // is still pending; sharing must span their complete source loads.
+        for (let index = 0; index < 32; index++) {
+          const target = await fixture.service.resolvePublishedExecutionTarget('hello-world');
+          loads.push(target!.load());
+        }
+      }
+      allLoadsStarted.resolve();
+      return Promise.all(loads);
+    })();
+    try {
+      await readStarted.promise;
+      await allLoadsStarted.promise;
+      changed = true;
+      fixture.controller.markWorkflowChanged('workflow-a');
+    } finally {
+      finishRead.resolve();
+    }
+    const loaded = await pending;
+    assert.ok(loaded.every((result) => result?.endpointAccess === 'internal'));
+    assert.equal(fixture.resolveCount, 2, 'One initial lookup and one access-change retry per shared load.');
+    assert.equal(fixture.readRevisionContentsCount, 1);
+    assert.equal(new Set(loaded.map((result) => result!.project)).size, 32);
+  }
+});
+
+test('unpublish before or during deferred load cannot become a stale-artifact failure', async (t) => {
+  for (const duringRead of [false, true]) {
+    let unpublished = false;
+    const fixture = createExecutionServiceFixture({
+      resolveExecutionPointerFromDatabase: async () => unpublished ? null : {
+        pointer: {
+          workflowId: 'workflow-a', relativePath: 'Managed Cache.rivet-project', revisionId: 'revision-a',
+        },
+        revision: fixture.revision,
+      },
+      readRevisionContents: async () => {
+        unpublished = true;
+        fixture.controller.markWorkflowChanged('workflow-a');
+        throw new Error('Retired revision artifacts are unavailable');
+      },
+    });
+    await fixture.controller.initialize();
+    t.after(() => fixture.controller.dispose());
+    const target = await fixture.service.resolvePublishedExecutionTarget('hello-world', true);
+    assert.ok(target);
+    if (!duringRead) {
+      unpublished = true;
+      fixture.controller.markWorkflowChanged('workflow-a');
+    }
+    assert.equal(await target.load(), null);
+    assert.equal(fixture.resolveCount, 2);
+    assert.equal(fixture.readRevisionContentsCount, duringRead ? 1 : 0);
+  }
+});
+
+test('a retired captured release is rechecked when its manifest read fails', async (t) => {
+  let unpublished = false;
+  const fixture = createExecutionServiceFixture({
+    resolveExecutionPointerFromDatabase: async () => unpublished ? null : {
+      pointer: {
+        workflowId: 'workflow-a', relativePath: 'Managed Cache.rivet-project',
+        revisionId: 'revision-a', releaseId: 'retired-release',
+      },
+      revision: fixture.revision,
+    },
+  });
+  let manifestReads = 0;
+  const pool = Object.assign(fixture.context.pool, {
+    query: async () => {
+      manifestReads++;
+      unpublished = true;
+      fixture.controller.markWorkflowChanged('workflow-a');
+      throw new Error('Captured release is no longer available');
+    },
+  });
+  const unused = async () => assert.fail('No blob operation should start for the retired release.');
+  const service = new ManagedWorkflowExecutionService({ context: {
+    ...fixture.context, pool, blobStore: { getText: unused, putText: unused, delete: unused },
+  } });
+  await fixture.controller.initialize();
+  t.after(() => fixture.controller.dispose());
+  const target = await service.resolvePublishedExecutionTarget('hello-world', true);
+  assert.ok(target);
+  assert.equal(await target.load(), null);
+  assert.equal(manifestReads, 1);
+  assert.equal(fixture.resolveCount, 2);
+  assert.equal(fixture.readRevisionContentsCount, 0);
+});
+
+test('shared target loading releases failures and rechecks later changes', async (t) => {
+  const failure = new Error('Artifact read failed');
+  let failing = true;
+  let changed = false;
+  const fixture = createExecutionServiceFixture({
+    resolveExecutionPointerFromDatabase: async () => ({
+      pointer: {
+        workflowId: 'workflow-a', relativePath: 'Managed Cache.rivet-project', revisionId: 'revision-a',
+        endpointAccess: changed ? 'internal' : 'public',
+      },
+      revision: fixture.revision,
+    }),
+    readRevisionContents: async () => {
+      if (failing) throw failure;
+      return { contents: fixture.projectContents, datasetsContents: null };
+    },
+  });
+  await fixture.controller.initialize();
+  t.after(() => fixture.controller.dispose());
+  const target = await fixture.service.resolvePublishedExecutionTarget('hello-world', true);
+  assert.ok(target);
+  for (const result of await Promise.allSettled([target.load(), target.load()])) {
+    assert.equal(result.status, 'rejected');
+    if (result.status === 'rejected') assert.equal(result.reason, failure);
+  }
+  assert.equal(fixture.readRevisionContentsCount, 1);
+  failing = false;
+  const recovered = await target.load();
+  assert.ok(recovered);
+  recovered.project.metadata.title = 'Caller mutation';
+  assert.equal(fixture.readRevisionContentsCount, 2);
+  changed = true;
+  fixture.controller.markWorkflowChanged('workflow-a');
+  const refreshed = await target.load();
+  assert.equal(refreshed?.endpointAccess, 'internal');
+  assert.equal(refreshed?.project.metadata.title, 'Managed Cache');
+  assert.equal(fixture.resolveCount, 2);
+  assert.equal(fixture.readRevisionContentsCount, 2);
+});
+
+test('a fresh admission target cannot join an older source load before notification arrives', async (t) => {
+  const oldReadStarted = createDeferred<void>();
+  const finishOldRead = createDeferred<void>();
+  let currentRevision = 'revision-a';
+  const fixture = createExecutionServiceFixture({
+    resolveExecutionPointerFromDatabase: async () => ({
+      pointer: {
+        workflowId: 'workflow-a', relativePath: 'Managed Cache.rivet-project', revisionId: currentRevision,
+      },
+      revision: { ...fixture.revision, revision_id: currentRevision },
+    }),
+    readRevisionContents: async (revision) => {
+      if (revision.revision_id === 'revision-a') {
+        oldReadStarted.resolve();
+        await finishOldRead.promise;
+        return { contents: fixture.projectContents, datasetsContents: null };
+      }
+      const [project] = loadProjectAndAttachedDataFromString(fixture.projectContents);
+      project.metadata.title = 'New publication';
+      return { contents: serializeProject(project) as string, datasetsContents: null };
+    },
+  });
+  await fixture.controller.initialize();
+  t.after(() => fixture.controller.dispose());
+  const older = fixture.service.loadPublishedExecutionProject('hello-world');
+  try {
+    await oldReadStarted.promise;
+    currentRevision = 'revision-b'; // Committed elsewhere; no local invalidation yet.
+    const target = await fixture.service.resolvePublishedExecutionTarget('hello-world', true);
+    assert.ok(target);
+    const fresh = target.load();
+    assert.equal(fixture.readRevisionContentsCount, 2, 'Fresh loading must not wait on the older source.');
+    const loaded = await fresh;
+    assert.equal(loaded?.revisionKey, 'managed:revision-b');
+    assert.equal(loaded?.project.metadata.title, 'New publication');
+    assert.equal(fixture.resolveCount, 2);
+  } finally {
+    finishOldRead.resolve();
+    assert.equal((await older)?.project.metadata.title, 'Managed Cache');
+  }
+});
 
 test('warm pointer hit does not re-run joined DB resolution', async () => {
   const fixture = createExecutionServiceFixture({});

@@ -356,6 +356,12 @@ async function verifyArtifacts(directory, artifacts, requiredRoles) {
 
 export async function verifyRecoveryReceipt(receipt, directory, request, { now = Date.now } = {}) {
   if (
+    request.requiredRecordingEncodings &&
+    JSON.stringify([...(receipt.recordingEncodings ?? [])].sort()) !==
+      JSON.stringify([...request.requiredRecordingEncodings].sort())
+  )
+    throw new Error('Recovery receipt does not verify the required recording encodings.');
+  if (
     receipt?.formatVersion !== 1 ||
     receipt.kind !==
       (request.consistency === 'online' ? 'rivet-recovery-checkpoint' : 'rivet-frozen-recovery-checkpoint') ||
@@ -443,6 +449,7 @@ export async function captureMaintenanceCheckpoint(
     installedManifestDigest: approval.plan.installedManifestDigest,
     candidateManifestDigest: approval.plan.candidateManifestDigest,
     consistency: 'quiesced',
+    ...(context.requiredRecordingEncodings ? { requiredRecordingEncodings: context.requiredRecordingEncodings } : {}),
     stage: 'backup',
     startedAt: new Date().toISOString(),
   };

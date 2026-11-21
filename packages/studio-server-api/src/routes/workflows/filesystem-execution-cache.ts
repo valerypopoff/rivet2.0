@@ -25,6 +25,8 @@ import {
 } from './filesystem-execution-source.js';
 import { getWorkflowDatasetPath } from './fs-helpers.js';
 import { normalizeWorkflowEndpointLookupName } from './endpoint-names.js';
+import type { WorkflowPublishedExecutionTarget } from './data-backend.js';
+import { createHttpError } from '../../utils/httpError.js';
 
 export type FilesystemExecutionProjectResult = {
   project: Project;
@@ -38,6 +40,10 @@ export type FilesystemExecutionProjectResult = {
     resolveMs: number;
     materializeMs: number;
   };
+};
+type FilesystemExecutionTarget = {
+  endpointAccess: 'public' | 'internal';
+  load(revalidateRouting?: boolean): Promise<FilesystemExecutionProjectResult | null>;
 };
 
 type FilesystemEndpointIndex = {
@@ -245,6 +251,10 @@ export class FilesystemExecutionCache {
     return this.#loadExecutionProject(root, 'published', endpointName);
   }
 
+  async resolvePublishedExecutionTarget(root: string, endpointName: string): Promise<WorkflowPublishedExecutionTarget | null> {
+    return this.#resolveExecutionTarget(root, 'published', endpointName);
+  }
+
   async loadLatestExecutionProject(root: string, endpointName: string): Promise<FilesystemExecutionProjectResult | null> {
     return this.#loadExecutionProject(root, 'latest', endpointName);
   }
@@ -254,6 +264,17 @@ export class FilesystemExecutionCache {
     runKind: FilesystemExecutionRunKind,
     endpointName: string,
   ): Promise<FilesystemExecutionProjectResult | null> {
+    const target = await this.#resolveExecutionTarget(root, runKind, endpointName);
+    // Immediate loads keep their caller's read lease. Deferred targets recheck
+    // routing when they acquire a new lease after admission instead.
+    return target ? target.load(false) : null;
+  }
+
+  async #resolveExecutionTarget(
+    root: string,
+    runKind: FilesystemExecutionRunKind,
+    endpointName: string,
+  ): Promise<FilesystemExecutionTarget | null> {
     const lookupName = normalizeWorkflowEndpointLookupName(endpointName);
     const resolveStartedAt = performance.now();
     const cacheStatus = await this.#ensureFreshIndex(root);
@@ -265,32 +286,40 @@ export class FilesystemExecutionCache {
 
     if (!await isPointerRoutingFresh(pointer)) {
       this.markIndexDirty();
-      return this.#loadExecutionProjectBypass(root, runKind, lookupName, resolveStartedAt);
+      return this.#resolveExecutionTargetBypass(root, runKind, lookupName, resolveStartedAt);
     }
 
     const resolveMs = Math.max(0, Math.round(performance.now() - resolveStartedAt));
-    const materializeStartedAt = performance.now();
+    return {
+      endpointAccess: pointer.endpointAccess,
+      load: async (revalidateRouting = true) => {
+        const materializeStartedAt = performance.now();
+        if (revalidateRouting && !await isPointerRoutingFresh(pointer)) {
+          this.markIndexDirty();
+          return this.#loadExecutionProjectBypass(root, runKind, lookupName, resolveStartedAt);
+        }
+        let materialization: FilesystemMaterializationCacheEntry;
+        try {
+          materialization = await this.#getOrLoadMaterialization(pointer);
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+            this.invalidateProjectMaterializations([pointer.sourceProjectPath, pointer.executionProjectPath]);
+            this.markIndexDirty();
+            return this.#loadExecutionProjectBypass(root, runKind, lookupName, resolveStartedAt);
+          }
 
-    let materialization: FilesystemMaterializationCacheEntry;
-    try {
-      materialization = await this.#getOrLoadMaterialization(pointer);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-        this.invalidateProjectMaterializations([pointer.sourceProjectPath, pointer.executionProjectPath]);
-        this.markIndexDirty();
-        return this.#loadExecutionProjectBypass(root, runKind, lookupName, resolveStartedAt);
-      }
+          throw error;
+        }
 
-      throw error;
-    }
-
-    return this.#createExecutionProjectResult(
-      pointer,
-      materialization,
-      cacheStatus,
-      resolveMs,
-      materializeStartedAt,
-    );
+        return this.#createExecutionProjectResult(
+          pointer,
+          materialization,
+          cacheStatus,
+          resolveMs,
+          materializeStartedAt,
+        );
+      },
+    };
   }
 
   #getCachedPointer(
@@ -313,6 +342,16 @@ export class FilesystemExecutionCache {
     lookupName: string,
     resolveStartedAt: number,
   ): Promise<FilesystemExecutionProjectResult | null> {
+    const target = await this.#resolveExecutionTargetBypass(root, runKind, lookupName, resolveStartedAt);
+    return target ? target.load(false) : null;
+  }
+
+  async #resolveExecutionTargetBypass(
+    root: string,
+    runKind: FilesystemExecutionRunKind,
+    lookupName: string,
+    resolveStartedAt: number,
+  ): Promise<FilesystemExecutionTarget | null> {
     const pointer = runKind === 'published'
       ? await resolveFilesystemPublishedExecutionPointer(root, lookupName)
       : await resolveFilesystemLatestExecutionPointer(root, lookupName);
@@ -322,15 +361,23 @@ export class FilesystemExecutionCache {
     }
 
     const resolveMs = Math.max(0, Math.round(performance.now() - resolveStartedAt));
-    const materializeStartedAt = performance.now();
-    const materialization = await loadFilesystemExecutionMaterialization(pointer);
-    return this.#createExecutionProjectResult(
-      pointer,
-      materialization,
-      'bypass',
-      resolveMs,
-      materializeStartedAt,
-    );
+    return {
+      endpointAccess: pointer.endpointAccess,
+      load: async (revalidateRouting = true) => {
+        const materializeStartedAt = performance.now();
+        if (revalidateRouting && !await isPointerRoutingFresh(pointer)) {
+          throw createHttpError(503, 'Workflow endpoint changed while loading. Retry the request.');
+        }
+        const materialization = await loadFilesystemExecutionMaterialization(pointer);
+        return this.#createExecutionProjectResult(
+          pointer,
+          materialization,
+          'bypass',
+          resolveMs,
+          materializeStartedAt,
+        );
+      },
+    };
   }
 
   #createExecutionProjectResult(

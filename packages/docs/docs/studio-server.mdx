@@ -177,6 +177,15 @@ The setting persists through upgrades and is separate for each installation.
 seconds and longer during an outage. This control is available only on supported
 replicated deployments with enforced admission.
 
+HTTP uploads have a separate limit: each server process reads up to four request
+bodies at once. Short bursts can wait in a queue of up to 64 requests for one
+second. If the queue or input-memory budget is full, the request receives `503`
+with `code: "body_capacity_exhausted"` and `Retry-After: 1` before its workflow
+starts. Increasing execution concurrency does not raise these upload limits.
+An oversized body receives `413`; a stalled upload receives `408`. A network
+failure after execution starts is different and can leave the run outcome
+uncertain, so do not automatically resubmit such a run.
+
 **Settings → CPU and RAM monitoring** shows background resource observations
 for execution and editor/dashboard replicas. Use the **Resource view** switcher
 to choose a role and the period buttons to inspect up to seven days of history.

@@ -20,7 +20,12 @@ parentPort!.on('message', async ({ id, method, args: encoded }: { id: number; me
             args[0] as Parameters<LocalWorkflowCatalog['readExecutionSource']>[0],
             args[1] ? cache : undefined,
           )
-        : await (catalog as unknown as Record<string, (...args: unknown[]) => unknown>)[method]!.apply(catalog, args);
+        : method === 'loadExecutionSource'
+          ? await catalog.loadExecutionSource(
+              args[0] as Parameters<LocalWorkflowCatalog['loadExecutionSource']>[0],
+              args[1] ? cache : undefined,
+            )
+          : await (catalog as unknown as Record<string, (...args: unknown[]) => unknown>)[method]!.apply(catalog, args);
     parentPort!.postMessage({ id, value });
   } catch (error) {
     const actual = error instanceof Error ? error : new Error(String(error));

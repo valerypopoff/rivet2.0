@@ -334,7 +334,7 @@ export function createCatalogWorker(
             update(prepared.next, prepared.index.revisionId);
             return call('commitPublication', [relativePath, prepared], signal);
           };
-        if (property === 'readExecutionSource')
+        if (property === 'readExecutionSource' || property === 'loadExecutionSource')
           return (selection: unknown, cache: unknown) => call(String(property), [selection, Boolean(cache)], signal);
         return (...args: unknown[]) => call(String(property), args, signal);
       },

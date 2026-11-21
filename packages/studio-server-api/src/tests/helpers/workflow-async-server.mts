@@ -1,8 +1,10 @@
 import fs from 'node:fs/promises';
+import assert from 'node:assert/strict';
 import path from 'node:path';
-import { monitorEventLoopDelay } from 'node:perf_hooks';
+import { monitorEventLoopDelay, performance, PerformanceObserver } from 'node:perf_hooks';
 import { setTimeout as delay } from 'node:timers/promises';
 import type { ChartNode, DataId, PortId } from '@valerypopoff/rivet2-node';
+import type { seedHostedSubgraphFixture } from './hosted-subgraph-fixture.js';
 
 if (!process.send || !process.env.RIVET_ASYNC_TEST_ROOT) throw new Error('Requires the isolated async test harness');
 const root = process.env.RIVET_ASYNC_TEST_ROOT;
@@ -34,8 +36,17 @@ const rivet = await import('@valerypopoff/rivet2-node');
 const { ManagedRecordingEvidence } = await import('../../routes/workflows/managed/recording-evidence.js');
 const canShareReplayProject = ManagedRecordingEvidence.prototype.canShareReplayProject;
 await storage.initializeWorkflowStorage();
+if (process.env.RIVET_ASYNC_TEST_BENCHMARK === 'true') {
+  const { writeRunRecordingsSettings } = await import('../../routes/workflows/recordings-config.js');
+  await writeRunRecordingsSettings({
+    maxPendingWrites: Number(process.env.RIVET_ASYNC_TEST_MAX_PENDING_WRITES ?? 1000),
+    maxRunsPerEndpoint: 10000,
+    retentionDays: 1,
+  });
+}
 let releaseRecordingWork: (() => void) | undefined;
-let finishSnapshotTiming: (() => Record<string, number>) | undefined;
+let finishSnapshotTiming: (() => Record<string, unknown>) | undefined;
+let readSnapshotTiming: (() => Record<string, unknown>) | undefined;
 const recordingWork = { registrations: 0, outcomes: 0 };
 if (process.env.RIVET_ASYNC_TEST_HOLD_RECORDING_WORK === 'true') {
   const gate = new Promise<void>((resolve) => {
@@ -97,6 +108,40 @@ if (!resume) {
     graph.nodes = [input, output];
     graph.connections = [connect(input, 'data', output, 'value')];
   }
+  const benchmarkNodes = Number(process.env.RIVET_ASYNC_TEST_BENCHMARK_NODES ?? 0);
+  if (benchmarkNodes) {
+    if (benchmarkNodes !== 100) throw new Error('Unsupported benchmark graph size');
+    graph.nodes.push(
+      ...Array.from({ length: benchmarkNodes }, (_, index) => {
+        const node = rivet.textNode.impl.create();
+        node.data.text = `fixture-${index}`;
+        return node;
+      }),
+    );
+  }
+  if (process.env.RIVET_ASYNC_TEST_BENCHMARK_CHAIN === '100') {
+    const chain = Array.from({ length: 98 }, () => rivet.passthroughNode.impl.create());
+    graph.nodes = [input, ...chain, output];
+    graph.connections = [
+      connect(input, 'data', chain[0]!, 'input1'),
+      ...chain.slice(1).map((node, index) => connect(chain[index]!, 'output1', node, 'input1')),
+      connect(chain.at(-1)!, 'output1', output, 'value'),
+    ];
+  }
+  if (process.env.RIVET_ASYNC_TEST_RECORDING_PAYLOAD) {
+    const encode = rivet.codeNode.impl.create();
+    encode.data.inputNames = ['value'];
+    encode.data.outputNames = ['recorded', 'response'];
+    const payload =
+      process.env.RIVET_ASYNC_TEST_RECORDING_PAYLOAD === 'aliases'
+        ? 'Array(1000).fill({ values: Array.from({length: 64}, (_, n) => n) })'
+        : "request.request_id + ':' + 'x'.repeat(Math.min(5 * 1024 * 1024, request.recordingBytes || 0))";
+    encode.data.code = `const request = inputs.value.value; return {
+      recorded: {type: 'any', value: ${payload}}, response: inputs.value
+    };`;
+    graph.nodes = [input, encode, output];
+    graph.connections = [connect(input, 'data', encode, 'value'), connect(encode, 'response', output, 'value')];
+  }
   if (process.env.RIVET_ASYNC_TEST_HTTP_ECHO_URL) {
     tail.data.useUrlInput = false;
     tail.data.url = process.env.RIVET_ASYNC_TEST_HTTP_ECHO_URL;
@@ -146,10 +191,57 @@ for (let attempt = 0; ; attempt++) {
   if (attempt === 300) throw new Error('Test API did not become ready');
   await delay(100);
 }
-let hostedSubgraphFixture:
-  | Awaited<ReturnType<typeof import('./hosted-subgraph-fixture.js').seedHostedSubgraphFixture>>
-  | undefined;
-process.on('message', async (message: { id: number; command: string }) => {
+let hostedSubgraphFixture: Awaited<ReturnType<typeof seedHostedSubgraphFixture>> | undefined;
+const benchmarkHelpers = process.env.RIVET_ASYNC_TEST_BENCHMARK_HELPER
+  ? await import(process.env.RIVET_ASYNC_TEST_BENCHMARK_HELPER)
+  : undefined;
+const memoryUrl = new URL('../../routes/workflows/recording-memory.js', import.meta.url);
+const recordingMemory = await fs.access(memoryUrl).then(
+  async () => (await import(memoryUrl.href)).recordingMemory,
+  () => undefined,
+);
+
+async function readBenchmarkPlatform() {
+  try {
+    const { resolveCgroupPaths } = await import('../../resource-monitoring/counters.js');
+    const locations = resolveCgroupPaths(
+      await fs.readFile('/proc/self/cgroup', 'utf8'),
+      await fs.readFile('/proc/self/mountinfo', 'utf8'),
+    );
+    const location = locations[0];
+    if (!location?.quota) return { unavailable: 'No accessible CPU controller' };
+    const v2 = location.version === 2;
+    const [stat, quota, memoryLimit, usage, period] = await Promise.all([
+      fs.readFile(`${location.quota}/cpu.stat`, 'utf8'),
+      fs.readFile(`${location.quota}/${v2 ? 'cpu.max' : 'cpu.cfs_quota_us'}`, 'utf8'),
+      fs.readFile(`${location.memory}/${v2 ? 'memory.max' : 'memory.limit_in_bytes'}`, 'utf8'),
+      v2 ? null : fs.readFile(`${location.cpu}/cpuacct.usage`, 'utf8'),
+      v2 ? null : fs.readFile(`${location.quota}/cpu.cfs_period_us`, 'utf8'),
+    ]);
+    const counters = Object.fromEntries(
+      stat
+        .trim()
+        .split('\n')
+        .map((line) => {
+          const [key, value] = line.split(/\s+/);
+          return [key, Number(value)];
+        }),
+    );
+    return {
+      sampledAtMs: performance.now(),
+      version: location.version,
+      stat: v2
+        ? counters
+        : { ...counters, usage_usec: Number(usage) / 1000, throttled_usec: counters.throttled_time! / 1000 },
+      quota: v2 ? quota.trim() : `${quota.trim()} ${period!.trim()}`,
+      memoryLimit: memoryLimit.trim(),
+    };
+  } catch {
+    return { unavailable: 'Container counters unavailable' };
+  }
+}
+type FixtureCommand = { id: number; command: string; batches?: { round: number; count: number }[] };
+async function handleCommand(message: FixtureCommand): Promise<void> {
   try {
     if (message.command === 'monitoring-on' || message.command === 'monitoring-off') {
       const monitoring = await import('../../resource-monitoring/runtime.js');
@@ -192,36 +284,173 @@ process.on('message', async (message: { id: number; command: string }) => {
       if (finishSnapshotTiming) throw new Error('A snapshot timing sample is already active.');
       const { getManagedPostgresPoolMetrics } = await import('../../managed-postgres-pool.js');
       const { getWorkflowExecutionRecordingPersistenceMetrics } = await import('../../routes/workflows/recordings.js');
+      const { getAppSettingsBackendKind } = await import('../../app-settings/settings-repository.js');
       const histogram = monitorEventLoopDelay({ resolution: 10 });
+      const platform = await readBenchmarkPlatform();
+      const gc = { count: 0, durationMs: 0 };
+      const observer = new PerformanceObserver((list) => {
+        for (const entry of list.getEntries()) {
+          gc.count++;
+          gc.durationMs += entry.duration;
+        }
+      });
+      observer.observe({ entryTypes: ['gc'] });
+      const loopBaseline = performance.eventLoopUtilization();
+      const diagnostic = (
+        globalThis as typeof globalThis & {
+          recordingBenchmark?: {
+            enabled: boolean;
+            phases: Record<string, number>;
+            marks: unknown[];
+            dropped: number;
+          };
+        }
+      ).recordingBenchmark;
+      if (diagnostic) {
+        diagnostic.enabled = process.env.RIVET_ASYNC_TEST_PHASE_DIAGNOSTICS === 'true';
+        diagnostic.phases = {};
+        diagnostic.marks = [];
+        diagnostic.dropped = 0;
+      }
+      const { getPublishedExecutionAdmission } = await import('../../published-execution-admission.js');
       let peakPendingWrites = 0;
       let peakPoolWaiting = 0;
+      let peakRss = process.memoryUsage.rss();
+      const history: Record<string, number>[] = [];
+      let lastSample = 0;
       const samples = setInterval(() => {
+        peakRss = Math.max(peakRss, process.memoryUsage.rss());
         peakPendingWrites = Math.max(
           peakPendingWrites,
           getWorkflowExecutionRecordingPersistenceMetrics().pendingWrites,
         );
         peakPoolWaiting = Math.max(peakPoolWaiting, getManagedPostgresPoolMetrics().waiting);
+        const now = Date.now();
+        if (now - lastSample >= 1000 && history.length < 600) {
+          lastSample = now;
+          history.push({
+            at: now,
+            rss: process.memoryUsage.rss(),
+            heapUsed: process.memoryUsage().heapUsed,
+            activeRuns: getPublishedExecutionAdmission().getSnapshot().activeRuns,
+            pendingWrites: getWorkflowExecutionRecordingPersistenceMetrics().pendingWrites,
+            ...(recordingMemory ? { estimatedBytes: recordingMemory.snapshot().estimatedBytes } : {}),
+          });
+        }
       }, 25);
       samples.unref();
       histogram.enable();
       const baseline = process.cpuUsage();
-      finishSnapshotTiming = () => {
-        clearInterval(samples);
-        histogram.disable();
+      readSnapshotTiming = () => {
         const cpu = process.cpuUsage(baseline);
         return {
           cpuMs: (cpu.user + cpu.system) / 1000,
+          settingsBackend: getAppSettingsBackendKind(),
+          atMs: performance.now(),
+          gc: { ...gc },
+          eventLoop: performance.eventLoopUtilization(loopBaseline),
+          platformBaseline: platform,
+          ...(diagnostic?.enabled ? { diagnostic } : {}),
           eventLoopP95Ms: histogram.percentile(95) / 1e6,
+          eventLoopMaxMs: histogram.max / 1e6,
+          peakRss,
           peakPendingWrites,
           peakPoolWaiting,
+          history,
         };
+      };
+      finishSnapshotTiming = () => {
+        clearInterval(samples);
+        histogram.disable();
+        observer.disconnect();
+        const result = readSnapshotTiming!();
+        if (diagnostic) diagnostic.enabled = false;
+        readSnapshotTiming = undefined;
+        return result;
       };
       process.send?.({ id: message.id, result: true });
       return;
     }
+    if (message.command === 'snapshot-timing-window') {
+      assert.ok(readSnapshotTiming, 'No resource timing window is active');
+      const result = readSnapshotTiming();
+      process.send?.({ id: message.id, result: { ...result, platform: await readBenchmarkPlatform() } });
+      return;
+    }
+    if (message.command === 'benchmark-drain') {
+      assert.ok(benchmarkHelpers);
+      const { getActiveHttpExecutionCount } = await import('../../active-http-executions.js');
+      const { getPublishedExecutionAdmission } = await import('../../published-execution-admission.js');
+      const { flushEvidenceWork } = await import('../../routes/workflows/recording-evidence-work.js');
+      const { flushWorkflowExecutionRecordingPersistence, getWorkflowExecutionRecordingPersistenceMetrics } =
+        await import('../../routes/workflows/recordings.js');
+      await benchmarkHelpers.drainBenchmark(
+        {
+          active: () => getActiveHttpExecutionCount() + getPublishedExecutionAdmission().getSnapshot().activeRuns,
+          pending: () => {
+            const state = getWorkflowExecutionRecordingPersistenceMetrics();
+            return state.activeWrites + state.pendingWrites;
+          },
+          async flush() {
+            await flushEvidenceWork();
+            await flushWorkflowExecutionRecordingPersistence();
+            await flushEvidenceWork();
+          },
+        },
+        175_000,
+      );
+      process.send?.({ id: message.id, result: { memory: recordingMemory?.snapshot() ?? null } });
+      return;
+    }
+    if (message.command === 'benchmark-audit') {
+      assert.ok(benchmarkHelpers && message.batches);
+      const ids = new Set<string>();
+      const requests = new Set<string>();
+      const expectedContents = rivet.serializeProject(project);
+      assert.ok(typeof expectedContents === 'string');
+      const expectedGraph = rivet.loadProjectFromString(expectedContents).graphs[graph.metadata!.id!];
+      let total = 0;
+      for (let pageNumber = 1; ; pageNumber++) {
+        const page = await storage.listWorkflowRecordingRunsPageWithBackend({
+          workflowId: project.metadata.id,
+          page: pageNumber,
+          pageSize: 100,
+        });
+        total = page.totalRuns;
+        for (const run of page.runs) {
+          if (ids.has(run.id)) throw new Error('Duplicate recording');
+          ids.add(run.id);
+          const capture = rivet.ExecutionRecorder.deserializeFromString(
+            await storage.readWorkflowRecordingArtifactWithBackend(run.id, 'recording'),
+          );
+          const snapshot = rivet.loadProjectFromString(
+            await storage.readWorkflowRecordingArtifactWithBackend(run.id, 'replay-project'),
+          );
+          const request = benchmarkHelpers.assertBenchmarkRecording(capture, snapshot, expectedGraph, requests);
+          if (process.env.RIVET_ASYNC_TEST_RECORDING_PAYLOAD) {
+            const intermediate = capture.events.find(
+              (event) => event.type === 'nodeFinish' && event.data.outputs['recorded' as PortId],
+            );
+            assert.ok(intermediate?.type === 'nodeFinish');
+            const value = intermediate.data.outputs['recorded' as PortId]?.value;
+            if (process.env.RIVET_ASYNC_TEST_RECORDING_PAYLOAD === 'aliases')
+              assert.deepEqual(value, Array(1000).fill({ values: Array.from({ length: 64 }, (_, n) => n) }));
+            else {
+              const expected = request as { request_id: string; recordingBytes: number };
+              assert.equal(value, `${expected.request_id}:${'x'.repeat(expected.recordingBytes)}`);
+            }
+          }
+        }
+        if (ids.size >= total || !page.runs.length) break;
+      }
+      if (ids.size !== total) throw new Error('Recording audit did not read every artifact');
+      benchmarkHelpers.assertBenchmarkRequests(requests, message.batches);
+      process.send?.({ id: message.id, result: { count: total, audited: ids.size } });
+      return;
+    }
     if (message.command === 'finish-snapshot-timing') {
       if (!finishSnapshotTiming) throw new Error('No snapshot timing sample is active.');
-      const result = finishSnapshotTiming();
+      const result = { ...finishSnapshotTiming(), platform: await readBenchmarkPlatform() };
       finishSnapshotTiming = undefined;
       process.send?.({ id: message.id, result });
       return;
@@ -379,6 +608,17 @@ process.on('message', async (message: { id: number; command: string }) => {
   } catch (error) {
     process.send?.({ id: message.id, error: String(error) });
   }
+}
+process.on('message', (message: FixtureCommand) => {
+  void handleCommand(message);
 });
-process.send({ ready: { baseUrl, projectId: project.metadata.id, projectPath: created.absolutePath } });
+process.send({
+  ready: {
+    baseUrl,
+    projectId: project.metadata.id,
+    projectPath: created.absolutePath,
+    storageMode: storage.getWorkflowStorageMode(),
+    nodeVersion: process.version,
+  },
+});
 process.channel?.unref();

@@ -10,7 +10,7 @@ import { removePackageManagerWindowsGlobs } from './remove-package-manager-windo
 
 // test-style: fixture-read: verifies only generated container staging fixtures.
 
-test('container runtime staging preserves compiled assets and bootstrap while excluding unrelated sources and tests', async () => {
+test('container runtime staging preserves compiled assets and bootstrap while excluding tests and operator tools', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-container-runtime-'));
   try {
     for (const name of ['core', 'node', 'evaluations', 'studio-server-api', 'studio-server-bootstrap', 'app']) {
@@ -31,6 +31,12 @@ test('container runtime staging preserves compiled assets and bootstrap while ex
     const tests = path.join(root, 'packages/studio-server-api/dist/studio-server-api/src/tests');
     await fs.mkdir(tests, { recursive: true });
     await fs.writeFile(path.join(tests, 'private-fixture.js'), 'not a runtime input');
+    const maintenance = path.join(root, 'packages/studio-server-api/dist/studio-server-api/maintenance');
+    await fs.mkdir(maintenance, { recursive: true });
+    await fs.writeFile(path.join(maintenance, 'compact-recording-projects.js'), 'operator only');
+    const runtimeMaintenance = path.join(root, 'packages/studio-server-api/dist/studio-server-api/src/routes');
+    await fs.mkdir(runtimeMaintenance, { recursive: true });
+    await fs.writeFile(path.join(runtimeMaintenance, 'maintenance.js'), 'normal recording cleanup');
     // Hoisted and workspace-local versions can coexist. Staging only dist and
     // package.json must not silently change which version a workspace resolves.
     for (const [workspace, value] of [
@@ -101,6 +107,17 @@ test('container runtime staging preserves compiled assets and bootstrap while ex
       await assert.rejects(fs.stat(path.join(destination, 'studio-server-api/dist/studio-server-api/src/tests')), {
         code: 'ENOENT',
       });
+      await assert.rejects(fs.stat(path.join(destination, 'studio-server-api/dist/studio-server-api/maintenance')), {
+        code: 'ENOENT',
+      });
+      if (profile === 'api')
+        assert.equal(
+          await fs.readFile(
+            path.join(destination, 'studio-server-api/dist/studio-server-api/src/routes/maintenance.js'),
+            'utf8',
+          ),
+          'normal recording cleanup',
+        );
       for (const workspace of ['core', 'studio-server-bootstrap']) {
         for (const name of ['picomatch', 'micromatch']) {
           await assert.rejects(fs.stat(path.join(destination, workspace, 'node_modules', name)), { code: 'ENOENT' });

@@ -569,6 +569,21 @@ export class HttpCallNodeImpl extends NodeImpl<HttpCallNode> {
 
   async process(inputs: Inputs, context: InternalProcessContext): Promise<Outputs> {
     const requestAttempts = this.data.retryOnNon200 ? createHttpCallRequestAttempts() : undefined;
+    let ownedResponse: Response | undefined;
+    const discardResponse = () => {
+      const response = ownedResponse;
+      ownedResponse = undefined;
+      try {
+        const body = response?.body;
+        if (body && !body.locked) {
+          // Custom streams can reject or never finish cancellation. Releasing
+          // an unused reply must not delay a run or replace its original error.
+          void body.cancel().catch(() => undefined);
+        }
+      } catch {
+        // A custom Fetch body can also throw synchronously during cleanup.
+      }
+    };
 
     try {
       const method = getInputOrData(this.data, inputs, 'method', 'string');
@@ -611,13 +626,15 @@ export class HttpCallNodeImpl extends NodeImpl<HttpCallNode> {
 
       const performRequest = async () => {
         try {
-          return await fetch(url, {
+          const response = await fetch(url, {
             method,
             headers,
             body,
             signal: context.signal,
             mode: 'cors',
           });
+          ownedResponse = response;
+          return response;
         } catch (err) {
           if (isAbortError(err, context.signal)) {
             throw err;
@@ -658,6 +675,7 @@ export class HttpCallNodeImpl extends NodeImpl<HttpCallNode> {
         const cooldownMs = normalizeHttpRetryCooldownMs(this.data.retryOnNon200CooldownMs);
 
         for (let attempt = 0; response.status !== 200 && attempt < repeatTimes; attempt++) {
+          discardResponse();
           await waitForRetryCooldown(cooldownMs, context.signal);
           response = await performTrackedRequest();
         }
@@ -688,12 +706,14 @@ export class HttpCallNodeImpl extends NodeImpl<HttpCallNode> {
 
       if (this.data.isBinaryOutput) {
         const responseBlob = await response.blob();
+        ownedResponse = undefined;
         output['binary' as PortId] = {
           type: 'binary',
           value: new Uint8Array(await responseBlob.arrayBuffer()),
         };
       } else {
         const responseText = await response.text();
+        ownedResponse = undefined;
         output['res_body' as PortId] = {
           type: 'string',
           value: responseText,
@@ -739,6 +759,8 @@ export class HttpCallNodeImpl extends NodeImpl<HttpCallNode> {
       }
 
       throw error;
+    } finally {
+      discardResponse();
     }
   }
 }

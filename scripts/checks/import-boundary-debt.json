@@ -1,6 +1,9 @@
 {
   "description": "Explicit existing deep-relative dependency debt, not an architectural endorsement. Remove resolved entries; new edges require review. Prefer public package or host contracts over adding allowances.",
   "edges": [
+    "packages/studio-server-api/maintenance/recompress-recordings.ts\t../../../deploy/studio-server/scripts/lib/recording-reader-inventory.mjs",
+    "packages/studio-server-api/maintenance/recompress-recordings.ts\t../../../deploy/studio-server/scripts/lib/studio-server-release-manifest.mjs",
+    "packages/studio-server-api/maintenance/recording-storage-transition.ts\t../../../deploy/studio-server/scripts/lib/recording-transition-guard.mjs",
     "packages/app/src/components/editors/custom/AiAssistEditorBase.tsx\t../../../../graphs/code-node-generator.rivet-project?raw",
     "packages/app/src/components/editors/custom/AiAssistEditorBase.tsx\t../../../assets/icons/ai-sparks-solid.svg?react",
     "packages/app/src/components/editors/custom/AiAssistEditorBase.tsx\t../../../hooks/useDependsOnPlugins",

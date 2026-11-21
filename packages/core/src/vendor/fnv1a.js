@@ -17,8 +17,8 @@
  * OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
-// Copied straight from https://github.com/sindresorhus/fnv1a/blob/main/index.js
-// with types added
+// Adapted from https://github.com/sindresorhus/fnv1a/blob/main/index.js
+// with types and an equivalent 32-bit arithmetic fast path added.
 
 const FNV_PRIMES = {
   32: 16_777_619n,
@@ -41,6 +41,14 @@ const FNV_OFFSETS = {
 const cachedEncoder = new globalThis.TextEncoder();
 
 function fnv1aUint8Array(uint8Array, size) {
+  if (size === 32) {
+    let hash = 2_166_136_261;
+    for (let index = 0; index < uint8Array.length; index++) {
+      hash = Math.imul(hash ^ uint8Array[index], 16_777_619);
+    }
+    return BigInt(hash >>> 0);
+  }
+
   const fnvPrime = FNV_PRIMES[size];
   let hash = FNV_OFFSETS[size];
 
