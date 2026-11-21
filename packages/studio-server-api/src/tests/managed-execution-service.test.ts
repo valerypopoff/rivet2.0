@@ -19,12 +19,50 @@ import { ManagedWorkflowExecutionInvalidationController } from '../routes/workfl
 import { ManagedWorkflowExecutionService } from '../routes/workflows/managed/execution-service.js';
 import { getManagedWorkflowProjectVirtualPath } from '../routes/workflows/virtual-paths.js';
 import { createDeferred, FakeListener } from './helpers/managed-backend-harness.js';
+import { withAsyncDeadline } from './helpers/workflow-async-process.js';
+import { ColdEndpointReleases } from '../routes/workflows/managed/endpoint-release-runtime.js';
+import { InMemoryManagedWorkflowBlobStore } from '../routes/workflows/managed/blob-store.js';
 import type {
   ManagedExecutionPointerLookupResult,
   ManagedExecutionRevisionRecord,
   ManagedExecutionWorkflowRecord,
   ManagedWebAppAccessPolicy,
 } from '../routes/workflows/managed/execution-types.js';
+
+test('cold public releases share reads, bound distinct work and release slots after errors or expiry', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const loads = new ColdEndpointReleases<void>();
+  const held = Array.from({ length: 4 }, () => createDeferred<void>());
+  const active = held.map((slot, i) => loads.load(String(i), true, () => slot.promise));
+  const never = async () => assert.fail('This release must not perform I/O');
+  assert.equal(loads.load('0', false, never), active[0]);
+  const busy = { status: 503 };
+  await assert.rejects(loads.load('internal', false, never), busy);
+
+  const started: string[] = [];
+  const next = createDeferred<void>();
+  const first = loads.load('first', true, async () => {
+    started.push('first');
+    throw Error('storage failed');
+  });
+  const failed = assert.rejects(first, /storage failed/);
+  const second = loads.load('second', true, async () => {
+    started.push('second');
+    await next.promise;
+  });
+  assert.equal(loads.load('second', true, never), second);
+  const expire = Array.from({ length: 26 }, (_, i) => assert.rejects(loads.load('waiting-' + i, true, never), busy));
+  await assert.rejects(loads.load('overflow', true, never), busy);
+  held[0]!.resolve();
+  await failed;
+  assert.deepEqual(started, ['first', 'second']);
+  t.mock.timers.tick(1_000);
+  await Promise.all(expire);
+  next.resolve();
+  for (const slot of held) slot.resolve();
+  await Promise.all([...active, second]);
+  await loads.load('first', true, async () => {});
+});
 
 function createControllerFixture() {
   const listener = new FakeListener();
@@ -48,6 +86,7 @@ function createExecutionServiceFixture(options: {
   resolveExecutionPointerFromDatabase?: (
     runKind: ManagedWorkflowRunKind,
     lookupName: string,
+    batchPublicLookup?: boolean,
   ) => Promise<ManagedExecutionPointerLookupResult | null>;
   resolveWebAppAccessPolicy?: (lookupName: string) => Promise<ManagedWebAppAccessPolicy | null>;
   getWorkflowByRelativePath?: (relativePath: string) => Promise<ManagedExecutionWorkflowRecord | null>;
@@ -103,10 +142,10 @@ function createExecutionServiceFixture(options: {
       },
       getRevision: async (_client, revisionId) =>
         options.getRevision ? options.getRevision(revisionId) : revisionId === revision.revision_id ? revision : null,
-      resolveExecutionPointerFromDatabase: async (_client, runKind, lookupName) => {
+      resolveExecutionPointerFromDatabase: async (_client, runKind, lookupName, batchPublicLookup) => {
         resolveCount += 1;
         return options.resolveExecutionPointerFromDatabase
-          ? options.resolveExecutionPointerFromDatabase(runKind, lookupName)
+          ? options.resolveExecutionPointerFromDatabase(runKind, lookupName, batchPublicLookup)
           : {
               pointer: {
                 workflowId: workflow.workflow_id,
@@ -173,31 +212,7 @@ function createExecutionServiceFixture(options: {
   };
 }
 
-type ManagedWorkflowExecutionContextFixture = Pick<
-  {
-    pool: Pool;
-    executionCache: ManagedWorkflowExecutionCache;
-    executionInvalidationController: ManagedWorkflowExecutionInvalidationController;
-  },
-  'pool' | 'executionCache' | 'executionInvalidationController'
-> & {
-  queries: {
-    getWorkflowByRelativePath(client: Pool, relativePath: string): Promise<ManagedExecutionWorkflowRecord | null>;
-    getWorkflowById(client: Pool, workflowId: string): Promise<ManagedExecutionWorkflowRecord | null>;
-    getRevision(client: Pool, revisionId: string | null | undefined): Promise<ManagedExecutionRevisionRecord | null>;
-    resolveExecutionPointerFromDatabase(
-      client: Pool,
-      runKind: ManagedWorkflowRunKind,
-      lookupName: string,
-    ): Promise<ManagedExecutionPointerLookupResult | null>;
-    resolveWebAppAccessPolicyFromDatabase(client: Pool, lookupName: string): Promise<ManagedWebAppAccessPolicy | null>;
-  };
-  revisions: {
-    readRevisionContents(
-      revision: ManagedExecutionRevisionRecord,
-    ): Promise<{ contents: string; datasetsContents: string | null }>;
-  };
-};
+type ManagedWorkflowExecutionContextFixture = ConstructorParameters<typeof ManagedWorkflowExecutionService>[0]['context'];
 
 test('published admission lookup defers cold reads and warm clones without a second DB lookup on load', async (t) => {
   const fixture = createExecutionServiceFixture({});
@@ -269,8 +284,61 @@ test('publication/access invalidation between admission lookup and load is reche
     invalidated = true;
     fixture.controller.markWorkflowChanged('workflow-a');
     const loaded = await target!.load();
-    assert.equal(loaded?.endpointAccess ?? null, changed === 'private' ? 'internal' : null);
+    assert.equal(loaded, null);
+    assert.equal(fixture.readRevisionContentsCount, 0);
     assert.equal(fixture.resolveCount, 2);
+  }
+});
+
+test('a republished public target waits for a cold reader and independently rechecks access', async (t) => {
+  const held = createDeferred<void>();
+  const saturated = createDeferred<void>();
+  let republished = false;
+  const batching: boolean[] = [];
+  const fixture = createExecutionServiceFixture({
+    resolveExecutionPointerFromDatabase: async (_kind, name, batch) => {
+      if (name === 'updated') batching.push(batch === true);
+      return {
+        pointer: {
+          workflowId: name, relativePath: name, revisionId: 'revision-a',
+          releaseId: name === 'updated' && republished ? 'replacement' : name,
+        },
+        revision: fixture.revision,
+      };
+    },
+  });
+  const reads: string[] = [];
+  const unavailable = Error('Manifest read failed');
+  const pool = Object.assign(fixture.context.pool, {
+    query: async (_sql: string, [id]: string[]) => {
+      reads.push(id!);
+      if (reads.length === 4) saturated.resolve();
+      await held.promise;
+      throw unavailable;
+    },
+  });
+  const service = new ManagedWorkflowExecutionService({ context: {
+    ...fixture.context, pool, blobStore: new InMemoryManagedWorkflowBlobStore(),
+  } });
+  await fixture.controller.initialize();
+  t.after(() => fixture.controller.dispose());
+  const targets = await Promise.all(['a', 'b', 'c', 'd', 'updated'].map(name =>
+    service.resolvePublishedExecutionTarget(name, true)));
+  const active = targets.slice(0, 4).map(target => assert.rejects(target!.load(), unavailable));
+  try {
+    await withAsyncDeadline(saturated.promise, 'four frozen release readers');
+    republished = true;
+    fixture.controller.markWorkflowChanged('updated');
+    const result = Promise.allSettled([targets[4]!.load()]);
+    await new Promise<void>(resolve => setImmediate(resolve));
+    assert.equal(reads.length, 4);
+    held.resolve();
+    assert.deepEqual(await result, [{ status: 'rejected', reason: unavailable }]);
+    assert.deepEqual(batching, [true, false]);
+    assert.equal(reads[4], 'replacement');
+  } finally {
+    held.resolve();
+    await Promise.all(active);
   }
 });
 
@@ -443,68 +511,37 @@ test('shared admission targets retain source-load sharing across an access-chang
   }
 });
 
-test('unpublish before or during deferred load cannot become a stale-artifact failure', async (t) => {
-  for (const duringRead of [false, true]) {
+test('unpublishing during a revision or frozen manifest read supersedes its storage error', async (t) => {
+  for (const releaseId of [undefined, 'retired-release']) {
     let unpublished = false;
+    const retire = async () => {
+      unpublished = true;
+      fixture.controller.markWorkflowChanged('workflow-a');
+      throw Error('Retired artifact');
+    };
     const fixture = createExecutionServiceFixture({
       resolveExecutionPointerFromDatabase: async () => unpublished ? null : {
         pointer: {
-          workflowId: 'workflow-a', relativePath: 'Managed Cache.rivet-project', revisionId: 'revision-a',
+          workflowId: 'workflow-a', relativePath: 'Managed Cache.rivet-project', revisionId: 'revision-a', releaseId,
         },
         revision: fixture.revision,
       },
-      readRevisionContents: async () => {
-        unpublished = true;
-        fixture.controller.markWorkflowChanged('workflow-a');
-        throw new Error('Retired revision artifacts are unavailable');
-      },
+      readRevisionContents: retire,
     });
+    const manifestRead = t.mock.fn(retire);
+    const service = new ManagedWorkflowExecutionService({ context: {
+      ...fixture.context, pool: Object.assign(fixture.context.pool, { query: manifestRead }),
+      blobStore: new InMemoryManagedWorkflowBlobStore(),
+    } });
     await fixture.controller.initialize();
     t.after(() => fixture.controller.dispose());
-    const target = await fixture.service.resolvePublishedExecutionTarget('hello-world', true);
+    const target = await service.resolvePublishedExecutionTarget('hello-world', true);
     assert.ok(target);
-    if (!duringRead) {
-      unpublished = true;
-      fixture.controller.markWorkflowChanged('workflow-a');
-    }
     assert.equal(await target.load(), null);
     assert.equal(fixture.resolveCount, 2);
-    assert.equal(fixture.readRevisionContentsCount, duringRead ? 1 : 0);
+    assert.equal(fixture.readRevisionContentsCount, releaseId ? 0 : 1);
+    assert.equal(manifestRead.mock.callCount(), releaseId ? 1 : 0);
   }
-});
-
-test('a retired captured release is rechecked when its manifest read fails', async (t) => {
-  let unpublished = false;
-  const fixture = createExecutionServiceFixture({
-    resolveExecutionPointerFromDatabase: async () => unpublished ? null : {
-      pointer: {
-        workflowId: 'workflow-a', relativePath: 'Managed Cache.rivet-project',
-        revisionId: 'revision-a', releaseId: 'retired-release',
-      },
-      revision: fixture.revision,
-    },
-  });
-  let manifestReads = 0;
-  const pool = Object.assign(fixture.context.pool, {
-    query: async () => {
-      manifestReads++;
-      unpublished = true;
-      fixture.controller.markWorkflowChanged('workflow-a');
-      throw new Error('Captured release is no longer available');
-    },
-  });
-  const unused = async () => assert.fail('No blob operation should start for the retired release.');
-  const service = new ManagedWorkflowExecutionService({ context: {
-    ...fixture.context, pool, blobStore: { getText: unused, putText: unused, delete: unused },
-  } });
-  await fixture.controller.initialize();
-  t.after(() => fixture.controller.dispose());
-  const target = await service.resolvePublishedExecutionTarget('hello-world', true);
-  assert.ok(target);
-  assert.equal(await target.load(), null);
-  assert.equal(manifestReads, 1);
-  assert.equal(fixture.resolveCount, 2);
-  assert.equal(fixture.readRevisionContentsCount, 0);
 });
 
 test('shared target loading releases failures and rechecks later changes', async (t) => {
@@ -540,9 +577,7 @@ test('shared target loading releases failures and rechecks later changes', async
   assert.equal(fixture.readRevisionContentsCount, 2);
   changed = true;
   fixture.controller.markWorkflowChanged('workflow-a');
-  const refreshed = await target.load();
-  assert.equal(refreshed?.endpointAccess, 'internal');
-  assert.equal(refreshed?.project.metadata.title, 'Managed Cache');
+  assert.equal(await target.load(), null);
   assert.equal(fixture.resolveCount, 2);
   assert.equal(fixture.readRevisionContentsCount, 2);
 });

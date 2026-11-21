@@ -1,9 +1,10 @@
 import { workflowFailure } from '../workflow-failure.js';
 import { LRUCache } from 'lru-cache';
 import type { ManagedWorkflowBlobStore } from './blob-store.js';
+import type { ManagedWorkflowQueries } from './db.js';
 import { MAX_ENDPOINT_RELEASE_BYTES } from './endpoint-release-manifest.js';
 import { loadEndpointReleaseArtifacts, readEndpointRelease } from './endpoint-release-reader.js';
-import { createPreparedEndpointRelease } from './endpoint-release-runtime.js';
+import { ColdEndpointReleases, createPreparedEndpointRelease } from './endpoint-release-runtime.js';
 import { validateManagedSubgraphTarget } from './subgraph-access.js';
 import { performance } from 'node:perf_hooks';
 import {
@@ -29,7 +30,6 @@ import type {
 } from './execution-cache.js';
 import type {
   ManagedExecutionProjectResult,
-  ManagedExecutionPointerLookupResult,
   ManagedExecutionResolveSnapshot,
   ManagedExecutionRevisionRecord,
   ManagedExecutionWorkflowRecord,
@@ -45,11 +45,7 @@ type ManagedWorkflowExecutionContext = {
     getWorkflowByRelativePath(client: Pool, relativePath: string): Promise<ManagedExecutionWorkflowRecord | null>;
     getWorkflowById(client: Pool, workflowId: string): Promise<ManagedExecutionWorkflowRecord | null>;
     getRevision(client: Pool, revisionId: string | null | undefined): Promise<ManagedExecutionRevisionRecord | null>;
-    resolveExecutionPointerFromDatabase(
-      client: Pool,
-      runKind: ManagedWorkflowRunKind,
-      lookupName: string,
-    ): Promise<ManagedExecutionPointerLookupResult | null>;
+    resolveExecutionPointerFromDatabase: ManagedWorkflowQueries['resolveExecutionPointerFromDatabase'];
     resolveWebAppAccessPolicyFromDatabase(client: Pool, lookupName: string): Promise<ManagedWebAppAccessPolicy | null>;
   };
   revisions: {
@@ -72,6 +68,7 @@ type ManagedExecutionSource = Omit<ManagedExecutionProjectResult, 'project' | 'a
   materialization: ManagedRevisionMaterializationCacheEntry;
 };
 type EndpointLoadOptions = {
+  publicPhase?: 'lookup' | 'admitted';
   forceBypassPointerCache?: boolean;
   allowPointerFallback?: boolean;
   remainingInvalidationRetries?: number;
@@ -87,7 +84,7 @@ export class ManagedWorkflowExecutionService {
   readonly #readyReleases = new LRUCache<string, ReadyEndpointRelease>({
     max: 128, maxSize: MAX_ENDPOINT_RELEASE_BYTES, sizeCalculation: (entry) => entry.bytes,
   });
-  readonly #releaseLoads = new Map<string, Promise<ReadyEndpointRelease>>();
+  readonly #releaseLoads = new ColdEndpointReleases<ReadyEndpointRelease>();
   readonly #executionCache: ManagedWorkflowExecutionCache;
   readonly #invalidationController: ManagedWorkflowExecutionInvalidationController;
   readonly #getWorkflowByRelativePath: (
@@ -102,11 +99,7 @@ export class ManagedWorkflowExecutionService {
   readonly #readRevisionContents: (
     revision: ManagedExecutionRevisionRecord,
   ) => Promise<{ contents: string; datasetsContents: string | null }>;
-  readonly #resolveExecutionPointerFromDatabase: (
-    client: Pool,
-    runKind: ManagedWorkflowRunKind,
-    lookupName: string,
-  ) => Promise<ManagedExecutionPointerLookupResult | null>;
+  readonly #resolveExecutionPointerFromDatabase: ManagedWorkflowExecutionContext['queries']['resolveExecutionPointerFromDatabase'];
   readonly #resolveWebAppAccessPolicyFromDatabase: (
     client: Pool,
     lookupName: string,
@@ -141,6 +134,7 @@ export class ManagedWorkflowExecutionService {
   ): Promise<WorkflowPublishedExecutionTarget | null> {
     const target = await this.#resolveExecutionTarget('published', normalizeWorkflowEndpointLookupName(endpointName), {
       forceBypassPointerCache: requireFreshPointer,
+      publicPhase: requireFreshPointer ? 'lookup' : undefined,
     });
     return target && {
       endpointAccess: target.endpointAccess,
@@ -312,7 +306,8 @@ export class ManagedWorkflowExecutionService {
     const target = await this.#resolveExecutionTarget(runKind, lookupName, options);
     // Full-source callers and invalidation retries already own their load.
     // Joining that entry here would make it wait on its own promise.
-    return target ? target.load(false) : null;
+    if (!target || (options.publicPhase === 'admitted' && target.endpointAccess === 'internal')) return null;
+    return target.load(false);
   }
 
   #resolveExecutionTarget(
@@ -358,7 +353,7 @@ export class ManagedWorkflowExecutionService {
         : 'bypass';
 
     if (!pointer) {
-      const resolved = await this.#resolveExecutionPointerFromDatabase(this.#pool, runKind, lookupName);
+      const resolved = await this.#resolveExecutionPointerFromDatabase(this.#pool, runKind, lookupName, options.publicPhase === 'lookup');
       if (!resolved) {
         if (
           this.#invalidationController.shouldRetryAfterResolve(resolveSnapshot, null) &&
@@ -366,6 +361,7 @@ export class ManagedWorkflowExecutionService {
         ) {
           return this.#resolveExecutionTarget(runKind, lookupName, {
             forceBypassPointerCache: true,
+            publicPhase: options.publicPhase,
             remainingInvalidationRetries: remainingInvalidationRetries - 1,
           });
         }
@@ -381,6 +377,7 @@ export class ManagedWorkflowExecutionService {
         if (remainingInvalidationRetries > 0) {
           return this.#resolveExecutionTarget(runKind, lookupName, {
             forceBypassPointerCache: true,
+            publicPhase: options.publicPhase,
             remainingInvalidationRetries: remainingInvalidationRetries - 1,
           });
         }
@@ -402,6 +399,7 @@ export class ManagedWorkflowExecutionService {
       remainingInvalidationRetries,
       (nextRetries) => this.#loadExecutionProjectByEndpointOnce(runKind, lookupName, {
         forceBypassPointerCache: true,
+        publicPhase: options.publicPhase ? 'admitted' : undefined,
         remainingInvalidationRetries: nextRetries,
       }),
       'Workflow endpoint changed while loading. Retry the request.',
@@ -418,7 +416,7 @@ export class ManagedWorkflowExecutionService {
         let materialization: ManagedRevisionMaterializationCacheEntry;
         try {
           release = pointer.releaseId
-            ? await this.#loadReadyRelease(pointer.releaseId, pointer.workflowId, pointer.revisionId)
+            ? await this.#loadReadyRelease(pointer.releaseId, pointer.workflowId, pointer.revisionId, options.publicPhase !== undefined)
             : undefined;
           materialization = release?.root ?? (await this.#getOrLoadRevisionMaterialization(pointer.revisionId, revision));
         } catch (error) {
@@ -484,26 +482,18 @@ export class ManagedWorkflowExecutionService {
     };
   }
 
-  async #loadReadyRelease(releaseId: string, workflowId: string, revisionId: string) {
+  async #loadReadyRelease(releaseId: string, workflowId: string, revisionId: string, canWait: boolean) {
     const cached = this.#readyReleases.get(releaseId);
     if (cached && cached.root.revisionId === revisionId && cached.projectId === workflowId) return cached;
     const key = JSON.stringify([releaseId, workflowId, revisionId]);
-    const pending = this.#releaseLoads.get(key);
-    if (pending) return pending;
-    // Bound distinct cold captures independently of execution admission, while
-    // allowing duplicate requests to share one artifact load.
-    if (this.#releaseLoads.size >= 4)
-      throw createHttpError(503, 'Captured endpoint revisions are busy loading. Try again shortly.');
     const blobStore = this.#blobStore;
     if (!blobStore) throw createHttpError(503, 'This server cannot read the captured endpoint revision.');
-    const load = (async () => {
+    return this.#releaseLoads.load(key, canWait, async () => {
       const stored = await readEndpointRelease(this.#pool, releaseId, workflowId, revisionId);
       const release = createPreparedEndpointRelease(stored, await loadEndpointReleaseArtifacts({ blobStore }, stored));
       this.#readyReleases.set(releaseId, release);
       return release;
-    })().finally(() => this.#releaseLoads.delete(key));
-    this.#releaseLoads.set(key, load);
-    return load;
+    });
   }
 
   #retryAfterInvalidation<T>(

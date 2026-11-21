@@ -40,6 +40,7 @@ import {
 import { initializeWebAppActionWebSockets, type WebAppActionWebSocketRuntime } from './web-app-action-websocket.js';
 import { getHostedEvaluationsCoordinatorConfig } from './hosted-evaluations-config.js';
 import { disposeWorkflowRecordingInputExtractor } from './routes/workflows/recording-input-extractor.js';
+import { getPublicEndpointLookups } from './public-endpoint-lookups.js';
 import { getPublishedExecutionAdmission } from './published-execution-admission.js';
 import { bindPublishedExecutionSettings } from './published-execution-settings.js';
 import { startResourceMonitoring, stopResourceMonitoring } from './resource-monitoring/runtime.js';
@@ -147,6 +148,7 @@ const retirement =
           if (shuttingDown || resources.phase !== 'ready' || isLegacyRestorePaused())
             throw new Error('This process cannot retire safely.');
           requestWork.beginDrain();
+          getPublicEndpointLookups().beginDrain();
           beginPassiveStreamRetirement();
           beginWorkflowStorageRetirement();
           runtimeHealth.beginDrain();
@@ -416,12 +418,14 @@ async function configureRestoreService() {
       async drain() {
         setLegacyRestorePaused(true);
         beginActiveHttpExecutionDrain();
+        getPublicEndpointLookups().beginDrain();
         getPublishedExecutionAdmission().beginDrain();
         webAppActionWebSockets?.drain();
         await stopScheduledRuns(120000);
         const deadline = Date.now() + 120000;
         while (
           getLegacyRestoreActiveRequests() ||
+          getPublicEndpointLookups().snapshot.active ||
           getActiveHttpExecutionCount() ||
           webAppActionWebSockets?.getActiveRunCount()
         ) {
@@ -473,6 +477,7 @@ async function shutdown(signal: string): Promise<void> {
 
   shuttingDown = true;
   requestWork.beginDrain();
+  getPublicEndpointLookups().beginDrain();
   // Retirement has already settled editor owners; idle relays must not hold HTTP close open.
   if (retirement?.snapshot().state === 'drained') disposeOwnerRouting?.();
   runtimeHealth.beginDrain();

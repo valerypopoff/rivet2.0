@@ -196,9 +196,30 @@ an unsettled listener.
 Published HTTP endpoints resolve current access metadata before acquiring their
 shared execution permit, then load project/frozen-release artifacts and construct
 per-run state only for admitted requests. Preparation is tracked during shutdown
-and retains its permit through the full background tail. Public managed requests
-still perform one fresh metadata lookup before admission; rejected requests skip
-artifact loading and cloning. See the [admission contract and local checks](./published-endpoint-admission-plan.md).
+and retains its permit through the full background tail. Each public managed
+request verifies access against a PostgreSQL snapshot taken after its lookup
+was admitted. The first lookup reads immediately. Overlapping lookups on the
+same repository can read multiple endpoint names in one statement on the next
+event-loop turn. Enrollment closes before the query starts. Each caller still
+checks its own endpoint, acquires its own execution permit and materializes its
+own graph. A repository loads at most four distinct cold frozen releases at
+once. Up to 28 additional release keys from admitted public runs can wait up to
+one second for a slot. Requests for the same immutable release share the load.
+If the endpoint changes during loading, the admitted public run independently
+rechecks the pointer. A public replacement keeps its eligibility for a cold
+reader. A private or unpublished replacement returns 404 before its artifacts
+are read. Legacy restore waits for active public metadata reads to settle,
+including reads whose HTTP client has disconnected. The route checks for a
+closed public response immediately before taking a run slot, across all storage
+modes. A disconnect after admission leaves the accepted run under its normal
+execution owner.
+
+Managed lookups compare notification sequence numbers to detect access or
+publication changes. Wall time controls only how long idle tracking entries are
+retained. If an older lookup outlives a discarded change and its target can no
+longer be verified, the existing bounded retry reads the current pointer.
+Warm releases use the existing cache directly. See the
+[admission contract and local checks](./published-endpoint-admission-plan.md).
 
 ## Managed legacy backup restore
 

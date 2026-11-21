@@ -277,7 +277,8 @@ async function handlePublishedWorkflowRequest(
     }
     // Public access must reflect the committed policy even before another replica
     // receives its asynchronous cache invalidation notification.
-    const target = await resolvePublishedExecutionTarget(endpointName, !options.internalRoute);
+    const target = await resolvePublishedExecutionTarget(endpointName, !options.internalRoute, res);
+    if (!options.internalRoute && res.destroyed) return;
     if (!target || (!options.internalRoute && target.endpointAccess === 'internal')) {
       sendJsonWithDuration(res, 404, { error: 'Published workflow not found' }, requestStartedAt);
       return;
@@ -308,7 +309,7 @@ async function handlePublishedWorkflowRequest(
       permit.release();
     }
   } catch (error) {
-    sendWorkflowErrorWithDuration(res, error, requestStartedAt);
+    if (!res.destroyed) sendWorkflowErrorWithDuration(res, error, requestStartedAt);
   }
 }
 

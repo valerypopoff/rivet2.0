@@ -79,7 +79,7 @@ export class ManagedWorkflowExecutionInvalidationController {
   #disposed = false;
   #executionPointerAnyGeneration = 0;
   #executionPointerGlobalGeneration = 0;
-  #executionPointerGlobalUpdatedAt = 0;
+  #lastPrunedGeneration = 0;
   readonly #executionPointerWorkflowGenerations = new Map<string, ManagedExecutionWorkflowGenerationRecord>();
   #executionPointerWorkflowGenerationInvalidationCount = 0;
   readonly #activeWorkflowLoads = new Map<string, number>();
@@ -250,9 +250,8 @@ export class ManagedWorkflowExecutionInvalidationController {
   markWorkflowChanged(workflowId: string): void {
     const now = this.#now();
     this.#executionPointerAnyGeneration += 1;
-    const current = this.#executionPointerWorkflowGenerations.get(workflowId);
     this.#executionPointerWorkflowGenerations.set(workflowId, {
-      generation: (current?.generation ?? 0) + 1,
+      generation: this.#executionPointerAnyGeneration,
       updatedAt: now,
     });
     this.#maybePruneWorkflowGenerations(now);
@@ -261,10 +260,8 @@ export class ManagedWorkflowExecutionInvalidationController {
   }
 
   markAllChanged(): void {
-    const now = this.#now();
     this.#executionPointerAnyGeneration += 1;
     this.#executionPointerGlobalGeneration += 1;
-    this.#executionPointerGlobalUpdatedAt = now;
     this.#executionPointerWorkflowGenerations.clear();
     this.#executionPointerWorkflowGenerationInvalidationCount = 0;
     this.#clearEndpointPointers();
@@ -287,10 +284,8 @@ export class ManagedWorkflowExecutionInvalidationController {
 
   captureResolveSnapshot(): ManagedExecutionResolveSnapshot {
     return {
-      startedAtWallClock: this.#now(),
       anyGeneration: this.#executionPointerAnyGeneration,
       globalGeneration: this.#executionPointerGlobalGeneration,
-      globalUpdatedAt: this.#executionPointerGlobalUpdatedAt,
     };
   }
 
@@ -310,14 +305,8 @@ export class ManagedWorkflowExecutionInvalidationController {
       return true;
     }
 
-    const workflowGenerationRecord = this.#executionPointerWorkflowGenerations.get(workflowId);
-    const sameWorkflowChangedDuringResolve =
-      workflowGenerationRecord != null && workflowGenerationRecord.updatedAt >= snapshot.startedAtWallClock;
-    const clearAllChangedDuringResolve =
-      this.#executionPointerGlobalGeneration !== snapshot.globalGeneration &&
-      this.#executionPointerGlobalUpdatedAt >= snapshot.startedAtWallClock;
-
-    return sameWorkflowChangedDuringResolve || clearAllChangedDuringResolve;
+    const lastChange = this.#executionPointerWorkflowGenerations.get(workflowId)?.generation ?? this.#lastPrunedGeneration;
+    return this.#executionPointerGlobalGeneration !== snapshot.globalGeneration || lastChange > snapshot.anyGeneration;
   }
 
   shouldRetryAfterMaterialize(
@@ -325,9 +314,11 @@ export class ManagedWorkflowExecutionInvalidationController {
     workflowId: string,
     workflowSnapshot: ManagedExecutionWorkflowSnapshot,
   ): boolean {
+    const current = this.#getWorkflowGeneration(workflowId);
     return (
       this.#executionPointerGlobalGeneration !== globalSnapshot.globalGeneration ||
-      this.#getWorkflowGeneration(workflowId) !== workflowSnapshot.generation
+      current !== workflowSnapshot.generation ||
+      (current === 0 && this.#lastPrunedGeneration > globalSnapshot.anyGeneration)
     );
   }
 
@@ -462,6 +453,8 @@ export class ManagedWorkflowExecutionInvalidationController {
         continue;
       }
 
+      // A lookup older than this discarded change can no longer prove its target stayed current.
+      this.#lastPrunedGeneration = Math.max(this.#lastPrunedGeneration, record.generation);
       this.#executionPointerWorkflowGenerations.delete(workflowId);
     }
   }

@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { Pool } from 'pg';
+import { withAsyncDeadline } from './helpers/workflow-async-process.js';
+import { createDeferred } from './helpers/managed-backend-harness.js';
 
 import { createManagedWorkflowQueries } from '../routes/workflows/managed/db.js';
 import { MANAGED_WORKFLOW_SCHEMA_SQL } from '../routes/workflows/managed/schema.js';
@@ -9,6 +11,8 @@ import type { ManagedWorkflowBlobStore } from '../routes/workflows/managed/blob-
 
 function createExecutionLookupRow() {
   return {
+    lookup_name: 'public-live',
+    endpoint_workflow_id: 'workflow-a',
     workflow_id: 'workflow-a',
     name: 'Main',
     file_name: 'Main.rivet-project',
@@ -23,6 +27,7 @@ function createExecutionLookupRow() {
     last_published_at: new Date().toISOString(),
     revision_id: 'resolved-revision',
     revision_workflow_id: 'workflow-a',
+    created_at: '2026-01-01T00:00:00.000Z',
     project_blob_key: 'project-blob',
     dataset_blob_key: null,
     stats_graph_count: 1,
@@ -155,6 +160,8 @@ test('managed published execution lookup uses published endpoint rows and the pu
   const result = await managedQueries.resolveExecutionPointerFromDatabase(pool, 'published', 'public-live');
 
   assert.ok(result);
+  assert.equal(result.pointer.workflowId, 'workflow-a');
+  assert.equal(result.revision.created_at, '2026-01-01T00:00:00.000Z');
   assert.equal(result.pointer.relativePath, 'Main.rivet-project');
   assert.equal(result.pointer.revisionId, 'resolved-revision');
   assert.equal(queries.length, 1);
@@ -163,6 +170,60 @@ test('managed published execution lookup uses published endpoint rows and the pu
   const normalizedSql = queries[0]!.text.replace(/\s+/g, ' ').trim();
   assert.match(normalizedSql, /JOIN workflow_revisions r ON r\.revision_id = w\.published_revision_id/);
   assert.match(normalizedSql, /WHERE e\.lookup_name = \$1 AND e\.is_published = TRUE$/);
+});
+
+test('fresh published lookups share only a future query and isolate missing and broken rows', async () => {
+  const batchStarted = createDeferred<void>();
+  const releaseBatch = createDeferred<void>();
+  const queries: Array<string | string[]> = [];
+  let access = 'public';
+  const failure = Error('Public lookup query failed');
+  const pool = {
+    async query(_sql: string, [names]: [string | string[]]) {
+      queries.push(names);
+      if (Array.isArray(names) && names.includes('unavailable')) throw failure;
+      const rows = (typeof names === 'string' ? [names] : names)
+        .filter((name) => name !== 'missing')
+        .map((name) => ({
+          ...createExecutionLookupRow(),
+          lookup_name: name,
+          endpoint_access: access,
+          history_version_id: name === 'broken' ? null : 'published-version',
+        }));
+      if (Array.isArray(names)) {
+        batchStarted.resolve();
+        await releaseBatch.promise;
+      }
+      return { rows };
+    },
+  } as unknown as Pool;
+  const db = createManagedWorkflowQueries(pool);
+  const lookup = (name: string) => db.resolveExecutionPointerFromDatabase(pool, 'published', name, true);
+  const initial = lookup('a');
+  const previous = Promise.all([
+    lookup('a'), lookup('a'), lookup('missing'), assert.rejects(lookup('broken'), { status: 503 }),
+  ]);
+  try {
+    await withAsyncDeadline(batchStarted.promise, 'batched pointer query');
+    access = 'internal';
+    assert.equal((await withAsyncDeadline(lookup('a'), 'independent fresh lookup'))?.pointer.endpointAccess, 'internal');
+    assert.deepEqual(queries, ['a', ['a', 'missing', 'broken'], 'a']);
+  } finally {
+    releaseBatch.resolve();
+  }
+  assert.equal((await initial)?.pointer.endpointAccess, 'public');
+  const [first, second, missing] = await previous;
+  assert.equal(first?.pointer.endpointAccess, 'public');
+  assert.equal(second?.pointer.endpointAccess, 'public');
+  assert.equal(missing, null);
+
+  const offset = queries.length;
+  const direct = lookup('a');
+  const failed = await Promise.allSettled([lookup('unavailable'), lookup('b')]);
+  assert.deepEqual(failed, Array(2).fill({ status: 'rejected', reason: failure }));
+  assert.ok(await direct);
+  assert.ok(await lookup('b'));
+  assert.deepEqual(queries.slice(offset), ['a', ['unavailable', 'b'], 'b']);
 });
 
 test('managed latest execution lookup uses draft endpoint rows but still requires published lineage', async () => {

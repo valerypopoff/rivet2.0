@@ -66,7 +66,9 @@ test('workflow-level invalidation increments only the targeted workflow generati
   });
 
   const before = controller.captureResolveSnapshot();
+  now--;
   controller.markWorkflowChanged('workflow-a');
+  assert.ok(controller.shouldRetryAfterResolve(before, 'workflow-a'));
   const after = controller.captureResolveSnapshot();
 
   assert.equal(after.anyGeneration, before.anyGeneration + 1);
@@ -74,14 +76,14 @@ test('workflow-level invalidation increments only the targeted workflow generati
   assert.equal(controller.captureWorkflowSnapshot('workflow-b').generation, 0);
   assert.deepEqual(invalidated, ['workflow-a']);
   assert.equal(cleared.count, 0);
+  controller.markWorkflowChanged('workflow-b');
+  assert.equal(controller.shouldRetryAfterResolve(after, 'workflow-a'), false);
 });
 
 test('catalog notifications refresh remote trees without evicting published execution caches or echoing local writes', async () => {
   const listener = new FakeListener();
   let external = 0;
   const { controller, invalidated, cleared, policyInvalidated, allPoliciesInvalidated } = createController({
-    // Resolve snapshots include their capture time; compare cache state under a controlled clock.
-    now: () => 1_000,
     createListener: () => listener,
     onExternalInvalidation: () => {
       external++;
@@ -123,7 +125,7 @@ test('cross-owner and recovered notifications refresh HA observers without a sec
   assert.equal(external, 1);
   listener.emitNotification({ eventType: 'workflow-changed', workflowId: 'remote', sourceInstanceId: 'other-owner' });
   assert.equal(external, 2);
-  assert.equal(controller.captureWorkflowSnapshot('remote').generation, 1);
+  assert.equal(controller.captureWorkflowSnapshot('remote').generation, controller.captureResolveSnapshot().anyGeneration);
   await controller.dispose();
 });
 
@@ -192,59 +194,47 @@ test('clear-all invalidation forces retry through global generation change', () 
     now: () => now,
   });
 
-  controller.markWorkflowChanged('workflow-a');
   const resolveSnapshot = controller.captureResolveSnapshot();
   const workflowSnapshot = controller.captureWorkflowSnapshot('workflow-a');
 
-  now += 1;
+  now--;
   controller.markAllChanged();
 
   assert.equal(controller.shouldRetryAfterResolve(resolveSnapshot, 'workflow-a'), true);
   assert.equal(controller.shouldRetryAfterMaterialize(resolveSnapshot, 'workflow-a', workflowSnapshot), true);
 });
 
-test('active workflow loads protect generation pruning until the load completes', () => {
+test('pruning preserves active and recent changes and rechecks only snapshots older than a discarded change', () => {
   let now = 1_000;
-  const { controller } = createController({
-    now: () => now,
-  });
+  const { controller } = createController({ now: () => now });
+  const sweep = () => {
+    for (let i = 0; i < MANAGED_WORKFLOW_EXECUTION_WORKFLOW_GENERATION_PRUNE_INTERVAL; i++) {
+      controller.markWorkflowChanged('unrelated');
+    }
+  };
+  const before = controller.captureResolveSnapshot();
+  const old = controller.captureWorkflowSnapshot('old');
+  controller.markWorkflowChanged('old');
+  controller.markWorkflowChanged('active');
+  controller.beginWorkflowLoad('active');
+  const active = controller.captureWorkflowSnapshot('active');
 
-  controller.markWorkflowChanged('workflow-a');
-  controller.beginWorkflowLoad('workflow-a');
   now += MANAGED_WORKFLOW_EXECUTION_WORKFLOW_GENERATION_RETENTION_MS + 1;
-
-  for (let index = 0; index < MANAGED_WORKFLOW_EXECUTION_WORKFLOW_GENERATION_PRUNE_INTERVAL; index += 1) {
-    controller.markWorkflowChanged(`workflow-${index}`);
+  controller.markWorkflowChanged('recent');
+  const recent = controller.captureWorkflowSnapshot('recent');
+  const after = controller.captureResolveSnapshot();
+  sweep();
+  assert.deepEqual(controller.captureWorkflowSnapshot('active'), active);
+  assert.deepEqual(controller.captureWorkflowSnapshot('recent'), recent);
+  assert.deepEqual(controller.captureWorkflowSnapshot('old'), old);
+  for (const [snapshot, retry] of [[before, true], [after, false]] as const) {
+    assert.equal(controller.shouldRetryAfterResolve(snapshot, 'old'), retry);
+    assert.equal(controller.shouldRetryAfterMaterialize(snapshot, 'old', old), retry);
   }
 
-  assert.equal(controller.captureWorkflowSnapshot('workflow-a').generation, 1);
-
-  controller.endWorkflowLoad('workflow-a');
-  now += MANAGED_WORKFLOW_EXECUTION_WORKFLOW_GENERATION_RETENTION_MS + 1;
-  for (let index = 0; index < MANAGED_WORKFLOW_EXECUTION_WORKFLOW_GENERATION_PRUNE_INTERVAL; index += 1) {
-    controller.markWorkflowChanged(`workflow-next-${index}`);
-  }
-
-  assert.equal(controller.captureWorkflowSnapshot('workflow-a').generation, 0);
-});
-
-test('generation pruning removes sufficiently old inactive workflows only', () => {
-  let now = 1_000;
-  const { controller } = createController({
-    now: () => now,
-  });
-
-  controller.markWorkflowChanged('old-workflow');
-  controller.markWorkflowChanged('fresh-workflow');
-  now += MANAGED_WORKFLOW_EXECUTION_WORKFLOW_GENERATION_RETENTION_MS + 1;
-  controller.markWorkflowChanged('fresh-workflow');
-
-  for (let index = 0; index < MANAGED_WORKFLOW_EXECUTION_WORKFLOW_GENERATION_PRUNE_INTERVAL - 3; index += 1) {
-    controller.markWorkflowChanged(`workflow-${index}`);
-  }
-
-  assert.equal(controller.captureWorkflowSnapshot('old-workflow').generation, 0);
-  assert.equal(controller.captureWorkflowSnapshot('fresh-workflow').generation, 2);
+  controller.endWorkflowLoad('active');
+  sweep();
+  assert.equal(controller.captureWorkflowSnapshot('active').generation, 0);
 });
 
 test('listener degradation disables pointer-cache health until a fresh listener session is established', async () => {

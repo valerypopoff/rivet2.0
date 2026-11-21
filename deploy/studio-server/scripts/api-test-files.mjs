@@ -123,6 +123,7 @@ export const defaultApiTestFiles = [
   'src/tests/project-reference-summary.test.ts',
   'src/tests/project-references.test.ts',
   'src/tests/proxy-image-contract.test.ts',
+  'src/tests/public-endpoint-lookups.test.ts',
   'src/tests/published-capacity-load.test.ts',
   'src/tests/published-execution-admission.test.ts',
   'src/tests/recording-durability.test.ts',

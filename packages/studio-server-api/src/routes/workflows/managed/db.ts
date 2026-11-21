@@ -1,12 +1,12 @@
 import { Pool, type PoolClient, type QueryResultRow } from 'pg';
-import { setTimeout as delay } from 'node:timers/promises';
+import { setImmediate as nextTurn, setTimeout as delay } from 'node:timers/promises';
 
 import { MANAGED_POSTGRES_CONNECTION_TIMEOUT_MS } from '../../../managed-health.js';
 import { withManagedPostgresPoolMax, withAuthoritativePostgresTls } from '../../../managed-postgres-pool.js';
 import { createHttpError } from '../../../utils/httpError.js';
 import type { ManagedWorkflowStorageConfig } from '../storage-config.js';
 import { WORKFLOW_COLUMNS, splitCurrentDraftRevisionRow } from './mappers.js';
-import type { ManagedExecutionPointerLookupResult, ManagedWebAppAccessPolicy } from './execution-types.js';
+import type { ManagedExecutionPointerLookupResult, ManagedExecutionRevisionRecord, ManagedWebAppAccessPolicy } from './execution-types.js';
 import type { CurrentDraftRevisionRow, FolderRow, RevisionRow, WorkflowRow } from './types.js';
 
 export type ManagedWorkflowDbClient = Pool | PoolClient;
@@ -139,11 +139,69 @@ export type ManagedWorkflowQueries = {
     client: Pool,
     runKind: 'published' | 'latest' | 'web-app' | 'latest-web-app',
     lookupName: string,
+    batchPublicLookup?: boolean,
   ): Promise<ManagedExecutionPointerLookupResult | null>;
   resolveWebAppAccessPolicyFromDatabase(client: Pool, lookupName: string): Promise<ManagedWebAppAccessPolicy | null>;
 };
 
 export function createManagedWorkflowQueries(pool: Pool): ManagedWorkflowQueries {
+  type PointerRow = ManagedExecutionRevisionRecord & {
+    lookup_name: string;
+    endpoint_workflow_id: string;
+    relative_path: string;
+    endpoint_access: 'public' | 'internal';
+    published_version_id?: string | null;
+    history_version_id?: string | null;
+    release_id?: string | null;
+  };
+
+  function readPointers(client: Pool, published: boolean, names: string | string[]) {
+    return queryRows<PointerRow>(
+      client,
+      `
+        SELECT e.lookup_name, w.workflow_id AS endpoint_workflow_id, w.relative_path, w.endpoint_access,
+               r.workflow_id, r.revision_id, r.project_blob_key, r.dataset_blob_key, r.created_at
+               ${published ? ', w.published_version_id, v.version_id AS history_version_id, v.release_id' : ''}
+        FROM workflow_endpoints e
+        JOIN workflows w ON w.workflow_id = e.workflow_id
+        JOIN workflow_revisions r ON r.revision_id = ${published ? 'w.published_revision_id' : 'w.current_draft_revision_id'}
+        ${published ? 'LEFT JOIN workflow_published_versions v ON v.version_id = w.published_version_id AND v.workflow_id = w.workflow_id' : ''}
+        WHERE e.lookup_name = ${typeof names === 'string' ? '$1' : 'ANY($1::text[])'}
+          AND ${published ? 'e.is_published = TRUE' : 'e.is_draft = TRUE AND w.published_revision_id IS NOT NULL'}
+      `,
+      [names],
+    );
+  }
+
+  let pending: { names: Set<string>; rows: Promise<Map<string, PointerRow>> } | undefined;
+  let activeReads = 0;
+
+  async function readPublicRows(names: string | string[]) {
+    activeReads++;
+    try {
+      return await readPointers(pool, true, names);
+    } finally {
+      activeReads--;
+    }
+  }
+
+  async function readFreshPublicPointer(name: string) {
+    if (!activeReads && !pending) return (await readPublicRows(name))[0];
+    if (!pending) {
+      const names = new Set<string>();
+      const rows = nextTurn().then(async () => {
+        // Close enrollment before issuing SQL. Later callers must see a new snapshot.
+        pending = undefined;
+        const keys = [...names];
+        const result = await readPublicRows(keys.length === 1 ? keys[0]! : keys);
+        return new Map(result.map((row) => [row.lookup_name, row]));
+      });
+      pending = { names, rows };
+    }
+    pending.names.add(name);
+    return (await pending.rows).get(name);
+  }
+
   return {
     async listFolderRows(client: ManagedWorkflowDbClient = pool): Promise<FolderRow[]> {
       return queryRows<FolderRow>(
@@ -296,6 +354,7 @@ export function createManagedWorkflowQueries(pool: Pool): ManagedWorkflowQueries
       client: Pool,
       runKind: 'published' | 'latest' | 'web-app' | 'latest-web-app',
       lookupName: string,
+      batchPublicLookup = false,
     ): Promise<ManagedExecutionPointerLookupResult | null> {
       if (runKind === 'web-app' || runKind === 'latest-web-app') {
         const row = await queryOne<
@@ -359,87 +418,28 @@ export function createManagedWorkflowQueries(pool: Pool): ManagedWorkflowQueries
         };
       }
 
-      const row = await queryOne<CurrentDraftRevisionRow & { release_id?: string | null; history_version_id?: string | null }>(
-        client,
-        runKind === 'published'
-          ? `
-            SELECT
-              w.workflow_id,
-              w.name,
-              w.file_name,
-              w.relative_path,
-              w.folder_relative_path,
-              w.updated_at,
-              w.current_draft_revision_id,
-              w.published_revision_id,
-              w.published_version_id,
-              w.endpoint_name,
-              w.published_endpoint_name,
-              w.endpoint_access,
-              w.last_published_at,
-              r.revision_id,
-              r.workflow_id AS revision_workflow_id,
-              r.project_blob_key,
-              r.dataset_blob_key,
-              r.stats_graph_count,
-              r.stats_total_node_count,
-              r.stats_web_app_count,
-              r.created_at AS revision_created_at,
-              v.release_id, v.version_id AS history_version_id
-            FROM workflow_endpoints e
-            JOIN workflows w ON w.workflow_id = e.workflow_id
-            JOIN workflow_revisions r ON r.revision_id = w.published_revision_id
-            LEFT JOIN workflow_published_versions v ON v.version_id = w.published_version_id AND v.workflow_id = w.workflow_id
-            WHERE e.lookup_name = $1 AND e.is_published = TRUE
-          `
-          : `
-            SELECT
-              w.workflow_id,
-              w.name,
-              w.file_name,
-              w.relative_path,
-              w.folder_relative_path,
-              w.updated_at,
-              w.current_draft_revision_id,
-              w.published_revision_id,
-              w.published_version_id,
-              w.endpoint_name,
-              w.published_endpoint_name,
-              w.endpoint_access,
-              w.last_published_at,
-              r.revision_id,
-              r.workflow_id AS revision_workflow_id,
-              r.project_blob_key,
-              r.dataset_blob_key,
-              r.stats_graph_count,
-              r.stats_total_node_count,
-              r.stats_web_app_count,
-              r.created_at AS revision_created_at
-            FROM workflow_endpoints e
-            JOIN workflows w ON w.workflow_id = e.workflow_id
-            JOIN workflow_revisions r ON r.revision_id = w.current_draft_revision_id
-            WHERE e.lookup_name = $1
-              AND e.is_draft = TRUE
-              AND w.published_revision_id IS NOT NULL
-          `,
-        [lookupName],
-      );
-      if (!row) {
-        return null;
-      }
-
-      if (runKind === 'published' && row.published_version_id && row.history_version_id === null)
+      const published = runKind === 'published';
+      const row = published && batchPublicLookup && client === pool
+        ? await readFreshPublicPointer(lookupName)
+        : (await readPointers(client, published, lookupName))[0];
+      if (!row) return null;
+      if (row.published_version_id && row.history_version_id === null)
         throw createHttpError(503, 'The active endpoint revision is missing from history.');
-      const split = splitCurrentDraftRevisionRow(row);
       return {
         pointer: {
-          workflowId: split.workflow.workflow_id,
-          relativePath: split.workflow.relative_path,
-          revisionId: split.revision.revision_id,
-          endpointAccess: split.workflow.endpoint_access ?? 'public',
+          workflowId: row.endpoint_workflow_id,
+          relativePath: row.relative_path,
+          revisionId: row.revision_id,
+          endpointAccess: row.endpoint_access ?? 'public',
           ...(row.release_id ? { releaseId: row.release_id } : {}),
         },
-        revision: split.revision,
+        revision: {
+          revision_id: row.revision_id,
+          workflow_id: row.workflow_id,
+          project_blob_key: row.project_blob_key,
+          dataset_blob_key: row.dataset_blob_key,
+          created_at: row.created_at,
+        },
       };
     },
 

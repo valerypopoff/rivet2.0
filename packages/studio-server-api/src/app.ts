@@ -1,4 +1,5 @@
 import { performance } from 'node:perf_hooks';
+import { getPublicEndpointLookups } from './public-endpoint-lookups.js';
 import type { AcceptedWork, ProcessRetirement } from '../../studio-server-shared/process-retirement.js';
 import type { PublishedExecutionPolicySnapshot } from '../../studio-server-shared/app-settings-types.js';
 import { createRequestWorkBarrier } from './request-work.js';
@@ -150,6 +151,7 @@ function collectMetricsSnapshot(collect: () => void): void {
 function sendMetrics(metrics: StudioMetrics, health: RuntimeHealthReader, res: Response): void {
   collectMetricsSnapshot(() => metrics.setRuntimeHealth(health.getLiveness(), health.getReadiness()));
   collectMetricsSnapshot(() => metrics.setPostgresPool(getManagedPostgresPoolMetrics()));
+  collectMetricsSnapshot(() => metrics.setEndpointLookupState(getPublicEndpointLookups().snapshot));
   collectMetricsSnapshot(() =>
     metrics.setWorkflowRecordingPersistence(getWorkflowExecutionRecordingPersistenceMetrics()),
   );

@@ -51,10 +51,8 @@ export type ManagedExecutionWorkflowGenerationRecord = {
 };
 
 export type ManagedExecutionResolveSnapshot = {
-  startedAtWallClock: number;
   anyGeneration: number;
   globalGeneration: number;
-  globalUpdatedAt: number;
 };
 
 export type ManagedExecutionWorkflowSnapshot = {

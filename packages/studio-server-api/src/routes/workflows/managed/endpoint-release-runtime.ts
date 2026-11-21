@@ -12,6 +12,61 @@ import type { ParsedExecutionCache } from '../parsed-execution-cache.js';
 import { endpointReleaseTargetKey } from './endpoint-release-manifest.js';
 import type { loadEndpointReleaseArtifacts, StoredEndpointRelease } from './endpoint-release-reader.js';
 
+const releaseBusy = () => createHttpError(503, 'Captured endpoint revisions are busy loading. Try again shortly.');
+
+/** Shares immutable release reads and bounds cold artifact I/O per repository. */
+export class ColdEndpointReleases<T> {
+  private readonly loads = new Map<string, Promise<T>>();
+  private readonly waiters = new Set<() => boolean>();
+  private active = 0;
+
+  load(key: string, canWait: boolean, read: () => Promise<T>): Promise<T> {
+    const pending = this.loads.get(key);
+    if (pending) return pending;
+    if (this.active >= 4 && (!canWait || this.waiters.size >= 28)) return Promise.reject(releaseBusy());
+    const result = this.run(read).finally(() => this.loads.delete(key));
+    this.loads.set(key, result);
+    return result;
+  }
+
+  private async run(read: () => Promise<T>) {
+    if (this.active < 4) this.active++;
+    else await this.wait();
+    try {
+      return await read();
+    } finally {
+      this.release();
+    }
+  }
+
+  private release() {
+    for (const start of this.waiters) if (start()) return;
+    this.active--;
+  }
+
+  private wait(): Promise<void> {
+    const deadline = performance.now() + 1_000;
+    return new Promise((resolve, reject) => {
+      const expire = () => {
+        this.waiters.delete(start);
+        reject(releaseBusy());
+      };
+      const start = () => {
+        clearTimeout(timer);
+        if (performance.now() >= deadline) {
+          expire();
+          return false;
+        }
+        this.waiters.delete(start);
+        resolve();
+        return true;
+      };
+      const timer = setTimeout(expire, 1_000);
+      this.waiters.add(start);
+    });
+  }
+}
+
 export function createPreparedEndpointRelease(
   release: StoredEndpointRelease,
   artifacts: Awaited<ReturnType<typeof loadEndpointReleaseArtifacts>>,
