@@ -1921,20 +1921,20 @@ committing or pushing the source never applies that recovery to a live cluster.
 
 The five private `@valerypopoff/rivet-studio-server-*` workspaces form one
 Studio Server product and use one lockstep package version. Their current
-version is `1.42.0`. `yarn studio-server:verify:repo-structure` rejects version
+version is `1.44.0`. `yarn studio-server:verify:repo-structure` rejects version
 drift between the API, web, executor, shared, and bootstrap manifests.
-This minor release adds frozen endpoint dependencies, History preview, saved
-dependency indicators, and Restore that preserves editable drafts. API, shared
-and web implement the feature. Bootstrap and executor follow product lockstep.
-The [frozen-release guide](workflow-publication.md#frozen-endpoint-releases)
-describes schema 22 and when to enable capture.
+This minor release adds bounded HTTP upload waiting and recording memory
+accounting, with earlier execution admission and bounded settings-check sharing.
+API implements these changes; the other four packages follow product lockstep.
+The [recording latency assessment](recording-latency-repair-plan.md) retains the
+open performance gates; a version bump is not qualification evidence.
 Backend overlap was covered by `1.31.0`; compact HA/autoscaling by `1.30.0`.
 This version update does not enable optional rollout features or establish new
 GKE qualification; see the [performance implementation status](rolling-update-performance-plan.md).
 Bump all five manifests together even when only one workspace has runtime
 changes; run the repository-structure check before
 building a release candidate. See the prepared release matrix in
-[Build and CI](../BUILD-AND-CI.md#prepared-release-versions-2026-11-19) for the
+[Build and CI](../BUILD-AND-CI.md#prepared-release-versions-2026-11-21) for the
 separate desktop, sidecar, documentation and public runtime version decisions.
 
 These private package versions are release metadata, not npm publication or
@@ -1943,16 +1943,16 @@ commit and promoted by immutable OCI digest. The Helm chart's `version` and
 `appVersion` are separate chart metadata and must not be changed merely to
 bump the private workspace manifests.
 
-Reference indexing introduced schema 19; durable recording evidence advances the
-current runtime to schema 20. Keep the chart's ordinary
-`workflowSchema.compatibility` defaults at 20/20 to match
-that build, independently of package versioning. The promoted release launcher
+The current managed runtime uses schema 23 for shared recording snapshots.
+Keep the chart's ordinary `workflowSchema.compatibility` defaults at 23/23,
+independently of package versioning. The promoted release launcher
 still derives exact migration and allowed reader windows from the immutable
 manifest; predecessor compatibility remains a separate contract, not permission
-to leave new-build chart defaults at16. The Kubernetes contract tests exercise
-both an ordinary exact-version migration and a lower serving-only rollback floor.
+to leave new-build chart defaults on an older schema. The Kubernetes contract
+tests exercise both an ordinary exact-version migration and a lower
+serving-only rollback floor.
 
-[Recording durability](recording-durability.md) documents the opt-in acceptance,
+[Recording durability](recording-durability.md) documents acceptance,
 recovery and mixed-version activation rules. An additive schema alone does not
 make an old garbage-collection owner safe for pending handoffs.
 

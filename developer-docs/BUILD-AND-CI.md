@@ -2169,6 +2169,28 @@ version. It checks npm before publishing each package and skips package versions
 that are already present in the registry, so re-running the same main-branch
 workflow does not turn an already-published package into a hard failure.
 
+### Prepared release versions (2026-11-21)
+
+Studio Server `1.44.0` adds bounded upload waiting and recording memory
+accounting, with earlier execution admission and bounded settings-check sharing.
+The public npm family advances to `2.34.0` for Core's optional host capture
+policy and discard APIs, HTTP response-body cleanup and serialization changes.
+Desktop `2.39.2` and App Executor `2.24.2` rebuild with that Core. Docs `2.33.0`
+covers upload admission and HTTP cleanup. The
+[package review](PACKAGES.md#version-update-2026-11-21--bounded-recording-memory-and-request-admission)
+records the actual version baselines and release companions.
+
+Run `yarn sync:desktop-version`, then verify `yarn verify:desktop-version`,
+`yarn check:npm-publish-versions`, an immutable Yarn install,
+`yarn check:pnp:fresh`, and `yarn studio-server:verify:repo-structure`.
+The CLI Docker fallback follows the public npm family. No dependency ranges,
+schema or Helm metadata change is required for this version update; the managed
+schema remains 23.
+
+This is release metadata, not publication, deployment or a performance pass.
+The [recording latency assessment](studio-server/recording-latency-repair-plan.md)
+keeps the remaining serving-loop delay and inconclusive latency gates explicit.
+
 ### Prepared release versions (2026-11-20)
 
 Studio Server `1.43.0` shares managed recording project snapshots. It compacts
