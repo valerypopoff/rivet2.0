@@ -673,9 +673,11 @@ Use the maintenance staging rehearsal for this image pair. Ordinary
 runtime qualification requires a compatible predecessor.
 
 After the schema 23 release opens admission, managed durable recordings
-share snapshots by default. The existing maintenance owner compacts older
-recordings in bounded batches outside the execution path. The regular
-operation requires no activation settings or separate compaction step.
+share snapshots by default without activation settings. The current server
+keeps legacy recordings readable but does not convert them in the background.
+An older installation can use the separate, bounded source-checkout operator
+tool; it is not shipped in serving images. Normal maintenance still performs
+recording retention, recovery and reference-checked snapshot cleanup.
 [Snapshot sharing and recovery](recording-snapshot-sharing-plan.md#rollout-and-restore)
 
 ## Schema 18 recording cost metadata

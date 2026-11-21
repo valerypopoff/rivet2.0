@@ -34,7 +34,7 @@ import { isRecordingProjectSnapshotKey } from '../routes/workflows/managed/blob-
 import { createRecordingProjectSnapshotRetentionTask } from '../routes/workflows/managed/recording-project-snapshots.js';
 import { startAsyncWorkflowProcess, withAsyncDeadline } from './helpers/workflow-async-process.js';
 import { listenTestServer } from './helpers/http-server-harness.js';
-import { verifyHistoricalRecordingCompaction } from './helpers/recording-project-compaction.js';
+import { verifyHistoricalRecordingCompaction } from '../../maintenance/tests/recording-project-compaction.js';
 import http from 'node:http';
 
 const input = {
@@ -89,7 +89,6 @@ async function verifySharedReplayProjects(
   config: ManagedWorkflowStorageConfig,
   baseUrl: string,
   measure: boolean,
-  compacted: Awaited<ReturnType<typeof verifyHistoricalRecordingCompaction>>,
   copyBackup: (objects: RestoreObject[]) => Promise<ReturnType<typeof createManagedWorkflowContext>>,
 ) {
   const { pool, blobStore } = context;
@@ -131,9 +130,43 @@ async function verifySharedReplayProjects(
   try {
     const legacyWriter = new ManagedRecordingEvidence(context);
     legacyWriter.canShareReplayProject = () => false;
-    const legacy = await persist(legacyWriter).finally(() => legacyWriter.dispose());
+    let legacy: string;
+    try {
+      legacy = await persist(legacyWriter);
+    } finally {
+      await legacyWriter.dispose();
+    }
     const legacyKey = await keyFor(legacy);
     const legacyText = await blobStore.getText(legacyKey);
+
+    // Ordinary maintenance must retain compatibility files without starting
+    // an upgrade operation or consulting its legacy checkpoint.
+    const checkpointSql = 'SELECT next_after,resume_at FROM workflow_recording_project_compaction WHERE singleton';
+    await pool.query(
+      "INSERT INTO workflow_recording_project_compaction (singleton,next_after,resume_at) VALUES (TRUE,'',TIMESTAMPTZ '2000-01-01')",
+    );
+    const checkpoint = (await pool.query(checkpointSql)).rows;
+    await pool.query("DELETE FROM managed_maintenance_leases WHERE lease_name='managed-workflow-maintenance'");
+    const automatic = createManagedWorkflowContext(config);
+    automatic.maintenance.config.intervalMs = 25;
+    let observe!: () => void;
+    const periodic = new Promise<void>((resolve) => {
+      observe = resolve;
+    });
+    automatic.maintenance.registerTask('zz-observe-periodic', async () => {
+      observe();
+    });
+    try {
+      await automatic.initialize();
+      await withAsyncDeadline(periodic, 'ordinary periodic recording maintenance');
+    } finally {
+      await automatic.dispose();
+      await pool.query("DELETE FROM managed_maintenance_leases WHERE lease_name='managed-workflow-maintenance'");
+    }
+    assert.equal(await keyFor(legacy), legacyKey);
+    assert.equal(await readFromApi(legacy), legacyText);
+    assert.deepEqual((await pool.query(checkpointSql)).rows, checkpoint);
+
     const [first, second] = await Promise.all([persist(), persist(peer)]);
     const key = await keyFor(first);
     assert.ok(isRecordingProjectSnapshotKey(key));
@@ -167,26 +200,12 @@ async function verifySharedReplayProjects(
     const restoreObjects = await captureRestoreObjects(pool, config);
     assert.equal(restoreObjects.filter((object) => object.key === config.objectStoragePrefix + key).length, 1);
     assert.ok(restoreObjects.some((object) => object.key === config.objectStoragePrefix + legacyKey));
-    assert.equal(
-      restoreObjects.filter((object) => object.key === config.objectStoragePrefix + compacted.sharedKey).length,
-      1,
-    );
-    assert.ok(!restoreObjects.some((object) => object.key === config.objectStoragePrefix + compacted.originalKey));
     const restored = await copyBackup(restoreObjects);
     try {
       const reader = createManagedWorkflowRecordingService({ context: restored });
       assert.equal(await reader.readWorkflowRecordingArtifact(legacy, 'replay-project'), legacyText);
       for (const id of [first, second])
         assert.equal(await reader.readWorkflowRecordingArtifact(id, 'replay-project'), await readFromApi(id));
-      assert.equal(
-        await reader.readWorkflowRecordingArtifact(compacted.recordingId, 'replay-project'),
-        compacted.sharedContents,
-      );
-      assert.equal(
-        await reader.readWorkflowRecordingArtifact(compacted.recordingId, 'replay-dataset'),
-        compacted.dataset,
-      );
-      assert.equal(await reader.readWorkflowRecordingArtifact(compacted.recordingId, 'recording'), compacted.trace);
       const checkpointSql = 'SELECT next_after,resume_at FROM workflow_recording_project_compaction WHERE singleton';
       const checkpoint = (await pool.query(checkpointSql)).rows;
       assert.equal(checkpoint.length, 1);
@@ -1311,7 +1330,33 @@ async function main() {
     assert.ok(!deletedCatalog.workflows.some((item) => item.workflowId === catalogProject.projectMetadataId));
     assert.equal(deletedCatalog.totals!.totalRuns, catalogBefore.totals!.totalRuns);
     console.log('Catalog shows first pending/unavailable runs and counts publication/deletion exactly once.');
-    const compacted = await verifyHistoricalRecordingCompaction(context, {
+    let restoreNumber = 0;
+    const copyBackup = async (objects: RestoreObject[]) => {
+      const database = `rivet_durability_restore_${++restoreNumber}`;
+      const dbContainer = owned[0]!;
+      const fixtureDump = '/tmp/rivet-durability-restore.dump';
+      docker('exec', dbContainer, 'pg_dump', '-U', 'postgres', '-Fc', '-f', fixtureDump, 'rivet_durability');
+      docker('exec', dbContainer, 'createdb', '-U', 'postgres', database);
+      docker('exec', dbContainer, 'pg_restore', '-U', 'postgres', '--exit-on-error', '-d', database, fixtureDump);
+      const objectStoragePrefix = `durability-restored-${restoreNumber}/`;
+      for (const { key, etag } of objects)
+        await s3!.send(
+          new CopyObjectCommand({
+            Bucket: config.objectStorageBucket,
+            CopySource: config.objectStorageBucket + '/' + key,
+            CopySourceIfMatch: etag,
+            Key: objectStoragePrefix + key.slice(config.objectStoragePrefix.length),
+          }),
+        );
+      const databaseUrl = new URL(config.databaseUrl!);
+      databaseUrl.pathname = '/' + database;
+      return createManagedWorkflowContext(
+        { ...config, databaseUrl: databaseUrl.href, objectStoragePrefix },
+        undefined,
+        { migrationMode: 'verify' },
+      );
+    };
+    await verifyHistoricalRecordingCompaction(context, {
       baseUrl: api.baseUrl,
       headers: proxyHeaders,
       storage: apiOptions.storage,
@@ -1319,40 +1364,9 @@ async function main() {
       count: measurePerformance ? 128 : 6,
       compiledCommand: process.argv.includes('--compiled-compaction'),
       traffic: measurePerformance ? { run: timedRequest, settle: waitIdle } : undefined,
+      copyBackup,
     });
-    await verifySharedReplayProjects(
-      context,
-      fresh,
-      config,
-      api.baseUrl,
-      measurePerformance,
-      compacted,
-      async (objects) => {
-        const database = 'rivet_durability_restore';
-        const dbContainer = owned[0]!;
-        const fixtureDump = '/tmp/rivet-durability-restore.dump';
-        docker('exec', dbContainer, 'pg_dump', '-U', 'postgres', '-Fc', '-f', fixtureDump, 'rivet_durability');
-        docker('exec', dbContainer, 'createdb', '-U', 'postgres', database);
-        docker('exec', dbContainer, 'pg_restore', '-U', 'postgres', '--exit-on-error', '-d', database, fixtureDump);
-        const objectStoragePrefix = 'durability-restored/';
-        for (const { key, etag } of objects)
-          await s3!.send(
-            new CopyObjectCommand({
-              Bucket: config.objectStorageBucket,
-              CopySource: config.objectStorageBucket + '/' + key,
-              CopySourceIfMatch: etag,
-              Key: objectStoragePrefix + key.slice(config.objectStoragePrefix.length),
-            }),
-          );
-        const databaseUrl = new URL(config.databaseUrl!);
-        databaseUrl.pathname = '/' + database;
-        return createManagedWorkflowContext(
-          { ...config, databaseUrl: databaseUrl.href, objectStoragePrefix },
-          undefined,
-          { migrationMode: 'verify' },
-        );
-      },
-    );
+    await verifySharedReplayProjects(context, fresh, config, api.baseUrl, measurePerformance, copyBackup);
     if (measurePerformance) {
       await api.close();
       api = undefined;

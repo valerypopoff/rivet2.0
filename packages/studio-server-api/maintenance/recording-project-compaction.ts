@@ -10,26 +10,23 @@ import {
   ManagedArtifactIntegrityError,
   parseManagedArtifactDescriptor,
   prepareManagedTextArtifact,
-} from './artifact-descriptor.js';
+} from '../src/routes/workflows/managed/artifact-descriptor.js';
 import {
   createRecordingBlobKey,
   createRecordingProjectSnapshotKey,
   isManagedWorkflowArtifactObjectKey,
   isMissingManagedWorkflowObject,
-} from './blob-store.js';
-import type { ManagedWorkflowContext } from './context.js';
-import type { ManagedWorkflowMaintenanceLease } from './maintenance.js';
+} from '../src/routes/workflows/managed/blob-store.js';
+import type { ManagedWorkflowContext } from '../src/routes/workflows/managed/context.js';
 import {
   canShareRecordingProjectSnapshot,
   noteRecordingProjectSnapshotReadFailure,
   readRecordingProjectSnapshotDescriptor,
-} from './recording-project-snapshots.js';
+} from '../src/routes/workflows/managed/recording-project-snapshots.js';
 
 type Candidate = { recording_id: string; workflow_id: string; replay_project_blob_key: string };
 
 const snapshotCleanupReason = 'workflow-recording-snapshot-retention';
-const automaticBatchLimit = 100;
-const automaticBatchTimeMs = 5000;
 
 const replayCanBeReplaced = `NOT EXISTS (
   SELECT 1 FROM workflow_run_evidence e WHERE e.run_id=r.recording_id
@@ -50,13 +47,11 @@ export async function compactRecordingProjectSnapshots(
     after,
     workflowId,
     signal,
-    lease,
   }: {
     limit: number;
     after?: string;
     workflowId?: string;
     signal: AbortSignal;
-    lease?: ManagedWorkflowMaintenanceLease;
   },
 ) {
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > 1000) throw new Error('Use a batch size from 1 to 1000.');
@@ -138,7 +133,6 @@ export async function compactRecordingProjectSnapshots(
     }
 
     const changed = await withTransaction(async (client) => {
-      await lease?.assertCurrent(client);
       if (fresh) {
         // Lock the unclaimed cleanup entry through publication. Once cleanup can
         // claim it, this generation cannot become a replay pointer.
@@ -213,38 +207,5 @@ export async function compactRecordingProjectSnapshots(
     ...result,
     interrupted: signal.aborted,
     nextAfter: signal.aborted || page.rows.length > limit ? cursor : null,
-  };
-}
-
-/** Run only on the periodic maintenance owner. Once at the end, give held or
- * newly imported recordings time to settle before scanning again. */
-export function createRecordingProjectCompactionTask(
-  context: Pick<ManagedWorkflowContext, 'pool' | 'blobStore' | 'withTransaction' | 'maintenance'>,
-) {
-  return async (lease: ManagedWorkflowMaintenanceLease): Promise<void> => {
-    const checkpoint = (
-      await context.pool.query<{ next_after: string | null; due: boolean }>(
-        `SELECT next_after,resume_at<=clock_timestamp() AS due
-         FROM workflow_recording_project_compaction WHERE singleton=TRUE`,
-      )
-    ).rows[0];
-    if (checkpoint && !checkpoint.due) return;
-
-    const result = await compactRecordingProjectSnapshots(context, {
-      after: checkpoint?.next_after ?? undefined,
-      limit: Math.min(context.maintenance.config.batchSize, automaticBatchLimit),
-      signal: AbortSignal.timeout(automaticBatchTimeMs),
-      lease,
-    });
-    if (result.interrupted && result.scanned === 0) return;
-    await context.withTransaction(async (client) => {
-      await lease.assertCurrent(client);
-      await client.query(
-        `INSERT INTO workflow_recording_project_compaction (singleton,next_after,resume_at)
-         VALUES (TRUE,$1,clock_timestamp()+CASE WHEN $1::text IS NULL THEN INTERVAL '1 day' ELSE INTERVAL '0' END)
-         ON CONFLICT (singleton) DO UPDATE SET next_after=EXCLUDED.next_after,resume_at=EXCLUDED.resume_at`,
-        [result.nextAfter],
-      );
-    });
   };
 }

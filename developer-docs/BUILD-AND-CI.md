@@ -965,10 +965,12 @@ Build's existing static-validation job runs the image/launcher contract file
 before docs/style checks, including PRs to `main`. These source-only tests need
 no compiled workspace exports; keep this cheap check ahead of image publication.
 API production compilation uses `tsconfig.runtime.json` to exclude test-only
-deployment imports; the image contract checks that runtime compiler target.
-The ordinary API build still type-checks tests. API and executor Dockerfiles copy
-deployment tooling after application compilation, preserving that cache across
-rollout-only repairs.
+deployment imports and the operator-only `maintenance/` directory. Runtime
+packaging also excludes compiled maintenance tools from full development builds;
+its fixture verifies that normal runtime maintenance remains included.
+The ordinary API build still type-checks tests and operator tools. API and
+executor Dockerfiles copy deployment tooling after application compilation,
+preserving that cache across rollout-only repairs.
 The API then bundles the autoscaler runtime closure and the fast candidate smoke
 boots its actual packaged command as non-root/read-only without cloud access.
 The separate minimal cleanup-worker image is scanned and published alongside the

@@ -878,10 +878,10 @@ objects stop receiving new references. Schema 23 is a maintenance cutover
 that retires older readers before opening managed storage. See the
 [snapshot sharing plan](recording-snapshot-sharing-plan.md).
 
-The periodic managed maintenance owner automatically compacts historical
-recordings using a durable cursor. The same operation is available as a
-scoped command. It checks a bounded page, compares the
-decoded replay, and verifies the replacement before changing the pointer and
+Historical recording conversion is an optional source-checkout operator
+command, excluded from serving images and normal maintenance. It checks a
+bounded page, compares the decoded replay, and verifies the replacement before
+changing the pointer and
 queuing the original blob in one transaction. It reads no live project
 revisions. The retention owner deletes replaced blobs after checking their
 references. A replay request that encountered a retired key reads the current

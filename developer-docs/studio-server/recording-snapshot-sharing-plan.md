@@ -5,8 +5,9 @@
 For new managed durable recordings, use one S3 replay project object per
 exact executed project state. Each recording keeps its own trace, replay tab
 ID, optional datasets and run metadata. A thousand recordings of the same
-state should reference one replay project object. The managed maintenance
-worker shares snapshots for existing recordings in bounded batches. This scope
+state should reference one replay project object. Retrospective conversion is
+an optional operator tool, outside the serving application and its images.
+Normal maintenance does not search for retrospective conversions. This scope
 covers the supported PostgreSQL/S3 deployments, including local storage with
 MinIO. Durable opt-out, legacy imports and filesystem and SQLite
 compatibility continue to produce per-recording artifacts.
@@ -147,13 +148,15 @@ retention budget. Use object inventory for physical storage savings.
    refuses this transition because older readers and backup tooling cannot
    handle shared replay ownership.
 2. Serve with schema 23-aware images and backup tooling. Managed durable
-   writers share snapshots by default. The regular background maintenance
-   worker starts historical compaction after serving resumes. Activation
-   requires no environment switch or manual compaction command.
+   writers share snapshots by default, without an activation switch.
+   Older releases also started retrospective conversion automatically; the
+   current server does not. An upgrade can leave legacy recordings readable
+   in their original format or convert them with the separate operator tool.
 3. Capture metadata and object storage from the same checkpoint. Backup
    inventory captures each shared object once, includes existing artifacts
-   of recoverable manifests and retains the compaction checkpoint. Only a
-   replay project can refer to a shared key owned by its workflow. Recovery
+   of recoverable manifests and retains the inert compaction checkpoint for
+   schema/restore compatibility. Only a replay project can refer to a shared
+   key owned by its workflow. Recovery
    after the cutover uses schema 23-compatible images or the reviewed
    pre-cutover backup procedure. Legacy imports still accept dedicated replay
    project files.
@@ -165,33 +168,25 @@ retention budget. Use object inventory for physical storage savings.
 
 ## Compact existing recordings
 
-The periodic managed maintenance owner processes up to 100 candidates per
-pass with a five-second processing budget. Each publication and cursor update
-checks its PostgreSQL lease. The cursor survives process replacement and
-restore. After reaching the end, the worker waits one day before another
-sweep so captures held by an active upload or newly imported files can be
-revisited. Startup and on-demand recording maintenance skip compaction.
-Published execution replicas leave this work to the maintenance owner.
-Periodic compaction and the operator command share the release and VM
-migration pause checks. The automatic path also checks the legacy restore
-pause, and the operator command takes the restore serving lease.
+The one-off converter lives under `packages/studio-server-api/maintenance/`.
+It is excluded from production TypeScript compilation and runtime packaging,
+including when packaging a full development build. There is no automatic
+registration, timer or checkpoint scan in the serving application. The small
+`workflow_recording_project_compaction` table stays in schema 23 and backups;
+removing it would need a separate migration and compatibility review.
+Normal maintenance uses the same task list for requested and scheduled passes;
+the converter's former periodic-only scheduling mode has been removed.
 
-The scoped operator command remains available for diagnosis or a targeted
-batch in the schema 23 control-plane environment.
-
-```sh
-yarn workspace @valerypopoff/rivet-studio-server-api run recording-projects:compact --limit 100 --max-seconds 30
-```
-
-On a packaged API image, load the same deployment environment as the
-control plane before invoking the compiled command.
+Use a source checkout matching the installation, with the normal workspace
+dependencies installed and built. Supply the installation's storage/settings
+environment and its mounted maintenance-pause inputs through the usual
+protected operator mechanism; a database URL alone is not that environment.
+The command verifies the managed schema, respects release/VM migration pauses,
+and takes the restore serving lease. It neither starts a server nor registers
+a worker.
 
 ```sh
-sh -eu -c '
-  . /opt/rivet/lib/load-env.sh
-  load_optional_dotenv_preserving_deployment_storage /vault/dotenv
-  exec node /app/packages/studio-server-api/dist/studio-server-api/src/scripts/compact-recording-projects.js --limit 100 --max-seconds 30
-'
+yarn studio-server:recording-projects:compact --limit 100 --max-seconds 30
 ```
 
 Use `--workflow-id ID` to limit the batch to one project. The command reads the
@@ -223,11 +218,11 @@ counts queued original bytes and bytes added for published shared snapshots.
 Storage use falls as the outbox drains, subject to the bucket's object-version
 retention policy. Use object inventory to measure reclaimed bytes. The
 command runs outside the serving process and uses its own bounded database
-connections. Automatic compaction runs through the existing maintenance
-timer and pool.
+connections. Normal maintenance still reclaims unreferenced snapshots and
+drains the deletion outbox; it does not perform retrospective conversion.
 
-[Compaction](../../packages/studio-server-api/src/routes/workflows/managed/recording-project-compaction.ts) ·
-[Operator command](../../packages/studio-server-api/src/scripts/compact-recording-projects.ts)
+[Compaction](../../packages/studio-server-api/maintenance/recording-project-compaction.ts) ·
+[Operator command](../../packages/studio-server-api/maintenance/compact-recording-projects.ts)
 
 ## Local release checks
 
@@ -257,9 +252,9 @@ timer and pool.
   and maintenance can reclaim the abandoned upload. Overlap two commands
   and live replay, expire a candidate before publication, and resume without
   moving a committed pointer again. Start the real periodic maintenance owner
-  with default activation and confirm progress persists and an expired hold
-  is revisited. Restore compacted history and verify the project, trace and
-  attached dataset from the restored storage.
+  and verify it leaves dedicated recordings and the legacy checkpoint untouched.
+  Restore compacted history and verify the project, trace and attached dataset
+  from the restored storage.
 - **Keep runs fast.** Compare shared writes with a dedicated-write baseline
   in the local measurement fixture. Use warmed small
   endpoints and large projects, concurrent cold writes and sustained
@@ -293,8 +288,18 @@ endpoint responses during concurrent recording writes and replay reads,
 scheduled permit occupancy during endpoint traffic, and the editor's
 post-execution recording upload time. Append `--sharing-latency-only` to
 repeat the timings separately. Build the API workspace and append
-`--compiled-compaction` to exercise the operator entry point shipped in the
-API image during the historical compaction fixture.
+`--compiled-compaction` to exercise the operator entry point from the full
+development build during the historical compaction fixture. That build output
+is not included in serving images. Ordinary shared-recording and operator
+checks use separate restore fixtures. A real periodic maintenance pass verifies
+that dedicated recordings and the old checkpoint remain untouched.
+
+The retirement recheck on 21 November 2026 passed the managed integration,
+69 focused recording/maintenance tests and six browser playback cases. Full
+development-build packaging retained normal recording maintenance and excluded
+the operator and its tests; the runtime compiler also excluded those files.
+Shared writing, replay and recovery code did not change during retirement.
+These are compatibility and cleanup checks, not new latency measurements.
 
 In the counterbalanced local run each mode had 256 endpoint samples, 24
 scheduled permits, 24 editor uploads and 16 replay opens per project size.
@@ -341,7 +346,7 @@ and editor upload tail timings varied across runs. The compaction integration
 also exercised file-backed and encrypted PostgreSQL storage settings and kept
 the original replay when the replacement failed verification.
 
-With automatic activation, the real managed maintenance timer converted
+Before automatic backfill was retired, the real managed maintenance timer converted
 128 seeded recordings and revisited a recording when its upload hold expired.
 The endpoint fixture measured p95 at 11.18 ms before compaction and 11.12 ms
 during it, with 128 requests in each group. The PostgreSQL schema fixture
