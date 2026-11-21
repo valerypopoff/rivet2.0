@@ -19,6 +19,7 @@ import {
   promoteStudioServerReleaseManifest,
   readHelmChartIdentity,
   readManagedWorkflowSchemaReleaseContract,
+  readRecordingStorageReleaseContract,
 } from './lib/studio-server-release-manifest.mjs';
 import {
   assertContentAddressedManifestReference,
@@ -31,10 +32,24 @@ import {
 } from './release-manifest-oci.mjs';
 import { parseArgs, resolveDeploymentRelease } from './deploy-kubernetes-release.mjs';
 import { HA_REQUIRED_CHECKS, HA_AUTOSCALING_CHECKS } from './lib/ha-release-evidence.mjs';
+import {
+  recordingStorageContract,
+  assertRecordingStorageUpgrade,
+  assertRecordingCheckpointReaders,
+} from './lib/recording-storage-contract.mjs';
+import { assertRecordingReaderInventory, assertRecordingReleaseSettled } from './lib/recording-reader-inventory.mjs';
+import { releaseOperationJournalName } from './lib/release-operation-journal.mjs';
+import { serveRecordingTransitionGuard, assertRecordingTransitionGuard } from './lib/recording-transition-guard.mjs';
 import { pinRehearsalImages } from './local-upgrade-rehearsal-safety.mjs';
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const digest = (letter) => `sha256:${letter.repeat(64)}`;
+const runManifestCli = (args) =>
+  spawnSync(
+    process.execPath,
+    [path.join(rootDir, 'deploy/studio-server/scripts/create-release-manifest.mjs'), ...args],
+    { cwd: rootDir, encoding: 'utf8' },
+  );
 
 test('reused component provenance survives normalization/promotion and is bound to installed lineage', () => {
   const previous = promoted();
@@ -280,6 +295,7 @@ test('source and chart identity checks require promotion unless certification ex
 test('release manifest digest is semantic, deterministic, and formatting independent', () => {
   const release = promoted();
   const reordered = {
+    recordingStorage: release.recordingStorage,
     evidence: release.evidence,
     images: release.images,
     lineage: release.lineage,
@@ -298,6 +314,121 @@ test('release manifest digest is semantic, deterministic, and formatting indepen
       images: { ...release.images, api: { ...release.images.api, digest: digest('e') } },
     }),
   );
+});
+
+test('recording capabilities preserve old manifests and gate readers, rolling writes and rollback', () => {
+  const sourceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'rivet-recording-contract-'));
+  try {
+    assert.equal(readRecordingStorageReleaseContract(sourceRoot), undefined);
+    const file = path.join(sourceRoot, 'packages/studio-server-bootstrap/recording-storage.mjs');
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(
+      file,
+      "export const DEFAULT_MANAGED_RECORDING_ENCODING = 'gzip';\nexport const RECORDING_STORAGE_COORDINATION_PROTOCOL = 1;\n",
+    );
+    assert.deepEqual(readRecordingStorageReleaseContract(sourceRoot).writableEncodings, ['identity', 'gzip']);
+  } finally {
+    fs.rmSync(sourceRoot, { recursive: true, force: true });
+  }
+  const old = promoted();
+  delete old.recordingStorage;
+  const oldDigest = getStudioServerReleaseManifestDigest(old);
+  assert.equal(assertStudioServerReleaseManifest(old).recordingStorage, undefined);
+  assert.equal(getStudioServerReleaseManifestDigest(JSON.parse(JSON.stringify(old))), oldDigest);
+  assert.deepEqual(recordingStorageContract(undefined).readableEncodings, ['identity', 'gzip']);
+  const reader = {
+    readableEncodings: ['br', 'gzip', 'identity'],
+    writableEncodings: ['identity', 'gzip'],
+    coordinationProtocol: 1,
+  };
+  const writer = { ...reader, writableEncodings: ['identity', 'gzip', 'br'] };
+  assert.doesNotThrow(() => assertRecordingStorageUpgrade(undefined, reader));
+  assert.throws(() => assertRecordingStorageUpgrade(undefined, writer), /reader-first/);
+  assert.doesNotThrow(() => assertRecordingStorageUpgrade(undefined, writer, { maintenance: true }));
+  assert.doesNotThrow(() => assertRecordingStorageUpgrade(reader, writer));
+  assert.throws(() => assertRecordingStorageUpgrade(writer, undefined, { maintenance: true }), /cannot read/);
+  assert.throws(() => assertRecordingCheckpointReaders(['br'], undefined), /cannot read/);
+  assert.throws(() => recordingStorageContract({ ...reader, readableEncodings: ['identity', 'identity'] }), /Invalid/);
+  assert.notEqual(getStudioServerReleaseManifestDigest({ ...old, recordingStorage: reader }), oldDigest);
+  const release = { ...old, recordingStorage: writer };
+  const pod = {
+    kind: 'Pod',
+    metadata: { labels: { 'app.kubernetes.io/instance': 'rivet', 'app.kubernetes.io/component': 'execution' } },
+    spec: { containers: [{ name: 'api', image: `${release.images.api.repository}@${release.images.api.digest}` }] },
+  };
+  assert.doesNotThrow(() => assertRecordingReaderInventory(release, [pod], 'rivet'));
+  const retiring = structuredClone(pod);
+  retiring.metadata.deletionTimestamp = 'now';
+  retiring.spec.containers[0].image = 'older:latest';
+  assert.throws(() => assertRecordingReaderInventory(release, [retiring], 'rivet'), /older, mutable or unknown/);
+});
+
+test('recording conversion rejects unresolved release operations even after their lease expires', () => {
+  const identity = { release: 'rivet', namespace: 'prod' };
+  const record = {
+    ...identity,
+    protocol: 1,
+    phase: 'complete',
+    leaseExpiresAt: 0,
+    token: 'token',
+    runner: 'runner',
+    manifestDigest: 'sha256:' + 'a'.repeat(64),
+  };
+  const journal = (data = record, metadata = {}) => ({
+    kind: 'ConfigMap',
+    metadata: {
+      name: releaseOperationJournalName(identity.release),
+      namespace: identity.namespace,
+      uid: 'journal',
+      resourceVersion: '1',
+      labels: { 'app.kubernetes.io/instance': identity.release },
+      ...metadata,
+    },
+    data: { record: JSON.stringify(data) },
+  });
+  const check = (items) =>
+    assertRecordingReleaseSettled(items, identity.release, identity.namespace, record.manifestDigest, () => 100);
+  assert.throws(() => check([]));
+  assert.doesNotThrow(() => check([journal()]));
+  const cutover = { ...record, protocol: undefined, formatVersion: 1 };
+  assert.doesNotThrow(() => check([journal(cutover, { labels: undefined })]));
+  assert.throws(() => check([journal({ ...cutover, phase: 'resuming' }, { labels: undefined })]));
+  for (const data of [
+    null,
+    { ...record, phase: 'templates' },
+    { ...record, leaseExpiresAt: 101 },
+    { ...record, proxyContinuity: { phase: 'started' } },
+    { ...record, namespace: 'other' },
+    { ...record, manifestDigest: 'sha256:' + 'b'.repeat(64) },
+  ])
+    assert.throws(() => check([journal(data)]));
+  assert.throws(() => check([journal(record, { labels: { 'app.kubernetes.io/instance': 'other' } })]));
+  assert.throws(() => check([journal(record, { deletionTimestamp: 'now' })]));
+  for (const field of ['scale', 'target', 'fence', 'fenceRepair', 'removal'])
+    assert.throws(
+      () => check([journal({ ...record, protocol: undefined, autoscalingProtocol: 1, [field]: {} })]),
+      /unfinished work/,
+    );
+});
+
+test('transition guard verifies live ownership and exact installation without exposing DB credentials', async () => {
+  const previous = process.env.RIVET_RECORDING_TRANSITION_GUARD;
+  let owned = true;
+  const identity = { protocol: 1, release: 'rivet', namespace: 'rivet', context: 'test' };
+  const guard = await serveRecordingTransitionGuard(async () => {
+    if (!owned) throw Error('lost');
+  }, identity);
+  try {
+    process.env.RIVET_RECORDING_TRANSITION_GUARD = guard.url;
+    await assertRecordingTransitionGuard(identity);
+    await assert.rejects(assertRecordingTransitionGuard({ ...identity, context: 'other' }), /another installation/);
+    owned = false;
+    await assert.rejects(assertRecordingTransitionGuard(identity), /ownership was lost/);
+  } finally {
+    if (previous === undefined) delete process.env.RIVET_RECORDING_TRANSITION_GUARD;
+    else process.env.RIVET_RECORDING_TRANSITION_GUARD = previous;
+    await guard.close();
+  }
 });
 
 test('legacy promoted manifests remain readable but cannot authorize lineage rollback', () => {
@@ -428,14 +559,10 @@ test('retained recovery manifests pass the real digest CLI only inside the check
   const outsideDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'rivet-release-lineage-recovery.'));
   try {
     const release = promoted();
-    const cli = path.join(rootDir, 'deploy', 'studio-server', 'scripts', 'create-release-manifest.mjs');
     const runDigest = (directory) => {
       const manifestPath = path.join(directory, 'promoted-release-manifest.json');
       fs.writeFileSync(manifestPath, `${JSON.stringify(release)}\n`);
-      return spawnSync(process.execPath, [cli, 'digest', '--input', manifestPath], {
-        cwd: rootDir,
-        encoding: 'utf8',
-      });
+      return runManifestCli(['digest', '--input', manifestPath]);
     };
 
     const recovered = runDigest(recoveryDirectory);
@@ -496,31 +623,17 @@ test('release manifest refuses a deployment checkout from another source revisio
 });
 
 test('release manifest CLI keeps release evidence inside the repository', () => {
-  const createResult = spawnSync(
-    process.execPath,
-    [
-      path.join(rootDir, 'deploy', 'studio-server', 'scripts', 'create-release-manifest.mjs'),
-      'create',
-      '--output',
-      '../outside-release-manifest.json',
-    ],
-    { cwd: rootDir, encoding: 'utf8' },
-  );
+  const createResult = runManifestCli(['create', '--output', '../outside-release-manifest.json']);
   assert.equal(createResult.status, 1);
   assert.match(createResult.stderr, /--output must remain inside this repository/);
 
-  const promoteResult = spawnSync(
-    process.execPath,
-    [
-      path.join(rootDir, 'deploy', 'studio-server', 'scripts', 'create-release-manifest.mjs'),
-      'promote',
-      '--input',
-      '../outside-release-manifest.json',
-      '--output',
-      'artifacts/releases/release-manifest.json',
-    ],
-    { cwd: rootDir, encoding: 'utf8' },
-  );
+  const promoteResult = runManifestCli([
+    'promote',
+    '--input',
+    '../outside-release-manifest.json',
+    '--output',
+    'artifacts/releases/release-manifest.json',
+  ]);
   assert.equal(promoteResult.status, 1);
   assert.match(promoteResult.stderr, /--input must remain inside this repository/);
 });
@@ -535,85 +648,66 @@ test('release manifest CLI binds and rechecks the production predecessor before 
     const promotedPath = path.join(temporaryDirectory, 'promoted.json');
     fs.writeFileSync(predecessorPath, `${JSON.stringify(promoted(), null, 2)}\n`);
     const relative = (filePath) => path.relative(rootDir, filePath);
-    const cli = path.join(rootDir, 'deploy', 'studio-server', 'scripts', 'create-release-manifest.mjs');
     const imageSpecs = Object.entries(images('example.test/cli'))
       .map(([component, image]) => `${component}=${image.repository}@${image.digest}`)
       .join(',');
-    const createResult = spawnSync(
-      process.execPath,
-      [
-        cli,
-        'create',
-        '--output',
-        relative(candidatePath),
-        '--predecessor',
-        relative(predecessorPath),
-        '--source-repository',
-        'valerypopoff/rivet2.0',
-        '--source-ref',
-        'refs/heads/main',
-        '--source-sha',
-        'b'.repeat(40),
-        '--workflow',
-        'Build Images',
-        '--run-id',
-        '456',
-        '--run-attempt',
-        '1',
-        '--image',
-        imageSpecs,
-      ],
-      { cwd: rootDir, encoding: 'utf8' },
-    );
+    const createResult = runManifestCli([
+      'create',
+      '--output',
+      relative(candidatePath),
+      '--predecessor',
+      relative(predecessorPath),
+      '--source-repository',
+      'valerypopoff/rivet2.0',
+      '--source-ref',
+      'refs/heads/main',
+      '--source-sha',
+      'b'.repeat(40),
+      '--workflow',
+      'Build Images',
+      '--run-id',
+      '456',
+      '--run-attempt',
+      '1',
+      '--image',
+      imageSpecs,
+    ]);
     assert.equal(createResult.status, 0, createResult.stderr);
 
-    const missingCurrent = spawnSync(
-      process.execPath,
-      [
-        cli,
-        'promote',
-        '--input',
-        relative(candidatePath),
-        '--output',
-        relative(promotedPath),
-        '--workflow',
-        'Build Images',
-        '--run-id',
-        '456',
-        '--run-attempt',
-        '1',
-      ],
-      { cwd: rootDir, encoding: 'utf8' },
-    );
+    const missingCurrent = runManifestCli([
+      'promote',
+      '--input',
+      relative(candidatePath),
+      '--output',
+      relative(promotedPath),
+      '--workflow',
+      'Build Images',
+      '--run-id',
+      '456',
+      '--run-attempt',
+      '1',
+    ]);
     assert.equal(missingCurrent.status, 1);
     assert.match(missingCurrent.stderr, /production release-manifest pointer is missing/);
 
-    const promoteResult = spawnSync(
-      process.execPath,
-      [
-        cli,
-        'promote',
-        '--input',
-        relative(candidatePath),
-        '--current',
-        relative(predecessorPath),
-        '--output',
-        relative(promotedPath),
-        '--workflow',
-        'Build Images',
-        '--run-id',
-        '456',
-        '--run-attempt',
-        '1',
-      ],
-      { cwd: rootDir, encoding: 'utf8' },
-    );
+    const promoteResult = runManifestCli([
+      'promote',
+      '--input',
+      relative(candidatePath),
+      '--current',
+      relative(predecessorPath),
+      '--output',
+      relative(promotedPath),
+      '--workflow',
+      'Build Images',
+      '--run-id',
+      '456',
+      '--run-attempt',
+      '1',
+    ]);
     assert.equal(promoteResult.status, 0, promoteResult.stderr);
 
-    const digestResult = spawnSync(process.execPath, [cli, 'digest', '--input', relative(promotedPath)], {
-      cwd: rootDir,
-      encoding: 'utf8',
-    });
+    const digestResult = runManifestCli(['digest', '--input', relative(promotedPath)]);
     assert.equal(digestResult.status, 0, digestResult.stderr);
     assert.match(digestResult.stdout.trim(), /^sha256:[a-f0-9]{64}$/);
   } finally {

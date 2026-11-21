@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { Worker } from 'node:worker_threads';
-import { gzipSync } from 'node:zlib';
+import { gzipSync, gunzipSync, brotliCompressSync } from 'node:zlib';
 import { WorkflowRecordingInputExtractor } from '../routes/workflows/recording-input-extractor.js';
 
 const workerUrl = new URL(
@@ -22,7 +22,7 @@ const source = {
   ),
 };
 
-test('catalog preparation creates only one idle worker and shares it with searches', async () => {
+test('catalog preparation shares one worker with searches and recovers its idle exit', async () => {
   const workers: Worker[] = [];
   const extractor = new WorkflowRecordingInputExtractor(() => {
     const worker = new Worker(workerUrl);
@@ -37,6 +37,7 @@ test('catalog preparation creates only one idle worker and shares it with search
     await workers[0]!.terminate();
     assert.deepEqual(await extractor.extract(source), { exists: true, value: 'needle' });
     assert.equal(workers.length, 2);
+    assert.ok(source.bytes.byteLength > 0, 'caller-owned compressed buffer is not detached');
   } finally {
     extractor.dispose();
   }
@@ -71,36 +72,21 @@ test('disposing a prepared worker does not restart it in the background', async 
   assert.equal(workers.length, 1);
 });
 
-test('compiled input workers recover from an unexpected idle exit without inline parsing', async () => {
-  const workers: Worker[] = [];
-  const extractor = new WorkflowRecordingInputExtractor(() => {
-    const worker = new Worker(workerUrl);
-    workers.push(worker);
-    return worker;
-  });
-  try {
-    const expected = await extractor.extract(source);
-    assert.equal(expected?.exists, true);
-    await workers[0]!.terminate();
-    assert.deepEqual(await extractor.extract(source), expected);
-    assert.equal(workers.length, 2);
-    assert.ok(source.bytes.byteLength > 0, 'caller-owned compressed buffer is not detached');
-  } finally {
-    extractor.dispose();
-  }
-});
-
-test('compiled input worker rejects corrupt gzip and remains usable', async () => {
+test('compiled input worker reads Brotli, rejects corrupt codecs and remains usable', async () => {
   const extractor = new WorkflowRecordingInputExtractor(() => new Worker(workerUrl));
   try {
+    const br = { ...source, encoding: 'br' as const, bytes: brotliCompressSync(gunzipSync(source.bytes)) };
+    assert.deepEqual(await extractor.extract(br), { exists: true, value: 'needle' });
+    await assert.rejects(extractor.extract({ ...br, decodedBytes: 1 }));
+    await assert.rejects(extractor.extract({ ...br, bytes: br.bytes.subarray(0, br.bytes.length - 1) }));
     for (const bytes of [Buffer.from('not gzip'), gzipSync('{broken-json'), gzipSync('{}')]) {
       await assert.rejects(extractor.extract({ ...source, bytes }), /extraction failed|Malformed recording artifact/);
       assert.deepEqual(await extractor.extract(source), { exists: true, value: 'needle' });
-      assert.deepEqual(
-        await extractor.extract({ ...source, bytes: gzipSync(JSON.stringify({ recording: { events: [] } })) }),
-        { exists: false, value: undefined },
-      );
     }
+    assert.deepEqual(
+      await extractor.extract({ ...source, bytes: gzipSync(JSON.stringify({ recording: { events: [] } })) }),
+      { exists: false, value: undefined },
+    );
     const controller = new AbortController();
     const cancelled = extractor.extract(source, controller.signal);
     controller.abort();
@@ -142,8 +128,10 @@ test('compiled input worker rejects invalid UTF-8 rather than caching a non-matc
     Buffer.from('"}'),
   ]);
   try {
-    for (const encoding of ['identity', 'gzip'] as const) {
-      const bytes = encoding === 'gzip' ? gzipSync(invalidText) : invalidText;
+    for (const encoding of ['identity', 'gzip', 'br'] as const) {
+      const encode = (bytes: Buffer) =>
+        encoding === 'gzip' ? gzipSync(bytes) : encoding === 'br' ? brotliCompressSync(bytes) : bytes;
+      const bytes = encode(invalidText);
       await assert.rejects(extractor.extract({ kind: 'artifact', encoding, bytes }), /encoded data|encoding|UTF-8/i);
       assert.deepEqual(await extractor.extract(source), { exists: true, value: 'needle' });
       const unicode = JSON.stringify({
@@ -153,7 +141,7 @@ test('compiled input worker rejects invalid UTF-8 rather than caching a non-matc
         await extractor.extract({
           kind: 'artifact',
           encoding,
-          bytes: encoding === 'gzip' ? gzipSync(unicode) : Buffer.from(unicode),
+          bytes: encode(Buffer.from(unicode)),
           decodedBytes: Buffer.byteLength(unicode),
         }),
         { exists: true, value: '🦊 café' },

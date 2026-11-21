@@ -55,6 +55,7 @@ type FakeSchemaDatabase = DatabaseSnapshot & {
   queryLog: string[];
   lockTail: Promise<void>;
   transientLockFailures: number;
+  recordingStorageBusy: boolean;
 };
 
 function createDatabase(overrides: Partial<FakeSchemaDatabase> = {}): FakeSchemaDatabase {
@@ -84,6 +85,7 @@ function createDatabase(overrides: Partial<FakeSchemaDatabase> = {}): FakeSchema
     queryLog: [],
     lockTail: Promise.resolve(),
     transientLockFailures: 0,
+    recordingStorageBusy: false,
     ...overrides,
   };
 }
@@ -180,6 +182,11 @@ function createPool(database: FakeSchemaDatabase): Pick<Pool, 'connect'> {
 
           if (sql === 'BEGIN' || sql.startsWith('SET LOCAL')) {
             return queryResult();
+          }
+
+          if (sql === 'SELECT pg_try_advisory_xact_lock_shared($1,$2) AS acquired') {
+            assert.deepEqual(params, [8072, 24006]);
+            return queryResult([{ acquired: !database.recordingStorageBusy }]);
           }
 
           if (sql.startsWith('SELECT') && sql.includes('pg_advisory_xact_lock')) {
@@ -642,6 +649,20 @@ test('migration baselines an existing unversioned schema without losing compatib
   assert.equal(database.migrationTableExists, true);
   assert.equal(database.schemaReady, true);
   assert.equal(database.migrations.get(CURRENT_MANAGED_WORKFLOW_SCHEMA_VERSION)?.checksum, currentMigration().checksum);
+});
+
+test('recompression blocks pending DDL but not an already-current startup', async () => {
+  const pending = createDatabase({ recordingStorageBusy: true });
+  await assert.rejects(
+    migrateManagedWorkflowSchema(createPool(pending), { logger: quietLogger }),
+    /storage transition/,
+  );
+  assert.equal(pending.applyCount, 0);
+  assert.ok(pending.queryLog.includes('ROLLBACK'));
+  const current = createCurrentDatabase();
+  current.recordingStorageBusy = true;
+  await migrateManagedWorkflowSchema(createPool(current), { logger: quietLogger });
+  assert.ok(!current.queryLog.some((sql) => sql.includes('pg_try_advisory_xact_lock_shared')));
 });
 
 test('verify mode takes a shared lock and never applies schema SQL', async () => {

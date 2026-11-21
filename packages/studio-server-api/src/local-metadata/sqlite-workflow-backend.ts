@@ -1,4 +1,9 @@
-import type { WorkflowPublishedExecutionTarget, WorkflowRecordingPageQuery } from '../routes/workflows/data-backend.js';
+import type {
+  WorkflowPublishedExecutionTarget,
+  WorkflowRecordingPageQuery,
+  PersistWorkflowExecutionRecordingOptions,
+  WorkflowDataBackend,
+} from '../routes/workflows/data-backend.js';
 import {
   hasWorkflowFailure,
   normalizeWorkflowStorageFailure,
@@ -14,7 +19,6 @@ import {
   serializeProject,
 } from '@valerypopoff/rivet2-node';
 import type { Project, SubgraphProjectTarget, ResolvedSubgraphProject } from '@valerypopoff/rivet2-node';
-import type { PersistWorkflowExecutionRecordingOptions } from '../routes/workflows/data-backend.js';
 import type {
   WorkflowRunStatisticsQuery,
   WorkflowRunStatisticsSurface,
@@ -22,9 +26,9 @@ import type {
   WorkflowRecordingRunsPageResponse,
 } from '../../../studio-server-shared/workflow-recording-types.js';
 import { readWorkflowRunCost } from '../../../studio-server-shared/workflow-recording-types.js';
-import type { LocalRecordingMetadata, LocalPublicationState } from './workflow-catalog.js';
 import { createCatalogWorker, type CatalogWorkerClient } from './catalog-worker-client.js';
 import {
+  assertLegacyRecordingCompression,
   getWorkflowRecordingConfig,
   getWorkflowRecordingRuntimeConfig,
 } from '../routes/workflows/recordings-config.js';
@@ -63,6 +67,8 @@ import {
   type LocalCatalogChange,
   type LocalExecutionSnapshot,
   type LocalWorkflowTreeProject,
+  type LocalRecordingMetadata,
+  type LocalPublicationState,
 } from './workflow-catalog.js';
 import { badRequest, conflict, createHttpError } from '../utils/httpError.js';
 import {
@@ -94,7 +100,6 @@ import {
   getWorkflowDuplicateProjectName,
 } from '../routes/workflows/workflow-project-naming.js';
 import { notifyWebAppSocketPolicyInvalidation } from '../routes/workflows/web-app-policy-invalidation.js';
-import type { WorkflowDataBackend } from '../routes/workflows/data-backend.js';
 import { ManagedWorkflowExecutionCache } from '../routes/workflows/managed/execution-cache.js';
 
 type Snapshot = LocalWorkflowCatalogSnapshot;
@@ -163,6 +168,7 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
       options.getRecordingRetentionHolds ?? getFilesystemLLMProfileHealthHeldRecordingIds;
   }
   initialize(options: { readOnly?: boolean } = {}): void | Promise<void> {
+    if (!options.readOnly) assertLegacyRecordingCompression();
     if (this.#disposePromise) throw new Error('Cannot initialize local workflow storage while shutdown is pending.');
     if (this.#closing && !(this.#catalog instanceof LocalWorkflowCatalog))
       throw new Error('Cannot initialize local workflow storage after shutdown has begun.');
@@ -956,7 +962,10 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
       );
       const next = structuredClone(before);
       const version = this.#version(next, id);
-      assertLegacyEndpointCanBeRestored(loadProjectAndAttachedDataFromString(version.contents)[0], version.datasetsContents);
+      assertLegacyEndpointCanBeRestored(
+        loadProjectAndAttachedDataFromString(version.contents)[0],
+        version.datasetsContents,
+      );
       const endpointName = before.publishedEndpointName || before.endpointName;
       if (!endpointName) throw badRequest('Configure an endpoint name before restoring.');
       const versionId = randomUUID(),
@@ -966,7 +975,14 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
       next.publishedVersionId = versionId;
       next.publishedEndpointName = endpointName;
       next.lastPublishedAt = publishedAt;
-      next.publishedVersions.unshift({ ...version, versionId, endpointName, publishedAt, isStarred: false, comment: '' });
+      next.publishedVersions.unshift({
+        ...version,
+        versionId,
+        endpointName,
+        publishedAt,
+        isStarred: false,
+        comment: '',
+      });
       next.publicationVersion = nextPublicationVersion(before.publicationVersion);
       next.endpointStatus = this.#status(next);
       await this.#commit(structure, [{ before, after: next }]);
@@ -1010,15 +1026,21 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
   }
   async resolvePublishedExecutionTarget(name: string): Promise<WorkflowPublishedExecutionTarget | null> {
     const target = await this.#catalog.resolveExecutionSource({
-      endpointName: normalizeWorkflowEndpointLookupName(name), version: 'published',
+      endpointName: normalizeWorkflowEndpointLookupName(name),
+      version: 'published',
     });
-    return target && {
-      endpointAccess: target.match.bundle.project.endpointAccess,
-      load: async () => {
-        const snapshot = await this.#catalog.loadExecutionSource(target, this.#readOnly ? undefined : this.#executionCache);
-        return this.#execution(snapshot, snapshot.contents, snapshot.datasetsContents);
-      },
-    };
+    return (
+      target && {
+        endpointAccess: target.match.bundle.project.endpointAccess,
+        load: async () => {
+          const snapshot = await this.#catalog.loadExecutionSource(
+            target,
+            this.#readOnly ? undefined : this.#executionCache,
+          );
+          return this.#execution(snapshot, snapshot.contents, snapshot.datasetsContents);
+        },
+      }
+    );
   }
   async loadLatestExecutionProject(name: string) {
     return this.#loadEndpoint(name, 'latest');

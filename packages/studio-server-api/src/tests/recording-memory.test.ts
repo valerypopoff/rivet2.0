@@ -3,6 +3,26 @@ import test from 'node:test';
 import { ExecutionRecorder, type GraphProcessor, type PortId } from '@valerypopoff/rivet2-core';
 import { RecordingMemoryBudget, RecordingMemoryCapacityError } from '../routes/workflows/recording-memory.js';
 
+void test('native codec workspace shares the byte limit and is released after failure', async () => {
+  const budget = new RecordingMemoryBudget({ bytes: 32 });
+  await budget.workspace(24, async () => {
+    assert.equal(budget.snapshot().estimatedBytes, 24);
+    assert.equal(budget.snapshot().captures, 0);
+    await assert.rejects(
+      budget.workspace(16, async () => {}),
+      RecordingMemoryCapacityError,
+    );
+  });
+  await assert.rejects(
+    budget.workspace(32, async () => {
+      throw new Error('codec failed');
+    }),
+    /codec failed/,
+  );
+  assert.equal(budget.snapshot().estimatedBytes, 0);
+  assert.equal(budget.snapshot().captures, 0);
+});
+
 function capture(budget?: RecordingMemoryBudget) {
   let listener: (type: string, data: unknown) => void = () => {};
   let finish: () => void = () => {};

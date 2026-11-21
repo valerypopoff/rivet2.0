@@ -853,13 +853,17 @@ New S3 revision/recording keys carry an `artifact-v1` descriptor suffix with the
 expected stored SHA-256, stored size, decoded size and encoding. SQL retains the
 whole immutable key; S3 metadata cannot redefine the expected descriptor. Uploads
 use conditional creation and verify existing bytes on an idempotent retry.
-Recordings use the configured gzip/identity policy and report actual stored and
-decoded sizes. Stream reads and decompression enforce a 100 MiB per-artifact bound;
+Managed recording traces default to Brotli quality 4; explicit gzip/identity
+configuration remains supported. Project/dataset snapshots and legacy local
+recording formats retain gzip/identity. All report actual stored and decoded
+sizes. Stream reads and decompression enforce a 100 MiB per-artifact bound;
 oversized or corrupt objects fail closed. Earlier descriptor-free plain-text
 objects remain readable within that bound. Recording input-search workers receive
 the descriptor's encoding. Payload uploads/reads have a five-minute absolute
 deadline in addition to transport timeouts. Reconciliation recognizes both key
-generations.
+generations, including unique recompressed trace names. The source-only
+[recompression tool](recording-brotli-plan.md) uses byte-verified pointer swaps
+and the normal deletion outbox; it does not install a background task.
 
 Managed schema 23 enables shared recording project snapshots. Durable
 recording persistence reuses one verified snapshot for the exact project and attached

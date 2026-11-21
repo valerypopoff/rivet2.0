@@ -1,7 +1,7 @@
-import { gunzipSync } from 'node:zlib';
+import { gunzipSync, brotliDecompressSync } from 'node:zlib';
 import { performance } from 'node:perf_hooks';
 
-import type { WorkflowRecordingBlobEncoding } from '../../../../studio-server-shared/workflow-recording-types.js';
+import type { WorkflowRecordingArtifactEncoding } from '../../../../studio-server-shared/workflow-recording-types.js';
 import {
   extractWorkflowInputFromSerializedRecording,
   type WorkflowRecordingExtractedInput,
@@ -20,7 +20,7 @@ export type WorkflowRecordingInputSource =
   | {
       kind: 'artifact';
       bytes: Uint8Array;
-      encoding: WorkflowRecordingBlobEncoding;
+      encoding: WorkflowRecordingArtifactEncoding;
       /** Authoritative decoded size when the storage format supplies one. */
       decodedBytes?: number;
     };
@@ -74,13 +74,16 @@ export function extractWorkflowRecordingInputFromSourceWithTiming(source: Workfl
 
 function decodeWorkflowRecordingArtifact(source: Extract<WorkflowRecordingInputSource, { kind: 'artifact' }>): string {
   const { bytes, encoding, decodedBytes } = source;
+  if (!['identity', 'gzip', 'br'].includes(encoding)) throw new Error('Unsupported recording artifact encoding.');
   if (decodedBytes !== undefined && (!Number.isSafeInteger(decodedBytes) || decodedBytes < 0))
     throw new Error('Invalid recording artifact decoded size.');
   const buffer = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const decoded =
     encoding === 'gzip'
       ? gunzipSync(buffer, decodedBytes === undefined ? {} : { maxOutputLength: Math.max(1, decodedBytes) })
-      : buffer;
+      : encoding === 'br'
+        ? brotliDecompressSync(buffer, decodedBytes === undefined ? {} : { maxOutputLength: Math.max(1, decodedBytes) })
+        : buffer;
   if (decodedBytes !== undefined && decoded.byteLength !== decodedBytes)
     throw new Error('Recording artifact decoded size differs.');
   return new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(decoded);

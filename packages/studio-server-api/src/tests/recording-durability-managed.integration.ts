@@ -35,6 +35,9 @@ import { createRecordingProjectSnapshotRetentionTask } from '../routes/workflows
 import { startAsyncWorkflowProcess, withAsyncDeadline } from './helpers/workflow-async-process.js';
 import { listenTestServer } from './helpers/http-server-harness.js';
 import { verifyHistoricalRecordingCompaction } from '../../maintenance/tests/recording-project-compaction.js';
+import { verifyRecordingRecompression } from '../../maintenance/tests/recording-recompression.js';
+import { parseManagedArtifactDescriptor } from '../routes/workflows/managed/artifact-descriptor.js';
+import { DEFAULT_MANAGED_RECORDING_ENCODING } from '@valerypopoff/rivet-studio-server-bootstrap/recording-storage.mjs';
 import http from 'node:http';
 
 const input = {
@@ -675,6 +678,36 @@ async function main() {
     }
     const context = createManagedWorkflowContext(config, undefined, { migrationMode: 'verify' });
     contexts.push(context);
+    let restoreNumber = 0;
+    const copyBackup = async (objects: RestoreObject[]) => {
+      const database = `rivet_durability_restore_${++restoreNumber}`;
+      const dbContainer = owned[0]!;
+      const fixtureDump = '/tmp/rivet-durability-restore.dump';
+      docker('exec', dbContainer, 'pg_dump', '-U', 'postgres', '-Fc', '-f', fixtureDump, 'rivet_durability');
+      docker('exec', dbContainer, 'createdb', '-U', 'postgres', database);
+      docker('exec', dbContainer, 'pg_restore', '-U', 'postgres', '--exit-on-error', '-d', database, fixtureDump);
+      const objectStoragePrefix = `durability-restored-${restoreNumber}/`;
+      for (const { key, etag } of objects)
+        await s3!.send(
+          new CopyObjectCommand({
+            Bucket: config.objectStorageBucket,
+            CopySource: config.objectStorageBucket + '/' + key,
+            CopySourceIfMatch: etag,
+            Key: objectStoragePrefix + key.slice(config.objectStoragePrefix.length),
+          }),
+        );
+      const databaseUrl = new URL(config.databaseUrl!);
+      databaseUrl.pathname = '/' + database;
+      return createManagedWorkflowContext(
+        { ...config, databaseUrl: databaseUrl.href, objectStoragePrefix },
+        undefined,
+        { migrationMode: 'verify' },
+      );
+    };
+    if (process.argv.includes('--recompression-only')) {
+      await verifyRecordingRecompression(context, config, copyBackup);
+      return;
+    }
     const evidence = new ManagedRecordingEvidence(context);
     const handle = await evidence.begin(input);
     const again = await evidence.begin(input, handle);
@@ -1018,6 +1051,23 @@ async function main() {
       }),
     );
     api = await startAsyncWorkflowProcess(apiOptions);
+    const readTraceFromApi = async (id: string) => {
+      const result = await fetch(`${api!.baseUrl}/api/workflows/recordings/${id}/recording`, {
+        headers: proxyHeaders,
+        signal: AbortSignal.timeout(5000),
+      });
+      const contents = await result.text();
+      assert.equal(result.status, 200, contents);
+      return contents;
+    };
+    const readDefaultEncodedTrace = async (id: string) => {
+      const saved = await pool!.query('SELECT recording_blob_key FROM workflow_recordings WHERE recording_id=$1', [id]);
+      assert.equal(
+        parseManagedArtifactDescriptor(saved.rows[0]?.recording_blob_key)?.encoding,
+        DEFAULT_MANAGED_RECORDING_ENCODING,
+      );
+      return readTraceFromApi(id);
+    };
     const response = await fetch(api.baseUrl + '/workflows/async-acceptance', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -1032,6 +1082,14 @@ async function main() {
       assert.ok(Date.now() < finishBy, api.logs);
       await delay(50);
     }
+    const endpointRow = await pool.query('SELECT recording_id FROM workflow_recordings WHERE workflow_id=$1', [
+      api.projectId,
+    ]);
+    assert.equal(endpointRow.rows.length, 1);
+    assert.ok(
+      ExecutionRecorder.deserializeFromString(await readDefaultEncodedTrace(endpointRow.rows[0].recording_id)).events
+        .length > 0,
+    );
     console.log('Real API route accepted, executed and durably recorded an asynchronous graph.');
 
     const localUrl = api.baseUrl + '/api/workflows/local-editor-recordings';
@@ -1121,6 +1179,7 @@ async function main() {
     );
     await recovered.recover();
     assert.equal((await evidence.read(editorHandle)).availability, 'available');
+    assert.equal(await readDefaultEncodedTrace(editorHandle.id), editorUpload.recordingSerialized);
     const denied = await post('/runs/read', { handle: { ...editorHandle, token: randomUUID() } });
     assert.equal(denied.status, 409);
     console.log(
@@ -1330,32 +1389,16 @@ async function main() {
     assert.ok(!deletedCatalog.workflows.some((item) => item.workflowId === catalogProject.projectMetadataId));
     assert.equal(deletedCatalog.totals!.totalRuns, catalogBefore.totals!.totalRuns);
     console.log('Catalog shows first pending/unavailable runs and counts publication/deletion exactly once.');
-    let restoreNumber = 0;
-    const copyBackup = async (objects: RestoreObject[]) => {
-      const database = `rivet_durability_restore_${++restoreNumber}`;
-      const dbContainer = owned[0]!;
-      const fixtureDump = '/tmp/rivet-durability-restore.dump';
-      docker('exec', dbContainer, 'pg_dump', '-U', 'postgres', '-Fc', '-f', fixtureDump, 'rivet_durability');
-      docker('exec', dbContainer, 'createdb', '-U', 'postgres', database);
-      docker('exec', dbContainer, 'pg_restore', '-U', 'postgres', '--exit-on-error', '-d', database, fixtureDump);
-      const objectStoragePrefix = `durability-restored-${restoreNumber}/`;
-      for (const { key, etag } of objects)
-        await s3!.send(
-          new CopyObjectCommand({
-            Bucket: config.objectStorageBucket,
-            CopySource: config.objectStorageBucket + '/' + key,
-            CopySourceIfMatch: etag,
-            Key: objectStoragePrefix + key.slice(config.objectStoragePrefix.length),
-          }),
-        );
-      const databaseUrl = new URL(config.databaseUrl!);
-      databaseUrl.pathname = '/' + database;
-      return createManagedWorkflowContext(
-        { ...config, databaseUrl: databaseUrl.href, objectStoragePrefix },
-        undefined,
-        { migrationMode: 'verify' },
-      );
-    };
+    await verifyRecordingRecompression(
+      context,
+      config,
+      copyBackup,
+      async () => {
+        await Promise.all(Array.from({ length: 4 }, timedRequest));
+        await waitIdle();
+      },
+      readTraceFromApi,
+    );
     await verifyHistoricalRecordingCompaction(context, {
       baseUrl: api.baseUrl,
       headers: proxyHeaders,

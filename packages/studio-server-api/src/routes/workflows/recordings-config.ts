@@ -4,10 +4,12 @@ import type {
   RunRecordingsSettings,
   RunRecordingsSettingsDraft,
 } from '../../../../studio-server-shared/app-settings-types.js';
+import type { WorkflowRecordingArtifactEncoding } from '@valerypopoff/rivet-studio-server-shared/workflow-recording-types.js';
 import { VersionedSettingsRepository } from '../../app-settings/settings-repository.js';
 import { parseBoolean, parseEnum, parseIntWithMinimum } from '../../utils/env-parsing.js';
 import { getAppDataRoot } from '../../security.js';
 import { recordingMemory } from './recording-memory.js';
+import { DEFAULT_MANAGED_RECORDING_ENCODING } from '@valerypopoff/rivet-studio-server-bootstrap/recording-storage.mjs';
 
 export type WorkflowRecordingCompression = 'gzip' | 'identity';
 
@@ -33,6 +35,8 @@ const MAX_RECORDING_SETTING_VALUE = 1_000_000;
 export type WorkflowRecordingRuntimeConfig = {
   enabled: boolean;
   compression: WorkflowRecordingCompression;
+  /** Only managed traces use this default; other artifacts preserve their encoding. */
+  managedTraceEncoding?: WorkflowRecordingArtifactEncoding;
   gzipLevel: number;
   includePartialOutputs: boolean;
   includeTrace: boolean;
@@ -167,18 +171,31 @@ export async function writeRunRecordingsSettings(
 }
 
 export function getWorkflowRecordingRuntimeConfig(): WorkflowRecordingRuntimeConfig {
-  const compression = parseEnum(process.env.RIVET_RECORDINGS_COMPRESS, ['gzip', 'identity'], 'gzip');
+  const selected = parseEnum(
+    process.env.RIVET_RECORDINGS_COMPRESS,
+    ['gzip', 'identity', 'br'],
+    DEFAULT_MANAGED_RECORDING_ENCODING,
+  );
+  if (selected === 'br' && DEFAULT_MANAGED_RECORDING_ENCODING !== 'br')
+    throw new Error('This reader-only release cannot write Brotli recordings.');
+  const compression = selected === 'br' ? 'gzip' : selected;
   const datasetMode = parseEnum(process.env.RIVET_RECORDINGS_DATASET_MODE, ['none', 'all'], 'none');
 
   return {
     enabled: parseBoolean(process.env.RIVET_RECORDINGS_ENABLED, true),
     compression,
+    managedTraceEncoding: selected,
     gzipLevel: Math.min(9, parseIntWithMinimum(process.env.RIVET_RECORDINGS_GZIP_LEVEL, 4, 0)),
     includePartialOutputs: parseBoolean(process.env.RIVET_RECORDINGS_INCLUDE_PARTIAL_OUTPUTS, false),
     includeTrace: parseBoolean(process.env.RIVET_RECORDINGS_INCLUDE_TRACE, false),
     datasetMode,
     maxTotalBytes: parseIntWithMinimum(process.env.RIVET_RECORDINGS_MAX_TOTAL_BYTES, 0, 0),
   };
+}
+
+export function assertLegacyRecordingCompression(): void {
+  if (process.env.RIVET_RECORDINGS_COMPRESS?.trim().toLowerCase() === 'br')
+    throw new Error('Brotli recording compression requires managed PostgreSQL/object storage.');
 }
 
 /** Live limits remain authoritative for retention and explicit settings reads. */

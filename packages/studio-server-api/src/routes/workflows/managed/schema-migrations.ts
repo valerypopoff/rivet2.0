@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { assertRecordingTransactionLock } from '@valerypopoff/rivet-studio-server-bootstrap/recording-storage.mjs';
 
 import type { Pool, PoolClient, QueryResultRow } from 'pg';
 
@@ -1115,8 +1116,16 @@ export const MANAGED_WORKFLOW_SCHEMA_REQUIRED_CONSTRAINTS = [
   ['workflow_endpoint_releases', 'p', 'PRIMARY KEY (release_id)'],
   ['workflow_endpoint_releases', 'f', 'FOREIGN KEY (workflow_id) REFERENCES workflows(workflow_id) ON DELETE CASCADE'],
   ['workflow_endpoint_release_projects', 'p', 'PRIMARY KEY (release_id, revision_id)'],
-  ['workflow_endpoint_release_projects', 'f', 'FOREIGN KEY (release_id) REFERENCES workflow_endpoint_releases(release_id) ON DELETE CASCADE'],
-  ['workflow_published_versions', 'f', 'FOREIGN KEY (release_id) REFERENCES workflow_endpoint_releases(release_id) ON DELETE CASCADE'],
+  [
+    'workflow_endpoint_release_projects',
+    'f',
+    'FOREIGN KEY (release_id) REFERENCES workflow_endpoint_releases(release_id) ON DELETE CASCADE',
+  ],
+  [
+    'workflow_published_versions',
+    'f',
+    'FOREIGN KEY (release_id) REFERENCES workflow_endpoint_releases(release_id) ON DELETE CASCADE',
+  ],
   ['resource_monitoring_instances', 'p', 'PRIMARY KEY (installation, incarnation)'],
   ['resource_monitoring_minutes', 'p', 'PRIMARY KEY (installation, incarnation, bucket_at)'],
   ['workflow_run_evidence', 'p', 'PRIMARY KEY (run_id)'],
@@ -1779,6 +1788,8 @@ async function runManagedWorkflowSchema(
     }
 
     if (mode === 'migrate') {
+      if (currentVersion < CURRENT_MANAGED_WORKFLOW_SCHEMA_VERSION)
+        await assertRecordingTransactionLock(client, 'shared');
       if (
         rolling &&
         MANAGED_WORKFLOW_SCHEMA_MIGRATIONS.some(

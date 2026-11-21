@@ -58,7 +58,11 @@ import {
   reportRecordingFailure,
   type RecordingDiagnosticContext,
 } from './recording-diagnostics.js';
-import { getWorkflowRecordingRuntimeConfig, isWorkflowRecordingEnabled } from './recordings-config.js';
+import {
+  assertLegacyRecordingCompression,
+  getWorkflowRecordingRuntimeConfig,
+  isWorkflowRecordingEnabled,
+} from './recordings-config.js';
 import {
   ensureWorkflowRecordingsRoot,
   getWorkflowRecordingBundlePath,
@@ -438,6 +442,7 @@ export async function flushWorkflowRecordingIndexRepairForTests(): Promise<void>
 }
 
 export async function initializeWorkflowRecordingStorage(root?: string): Promise<void> {
+  if (!migrationCopyMode) assertLegacyRecordingCompression();
   const recordingsRoot = await ensureWorkflowRecordingsRoot(root);
   await workflowRecordingStore.ensureStorage(recordingsRoot, { skipCleanup: migrationCopyMode });
   lastIndexRepairStartedAt = Date.now();
@@ -757,6 +762,7 @@ export async function deleteWorkflowRecording(root: string, recordingId: string)
 export async function persistWorkflowExecutionRecording(
   options: PersistWorkflowExecutionRecordingOptions,
 ): Promise<string | undefined> {
+  assertLegacyRecordingCompression();
   if (!isWorkflowRecordingEnabled()) {
     return undefined;
   }
@@ -956,6 +962,7 @@ export async function resetWorkflowRecordingStorageForTests(): Promise<void> {
   lastIndexRepairStartedAt = 0;
   unresolvedWorkflowRecordingDriftSignature = null;
   await workflowRecordingStore.resetForTests();
+  migrationCopyMode = false;
 }
 
 export async function getWorkflowRecordingStorageSchemaVersion(): Promise<string | null> {

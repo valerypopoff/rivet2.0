@@ -11,6 +11,36 @@ acceptance matrix and the completed scope.
 
 ## Guarantees and limits
 
+Managed recording traces now support `identity`, `gzip` and Brotli (`br`) in the
+existing hash/length descriptor. New managed traces default to Brotli quality 4;
+the existing explicit compression setting still overrides the default. Projects
+and datasets retain their codecs. Legacy filesystem/SQLite writers reject an
+explicit `br` setting, and otherwise preserve their format. Search workers and
+playback decode all managed codecs with the same integrity and output-size checks.
+
+The source-only [Brotli/recompression operation](recording-brotli-plan.md) explains
+the reader-first rollout gate, bounded conversion, resume receipts and transition
+coordination. It installs no background compactor. Recompression skips every
+recording with retained run evidence, compares exact decoded bytes before swapping
+only the trace pointer/encoded size, and retires old files through ordinary
+reference-checked maintenance. Readers recheck a replaced missing trace once;
+input searches re-evaluate a changed source without silently advancing their cursor.
+
+Brotli preparation reserves 32 MiB of transient codec workspace within the
+existing shared recording-memory ceiling and releases it after native compression
+settles. This is separate from retained input/output accounting. Capacity exhaustion
+keeps the existing recording-unavailable behavior; it does not fail a successful
+business run. Local 5/32/99 MiB incompressible probes observed up to roughly
+22 MiB higher compression peaks than gzip. These probes are not a hard bound on
+whole-process RSS or a production latency measurement.
+
+If artifact preparation fails, all started compressors settle before the retained
+recording reservation is released. Successful preparations remain concurrent.
+The historical converter charges failed reads against its work budget and stops
+without advancing past a confirmed unpublished transaction. Its release guard
+requires a completed journal for the installed reader release, rather than treating
+an expired process lease as proof that a deployment finished.
+
 With managed storage, recording enabled and
 `RIVET_RECORDING_DURABILITY_ENABLED=true`, production endpoints, HTTP/WebSocket
 web-app actions and API execution sessions allocate a stable recording identity
@@ -193,7 +223,7 @@ fully measured; garbage collection can retain released allocations temporarily.
 Capacity exhaustion discards replay data without cancelling the graph. Known
 outcomes and costs remain separate; managed evidence uses its existing capacity
 unavailability state and child captures mark coverage incomplete. The v1 replay
-codec, immutable artifacts and retry protocol are unchanged. The
+payload format, immutable artifacts and retry protocol are unchanged. The
 [implementation and serialization assessment](recording-memory-and-serialization-plan.md)
 records validation and why raw worker transfer was not enabled.
 The current local measurements have not cleared the strict no-slowdown release

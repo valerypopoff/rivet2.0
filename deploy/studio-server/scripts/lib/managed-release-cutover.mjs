@@ -68,7 +68,12 @@ export function requiresMaintenanceCutover(manifest, installedValues) {
   if (!installedValues) return false;
   const current = installedValues.release?.production?.database?.managedWorkflowSchemaVersion;
   if (!Number.isInteger(current)) return true;
-  return current < manifest.database.managedWorkflowSchema.minimumRollbackCompatibleVersion;
+  const oldCodecs = installedValues.release?.production?.recordingStorage?.readableEncodings ?? ['identity', 'gzip'];
+  const newCodecs = manifest.recordingStorage?.writableEncodings ?? ['identity', 'gzip'];
+  return (
+    current < manifest.database.managedWorkflowSchema.minimumRollbackCompatibleVersion ||
+    newCodecs.some((codec) => !oldCodecs.includes(codec))
+  );
 }
 
 export function assertCutoverJournal(journal, { release, namespace }) {

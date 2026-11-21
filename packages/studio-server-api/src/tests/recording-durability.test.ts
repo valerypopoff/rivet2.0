@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { randomUUID } from 'node:crypto';
+import { spawnSync } from 'node:child_process';
 import type { NodeCreatedProcessor } from '@valerypopoff/rivet2-node';
 import { ExecutionSession } from '../routes/workflows/execution-session.js';
 import type { RunEvidenceRepository, RunEvidenceOutcome } from '../../../studio-server-shared/workflow-run-evidence.js';
@@ -66,6 +67,49 @@ test('durable recording defaults on and preserves explicit opt-out', async () =>
   await withScopedEnv([key], { [key]: 'invalid' }, () => {
     assert.throws(recordingDurabilityEnabled, /must be true or false/);
   });
+});
+
+test('failed trace preparation holds its reservation until sibling compression settles', () => {
+  const compiled = new URL(
+    import.meta.url.endsWith('.ts') ? '../../dist/studio-server-api/src/' : '../',
+    import.meta.url,
+  );
+  const result = spawnSync(
+    process.execPath,
+    [
+      ...process.execArgv,
+      '--input-type=module',
+      '-e',
+      `
+      import assert from 'node:assert/strict';
+      import zlib from 'node:zlib';
+      import { syncBuiltinESMExports } from 'node:module';
+      import { randomUUID } from 'node:crypto';
+      import { setImmediate } from 'node:timers/promises';
+      const finish = [];
+      zlib.gzip = (_bytes, _options, callback) => finish.push(() => callback(null, Buffer.from('compressed')));
+      syncBuiltinESMExports();
+      const { ManagedRecordingEvidence } = await import(${JSON.stringify(new URL('routes/workflows/managed/recording-evidence.js', compiled).href)});
+      const handle = { id: randomUUID(), token: randomUUID() };
+      const row = { run_id: handle.id, workflow_id: 'project', state: 'succeeded', availability: 'pending',
+        upload_until: new Date(Date.now() + 60000), input_json: { runKind: 'published' },
+        manifest_json: { compression: true, artifacts: [{ key: 'trace', decodedBytes: 999 }], row: { recordingBlobKey: 'trace' } } };
+      const repository = new ManagedRecordingEvidence({ initialize: async () => {}, pool: { query: async () => ({ rows: [row] }) } });
+      const project = { metadata: { id: 'project', title: 'Test', description: '' }, graphs: {} };
+      let settled = false;
+      const work = repository.persist({ sourceProject: project, executedProject: project, executedDatasets: [],
+        recordingSerialized: '{}', runKind: 'published', status: 'succeeded', durationMs: 1 }, handle)
+        .then(() => null, error => { settled = true; return error; });
+      await setImmediate();
+      assert.equal(finish.length, 1, 'Sibling gzip preparation started');
+      assert.equal(settled, false, 'A failed trace must not release ownership while gzip is still pending');
+      finish[0]();
+      assert.match((await work).message, /differs from its manifest/);
+    `,
+    ],
+    { encoding: 'utf8', timeout: 15_000, windowsHide: true },
+  );
+  assert.equal(result.status, 0, result.stderr || result.stdout);
 });
 
 test('history distinguishes accepted execution, expired ownership and deleted replay readiness', () => {

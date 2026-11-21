@@ -46,6 +46,7 @@ export type ManagedObjectDeletionReason =
   | 'workflow-recording-deletion'
   | 'workflow-recording-retention'
   | 'workflow-recording-snapshot-retention'
+  | 'workflow-recording-recompression'
   | 'workflow-stale-upload-reconciliation';
 
 const EXPLICIT_WORKFLOW_DELETION_REASONS = new Set<ManagedObjectDeletionReason>([
@@ -54,6 +55,7 @@ const EXPLICIT_WORKFLOW_DELETION_REASONS = new Set<ManagedObjectDeletionReason>(
   'workflow-recording-deletion',
   'workflow-recording-retention',
   'workflow-recording-snapshot-retention',
+  'workflow-recording-recompression',
 ]);
 
 export function isManagedObjectDeletionReason(value: string): value is ManagedObjectDeletionReason {

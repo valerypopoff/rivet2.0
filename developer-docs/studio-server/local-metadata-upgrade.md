@@ -758,6 +758,8 @@ skips compression. Migration always preserves the source encoding independently
 of those new-write settings, including empty gzip payloads. Playback, download,
 replay and exact verification use checksum-verified
 stored bytes and bounded decompression, returning the original text including BOM.
+Explicit `br` is rejected for filesystem/SQLite writers. Managed S3 trace Brotli
+support does not change the legacy local recording envelope or imports/exports.
 Artifact reads check the catalog's stored size against the regular file and its
 opened handle before allocating its buffer, then verify the hash and stable file
 identity. A corrupt oversized object cannot bypass size admission by matching the

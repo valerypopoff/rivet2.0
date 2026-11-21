@@ -317,6 +317,21 @@ export class RecordingMemoryBudget {
       return Promise.reject(error);
     }
   }
+
+  /** Native codec workspace shares the existing byte ceiling without
+   * pretending to be another captured run. Always release after settlement. */
+  async workspace<T>(bytes: number, run: () => Promise<T>): Promise<T> {
+    if (!Number.isSafeInteger(bytes) || bytes < 0) throw new Error('Invalid recording workspace size.');
+    if (!this.resize(0, bytes)) {
+      this.reject();
+      throw new RecordingMemoryCapacityError();
+    }
+    try {
+      return await run();
+    } finally {
+      this.resize(bytes, 0);
+    }
+  }
 }
 
 export const recordingMemory = new RecordingMemoryBudget();

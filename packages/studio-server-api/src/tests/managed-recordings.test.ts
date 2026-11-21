@@ -84,7 +84,11 @@ test('managed persistence supplies the captured start to the existing timestamp 
   );
   t.mock.method(console, 'error', () => {});
   const id = await service.persistWorkflowExecutionRecording({
-    ...input, status: 'failed', onPersisted: async () => { throw new Error('notification failed'); },
+    ...input,
+    status: 'failed',
+    onPersisted: async () => {
+      throw new Error('notification failed');
+    },
   });
   assert.ok(id);
   assert.equal(writes.length, 5, 'a notification error cannot retry or discard the metadata insert');
@@ -499,6 +503,9 @@ test('managed input continuations enrich only matches and preserve progress acro
             { ...rows[1]!, recording_blob_key: 'replaced' },
           ];
         }
+        if (sql.startsWith('SELECT recording_id,recording_blob_key')) {
+          return [{ recording_id: 'race-1', recording_blob_key: 'replaced' }];
+        }
         assert.doesNotMatch(sql, /has_sub_runs|source_project_name|replay_project_blob_key/);
         return rows.slice(Number(parameters[2]));
       },
@@ -524,13 +531,13 @@ test('managed input continuations enrich only matches and preserve progress acro
   assert.equal(page.scopeCounts, undefined);
   assert.deepEqual(
     page.runs.map((row) => row.id),
-    ['race-3'],
+    ['race-1', 'race-3'],
   );
-  assert.equal(page.runs[0]!.hasSubRuns, true);
+  assert.equal(page.runs[1]!.hasSubRuns, true);
   assert.equal(page.inputSearchAnalyzedRuns, 4);
   assert.equal(page.hasMore, false);
   assert.equal(page.totalRunsExact, false);
-  assert.equal(queries.length, 2);
+  assert.equal(queries.length, 3);
 });
 
 test('managed search validates cursors before counts and stops after a canceled active metadata read', async () => {
@@ -572,6 +579,71 @@ test('managed search validates cursors before counts and stops after a canceled 
   finish();
   await assert.rejects(search, { name: 'AbortError' });
   assert.equal(windows, 0);
+});
+
+test('input search rechecks replaced traces during extraction and hydration without skipping later matches', async () => {
+  for (const phase of ['missing', 'hydration'] as const) {
+    const old = createRecordingRow(`replacement-${phase}`, 'endpoint', '2026-08-04T12:00:01.000Z');
+    const later = createRecordingRow(`later-${phase}`, 'endpoint', '2026-08-04T12:00:00.000Z');
+    const current = { ...old, recording_blob_key: `current-${phase}` };
+    let replaced = false;
+    const reads: string[] = [];
+    const context = {
+      pool: {},
+      initialize: async () => {},
+      revisions: {},
+      db: {
+        queryOne: async (_pool: unknown, sql: string) =>
+          sql.includes('WHERE recording_id=$1') ? current : { totalRuns: 2, failedRuns: 0, suspiciousRuns: 0 },
+        queryRows: async (_pool: unknown, sql: string) => {
+          if (sql.includes('WITH recording_matches')) {
+            replaced = true;
+            return [current, later];
+          }
+          if (sql.startsWith('SELECT recording_id,recording_blob_key')) return [current];
+          return [replaced ? current : old, later];
+        },
+      },
+      blobStore: {
+        getText: async (key: string) => {
+          reads.push(key);
+          if (key === old.recording_blob_key && phase === 'missing') {
+            replaced = true;
+            throw Object.assign(new Error('missing'), { name: 'NoSuchKey' });
+          }
+          return JSON.stringify({
+            recording: {
+              events: [
+                {
+                  type: 'start',
+                  data: {
+                    inputs: {
+                      input: { value: { request_id: key === current.recording_blob_key ? 'other' : 'needle' } },
+                    },
+                  },
+                },
+              ],
+            },
+          });
+        },
+      },
+      mappers: { RECORDING_COLUMNS: 'recording_id', toIsoString: (value: unknown) => String(value) },
+    } as unknown as ManagedWorkflowContext;
+    const result = await createManagedWorkflowRecordingService({ context }).listWorkflowRecordingRunsPage(
+      '',
+      1,
+      20,
+      'all',
+      { path: '$.request_id', operator: '==', value: 'needle' },
+    );
+    assert.deepEqual(
+      result.runs.map((row) => row.id),
+      [later.recording_id],
+      phase,
+    );
+    assert.equal(result.hasMore, false, phase);
+    assert.ok(reads.includes(current.recording_blob_key), phase);
+  }
 });
 
 test('managed input filtering reads a bounded newest-first window and returns a fresh match immediately', async () => {

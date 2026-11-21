@@ -12,6 +12,10 @@ covers the supported PostgreSQL/S3 deployments, including local storage with
 MinIO. Durable opt-out, legacy imports and filesystem and SQLite
 compatibility continue to produce per-recording artifacts.
 
+The separate [Brotli recording plan](recording-brotli-plan.md) covers the new
+trace codec and bounded historical recompression command. Those changes are
+implemented locally and do not change shared project snapshot ownership or retention.
+
 Fingerprint the same executed project and attached data that capture already
 hands to persistence. Serialize with the original project ID and hash the
 exact UTF-8 bytes before compression. The existing serializer stabilizes

@@ -17,6 +17,7 @@ import {
   ManagedArtifactIntegrityError,
   MAX_MANAGED_ARTIFACT_BYTES,
   prepareManagedTextArtifact,
+  decodeManagedArtifactBytes,
   verifyManagedArtifactBytes,
   type ManagedArtifactDescriptor,
 } from './artifact-descriptor.js';
@@ -24,6 +25,7 @@ import {
   createRecordingBlobKey,
   createRecordingProjectSnapshotKey,
   isRecordingProjectSnapshotKey,
+  isMissingManagedWorkflowObject,
 } from './blob-store.js';
 import {
   confirmRecordingProjectSnapshot,
@@ -571,13 +573,24 @@ export class ManagedRecordingEvidence implements RunEvidenceRepository {
         await this.unavailable(handle, 'capacity');
         throw error;
       }
-      const [recording, dataset, dedicated] = await Promise.all([
-        prepare(createRecordingBlobKey(workflowId, handle.id, 'recording'), options.recordingSerialized),
+      const preparations = [
+        this.#prepareTrace(
+          current,
+          options.recordingSerialized,
+          policy.managedTraceEncoding ?? policy.compression,
+          gzipLevel,
+        ),
         datasetText === null
           ? null
           : prepare(createRecordingBlobKey(workflowId, handle.id, 'replay-dataset'), datasetText),
         projectText === undefined ? undefined : prepareDedicatedProject(projectText),
-      ]);
+      ] as const;
+      const [recording, dataset, dedicated] = await Promise.all(preparations).catch(async (error: unknown) => {
+        // Native compression keeps its input alive until its callback settles.
+        // Keep ownership of sibling work even when another preparation fails.
+        await Promise.allSettled(preparations);
+        throw error;
+      });
       const buildManifest = (project: ManagedArtifactDescriptor, replayProjectDigest?: string): Manifest => ({
         compression,
         gzipLevel,
@@ -702,6 +715,46 @@ export class ManagedRecordingEvidence implements RunEvidenceRepository {
     } finally {
       this.#activeBytes -= estimate;
     }
+  }
+
+  async #prepareTrace(
+    current: EvidenceRow,
+    text: string,
+    encoding: ManagedArtifactDescriptor['encoding'],
+    gzipLevel: number,
+  ): Promise<PreparedArtifact> {
+    const manifest = current.manifest_json;
+    const bound = manifest?.artifacts.find((item) => item.key === manifest.row.recordingBlobKey);
+    if (!bound) {
+      if (manifest) throw new RecordingIntegrityError('The recording manifest has no trace artifact.');
+      return prepareManagedTextArtifact(
+        createRecordingBlobKey(current.workflow_id, current.run_id, 'recording'),
+        text,
+        encoding,
+        gzipLevel,
+      );
+    }
+    if (Buffer.byteLength(text) !== bound.decodedBytes) throw conflict('Recording content differs from its manifest.');
+    if (!this.context.blobStore.getBytes) throw new Error('Durable recording storage requires verified bytes.');
+    try {
+      const bytes = await this.context.blobStore.getBytes(bound.key);
+      const decoded = await decodeManagedArtifactBytes(bytes, bound);
+      if (!Buffer.from(decoded.buffer, decoded.byteOffset, decoded.byteLength).equals(Buffer.from(text)))
+        throw conflict('Recording content differs from its manifest.');
+      return { descriptor: bound, bytes: Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength) };
+    } catch (error) {
+      if (!isMissingManagedWorkflowObject(error)) throw error;
+    }
+    // Only a missing upload may be reproduced. Never replace the manifest with
+    // a different compressor result after a process or configuration change.
+    const rebuilt = await prepareManagedTextArtifact(
+      createRecordingBlobKey(current.workflow_id, current.run_id, 'recording'),
+      text,
+      bound.encoding,
+      gzipLevel,
+    );
+    verifyManagedArtifactBytes(rebuilt.bytes, bound);
+    return { ...rebuilt, descriptor: bound };
   }
 
   async recover(): Promise<void> {

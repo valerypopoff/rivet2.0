@@ -11,7 +11,9 @@ import { Agent, request as httpRequest } from 'node:http';
 
 // Local-only black-box comparison. Runtime modules are never patched. Both
 // versions use the same test fixture and image dependencies, with their own builds.
-const packages = ['core', 'node', 'evaluations', 'studio-server-api'];
+const packages = ['core', 'node', 'evaluations', 'studio-server-api', 'studio-server-bootstrap'];
+const packageDirectory = (root, pkg) =>
+  path.join(root, 'packages', pkg, ...(pkg === 'studio-server-bootstrap' ? [] : ['dist']));
 const script = fileURLToPath(import.meta.url);
 const docker = (...args) =>
   execFileSync('docker', args, { encoding: 'utf8', timeout: 120_000, stdio: ['ignore', 'pipe', 'pipe'] }).trim();
@@ -44,6 +46,8 @@ export function parseOptions(args = process.argv.slice(2)) {
     'audit-timeout-ms',
     'first-side',
     'settings-backend',
+    'original-compression',
+    'candidate-compression',
   ]);
   for (let index = 0; index < args.length; index += 2) {
     const key = args[index]?.replace(/^--/, '');
@@ -52,6 +56,9 @@ export function parseOptions(args = process.argv.slice(2)) {
   }
   for (const key of ['original', 'candidate', 'output', 'image']) assert.ok(result[key], `Missing --${key}`);
   result.profile ??= 'production';
+  for (const side of ['original', 'candidate'])
+    if (result[`${side}-compression`] !== undefined)
+      assert.ok(['gzip', 'identity', 'br'].includes(result[`${side}-compression`]), 'Invalid recording codec');
   result.backend ??= 'managed';
   result.workload ??= 'small';
   result.diagnostics ??= 'none';
@@ -214,7 +221,7 @@ export async function fingerprint(root) {
   const hash = createHash('sha256');
   const servingHash = createHash('sha256');
   for (const pkg of packages) {
-    const dir = path.join(root, 'packages', pkg, 'dist');
+    const dir = packageDirectory(root, pkg);
     const files = (await fs.readdir(dir, { recursive: true, withFileTypes: true }))
       .filter((entry) => entry.isFile())
       .map((entry) => path.join(entry.parentPath, entry.name))
@@ -417,8 +424,9 @@ async function compare() {
     for (const pkg of packages)
       args.push(
         '--mount',
-        `type=bind,source=${path.join(sources[side], 'packages', pkg, 'dist')},target=/app/packages/${pkg}/dist,readonly`,
+        `type=bind,source=${packageDirectory(sources[side], pkg)},target=/app/packages/${pkg}${pkg === 'studio-server-bootstrap' ? '' : '/dist'},readonly`,
       );
+    if (config[`${side}-compression`]) args.push('-e', `BENCH_RECORDING_COMPRESSION=${config[`${side}-compression`]}`);
     // Only the identical test fixture is shared; each side's application code
     // and Core/Node implementation come entirely from its fingerprinted build.
     args.push(
@@ -815,6 +823,7 @@ async function serve() {
   const backend = process.env.BENCH_BACKEND;
   const root = '/tmp/recording-benchmark';
   const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('RIVET_')));
+  if (process.env.BENCH_RECORDING_COMPRESSION) env.RIVET_RECORDINGS_COMPRESS = process.env.BENCH_RECORDING_COMPRESSION;
   Object.assign(env, {
     PORT: '8080',
     RIVET_ASYNC_TEST_ROOT: root,

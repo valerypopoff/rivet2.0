@@ -287,8 +287,8 @@ test('benchmark entry point preserves an existing result directory before starti
 test('benchmark fingerprints distinguish serving code from the common test fixture', async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'recording-fingerprint-'));
   t.after(() => fs.rm(root, { recursive: true }));
-  for (const pkg of ['core', 'node', 'evaluations', 'studio-server-api']) {
-    const dir = path.join(root, 'packages', pkg, 'dist');
+  for (const pkg of ['core', 'node', 'evaluations', 'studio-server-api', 'studio-server-bootstrap']) {
+    const dir = path.join(root, 'packages', pkg, ...(pkg === 'studio-server-bootstrap' ? [] : ['dist']));
     await fs.mkdir(dir, { recursive: true });
     await fs.writeFile(path.join(dir, 'server.js'), 'serving code');
   }

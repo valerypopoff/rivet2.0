@@ -52,6 +52,8 @@
     "bench:runtime-attribution": "yarn workspace @valerypopoff/rivet2-node run bench:runtime-attribution",
     "studio-server:recordings:benchmark": "node scripts/benchmark-recording-memory.mjs",
     "studio-server:recording-projects:compact": "yarn workspace @valerypopoff/rivet-studio-server-api exec tsx maintenance/compact-recording-projects.ts",
+    "studio-server:recordings:recompress": "yarn workspace @valerypopoff/rivet-studio-server-api exec tsx maintenance/recompress-recordings.ts",
+    "studio-server:recordings:guard-transition": "yarn workspace @valerypopoff/rivet-studio-server-api exec tsx maintenance/recording-storage-transition.ts",
     "lint": "yarn workspace @valerypopoff/rivet2-core run lint && yarn workspace @valerypopoff/rivet2-node run lint && yarn workspace @valerypopoff/rivet-app run lint && yarn workspace @valerypopoff/rivet2-evaluations run lint && yarn workspace @valerypopoff/rivet-app-executor run lint && yarn workspace @valerypopoff/rivet2-cli run lint",
     "prettier:check": "prettier --check --end-of-line auto package.json \"scripts/checks/*.{mjs,mts}\" \"scripts/ci/*.mjs\" \"deploy/studio-server/scripts/{api-test-files,candidate-image-smoke,candidate-image-smoke.test,clean-docker,clean-docker.test,run-api-tests,watch-api-workspace-dependencies,watch-api-workspace-dependencies.test}.mjs\"",
     "prettier:fix": "prettier --write .",

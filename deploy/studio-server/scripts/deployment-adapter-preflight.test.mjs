@@ -72,6 +72,10 @@ async function fixture(t) {
   };
   return { root, requirements, request, receiptPath: path.join(directory, 'receipt.json'), options, calls };
 }
+async function rejectWithoutReceipt(f, reason) {
+  await assert.rejects(runDeploymentAdapterPreflight(f, f.options), reason);
+  await assert.rejects(fs.stat(f.receiptPath), { code: 'ENOENT' });
+}
 test('local adapter preflight verifies bounded storage, scratch readback and fixed non-cluster commands', async (t) => {
   const f = await fixture(t);
   const result = await runDeploymentAdapterPreflight(f, f.options);
@@ -97,11 +101,7 @@ test('local adapter preflight verifies bounded storage, scratch readback and fix
     f.calls.some((c) => c.args.some((a) => ['pull', 'apply', 'get', 'restore', 'run'].includes(a))),
     false,
   );
-  const files = await fs.readdir(path.dirname(f.receiptPath));
-  assert.equal(
-    files.some((file) => file.startsWith('.readiness-')),
-    false,
-  );
+  assert.ok(!(await fs.readdir(path.dirname(f.receiptPath))).some((file) => file.startsWith('.readiness-')));
 });
 test('changed identities, dependencies and insufficient capacity fail before any local child starts', async (t) => {
   for (const flaw of ['stage', 'installation', 'dependency', 'capacity', 'unbound-probe']) {
@@ -111,12 +111,38 @@ test('changed identities, dependencies and insufficient capacity fail before any
     if (flaw === 'dependency') await fs.writeFile(path.join(f.root, 'probe.mjs'), 'changed');
     if (flaw === 'capacity') f.options.statfs = async () => ({ bavail: 1300n, bsize: 1n });
     if (flaw === 'unbound-probe') f.requirements.dependencies = f.requirements.dependencies.slice(1);
-    await assert.rejects(
-      runDeploymentAdapterPreflight(f, f.options),
-      /request identity|dependency changed|headroom|probe files must be/,
-    );
+    await rejectWithoutReceipt(f, /request identity|dependency changed|headroom|probe files must be/);
     assert.equal(f.calls.length, 0);
-    await assert.rejects(fs.stat(f.receiptPath), { code: 'ENOENT' });
+  }
+});
+
+test('codec preflight verifies every declared reader before issuing its receipt', async (t) => {
+  for (const missingIdentityReader of [false, true]) {
+    const f = await fixture(t);
+    f.request.requiredRecordingEncodings = ['gzip'];
+    const module = path.join(
+      f.root,
+      'packages/studio-server-api/dist/studio-server-api/src/routes/workflows/managed/artifact-descriptor.js',
+    );
+    await fs.mkdir(path.dirname(module), { recursive: true });
+    await fs.writeFile(path.join(f.root, 'package.json'), JSON.stringify({ type: 'module' }));
+    await fs.writeFile(
+      module,
+      `export async function prepareManagedTextArtifact(key, text, encoding) {
+        if (${missingIdentityReader} && encoding === 'identity') throw Error('Missing identity reader');
+        return { bytes: text, descriptor: { encoding } };
+      }
+      export async function decodeManagedArtifact(bytes) { return bytes; }`,
+    );
+    if (missingIdentityReader) {
+      await rejectWithoutReceipt(f, /Missing identity reader/);
+    } else {
+      await runDeploymentAdapterPreflight(f, f.options);
+      const proof = JSON.parse(
+        await fs.readFile(path.join(path.dirname(f.receiptPath), 'recording-storage.json'), 'utf8'),
+      );
+      assert.deepEqual(proof.checked, ['identity', 'gzip', 'br']);
+    }
   }
 });
 test('wrong cached image, missing import evidence or failed executable cannot produce a successful receipt', async (t) => {
@@ -130,10 +156,6 @@ test('wrong cached image, missing import evidence or failed executable cannot pr
       if (flaw === 'tool') throw Error('synthetic missing tool');
       return original(executable, args);
     };
-    await assert.rejects(
-      runDeploymentAdapterPreflight(f, f.options),
-      /image identity changed|required prerequisite|Local prerequisite/,
-    );
-    await assert.rejects(fs.stat(f.receiptPath), { code: 'ENOENT' });
+    await rejectWithoutReceipt(f, /image identity changed|required prerequisite|Local prerequisite/);
   }
 });

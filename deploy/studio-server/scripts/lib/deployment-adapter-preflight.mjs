@@ -3,6 +3,7 @@ import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { pathToFileURL } from 'node:url';
 
 const execute = promisify(execFile);
 const digest = (bytes) => `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
@@ -197,6 +198,29 @@ export async function runDeploymentAdapterPreflight(
       capacity: { passed: true, observed: true, evidence: 'capacity.json' },
     },
   };
+  if (request.requiredRecordingEncodings) {
+    const artifactModule = path.join(
+      root,
+      'packages/studio-server-api/dist/studio-server-api/src/routes/workflows/managed/artifact-descriptor.js',
+    );
+    const { prepareManagedTextArtifact, decodeManagedArtifact } = await import(pathToFileURL(artifactModule).href);
+    const text = JSON.stringify({ recording: { events: [] }, test: 'recording codec preflight' });
+    const checked = [...new Set(['identity', 'gzip', 'br', ...request.requiredRecordingEncodings])];
+    for (const encoding of checked) {
+      const artifact = await prepareManagedTextArtifact(
+        'probe/recordings/probe/recording.rivet-recording',
+        text,
+        encoding,
+      );
+      if ((await decodeManagedArtifact(artifact.bytes, artifact.descriptor)) !== text)
+        throw Error('Recording codec preflight failed.');
+    }
+    await fs.writeFile(path.join(directory, 'recording-storage.json'), JSON.stringify({ checked, exactBytes: true }), {
+      flag: 'wx',
+      mode: 0o600,
+    });
+    receipt.checks.recordingStorage = { passed: true, observed: true, evidence: 'recording-storage.json' };
+  }
   await fs.writeFile(receiptPath, JSON.stringify(receipt), { flag: 'wx', mode: 0o600 });
   return { verified: true, localOnly: true, requiredBytes: String(requiredBytes), checks: evidence.length };
 }
