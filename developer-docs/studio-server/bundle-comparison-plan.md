@@ -40,6 +40,9 @@ The holistic UI review covers actual project names in the unmatched list,
 collapsed selected-descendant cues during native tab navigation, availability
 errors scoped to the confirmed review, and a 63-member narrow matching modal
 with reachable actions, mobile labels and two-stage Escape dismissal.
+Native-navigation browser tests wait for committed `.project:not(.opening)` tabs
+before switching projects. Loading tabs share the active-tab presentation but
+are cancellable; selecting one is not evidence that its project finished opening.
 The setup modal also reuses the common dark dialog surface and blurred backdrop,
 bundle-dialog frame, zero body padding, corner close control, footer and button
 styles. A focused browser journey checks shared sizing at 1600/740/360px, insets,

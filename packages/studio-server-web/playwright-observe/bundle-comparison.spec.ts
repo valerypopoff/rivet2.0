@@ -242,10 +242,13 @@ async function openRealNavigationTabs(page: Page) {
   await page.getByRole('button', { name: 'Expand Original bundle', exact: true }).click();
   await page.locator('.project-row', { hasText: 'Dependency' }).dblclick();
   const editor = page.frameLocator('iframe.dashboard-editor-frame');
-  const outsideTab = editor.locator('.projects-container .project', { hasText: 'Dependency' });
+  const outsideTab = editor.locator('.projects-container .project:not(.opening)', { hasText: 'Dependency' });
   await expect(outsideTab).toHaveClass(/\bactive\b/);
   await page.getByRole('button', { name: 'Expand Working bundle', exact: true }).click();
   await page.locator('.project-row', { hasText: 'Main project' }).last().dblclick();
+  await expect(editor.locator('.projects-container .project:not(.opening)', { hasText: 'Main' })).toHaveClass(
+    /\bactive\b/,
+  );
   await expect(outsideTab).not.toHaveClass(/\bactive\b/);
   return { editor, outsideTab };
 }
@@ -537,9 +540,12 @@ test('collapsed comparison folders indicate the selected project after native ta
   const tree = page.getByLabel('Compared bundles', { exact: true });
   const editor = page.frameLocator('iframe.dashboard-editor-frame');
   await tree.getByRole('button', { name: 'Compare Newer project Dependency' }).click();
-  const dependency = editor.locator('.projects-container .project', { hasText: 'Dependency' });
+  const dependency = editor.locator('.projects-container .project:not(.opening)', { hasText: 'Dependency' });
   await expect(dependency).toHaveClass(/\bactive\b/);
   await tree.getByRole('button', { name: 'Compare Newer project Main project' }).click();
+  await expect(editor.locator('.projects-container .project:not(.opening)', { hasText: 'Main' })).toHaveClass(
+    /\bactive\b/,
+  );
   await expect(dependency).not.toHaveClass(/\bactive\b/);
   const folders = tree.locator('summary').filter({ hasText: /^Nested/ });
   await expect(folders).toHaveCount(2);
