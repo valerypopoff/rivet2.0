@@ -5,6 +5,18 @@ gates or reusing an unverified build from another commit. Standard GitHub-hosted
 runners for public repositories are free; these changes need no paid runner.
 Branch targeting, signing and protected deployment safeguards remain unchanged.
 
+Measure elapsed time from the push to the last required workflow completion,
+including runner queues and prerequisites. Parallel job durations must not be
+added together. Local compiler timings establish cache behavior, not an
+end-to-end CI speedup; compare the hosted critical path before making that claim.
+For reference, main Build Images `44965926486` took 33m36s: 9m38s before the
+longest HA lane, 22m16s in that lane and 1m42s for final assembly/promotion.
+Its other HA lanes took about 17 minutes each. Optimizing only the longest lane
+therefore saves at most about five minutes before another becomes critical.
+Keep the full real-time routing-withdrawal, accepted-work and recovery proofs;
+look for independent preparation and duplicated work around them, rather than
+reducing their protection windows or assuming a faster compiler halves the run.
+
 ## Local pre-push recurrence checklist
 
 Keep repeatable CI findings in `developer-docs/studio-server/ci-pre-push.local.md`.
@@ -32,6 +44,23 @@ current findings. A failed security gate also blocks exact-commit desktop
 publication after successful compilation. The developer release tracks
 `security/dependency-audit-exceptions.json` in its push paths so an audit-policy
 repair can start publication for the corrected commit.
+
+Refresh Rust's audit too, even for CI-only changes. The November 22 push found
+new `RUSTSEC-2026-0592` in the unchanged desktop lockfile: `url` through 2.5.8
+can overflow the process stack while resolving nested `blob:` origins. The
+lockfile now selects patched `url` 2.5.9 and its required `form_urlencoded` 1.2.3.
+No advisory exception was added. Validate both the unfiltered audit through
+`check-rust-audit-exceptions.mjs --audit-report` and the configured
+`cargo audit --no-fetch` from `packages/app/src-tauri`; a policy-only check does
+not detect new findings in the live database.
+
+After moving a file imported by the Studio Server consolidation, update its
+reviewed successor in `verify-migration-ledger.mjs`, regenerate
+`source-file-ledger.json` and run `studio-server:verify:migration-ledger`.
+The November 22 context-menu move keeps project-summary behavior in
+`WorkflowProjectSummary.tsx`; its ledger entry retains the original
+`ActiveProjectSection.tsx` migration blob and records that current successor.
+Repository style checks alone do not exercise this historical-source contract.
 
 The November 18, 2026 withdrawal of the
 [`picomatch` advisory](https://github.com/advisories/GHSA-fc5q-39xc-vjpf)
