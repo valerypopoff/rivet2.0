@@ -114,3 +114,35 @@ cancellation, empty histories and virtualized sub-run ordering in both ordinary
 and bad-only input searches. Documentation links, formatting and the Studio
 Server test-style checks passed. This is a presentation change; recording storage
 and production recompression are unchanged.
+
+## Project context-menu follow-up (2026-11-22)
+
+- [x] Move project details into `WorkflowProjectSummary.tsx` at the top of the
+      project context menu; remove the sidebar card and empty placeholder.
+- [x] Resolve the clicked project by its tree path, preserve its live status and
+      reference details, and keep Settings and dirty-open-project Save ownership.
+- [x] Keep the editable Newer comparison projects accessible through the same
+      menu while frozen Older projects remain read-only.
+- [x] Limit the menu to 75% of the sidebar maximum (currently 420px), wrap long
+      names, and keep the menu within narrow/short viewports as metadata loads.
+- [x] Retain gray/green/yellow summary fills without colored outlines. Show only
+      live endpoint/web-app details, prefer the published endpoint name, ignore
+      draft-only apps, and omit the graph/node/web-app count line.
+- [x] Label the statistics action **Run statistics** with an unframed rising
+      line-chart icon, retaining the inspection group and project targeting.
+- [x] Use filled green/yellow publication pills with dark text across the menu,
+      project settings, recording project info and Published catalog.
+- [x] Update the existing browser journeys for menu-based Settings/Save and use
+      actual tree/tab selection assertions after removing the persistent card.
+
+Local validation covers the production web build, the focused 28-journey menu,
+editing, comparison, reference and settings pass, plus the later layout/count and
+filled-pill checks. The final entry-point checks also pass, including deleting
+and saving the final graph, delayed saves, modal focus, selection, remote renames,
+conflict controls and development refresh after a failed save. The isolated
+graph-deletion fixture now mocks hosted bootstrap; development-refresh checks run
+against the development server, which provides the required build-event stream.
+The CI inventory loads 394 tests in 42 files, and import boundaries, test style,
+documentation links and formatting pass. These results do not claim a cloud
+rollout or a complete CI run. Recording formats, database and production
+recompression remain unchanged.

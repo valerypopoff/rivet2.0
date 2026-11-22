@@ -1,7 +1,12 @@
 import { expect, test } from '@playwright/test';
 import { startHostedSubgraphRuntime } from '../../studio-server-api/src/tests/helpers/hosted-subgraph-runtime';
 import type { WorkflowTreeResponse } from '../../studio-server-shared/workflow-types';
-import { openBundleActions, mockHostedEditorBootstrap, waitForDashboardReady } from './helpers/hostedEditorObserve';
+import {
+  mockHostedEditorBootstrap,
+  openBundleActions,
+  openProjectContextMenu,
+  waitForDashboardReady,
+} from './helpers/hostedEditorObserve';
 import { ensureFolderExpanded } from './helpers/workflowLibraryObserve';
 import { projectBundleFixture } from '../../studio-server-api/src/tests/helpers/project-bundle-fixture';
 import { collectProjectBundle } from '../../studio-server-api/src/routes/workflows/project-bundle';
@@ -579,6 +584,7 @@ test('moving a bundle reparents the persisted PostgreSQL tree and survives a das
     const saved = page.waitForResponse(
       (response) => new URL(response.url()).pathname === '/api/projects/save' && response.request().method() === 'POST',
     );
+    await openProjectContextMenu(page);
     await page.locator('.active-project-save-button').click();
     const save = await saved;
     expect(save.request().postDataJSON().path).toBe(

@@ -1,5 +1,9 @@
 import { expect, test, type Page } from '@playwright/test';
-import { mockHostedEditorBootstrap, openHostedDashboardFixture } from './helpers/hostedEditorObserve';
+import {
+  mockHostedEditorBootstrap,
+  openHostedDashboardFixture,
+  openProjectContextMenu,
+} from './helpers/hostedEditorObserve';
 import { seedHostedEditorProject } from './helpers/hostedEditorStorage';
 import { serializeProject } from '@valerypopoff/rivet2-core';
 
@@ -225,8 +229,9 @@ for (const target of ['editor', 'dashboard'] as const) {
       target === 'editor'
         ? editor.getByRole('button', { name: 'Project settings', exact: true })
         : page.locator('.active-project-more-button');
+    if (target === 'dashboard') await openProjectContextMenu(page);
     await control.focus();
-    await expect(menu).toBeVisible(); // Focus/Tab alone is not an outside click.
+    if (target === 'editor') await expect(menu).toBeVisible(); // Focus alone is not an outside click.
     await control.press('Enter');
     const modal =
       target === 'editor'
@@ -308,6 +313,7 @@ test('editor context menus dismiss into dashboard input without stealing focus o
   await graph.click({ button: 'right' });
   const graphMenu = editor.locator('.graph-item-context-menu');
   await expect(graphMenu).toBeVisible();
+  await openProjectContextMenu(page);
   await page.locator('.active-project-more-button').click();
   await expect(graphMenu).toHaveCount(0);
   const endpoint = page.getByRole('textbox', { name: 'Workflow endpoint path' });
@@ -677,6 +683,7 @@ test('editor output modal yields focus to dashboard inputs without losing its ow
     await expect(modal).toBeVisible();
   }
 
+  await openProjectContextMenu(page);
   await page.locator('.active-project-more-button').click();
   const endpoint = page.getByRole('textbox', { name: 'Workflow endpoint path' });
   await endpoint.click();
@@ -701,6 +708,7 @@ test('editor output modal yields focus to dashboard inputs without losing its ow
     }
   }
   // Moving back to the dashboard after re-entering the editor must still work.
+  await openProjectContextMenu(page);
   await page.locator('.active-project-more-button').click();
   await endpoint.fill('focus-again');
   await expect(endpoint).toBeFocused();

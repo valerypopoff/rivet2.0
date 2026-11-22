@@ -8,7 +8,12 @@ import {
   type NodeGraph,
   type Project,
 } from '@valerypopoff/rivet2-core';
-import { authenticateIfNeeded, mockHostedEditorBootstrap, waitForDashboardReady } from './helpers/hostedEditorObserve';
+import {
+  authenticateIfNeeded,
+  mockHostedEditorBootstrap,
+  openProjectContextMenu,
+  waitForDashboardReady,
+} from './helpers/hostedEditorObserve';
 import type { WorkflowProjectItem, WorkflowTreeResponse } from '../dashboard/types';
 
 const projectName = 'Graph port rename';
@@ -520,6 +525,7 @@ async function returnToParentGraph(page: Page) {
 
 async function saveProject(page: Page, saves: readonly ProjectSave[]): Promise<Project> {
   const saveButton = page.locator('.active-project-save-button');
+  await openProjectContextMenu(page);
   await expect(saveButton).toBeVisible();
   const saveCount = saves.length;
   await saveButton.click();

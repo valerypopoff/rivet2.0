@@ -5,7 +5,12 @@ import {
   withAsyncDeadline,
 } from '../../studio-server-api/src/tests/helpers/workflow-async-process';
 
-import { authenticateIfNeeded, panGraphCanvas, waitForDashboardReady } from './helpers/hostedEditorObserve';
+import {
+  authenticateIfNeeded,
+  openProjectContextMenu,
+  panGraphCanvas,
+  waitForDashboardReady,
+} from './helpers/hostedEditorObserve';
 import { readCommittedWorkspaceCheckpoint } from './helpers/workspaceRecovery';
 import type { WorkflowFolderItem, WorkflowProjectItem } from '../dashboard/types';
 import type { HostedProjectConflictSnapshot } from '../../studio-server-shared/editor-bridge';
@@ -609,7 +614,7 @@ test('a remote removal updates the tree but preserves the already open editor do
   await expect(editorFrame).toBeVisible();
   await expect(page.frameLocator('iframe.dashboard-editor-frame').locator('.projects-container')).toBeVisible();
   await dispatchProjectOpenedFromEditorFrame(page, project.absolutePath);
-  await expect(page.locator('.active-project-name')).toHaveText(projectName);
+  await expect(page.locator('.project-row.active .label')).toHaveText(projectName);
   expect(projectLoadRequests).toBe(1);
 
   state.projects = [];
@@ -800,7 +805,7 @@ test('a remote project move retargets the open editor tab and notifies the user 
     `"${projectName}" was moved on the server. Your editor tab now follows the new location.`,
   );
   await expect(editorFrame.locator('.projects-container .project.active', { hasText: projectName })).toBeVisible();
-  await expect(page.locator('.active-project-name')).toHaveText(projectName);
+  await expect(page.locator('.project-row.active .label')).toHaveText(projectName);
   expect(projectLoadRequests).toBe(1);
   expect(treeReads.count).toBeGreaterThan(1);
 });
@@ -858,7 +863,7 @@ test('a remote project rename updates the open tab title and notifies the user w
     `"${originalName}" was renamed to "${renamedName}" on the server. Your editor tab now follows the renamed project.`,
   );
   await expect(editorFrame.locator('.projects-container .project.active', { hasText: renamedName })).toBeVisible();
-  await expect(page.locator('.active-project-name')).toHaveText(renamedName);
+  await expect(page.locator('.project-row.active .label')).toHaveText(renamedName);
   expect(projectLoadRequests).toBe(1);
 });
 
@@ -956,7 +961,7 @@ test('an overloaded committed rename reconciles the open tab and subsequent save
   await input.fill(renamedName);
   await input.press('Enter');
   await expect(editorFrame.locator('.projects-container .project.active', { hasText: renamedName })).toBeVisible();
-  await expect(page.locator('.active-project-name')).toHaveText(renamedName);
+  await expect(page.locator('.project-row.active .label')).toHaveText(renamedName);
   expect(projectLoads).toBe(1, 'reconciliation must preserve the existing authored tab, not reload it');
   await saveThroughEditor(page);
   await expect.poll(() => saves.map((save) => save.path)).toEqual([renamedProject.absolutePath]);
@@ -1072,6 +1077,7 @@ async function saveThroughEditor(page: Page) {
   await page.mouse.down();
   await page.mouse.move(bounds.x + bounds.width / 2 + 40, bounds.y + bounds.height / 2, { steps: 8 });
   await page.mouse.up();
+  await openProjectContextMenu(page);
   await page.locator('.active-project-save-button').click();
 }
 
@@ -1436,7 +1442,7 @@ for (const race of ['old tree after save', 'tree before save response', 'remote 
         .frameLocator('iframe.dashboard-editor-frame')
         .locator('.projects-container .project.active', { hasText: name }),
     ).toBeVisible();
-    await expect(page.locator('.active-project-name')).toHaveText(name);
+    await expect(page.locator('.project-row.active .label')).toHaveText(name);
     try {
       if (race === 'old tree after save') {
         holdTree = true;
@@ -1522,7 +1528,7 @@ test('a matching observation clears an obsolete warning, but failed fetches and 
   await authenticateIfNeeded(page);
   await waitForDashboardReady(page);
   await page.locator('.project-row', { hasText: name }).dblclick();
-  await expect(page.locator('.active-project-name')).toHaveText(name);
+  await expect(page.locator('.project-row.active .label')).toHaveText(name);
   const warning = page.locator('.workflow-remote-project-change-notice');
   state.projects = [{ ...project, revisionId: 'remote' }];
   const change = () =>
@@ -1572,7 +1578,7 @@ test('a move with a newer saved revision rebinds the tab but blocks overwriting 
   await authenticateIfNeeded(page);
   await waitForDashboardReady(page);
   await page.locator('.project-row', { hasText: name }).dblclick();
-  await expect(page.locator('.active-project-name')).toHaveText(name);
+  await expect(page.locator('.project-row.active .label')).toHaveText(name);
   state.projects = [
     {
       ...project,
@@ -1612,7 +1618,7 @@ test('a renamed pending project updates its warning and fences the old resolutio
   await authenticateIfNeeded(page);
   await waitForDashboardReady(page);
   await page.locator('.project-row', { hasText: originalName }).dblclick();
-  await expect(page.locator('.active-project-name')).toHaveText(originalName);
+  await expect(page.locator('.project-row.active .label')).toHaveText(originalName);
   const warning = page.locator('.workflow-remote-project-change-notice');
   const change = () =>
     emitTreeChange(page, {
@@ -1750,7 +1756,7 @@ for (const reconnectTiming of ['before retry', 'after retry'] as const) {
     await authenticateIfNeeded(page);
     await waitForDashboardReady(page);
     await page.locator('.project-row', { hasText: name }).dblclick();
-    await expect(page.locator('.active-project-name')).toHaveText(name);
+    await expect(page.locator('.project-row.active .label')).toHaveText(name);
     await expect.poll(() => page.evaluate(() => window.__reconciliationStatuses.length)).toBeGreaterThan(0);
     await flushConflictMessages(page);
     // Prime the initial SSE state so the later reconnect is an ordinary hint.
@@ -1840,12 +1846,13 @@ test('a rejected save requests fresh conflict controls even without a tree event
   await authenticateIfNeeded(page);
   await waitForDashboardReady(page);
   await page.locator('.project-row', { hasText: name }).dblclick();
-  await expect(page.locator('.active-project-name')).toHaveText(name);
+  await expect(page.locator('.project-row.active .label')).toHaveText(name);
   await saveThroughEditor(page);
   const warning = page.locator('.workflow-remote-project-change-notice');
   await expect(warning).toBeVisible();
   await warning.getByRole('button', { name: 'Keep mine' }).click();
   await expect(warning).toHaveCount(0);
+  await openProjectContextMenu(page);
   await page.locator('.active-project-save-button').click();
   await expect.poll(() => expectations).toEqual(['accepted', 'remote']);
 });
@@ -1869,7 +1876,7 @@ test('inactive conflicts survive bridge timeouts and reconnects, but not closing
   await waitForDashboardReady(page);
   for (const project of [a, b]) {
     await page.locator('.project-row', { hasText: project.name }).dblclick();
-    await expect(page.locator('.active-project-name')).toHaveText(project.name);
+    await expect(page.locator('.project-row.active .label')).toHaveText(project.name);
   }
   const warning = page.locator('.workflow-remote-project-change-notice');
   const change = () =>
@@ -1881,7 +1888,7 @@ test('inactive conflicts survive bridge timeouts and reconnects, but not closing
   state.projects = [{ ...a, revisionId: 'remote' }, b];
   await change();
   await expect(warning).toContainText(a.name);
-  await expect(page.locator('.active-project-name')).toHaveText(b.name);
+  await expect(page.locator('.project-row.active .label')).toHaveText(b.name);
   const oldSnapshot = await page.evaluate(
     () => window.__conflictSnapshots.findLast((snapshot) => snapshot.contentChanges.length > 0)!,
   );
@@ -1907,7 +1914,7 @@ test('inactive conflicts survive bridge timeouts and reconnects, but not closing
   await editor.getByRole('button', { name: `Close ${a.name}`, exact: true }).click();
   await expect(warning).toHaveCount(0);
   await page.locator('.project-row', { hasText: a.name }).dblclick();
-  await expect(page.locator('.active-project-name')).toHaveText(a.name);
+  await expect(page.locator('.project-row.active .label')).toHaveText(a.name);
   await page.evaluate((snapshot) => {
     window.dispatchEvent(
       new MessageEvent('message', {

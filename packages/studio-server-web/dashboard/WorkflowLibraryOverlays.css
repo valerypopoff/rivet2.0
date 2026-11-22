@@ -27,6 +27,22 @@
   cursor: pointer;
 }
 
+.workflow-project-context-menu-with-summary {
+  box-sizing: border-box;
+  width: max-content;
+  min-width: min(260px, calc(100vw - 16px));
+  max-width: min(calc(var(--workflow-library-max-width, 560px) * 0.75), calc(100vw - 16px));
+  max-height: calc(100dvh - 16px);
+  overflow-y: auto;
+  overflow-wrap: anywhere;
+}
+
+.workflow-project-context-menu-header {
+  margin-bottom: 6px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
 .workflow-project-context-menu-item-icon {
   flex: 0 0 auto;
   width: 14px;

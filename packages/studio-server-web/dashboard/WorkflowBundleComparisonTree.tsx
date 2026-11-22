@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, type MouseEvent } from 'react';
 import type {
   BundleComparisonCatalog,
   BundleComparisonPair,
@@ -18,6 +18,7 @@ export function WorkflowBundleComparisonTree({
   changedProjects,
   changeError,
   onSelect,
+  onProjectContextMenu,
 }: {
   older: BundleComparisonCatalog;
   newer: BundleComparisonCatalog;
@@ -29,6 +30,7 @@ export function WorkflowBundleComparisonTree({
   changedProjects: ReadonlySet<string> | null;
   changeError: string;
   onSelect(pair: BundleComparisonPair): void;
+  onProjectContextMenu(projectId: string, event: MouseEvent<HTMLElement>): void;
 }) {
   const [closed, setClosed] = useState<Record<string, boolean>>({});
   const render = (catalog: BundleComparisonCatalog, role: 'Older' | 'Newer') => {
@@ -105,6 +107,9 @@ export function WorkflowBundleComparisonTree({
                 aria-label={`Compare ${role} project ${p.name}${members.filter(({ project }) => project.name === p.name).length > 1 ? ` (${displayBundleMergePath(p.relativePath)})` : ''}`}
                 aria-current={selected === pairKey ? 'true' : undefined}
                 onClick={() => onSelect(pair)}
+                onContextMenu={
+                  role === 'Newer' && !removed ? (event) => onProjectContextMenu(p.projectId, event) : undefined
+                }
                 title={
                   errors[pairKey] ||
                   (changeError && pair.newerId && pair.olderId

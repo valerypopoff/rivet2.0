@@ -8,7 +8,6 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { ScheduledRunsModal } from './ScheduledRunsModal';
 import { requestScheduledRuns } from './scheduledRunApi';
 import type { ScheduledRunSummary } from '../../studio-server-shared/scheduled-run-types';
-import { ActiveProjectSection } from './ActiveProjectSection';
 import { WorkflowFolderTree } from './WorkflowFolderTree';
 import { WorkflowBundleDragPreview } from './WorkflowBundleDragPreview';
 import { WorkflowLibraryContextMenus } from './WorkflowLibraryContextMenus';
@@ -225,7 +224,6 @@ export const WorkflowLibraryPanel: FC<WorkflowLibraryPanelProps> = ({
     folderIds,
     activePath,
     openedWorkflowProject,
-    activeProject,
     loading,
     error,
     expandedFolders,
@@ -236,9 +234,7 @@ export const WorkflowLibraryPanel: FC<WorkflowLibraryPanelProps> = ({
     editingProjectPath,
     renamingProjectPath,
     dragOverRoot,
-    isActiveProjectOpen,
     handleCreateFolder,
-    handleOpenSettings,
     handleProjectContextMenu,
     handleFolderContextMenu,
     handleDragStart,
@@ -310,6 +306,14 @@ export const WorkflowLibraryPanel: FC<WorkflowLibraryPanelProps> = ({
           )
         }
         onSelect={comparison.select}
+        onProjectContextMenu={(projectId, event) => {
+          const project = controller.allProjects.find(
+            (item) =>
+              item.bundleId === comparison.session?.manifest.newer.bundleId &&
+              (item.id === projectId || item.projectMetadataId === projectId),
+          );
+          if (project) handleProjectContextMenu(project, event);
+        }}
       />
     );
   } else if (loading) {
@@ -378,19 +382,6 @@ export const WorkflowLibraryPanel: FC<WorkflowLibraryPanelProps> = ({
           </span>
           <span className="header-title">Rivet Studio Server</span>
         </button>
-
-        {!historyPreview && (
-          <div className="active-project-slot">
-            <ActiveProjectSection
-              activeProject={activeProject}
-              isCurrentlyOpen={isActiveProjectOpen}
-              hasUnsavedChanges={activeProjectHasUnsavedChanges}
-              editorReady={editorReady}
-              onSave={onSaveProject}
-              onOpenSettings={handleOpenSettings}
-            />
-          </div>
-        )}
 
         <div
           ref={bodyRef}
@@ -538,6 +529,9 @@ export const WorkflowLibraryPanel: FC<WorkflowLibraryPanelProps> = ({
         </ModalTransition>
         <WorkflowLibraryContextMenus
           controller={controller}
+          openedProjectPath={openedProjectPath}
+          hasUnsavedChanges={activeProjectHasUnsavedChanges}
+          onSave={onSaveProject}
           onCompareBundle={(bundleId, opener) => {
             onExitHistoryPreview();
             comparison.begin(bundleId, opener);

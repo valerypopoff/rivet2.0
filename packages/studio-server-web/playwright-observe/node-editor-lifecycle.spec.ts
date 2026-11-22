@@ -2,7 +2,12 @@ import { expect, test, type Page } from '@playwright/test';
 import { writeFile } from 'node:fs/promises';
 import { deserializeProject, serializeProject, type Project } from '@valerypopoff/rivet2-core';
 import type { WorkflowProjectItem } from '../dashboard/types';
-import { authenticateIfNeeded, mockHostedEditorBootstrap, waitForDashboardReady } from './helpers/hostedEditorObserve';
+import {
+  authenticateIfNeeded,
+  mockHostedEditorBootstrap,
+  openProjectContextMenu,
+  waitForDashboardReady,
+} from './helpers/hostedEditorObserve';
 import { readCommittedWorkspaceCheckpoint } from './helpers/workspaceRecovery';
 
 async function waitForWorkspaceCheckpoint(
@@ -343,6 +348,7 @@ test('a retired Subgraph preview cannot contaminate the next project and current
   await expect(target).not.toContainText('Obsolete target');
   await w.frame.getByRole('button', { name: 'Published', exact: true }).click();
   await expect(target).toContainText('Published graph');
+  await openProjectContextMenu(page);
   await page.locator('.active-project-save-button').click();
   await expect.poll(() => w.saves.length).toBe(1);
   const data = w.saves[0]!.graphs['shared-main' as keyof Project['graphs']]!.nodes.find(
@@ -493,6 +499,7 @@ test('a delayed save preserves newer text and sibling settings through close and
   );
   try {
     await w.edit('first-save');
+    await openProjectContextMenu(page);
     await page.locator('.active-project-save-button').click();
     await expect.poll(() => w.saves.length).toBe(1);
     await w.edit('newer-edit');
@@ -505,9 +512,11 @@ test('a delayed save preserves newer text and sibling settings through close and
     await expect(w.view).toContainText('newer-edit');
     release();
     w.holdSave(undefined);
+    await openProjectContextMenu(page);
     await expect(page.locator('.active-project-save-button')).toBeEnabled();
     await expect(w.tab('A')).toHaveClass(/\bhas-unsaved-changes\b/);
     expect(w.saved(0)).toBe(w.value('first-save'));
+    await openProjectContextMenu(page);
     await page.locator('.active-project-save-button').click();
     await expect.poll(() => w.saves.length).toBe(2);
     expect(w.saved(1)).toBe(w.value('newer-edit'));
@@ -542,6 +551,7 @@ test('reused node IDs across graphs, focused Undo/Redo and explicit reload prese
   await w.navigate('shared-main');
   await w.openNode();
   await expect(w.view).toContainText('main-edited');
+  await openProjectContextMenu(page);
   await page.locator('.active-project-save-button').click();
   await expect.poll(() => w.saves.length).toBe(1);
   expect(w.saved(0)).toBe(w.value('main-edited'));
@@ -670,6 +680,7 @@ for (const change of ['switch', 'delete', 'edit', 'apply'] as const) {
       );
       await expect(w.frame.getByText('Object generated successfully!', { exact: true })).toHaveCount(0);
       if (change === 'delete') {
+        await openProjectContextMenu(page);
         await page.locator('.active-project-save-button').click();
         await expect.poll(() => w.saves.length).toBe(1);
         expect(Object.values(w.saves[0]!.graphs)[0]!.nodes).toHaveLength(0);
@@ -719,6 +730,7 @@ test('evicted Monaco models reopen from their own canonical node without restori
   }
   await w.openNode();
   await expect(w.view).toContainText('before-eviction');
+  await openProjectContextMenu(page);
   await page.locator('.active-project-save-button').click();
   await expect.poll(() => w.saves.length).toBe(1);
   expect(w.saved(0)).toBe(w.value('before-eviction'));
@@ -745,6 +757,7 @@ test('synchronous Code typing remains measurable on a 350-node graph without los
   const typed = 'each-keystroke-reaches-the-owning-node-before-close-and-save';
   await page.keyboard.type(typed);
   await w.input.press('Escape');
+  await openProjectContextMenu(page);
   await page.locator('.active-project-save-button').click();
   await expect.poll(() => w.saves.length).toBe(1);
   // Monaco chooses the platform EOL for a newly inserted first newline.

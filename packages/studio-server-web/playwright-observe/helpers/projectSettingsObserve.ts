@@ -663,6 +663,7 @@ export async function showProjectSettingsModal(page: Page, project: WorkflowProj
   const projectRow = page.locator('.project-row', { hasText: project.name });
   await expect(projectRow).toBeVisible({ timeout: 30_000 });
   await projectRow.click();
+  await projectRow.click({ button: 'right' });
   await page.locator('.active-project-more-button').click();
 
   const modal = page.getByTestId('workflow-project-settings-modal');

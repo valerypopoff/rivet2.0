@@ -98,7 +98,8 @@
   align-self: flex-start;
   margin-top: 4px;
   padding: 2px 7px;
-  border: 1px solid currentColor;
+  border: 1px solid transparent;
+  color: #1f2228;
   border-radius: 999px;
   font-size: 11px;
   font-weight: 700;
@@ -107,13 +108,11 @@
 }
 
 .published-item-status-published {
-  background: var(--workflow-status-published-bg);
-  color: var(--workflow-status-published-color);
+  background: var(--workflow-status-published-color);
 }
 
 .published-item-status-unpublished_changes {
-  background: var(--workflow-status-unpublished-changes-bg);
-  color: var(--workflow-status-unpublished-changes-color);
+  background: var(--workflow-status-unpublished-changes-color);
 }
 
 .published-item-details {

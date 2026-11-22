@@ -1,7 +1,12 @@
 import { expect, test } from '@playwright/test';
 
 import type { WorkflowProjectItem, WorkflowTreeResponse } from '../dashboard/types';
-import { authenticateIfNeeded, waitForDashboardReady } from './helpers/hostedEditorObserve';
+import {
+  authenticateIfNeeded,
+  mockHostedEditorBootstrap,
+  openProjectContextMenu,
+  waitForDashboardReady,
+} from './helpers/hostedEditorObserve';
 
 const projectName = 'Dashboard Graph Deletion';
 const projectId = 'dashboard-graph-deletion-project';
@@ -45,6 +50,7 @@ const project: WorkflowProjectItem = {
 };
 
 test('dashboard Save persists deleting the final active graph', async ({ page }) => {
+  await mockHostedEditorBootstrap(page);
   const pageErrors: string[] = [];
   const savedPaths: string[] = [];
   let savedContents = projectContents;
@@ -85,6 +91,7 @@ test('dashboard Save persists deleting the final active graph', async ({ page })
   await editor.getByRole('dialog', { name: 'Delete Graph?' }).getByRole('button', { name: 'Delete' }).click();
 
   const saveButton = page.locator('.active-project-save-button');
+  await openProjectContextMenu(page);
   await expect(saveButton).toBeVisible({ timeout: 30_000 });
   await saveButton.click();
 

@@ -1,5 +1,10 @@
 import { expect, test } from '@playwright/test';
-import { authenticateIfNeeded, mockHostedEditorBootstrap, waitForDashboardReady } from './helpers/hostedEditorObserve';
+import {
+  authenticateIfNeeded,
+  mockHostedEditorBootstrap,
+  openProjectContextMenu,
+  waitForDashboardReady,
+} from './helpers/hostedEditorObserve';
 import { expectStudioModalSizing } from './helpers/modalSizing';
 
 test('dashboard dialogs share responsive dimensions, including nested schedule editing', async ({ page }) => {
@@ -146,6 +151,7 @@ test('project settings uses vertical sections on wide and narrow viewports', asy
   await authenticateIfNeeded(page);
   await waitForDashboardReady(page);
   await page.locator('.project-row', { hasText: project.name }).click();
+  await openProjectContextMenu(page);
   await page.locator('.active-project-more-button').click();
   const modal = page.getByTestId('workflow-project-settings-modal');
   await expect(modal).toBeVisible();

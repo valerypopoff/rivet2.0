@@ -47,12 +47,12 @@ test.describe('Hosted open-project cache after rename', () => {
 
       await ensureFolderExpanded(page, initialFolderName, nestedProjectName);
       await page.locator('.project-row', { hasText: nestedProjectName }).dblclick();
-      await expect(page.locator('.active-project-name')).toHaveText(nestedProjectName, { timeout: 120_000 });
+      await expect(page.locator('.project-row.active .label')).toHaveText(nestedProjectName, { timeout: 120_000 });
       await expect(activeNestedEditorTab).toBeVisible({ timeout: 120_000 });
       await expect(page.locator('.active-project-save-button')).toHaveCount(0, { timeout: 120_000 });
 
       await page.locator('.project-row', { hasText: rootProjectName }).dblclick();
-      await expect(page.locator('.active-project-name')).toHaveText(rootProjectName, { timeout: 120_000 });
+      await expect(page.locator('.project-row.active .label')).toHaveText(rootProjectName, { timeout: 120_000 });
       await expect(activeRootEditorTab).toBeVisible({ timeout: 120_000 });
       await expect(page.locator('.active-project-save-button')).toHaveCount(0, { timeout: 120_000 });
 
@@ -78,7 +78,7 @@ test.describe('Hosted open-project cache after rename', () => {
       page.on('request', handleRequest);
       try {
         await page.locator('.project-row', { hasText: nestedProjectName }).dblclick();
-        await expect(page.locator('.active-project-name')).toHaveText(nestedProjectName, { timeout: 30_000 });
+        await expect(page.locator('.project-row.active .label')).toHaveText(nestedProjectName, { timeout: 30_000 });
         await expect(activeNestedEditorTab).toBeVisible({ timeout: 30_000 });
         await expect(page.locator('.active-project-save-button')).toHaveCount(0, { timeout: 30_000 });
         await page.waitForTimeout(750);

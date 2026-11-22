@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { authenticateIfNeeded, waitForDashboardReady } from './helpers/hostedEditorObserve';
+import { authenticateIfNeeded, openProjectContextMenu, waitForDashboardReady } from './helpers/hostedEditorObserve';
 import {
   createProjectSettingsFixture,
   createProjectSettingsRouteTrackers,
@@ -75,6 +75,7 @@ test.describe('Project settings modal', () => {
       expect(deletes).toBe(0);
       await modal.getByRole('button', { name: 'Close project settings' }).click();
       await page.locator('.project-row', { hasText: project.name }).click();
+      await openProjectContextMenu(page);
       await page.locator('.active-project-more-button').click();
       await expect(modal.getByRole('tab', { name: 'Endpoint', exact: true })).toHaveAttribute('aria-selected', 'true');
     });
@@ -182,7 +183,6 @@ test.describe('Project settings modal', () => {
     await expect(modal.getByRole('button', { name: 'Publish', exact: true })).toBeEnabled();
     await expect(modal.locator('.project-settings-status-help')).toHaveCount(0);
     expect(unpublishRequests).toBe(1);
-    await expect(page.locator('.active-project-status-line').first()).toContainText('Unpublished');
     await modal.getByRole('tab', { name: 'Web apps', exact: true }).click();
     const app = modal.locator('.project-settings-web-app-row', { hasText: 'Summary app' });
     await expect(app.locator('.project-settings-web-app-state')).toHaveText('Published');
@@ -800,17 +800,7 @@ test.describe('Project settings modal', () => {
     expect(sectionSwitcherBox).not.toBeNull();
     expect(modalBox).not.toBeNull();
     expect(sectionSwitcherBox!.width).toBeLessThan(modalBox!.width);
-    const activeProjectSection = page.locator('.active-project-section');
-    await expect(activeProjectSection.locator('.active-project-details > :first-child')).toHaveClass(
-      /active-project-name-row/,
-    );
-    await expect(activeProjectSection.locator('.active-project-name')).toHaveText(unique);
-    const activeProjectStatusLines = activeProjectSection.locator('.active-project-status-line');
-    await expect(activeProjectStatusLines).toHaveCount(2);
-    await expect(activeProjectStatusLines.first()).toContainText('Endpoint:');
-    await expect(activeProjectStatusLines.nth(1)).toContainText('Web app:');
-    await expect(activeProjectStatusLines.nth(1).locator('.active-project-status-text')).toHaveText('none');
-    await expect(activeProjectSection.locator('.active-project-stats')).toHaveText('2 graphs, 7 nodes');
+    await expect(page.locator('.workflow-project-context-menu')).toHaveCount(0);
     await expect(modal.getByRole('button', { name: 'Rename project' })).toHaveCount(0);
     await expect(modal.locator('.project-settings-title-input input')).toHaveCount(0);
 
@@ -1010,14 +1000,7 @@ test.describe('Project settings modal', () => {
     });
 
     const { modal } = await openProjectSettingsModal(page, project);
-    const activeProjectSection = page.locator('.active-project-section');
-    await expect(activeProjectSection.locator('.active-project-details > :first-child')).toHaveClass(
-      /active-project-name-row/,
-    );
-    await expect(activeProjectSection.locator('.active-project-status-line')).toHaveCount(2);
-    await expect(activeProjectSection.locator('.active-project-status-line').nth(1)).toContainText('Web apps:');
-    await expect(activeProjectSection.locator('.active-project-various-statuses')).toHaveText('various statuses');
-    await expect(activeProjectSection.locator('.active-project-stats')).toHaveText('2 graphs, 7 nodes, 3 web apps');
+    await expect(page.locator('.workflow-project-context-menu')).toHaveCount(0);
     await expect(modal.getByRole('tab', { name: 'Endpoint' })).toHaveAttribute('aria-selected', 'true');
     await modal.getByRole('tab', { name: 'Web apps' }).click();
     await expect(modal.getByRole('tab', { name: 'Web apps' })).toHaveAttribute('aria-selected', 'true');

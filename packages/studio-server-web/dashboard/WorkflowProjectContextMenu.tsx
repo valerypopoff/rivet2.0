@@ -1,4 +1,5 @@
 import {
+  autoUpdate,
   offset,
   shift,
   useDismiss,
@@ -11,10 +12,10 @@ import CopyIcon from '@atlaskit/icon/glyph/copy';
 import ArrowDownIcon from 'majesticons/line/arrow-down-line.svg?react';
 import DeleteBinIcon from 'majesticons/line/delete-bin-line.svg?react';
 import RecordingIcon from 'majesticons/line/video-line.svg?react';
-import StatisticsIcon from 'majesticons/line/analytics-line.svg?react';
 import { useLayoutEffect, type FC } from 'react';
 import type { WorkflowProjectItem } from './types';
 import { useHostedSurfaceDismiss } from './useHostedSurfaceDismiss';
+import { WorkflowProjectSummary } from './WorkflowProjectSummary';
 
 type WorkflowProjectContextMenuProps = {
   isOpen: boolean;
@@ -22,6 +23,11 @@ type WorkflowProjectContextMenuProps = {
   x: number;
   y: number;
   onClose: () => void;
+  isCurrentlyOpen: boolean;
+  hasUnsavedChanges: boolean;
+  editorReady: boolean;
+  onSave: () => void;
+  onOpenSettings: () => void;
   onRename: () => void;
   onInspectRecordings: () => void;
   onInspectStatistics: () => void;
@@ -57,6 +63,11 @@ export const WorkflowProjectContextMenu: FC<WorkflowProjectContextMenuProps> = (
   x,
   y,
   onClose,
+  isCurrentlyOpen,
+  hasUnsavedChanges,
+  editorReady,
+  onSave,
+  onOpenSettings,
   onRename,
   onInspectRecordings,
   onInspectStatistics,
@@ -78,7 +89,8 @@ export const WorkflowProjectContextMenu: FC<WorkflowProjectContextMenuProps> = (
     },
     placement: 'bottom-start',
     strategy: 'fixed',
-    middleware: [offset(6), shift({ padding: 8 })],
+    whileElementsMounted: autoUpdate,
+    middleware: [offset(6), shift({ padding: 8, crossAxis: true })],
   });
 
   const dismiss = useDismiss(context);
@@ -101,11 +113,22 @@ export const WorkflowProjectContextMenu: FC<WorkflowProjectContextMenuProps> = (
   return (
     <div
       ref={refs.setFloating}
-      className="workflow-project-context-menu"
+      className="workflow-project-context-menu workflow-project-context-menu-with-summary"
       style={floatingStyles}
       aria-label={`Actions for ${project.name}`}
       {...getFloatingProps()}
     >
+      <div className="workflow-project-context-menu-header" role="presentation">
+        <WorkflowProjectSummary
+          project={project}
+          isCurrentlyOpen={isCurrentlyOpen}
+          hasUnsavedChanges={hasUnsavedChanges}
+          editorReady={editorReady}
+          onSave={onSave}
+          onOpenSettings={onOpenSettings}
+          onOpenReferenceDetails={onClose}
+        />
+      </div>
       <button type="button" className="workflow-project-context-menu-item" role="menuitem" onClick={onRename}>
         <span>Rename project</span>
       </button>
@@ -136,13 +159,31 @@ export const WorkflowProjectContextMenu: FC<WorkflowProjectContextMenuProps> = (
         <span>Duplicate</span>
       </button>
       <div className="workflow-project-context-menu-separator" role="separator" aria-hidden="true" />
-      <button type="button" className="workflow-project-context-menu-item" role="menuitem" onClick={onInspectRecordings}>
+      <button
+        type="button"
+        className="workflow-project-context-menu-item"
+        role="menuitem"
+        onClick={onInspectRecordings}
+      >
         <RecordingIcon className="workflow-project-context-menu-item-icon" aria-hidden="true" />
         <span>Inspect recordings</span>
       </button>
-      <button type="button" className="workflow-project-context-menu-item" role="menuitem" onClick={onInspectStatistics}>
-        <StatisticsIcon className="workflow-project-context-menu-item-icon" aria-hidden="true" />
-        <span>Inspect run statistics</span>
+      <button
+        type="button"
+        className="workflow-project-context-menu-item"
+        role="menuitem"
+        onClick={onInspectStatistics}
+      >
+        <svg className="workflow-project-context-menu-item-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path
+            d="m4 17 5-6 5 3 6-10"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        </svg>
+        <span>Run statistics</span>
       </button>
       <div className="workflow-project-context-menu-separator" role="separator" aria-hidden="true" />
       <button

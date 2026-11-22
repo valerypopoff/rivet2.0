@@ -127,7 +127,7 @@ async function installWrappingFixture(page: Page, tree: WorkflowTreeResponse, pr
   });
 }
 
-test('wraps long sidebar names but clips the active project title to one line', async ({ page }) => {
+test('wraps long sidebar names and bounds the project context-menu header', async ({ page }) => {
   const projectName = `project-${'unbroken-name-'.repeat(14)}`;
   const serverFolderName = `server-folder-${'unbroken-name-'.repeat(12)}`;
   const graphFolderName = `editor-folder-${'unbroken-name-'.repeat(12)}`;
@@ -191,6 +191,7 @@ test('wraps long sidebar names but clips the active project title to one line', 
     'Server project status aligns with its first label line',
   );
   await serverProjectRow.dblclick();
+  await serverProjectRow.click({ button: 'right' });
 
   const activeProjectName = page.locator('.workflow-library-panel .active-project-name');
   await expect(activeProjectName).toHaveText(projectName);
@@ -200,19 +201,25 @@ test('wraps long sidebar names but clips the active project title to one line', 
       clientWidth: element.clientWidth,
       height: element.getBoundingClientRect().height,
       lineHeight: Number.parseFloat(styles.lineHeight),
-      overflow: styles.overflow,
       scrollWidth: element.scrollWidth,
-      textOverflow: styles.textOverflow,
       whiteSpace: styles.whiteSpace,
     };
   });
-  expect(activeNameMetrics.whiteSpace).toBe('nowrap');
-  expect(activeNameMetrics.overflow).toBe('hidden');
-  expect(activeNameMetrics.textOverflow).toBe('clip');
-  expect(activeNameMetrics.scrollWidth).toBeGreaterThan(activeNameMetrics.clientWidth);
-  expect(activeNameMetrics.height).toBeLessThan(activeNameMetrics.lineHeight * 1.5);
+  expect(activeNameMetrics.whiteSpace).toBe('normal');
+  expect(activeNameMetrics.scrollWidth).toBeLessThanOrEqual(activeNameMetrics.clientWidth);
+  expect(activeNameMetrics.height).toBeGreaterThan(activeNameMetrics.lineHeight * 1.5);
   const activeProjectCard = page.locator('.workflow-library-panel .active-project-section');
-  await expect(activeProjectCard).toHaveCSS('height', '166px');
+  await expect(activeProjectCard).toHaveCSS('border-width', '0px');
+  const menu = page.getByRole('menu', { name: `Actions for ${projectName}` });
+  expect((await menu.boundingBox())!.width).toBeLessThanOrEqual(420);
+  await page.setViewportSize({ width: 390, height: 600 });
+  await expect.poll(async () => {
+    const box = (await menu.boundingBox())!;
+    return box.x >= 8 && box.x + box.width <= 382 && box.y >= 8 && box.y + box.height <= 592;
+  }).toBe(true);
+  await expect(activeProjectName).toHaveText(projectName);
+  await page.keyboard.press('Escape');
+  await page.setViewportSize({ width: 1280, height: 900 });
 
   const editor = page.frameLocator('iframe.dashboard-editor-frame');
   await expect(editor.locator('#graph-tree-sidebar')).toBeVisible({ timeout: 90_000 });

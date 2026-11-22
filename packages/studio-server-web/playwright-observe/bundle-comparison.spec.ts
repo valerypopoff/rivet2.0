@@ -7,8 +7,9 @@ import type {
 } from '../../studio-server-shared/workflow-bundle-comparison-types';
 import {
   authenticateIfNeeded,
-  openBundleActions,
   mockHostedEditorBootstrap,
+  openBundleActions,
+  openProjectContextMenu,
   waitForDashboardReady,
 } from './helpers/hostedEditorObserve';
 import { expectStudioModalSizing } from './helpers/modalSizing';
@@ -416,6 +417,7 @@ test('matches both bundles, saves only Newer, and inspects removed graphs withou
   await page.mouse.down();
   await page.mouse.move(box!.x + 110, box!.y + 45, { steps: 8 });
   await page.mouse.up();
+  await openProjectContextMenu(page);
   await expect(page.locator('.active-project-save-button')).toBeVisible();
   await title.click();
   await page.keyboard.press('Control+s');
@@ -860,12 +862,14 @@ test('modal Swap preserves unsaved real tabs, uses saved Older versions, and inn
   await page.mouse.down();
   await page.mouse.move(box!.x + 120, box!.y + 35, { steps: 8 });
   await page.mouse.up();
+  await openProjectContextMenu(page);
   await expect(page.locator('.active-project-save-button')).toBeVisible();
   const currentTransform = () =>
     editor.locator('.node[data-nodeid="text"]').evaluate((node: HTMLElement) => node.style.transform);
   const dirtyPosition = await currentTransform();
   await (await begin(page)).getByRole('button', { name: 'Compare bundles', exact: true }).click();
   await expect.poll(currentTransform).toBe(dirtyPosition);
+  await openProjectContextMenu(page);
   await expect(page.locator('.active-project-save-button')).toBeVisible();
   expect(f.loads.filter((p) => p.includes('/Working/Main'))).toHaveLength(1);
   await page.getByRole('button', { name: 'Exit comparison', exact: true }).click();
@@ -890,6 +894,7 @@ test('modal Swap preserves unsaved real tabs, uses saved Older versions, and inn
     'Older · Original (saved) → Newer · Working (editable)',
   );
   await expect.poll(currentTransform).toBe(dirtyPosition);
+  await openProjectContextMenu(page);
   await expect(page.locator('.active-project-save-button')).toBeVisible();
   const before = await title.boundingBox();
   await title.click();
@@ -900,6 +905,7 @@ test('modal Swap preserves unsaved real tabs, uses saved Older versions, and inn
   await editor.locator('.project-compare-notice').getByRole('button', { name: 'Exit comparison', exact: true }).click();
   await expect(page.getByLabel('Compared bundles', { exact: true })).toHaveCount(0);
   await expect(page.getByRole('button', { name: /^(Expand|Collapse) Working bundle$/ })).toBeVisible();
+  await openProjectContextMenu(page);
   await expect(page.locator('.active-project-save-button')).toBeVisible();
   expect(f.saves).toHaveLength(0);
 });

@@ -209,10 +209,9 @@ test('published catalog lists endpoint and app references and opens their projec
   expect(tabAfterScroll).not.toBeNull();
   expect(tabAfterScroll!.y).toBeCloseTo(tabBeforeScroll!.y, 0);
 
-  const changedStatusColors = await changedStatus.evaluate((element) => {
-    const style = getComputedStyle(element);
-    return { background: style.backgroundColor, color: style.color };
-  });
+  await expect(changedStatus).toHaveCSS('background-color', 'rgb(255, 215, 106)');
+  await expect(changedStatus).toHaveCSS('border-color', 'rgba(0, 0, 0, 0)');
+  await expect(changedStatus).toHaveCSS('color', 'rgb(31, 34, 40)');
 
   await webAppsTab.click();
   await expect(webAppsTab).toHaveAttribute('aria-selected', 'true');
@@ -220,11 +219,9 @@ test('published catalog lists endpoint and app references and opens their projec
   await expect(appRoute).toBeVisible();
   const publishedStatus = modal.locator('.published-item-status-published');
   await expect(publishedStatus).toBeVisible();
-  const publishedStatusColors = await publishedStatus.evaluate((element) => {
-    const style = getComputedStyle(element);
-    return { background: style.backgroundColor, color: style.color };
-  });
-  expect(publishedStatusColors).not.toEqual(changedStatusColors);
+  await expect(publishedStatus).toHaveCSS('background-color', 'rgb(126, 226, 148)');
+  await expect(publishedStatus).toHaveCSS('border-color', 'rgba(0, 0, 0, 0)');
+  await expect(publishedStatus).toHaveCSS('color', 'rgb(31, 34, 40)');
   await appRoute.click();
   await expect(appRoute).toHaveText('Copied: /apps/story-console');
   const expectedCopiedUrl = await page.evaluate(() =>

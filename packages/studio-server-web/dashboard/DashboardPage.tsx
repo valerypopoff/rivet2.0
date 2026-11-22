@@ -651,7 +651,10 @@ export const DashboardPage: FC = () => {
   return (
     <div
       className={`dashboard-page${sidebarResizing ? ' dashboard-page-resizing' : ''}`}
-      style={{ ['--workflow-dashboard-sidebar-width' as string]: `${visibleSidebarWidth}px` }}
+      style={{
+        ['--workflow-dashboard-sidebar-width' as string]: `${visibleSidebarWidth}px`,
+        ['--workflow-library-max-width' as string]: `${MAX_SIDEBAR_WIDTH}px`,
+      }}
     >
       <aside
         className={`dashboard-sidebar${sidebarCollapsed ? ' dashboard-sidebar-collapsed' : ''}${sidebarResizing ? ' dashboard-sidebar-resizing' : ''}`}

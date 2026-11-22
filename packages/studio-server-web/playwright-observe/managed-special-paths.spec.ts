@@ -1,5 +1,5 @@
 import { expect, test, type Request } from '@playwright/test';
-import { authenticateIfNeeded, waitForDashboardReady } from './helpers/hostedEditorObserve';
+import { authenticateIfNeeded, openProjectContextMenu, waitForDashboardReady } from './helpers/hostedEditorObserve';
 import {
   cleanupWorkflowProject,
   createWorkflowFolder,
@@ -52,13 +52,15 @@ test.describe('Managed special workflow paths', () => {
 
       await ensureFolderExpanded(page, initialFolderName, nestedProjectName);
       await page.locator('.project-row', { hasText: nestedProjectName }).dblclick();
-      await expect(page.locator('.active-project-name')).toHaveText(nestedProjectName, { timeout: 120_000 });
+      await expect(page.locator('.project-row.active .label')).toHaveText(nestedProjectName, { timeout: 120_000 });
+      await openProjectContextMenu(page);
       await expect(page.locator('.active-project-save-button')).toHaveText('Save', { timeout: 120_000 });
 
       await renameWorkflowFolderInline(page, initialFolderName, renamedFolderName);
 
       await expect(page.locator('.folder-row', { hasText: renamedFolderName })).toBeVisible({ timeout: 30_000 });
-      await expect(page.locator('.active-project-name')).toHaveText(nestedProjectName, { timeout: 30_000 });
+      await expect(page.locator('.project-row.active .label')).toHaveText(nestedProjectName, { timeout: 30_000 });
+      await openProjectContextMenu(page);
       await expect(page.locator('.active-project-save-button')).toHaveText('Save', { timeout: 30_000 });
 
       folderRelativePath = renamedFolderName;
@@ -70,6 +72,7 @@ test.describe('Managed special workflow paths', () => {
         return response.request().method() === 'POST' && url.pathname === '/api/projects/save';
       }, { timeout: 30_000 });
 
+      await openProjectContextMenu(page);
       await page.locator('.active-project-save-button').click();
 
       const saveRequest = await saveRequestPromise;
@@ -90,7 +93,8 @@ test.describe('Managed special workflow paths', () => {
       await waitForDashboardReady(page);
 
       await expect(page.locator('.folder-row', { hasText: renamedFolderName })).toBeVisible({ timeout: 30_000 });
-      await expect(page.locator('.active-project-name')).toHaveText(nestedProjectName, { timeout: 120_000 });
+      await expect(page.locator('.project-row.active .label')).toHaveText(nestedProjectName, { timeout: 120_000 });
+      await openProjectContextMenu(page);
       await expect(page.locator('.active-project-save-button')).toHaveText('Save', { timeout: 120_000 });
     } finally {
       if (projectRelativePath) {

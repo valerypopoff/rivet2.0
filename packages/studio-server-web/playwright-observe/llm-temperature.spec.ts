@@ -7,7 +7,11 @@ import {
   serializeProject,
   type Project,
 } from '@valerypopoff/rivet2-core';
-import { mockHostedEditorBootstrap, waitForDashboardReady } from './helpers/hostedEditorObserve';
+import {
+  mockHostedEditorBootstrap,
+  openProjectContextMenu,
+  waitForDashboardReady,
+} from './helpers/hostedEditorObserve';
 import { readCommittedWorkspaceCheckpoint } from './helpers/workspaceRecovery';
 
 for (const type of ['llmChatV2', 'llmProfile'] as const) {
@@ -110,6 +114,7 @@ for (const type of ['llmChatV2', 'llmProfile'] as const) {
     await input.fill('');
     await input.pressSequentially('0.35');
     await expect(node).toContainText('Temperature: 0.35');
+    await openProjectContextMenu(page);
     await page.locator('.active-project-save-button').click();
     await expect.poll(() => saved.length).toBe(1);
     expect(savedTemperature(0)).toBe(0.35);
@@ -144,6 +149,7 @@ for (const type of ['llmChatV2', 'llmProfile'] as const) {
     await tab('A').click();
     await expect(input).toHaveValue('');
     await expect(node).not.toContainText('Temperature:');
+    await openProjectContextMenu(page);
     await page.locator('.active-project-save-button').click();
     await expect.poll(() => saved.length).toBe(2);
     expect(savedTemperature(1)).toBeUndefined();
@@ -204,6 +210,7 @@ for (const type of ['llmChatV2', 'llmProfile'] as const) {
     await expect(input).toHaveValue('');
     await expect(node).not.toContainText('Temperature:');
     await expect(tab('B')).toHaveClass(/\bhas-unsaved-changes\b/);
+    await openProjectContextMenu(page);
     await page.locator('.active-project-save-button').click();
     await expect.poll(() => saved.length).toBe(3);
     expect(savedTemperature(2)).toBeUndefined();
@@ -222,6 +229,7 @@ for (const type of ['llmChatV2', 'llmProfile'] as const) {
       await expect(timeout).toHaveValue('1.0005');
       await input.focus();
       await expect(timeout).toHaveValue('1.001');
+      await openProjectContextMenu(page);
       await page.locator('.active-project-save-button').click();
       await expect.poll(() => saved.length).toBe(4);
       expect(
