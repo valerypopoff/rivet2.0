@@ -328,6 +328,20 @@ test('desktop Build evidence uses exact owned runs, bounded GETs and fail-closed
   assert.deepEqual(await run('validated', 'ok', { runId: 101, runAttempt: 1 }), { runId: 101, runAttempt: 1 });
   assert.deepEqual(await run('validated', 'advance'), { runId: 101, runAttempt: 1 });
   assert.deepEqual(await run('artifact', 'pending'), { runId: 101, runAttempt: 1, artifactId: 501 });
+  assert.deepEqual(await run('artifact', 'download-pending'), { runId: 101, runAttempt: 1, artifactId: 501 });
+  assert.equal(
+    requests.filter((request) => request === 'GET /download-pending/repos/fixture/repo/actions/artifacts/501/zip')
+      .length,
+    3,
+    'Listed artifacts must not be handed off while their exact download endpoint returns 404.',
+  );
+  for (const [scenario, failure] of [
+    ['download-forbidden', /HTTP 403/],
+    ['download-broken', /HTTP 502/],
+    ['download-rerun', /identity\/attempt changed/],
+    ['download-replaced', /artifact changed/],
+  ])
+    await assert.rejects(run('artifact', scenario), failure, scenario);
   for (const [scenario, failure] of [
     ['failed', /did not succeed/],
     ['cancelled', /did not succeed/],
@@ -354,6 +368,7 @@ test('desktop Build evidence uses exact owned runs, bounded GETs and fail-closed
   for (const [mode, scenario] of [
     ['validated', 'pending'],
     ['artifact', 'empty'],
+    ['artifact', 'download-missing'],
   ])
     await assert.rejects(run(mode, scenario, { maxWaitMs: 60 }), /Timed out|operation was aborted due to timeout/);
   await assert.rejects(run('validated', 'ok', { runId: 101 }), /Pinned/);

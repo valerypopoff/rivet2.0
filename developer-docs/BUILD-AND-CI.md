@@ -1915,7 +1915,12 @@ the cancellation-settlement delay. A stale or failed freshness check prevents
 the second deployment; the old check is never reused to authorize another write.
 
 Evidence waits are bounded to 20 minutes, with individual HTTP calls bounded to
-10 seconds and no redirect-following or modifying API calls. Missing or expired
+10 seconds and no redirect-following or modifying API calls. A listed artifact
+must also expose its ZIP download redirect before handoff to the download action.
+That read-only check polls a 404 for at most one minute within the original
+deadline, retaining the same artifact ID and rechecking the Build identity and
+attempt. Other errors fail immediately; the helper never follows the signed
+storage URL or sends it credentials. Missing or expired
 frontend artifacts require rerunning Build before the desktop workflow. Artifacts
 are retained seven days. Do not bypass the gate or rebuild an unqualified
 frontend inside Desktop Release. Existing workflow triggers, manual entry points,

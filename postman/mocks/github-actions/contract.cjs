@@ -20,7 +20,7 @@ function createGitHubActionsHandler({ requests = [] } = {}) {
     const repository = { id: 10, full_name: 'fixture/repo' };
     const run = {
       id: 101,
-      run_attempt: mode === 'rerun' ? 2 : 1,
+      run_attempt: mode === 'rerun' || (mode === 'download-rerun' && count > 3) ? 2 : 1,
       head_sha: mode === 'stale' ? 'b'.repeat(40) : sha,
       head_branch: mode === 'wrongbranch' ? 'main' : 'develop',
       event: mode === 'pr' ? 'pull_request' : 'push',
@@ -42,7 +42,7 @@ function createGitHubActionsHandler({ requests = [] } = {}) {
     } else if (endpoint === '/repos/fixture/repo/actions/runs/101') body = run;
     else if (endpoint === '/repos/fixture/repo/actions/runs/101/artifacts') {
       const artifact = {
-        id: 501,
+        id: mode === 'download-replaced' && count > 4 ? 502 : 501,
         name: `rivet-desktop-web-${sha}`,
         expired: mode === 'expired',
         size_in_bytes: 100,
@@ -57,6 +57,20 @@ function createGitHubActionsHandler({ requests = [] } = {}) {
       body = {
         artifacts: mode === 'missing' ? [] : mode === 'duplicate' ? [artifact, { ...artifact, id: 502 }] : [artifact],
       };
+    } else if (endpoint === '/repos/fixture/repo/actions/artifacts/501/zip') {
+      const key = `${mode}:download`;
+      const downloads = (reads.get(key) || 0) + 1;
+      reads.set(key, downloads);
+      if (mode === 'download-forbidden') return res.writeHead(403).end();
+      if (mode === 'download-broken') return res.writeHead(502).end();
+      if (
+        mode === 'download-missing' ||
+        mode === 'download-rerun' ||
+        mode === 'download-replaced' ||
+        (mode === 'download-pending' && downloads < 3)
+      )
+        return res.writeHead(404).end();
+      return res.writeHead(302, { location: 'https://artifacts.example.invalid/fixture.zip' }).end();
     } else return res.writeHead(501).end('Endpoint not defined by the GitHub Build-evidence contract.');
     res.setHeader('content-type', 'application/json');
     res.end(JSON.stringify(body));

@@ -62,6 +62,16 @@ The November 22 context-menu move keeps project-summary behavior in
 `ActiveProjectSection.tsx` migration blob and records that current successor.
 Repository style checks alone do not exercise this historical-source contract.
 
+Desktop frontend handoff also checks the exact artifact's ZIP endpoint before
+returning its ID. In run `45039671659`, GitHub listed a newly uploaded artifact
+but its download returned 404 less than a second later. The listing alone is
+insufficient evidence of immediate download availability. Poll only that 404,
+for up to one minute within the existing overall deadline, and keep validating
+the same Build SHA, run, attempt and artifact ID. Permission/server errors and
+changed identities still fail; redirects are inspected without being followed.
+The local GitHub contract covers delayed availability, permanent absence and
+identity changes. Actual transfer still requires a successful hosted run.
+
 The November 18, 2026 withdrawal of the
 [`picomatch` advisory](https://github.com/advisories/GHSA-fc5q-39xc-vjpf)
 removed finding `1247710` from the npm audit feed. The audit rejected the
