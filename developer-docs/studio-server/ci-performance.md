@@ -272,11 +272,11 @@ run. These measurements are scheduling estimates, not runtime guarantees.
 The November 22, 2026 local inventory has 396 cases in 42 selected specs, in four
 independent jobs with two browser workers each. The authoritative selection and
 weights live in [editor-test-shards.mjs](../../scripts/ci/editor-test-shards.mjs).
-Weights now use the higher total per-file case work from successful hosted runs
-`44964153448` and `45041549860`, rounded up to five seconds. The renamed
-`ha-browser-contracts.spec.ts` adds the two Save checks; its temporary 25-second
-hint includes headroom over the measured recording-selection cases. Current
-combined work estimates are 980-990 seconds per shard, not measured elapsed times. The shard
+Weights now use the highest total per-file case work from successful hosted runs
+`44964153448`, `45041549860` and `45045691893`, rounded up to five seconds.
+The renamed `ha-browser-contracts.spec.ts` adds the two Save checks; its 25-second
+hint retains headroom over their complete measured file work. Current combined
+work estimates are 1,075-1,080 seconds per shard, not measured elapsed times. The shard
 contract checks exact-once coverage, balanced weights and a
 75% work budget against the existing 12-minute/two-worker step limit (1,080
 seconds). This leaves room for setup, serial tails and runner variation; increasing
@@ -301,6 +301,15 @@ only one does not remove the other from the all-green critical path. Rebalancing
 is expected to trim browser tails, not halve the workflow. Evidence and timing
 inputs are in ignored `artifacts/ci-critical-path-20261122/`.
 
+The first revised hosted run (`45045691893`) passed all 396 browser cases,
+but Verify took 16m51s, 24 seconds longer than the previous sample. The slowest
+browser job remained 10m52s; other files slowed while recordings got faster.
+The elapsed time to all-green was 16m51s instead of 17m17s because native desktop
+packaging finished sooner. This does not establish a causal browser speedup.
+Keep the slower per-file observations in the weights rather than selecting only
+favorable timings. The managed integration lane was also near ten minutes after
+compilation, limiting the possible benefit from adding more browser jobs alone.
+
 ## Intel macOS runner experiment
 
 The normal release matrix still builds Intel on `macos-15-intel` and Apple Silicon
@@ -320,7 +329,9 @@ No artifact is published as a release, and no GCP qualification or rollout runs.
 Initial dependency-cache availability differs across hosts. Both perform a full
 warm-up build, then clean only the app's release artifacts and bundle directory
 before the measured complete rebuild. Dependency caches survive that cleanup;
-benchmark jobs do not save Rust caches. Compare measured rebuild, signing,
+benchmark jobs do not save Rust caches and use a separate temporary pkg cache,
+so an experiment cannot populate a normal release cache with the other target's
+base binaries. Compare measured rebuild, signing,
 notarization and native-verification time separately from warm-up/setup/cache
 transfer time. A warm rebuild result is not a cold-build result. Compare the
 recorded Xcode/SDK versions before interpreting timings; mismatched toolchains

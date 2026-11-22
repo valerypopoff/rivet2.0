@@ -58,10 +58,10 @@ jobs:
       # Both hosts build the SAME Intel package. Keep normal release hosts unchanged.
       RIVET_DESKTOP_TARGET: x86_64-apple-darwin
       NODE_OPTIONS: --max-old-space-size=6000
+      PKG_CACHE_PATH: ${{ runner.temp }}/rivet-macos-benchmark-pkg
     steps:
       - uses: actions/checkout@v6
       - uses: ./.github/actions/setup-yarn
-      - uses: ./.github/actions/setup-pkg-cache
       - uses: dtolnay/rust-toolchain@1.100.0
         with:
           targets: x86_64-apple-darwin
@@ -79,6 +79,7 @@ jobs:
           rustc -Vv
           node --version
           arch -x86_64 /usr/bin/true
+          mkdir -p "$PKG_CACHE_PATH"
       - name: Install dependencies
         run: node .yarn/releases/yarn-4.17.1.cjs install --immutable --immutable-cache
       - name: Sync desktop version metadata

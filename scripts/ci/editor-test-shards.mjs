@@ -1,27 +1,27 @@
 // Hosted total case-time estimates, using the higher per-file work from runs
-// 44964153448 and 45041549860, rounded up to five seconds. Not parallel wall time.
+// 44964153448, 45041549860 and 45045691893, rounded up to five seconds.
 // Hints balance work; they never select or omit individual test cases.
 const weightedSpecs = [
-  ['explicit-bundles.spec.ts', 135],
+  ['explicit-bundles.spec.ts', 180],
   // Comparison, recovery, modal layout and native drag journeys.
-  ['bundle-merge.spec.ts', 150],
+  ['bundle-merge.spec.ts', 155],
   // Complete comparison/edit/save/swap/recovery and iframe-owner journeys.
-  ['bundle-comparison.spec.ts', 245],
-  ['modal-sizing.spec.ts', 20],
-  ['deployment-status.spec.ts', 30],
-  ['scheduled-runs.spec.ts', 85],
+  ['bundle-comparison.spec.ts', 295],
+  ['modal-sizing.spec.ts', 25],
+  ['deployment-status.spec.ts', 35],
+  ['scheduled-runs.spec.ts', 90],
   ['fullscreen-output-search-paging.spec.ts', 30],
-  ['hosted-modal-focus.spec.ts', 130],
+  ['hosted-modal-focus.spec.ts', 165],
   ['hosted-editor-search-shortcuts.spec.ts', 45],
   ['hosted-dashboard-contracts.spec.ts', 25],
   // Preview recording, incomplete-history and receipt recovery.
-  ['hosted-executor-origin.spec.ts', 85],
+  ['hosted-executor-origin.spec.ts', 110],
   // Includes admission races and error-recovery regressions.
   ['project-bundle.spec.ts', 120],
   ['project-bundle-upload.spec.ts', 15],
   ['sidebar-name-wrapping.spec.ts', 30],
-  ['streaming-nodes.spec.ts', 20],
-  ['project-tree-activation.spec.ts', 190],
+  ['streaming-nodes.spec.ts', 25],
+  ['project-tree-activation.spec.ts', 230],
   ['port-connection-warnings.spec.ts', 25],
   ['cross-project-subgraph-loading.spec.ts', 180],
   ['subgraph-bundle-scope.spec.ts', 20],
@@ -29,15 +29,15 @@ const weightedSpecs = [
   ['passthrough-port-labels.spec.ts', 30],
   ['bundle-local-execution-history.spec.ts', 15],
   ['hosted-subgraph-auth.spec.ts', 290],
-  ['remote-bundle-observation.spec.ts', 225],
-  ['ha-latest-replay.spec.ts', 20],
+  ['remote-bundle-observation.spec.ts', 280],
+  ['ha-latest-replay.spec.ts', 25],
   // Complete hosted fixture, including scoped HA transport, runs and reconnect.
-  ['managed-debugger-channels.spec.ts', 235],
+  ['managed-debugger-channels.spec.ts', 265],
   ['ha-browser-contracts.spec.ts', 25],
-  ['recording-playback-history.spec.ts', 70],
+  ['recording-playback-history.spec.ts', 90],
   ['graph-deletion-references.spec.ts', 90],
   ['published-revision-history.spec.ts', 90],
-  ['node-editor-ownership.spec.ts', 70],
+  ['node-editor-ownership.spec.ts', 90],
   ['node-editor-lifecycle.spec.ts', 220],
   ['llm-temperature.spec.ts', 60],
   ['evaluation-history-paging.spec.ts', 45],
@@ -46,11 +46,11 @@ const weightedSpecs = [
   // Crossing/curved/bent wire routes through pan, zoom, resize and culling.
   ['wire-viewport-culling.spec.ts', 35],
   ['tunnel-cache-retention.spec.ts', 5],
-  ['run-statistics-modal.spec.ts', 65],
+  ['run-statistics-modal.spec.ts', 90],
   // Isolated recordings cases can share both browser workers.
   ['run-recordings-modal.spec.ts', 665],
   // Debug node discovery, output labels, icons and documentation links.
-  ['graph-call-path-node.spec.ts', 10],
+  ['graph-call-path-node.spec.ts', 15],
   // Real local PostgreSQL/MinIO + provider HTTP, including cancellation settlement.
   ['run-cost-statistics.spec.ts', 50],
 ];
