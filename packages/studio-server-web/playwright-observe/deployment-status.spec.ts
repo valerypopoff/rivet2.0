@@ -252,6 +252,11 @@ test('resource monitoring distinguishes container and process data, unknown allo
   await page.mouse.wheel(0, 800);
   const monitoringTab = modal.getByRole('tab', { name: 'CPU and RAM monitoring', exact: true });
   await expect(monitoringTab).toBeInViewport({ ratio: 1 });
+  // Native font metrics differ. Constrain only width to exercise wrapping;
+  // height and vertical padding still come from the real settings styles.
+  await monitoringTab.evaluate((element) => {
+    (element as HTMLElement).style.width = '130px';
+  });
   const tabSpacing = await monitoringTab.evaluate((element) => {
     const range = document.createRange();
     range.selectNodeContents(element);
@@ -262,6 +267,9 @@ test('resource monitoring distinguishes container and process data, unknown allo
   expect(tabSpacing.lines).toBeGreaterThan(1);
   expect(tabSpacing.above).toBeGreaterThanOrEqual(6);
   expect(tabSpacing.below).toBeGreaterThanOrEqual(6);
+  await monitoringTab.evaluate((element) => {
+    (element as HTMLElement).style.removeProperty('width');
+  });
   await monitoringTab.click();
   const panel = modal.getByRole('region', { name: 'Resource monitoring' });
   await expect(panel).toContainText(

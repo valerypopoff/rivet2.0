@@ -1,6 +1,7 @@
 import { test, expect, type Page } from '@playwright/test';
 import {
   openBundleActions,
+  openProjectContextMenu,
   authenticateIfNeeded,
   mockHostedEditorBootstrap,
   waitForDashboardReady,
@@ -124,8 +125,6 @@ test('a delayed bundle deletion preserves an unsaved replacement project at the 
   await page.mouse.move(box.x + box.width / 2 + 70, box.y + box.height / 2 + 40, { steps: 5 });
   await page.mouse.up();
   await expect(tab).toHaveClass(/has-unsaved-changes/);
-  const save = page.getByRole('button', { name: 'Save current project', exact: true });
-  await expect(save).toBeVisible();
   await page.getByRole('button', { name: /^(Expand|Collapse) Feature bundle$/ }).click({ button: 'right' });
   await openBundleActions(page);
   await page.getByRole('menuitem', { name: 'Delete bundle', exact: true }).click();
@@ -138,7 +137,8 @@ test('a delayed bundle deletion preserves an unsaved replacement project at the 
   await expect(tab).toBeVisible();
   await expect(tab).toHaveClass(/has-unsaved-changes/);
   await expect(node).toBeVisible();
-  await expect(save).toBeVisible();
+  await openProjectContextMenu(page, 'Replacement');
+  await expect(page.getByRole('button', { name: 'Save current project', exact: true })).toBeVisible();
 });
 
 test('bundle deletion closes a member whose earlier open is still loading', async ({ page }) => {

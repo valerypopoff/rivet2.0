@@ -72,6 +72,13 @@ changed identities still fail; redirects are inspected without being followed.
 The local GitHub contract covers delayed availability, permanent absence and
 identity changes. Actual transfer still requires a successful hosted run.
 
+Browser fixtures must follow the current UI ownership. After moving project
+details into the context-menu header, the bundle-deletion survivor check opens
+that menu before asserting Save availability; it still verifies the surviving
+project ID, graph and dirty state. Settings padding checks explicitly constrain
+the tab's width to exercise wrapped text across native fonts, then restore it.
+They keep the production height/padding rules and the two-line assertions.
+
 The November 18, 2026 withdrawal of the
 [`picomatch` advisory](https://github.com/advisories/GHSA-fc5q-39xc-vjpf)
 removed finding `1247710` from the npm audit feed. The audit rejected the
