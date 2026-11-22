@@ -22,6 +22,8 @@ on:
       - 'packages/node/**'
       - 'packages/studio-server-*/**'
       - 'scripts/build-wrapper-target.mjs'
+      - 'scripts/ci/scan-container-images.mjs'
+      - 'scripts/ci/verify-container-scan.mjs'
       - 'yarn.lock'
       # Rollout/test-tool repairs publish through Publish qualification images.
       # The embedded autoscaler closure is application runtime and remains here.
@@ -179,8 +181,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Set up Node for proxy input proof
-        if: ${{ matrix.service == 'proxy' }}
+      - name: Set up Node for image proof and scans
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 24
@@ -242,6 +243,31 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha,scope=${{ matrix.service }}
           cache-to: type=gha,mode=max,scope=${{ matrix.service }}
+
+      - name: Scan every published architecture immediately
+        shell: bash
+        env:
+          SCAN_REPOSITORY: ${{ matrix.image }}
+          SCAN_SERVICE: ${{ matrix.service }}
+          TRIVY_USERNAME: ${{ github.actor }}
+          TRIVY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          digest="$(docker buildx imagetools inspect "${SCAN_REPOSITORY}:${SOURCE_TAG}" --format '{{.Manifest.Digest}}')"
+          node scripts/ci/scan-container-images.mjs \
+            --image "${SCAN_REPOSITORY}@${digest}" --service "$SCAN_SERVICE" \
+            --source-sha "$GITHUB_SHA" --output "artifacts/container-security/${SCAN_SERVICE}"
+      - name: Retain container vulnerability evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808 # v4
+        with:
+          name: container-security-${{ matrix.service }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            artifacts/container-security/${{ matrix.service }}/**/trivy.json
+            artifacts/container-security/${{ matrix.service }}/**/assessment.json
+            artifacts/container-security/${{ matrix.service }}/result.json
+          if-no-files-found: error
+          retention-days: 30
 
   release-manifest:
     name: Create candidate release manifest
@@ -520,26 +546,17 @@ jobs:
         with:
           name: studio-server-candidate-release-manifest-${{ github.run_id }}-${{ github.run_attempt }}
           path: artifacts/studio-server-release-manifest
-      - name: Scan every published architecture
-        env:
-          TRIVY_USERNAME: ${{ github.actor }}
-          TRIVY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
-        run: >-
-          node scripts/ci/scan-container-images.mjs
-          --manifest artifacts/studio-server-release-manifest/candidate-release-manifest.json
-          --service ${{ matrix.service }}
-          --output artifacts/container-security/${{ matrix.service }}
-      - name: Retain container vulnerability evidence
-        if: ${{ always() }}
-        uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808 # v4
+      - name: Download component scan evidence
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: container-security-${{ matrix.service }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: |
-            artifacts/container-security/${{ matrix.service }}/**/trivy.json
-            artifacts/container-security/${{ matrix.service }}/**/assessment.json
-            artifacts/container-security/${{ matrix.service }}/result.json
-          if-no-files-found: error
-          retention-days: 30
+          path: artifacts/container-security/${{ matrix.service }}
+      - name: Verify every scanned digest and architecture
+        run: >-
+          node scripts/ci/verify-container-scan.mjs
+          --manifest artifacts/studio-server-release-manifest/candidate-release-manifest.json
+          --service ${{ matrix.service }}
+          --input artifacts/container-security/${{ matrix.service }}
 
   fast-container-smoke:
     name: Smoke candidate images

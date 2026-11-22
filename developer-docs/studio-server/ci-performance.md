@@ -54,6 +54,55 @@ Their Linux images omit only the hash-reviewed Windows node-gyp discovery parser
 while final-image installation/native-build probes preserve Linux functionality.
 Review dependency ownership again when the execution graph changes.
 
+## Image scan and compilation boundaries
+
+Runtime-image builds scan their own completed immutable image immediately,
+including reused proxy images. The existing `scan-images` matrix then verifies
+those per-service/run/attempt artifacts against the final release manifest.
+It recomputes assessments from sanitized inventories, checks scanner and source
+identity, complete platform coverage, freshness and the unchanged High/Critical
+policy. Missing, failed or mismatched evidence blocks qualification and promotion.
+Both scanning and verification scripts are explicit Build Images push inputs.
+No scan result from another release or workflow attempt substitutes for this gate.
+
+API/executor `runtime-build` stages copy only Core, Node and their wrapper build
+inputs before compiling the shared SDK. The web `hosted-dependencies` stage does
+the same for Core and Evaluations. Consumers still receive the complete source
+checkout before their own compilation and runtime packaging. This preserves
+development targets and existing source resolution while keeping unrelated
+application or rollout edits out of the expensive shared compilation cache key.
+Dependency installation continues to depend on the complete workspace manifests,
+lockfile, vendored Yarn and package-manager checks.
+
+Keep external cache `mode=max` until a controlled cold/source/dependency-change
+comparison establishes a better total cost. Docker's [cache modes](https://docs.docker.com/build/cache/backends/)
+export different intermediate layers; a shorter export alone is not a faster
+sequence of builds. Local BuildKit measurements and input-invalidation evidence
+do not establish hosted GHA transfer costs or total workflow savings.
+
+The November 22 local comparison built the original and revised web, API and
+executor builder stages, then changed an unrelated package source input. Shared
+compilation was reused by the revised stages. Single repeat-build observations
+were web 80.2s to 66.4s, API 36.8s to 23.5s, and executor 26.2s to 12.9s. Initial
+priming durations are not comparable cold-build measurements. All 3,786 checked
+compiled/staged files matched byte-for-byte between the original and revised
+builds. These are builder-output checks, not final-image scan qualification.
+
+A separate disposable-builder pilot exercised fresh cache imports and a harmless
+root-manifest input change. Both configurations rebuilt after the manifest change.
+Its cache-only `min` and `max` exports had identical manifests and byte counts
+(1,039,790,081 bytes each), so their elapsed times do not compare distinct policies
+or justify changing GHA exports. Use an actual image/registry export and inspect
+cache identities before drawing that conclusion in a future experiment.
+
+Local validation passed the scan/policy tests on Windows and offline unprivileged
+Linux, the 26 source image/launcher contracts, repository-wide `test:style`, Studio
+Server test-style checks and five headless dashboard/dialog cases against the
+actual compiled web output. Temporary container builders and the UI container
+were removed; the existing development stack and build cache were preserved.
+Evidence is under ignored `artifacts/ci-early-scans-20261122/`. Hosted timings and
+exact-image scans remain the next normal CI run's responsibility.
+
 ## Rollout and chart contracts
 
 The required deployment-command job starts after the source contracts pass, in

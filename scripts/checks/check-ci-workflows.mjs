@@ -1016,12 +1016,23 @@ for (const target of imageJobs['build-and-push'].strategy.matrix.include) {
 }
 assert.equal(scanImages.strategy['fail-fast'], false);
 assert.deepEqual(scanImages.permissions, { actions: 'read', contents: 'read', packages: 'read' });
-const scanStep = findStep(scanImages, 'Scan every published architecture', 'Container security');
-assert.match(scanStep.run, /scan-container-images\.mjs/);
+const scanProducer = imageJobs['build-and-push'];
+const scanNode = findStep(scanProducer, 'Set up Node for image proof and scans', 'Container security');
+assert.equal(scanNode.if, undefined);
+assert.equal(scanNode.with['node-version'], 24);
+for (const input of ['scripts/ci/scan-container-images.mjs', 'scripts/ci/verify-container-scan.mjs'])
+  assert.ok(images.workflow.on.push.paths.includes(input), `${input}: changes must trigger image verification`);
+const earlyScan = findStep(scanProducer, 'Scan every published architecture immediately', 'Container security');
+assert.match(earlyScan.run, /--image "\$\{SCAN_REPOSITORY\}@\$\{digest\}" --service "\$SCAN_SERVICE"/);
+assert.match(earlyScan.run, /--source-sha "\$GITHUB_SHA"/);
+assert.equal(earlyScan.env.SCAN_REPOSITORY, '${{ matrix.image }}');
+assert.equal(earlyScan.env.SCAN_SERVICE, '${{ matrix.service }}');
+const scanStep = findStep(scanImages, 'Verify every scanned digest and architecture', 'Container security');
+assert.match(scanStep.run, /verify-container-scan\.mjs/);
 assert.match(scanStep.run, /--manifest artifacts\/studio-server-release-manifest\/candidate-release-manifest\.json/);
 assert.match(scanStep.run, /--service \$\{\{ matrix\.service \}\}/);
 assert.equal(scanStep['continue-on-error'], undefined, 'Container security must fail closed');
-const scanEvidence = findStep(scanImages, 'Retain container vulnerability evidence', 'Container security');
+const scanEvidence = findStep(scanProducer, 'Retain container vulnerability evidence', 'Container security');
 assert.equal(scanEvidence.if, '${{ always() }}');
 assert.equal(scanEvidence.with['if-no-files-found'], 'error');
 for (const file of [
@@ -1066,6 +1077,16 @@ assert.equal(
 );
 for (const service of ['api', 'executor', 'web']) {
   const dockerfile = read(`deploy/studio-server/images/${service}/Dockerfile`);
+  if (service === 'web') {
+    const shared = dockerfile
+      .split('FROM dependencies AS hosted-dependencies')[1]
+      ?.split('FROM hosted-dependencies AS source')[0];
+    assert.ok(shared, 'Web shared compilation must be separate from complete application sources');
+    for (const pkg of ['core', 'evaluations']) assert.ok(shared.includes(`COPY packages/${pkg} ./packages/${pkg}`));
+    assert.doesNotMatch(shared, /COPY packages \.\/packages/);
+    assert.match(dockerfile, /FROM source AS development/);
+    assert.match(dockerfile, /FROM source AS builder/);
+  }
   const firstYarnCommand = dockerfile.search(/\byarn (?:config|install)\b/);
   assert.ok(firstYarnCommand >= 0, `${service}: missing dependency installation`);
   for (const setup of [
@@ -1107,7 +1128,14 @@ for (const service of ['api', 'executor', 'web']) {
     );
     assert.match(dockerfile, /sh \/rebuild-esbuild\.sh "\$TARGETARCH" runtime/);
     assert.match(dockerfile, /FROM scratch AS runtime-dependencies/);
-    assert.match(dockerfile, /FROM dependencies AS builder/);
+    assert.match(dockerfile, /FROM dependencies AS runtime-build/);
+    assert.match(dockerfile, /FROM runtime-build AS builder/);
+    const runtimeBuild = dockerfile
+      .split('FROM dependencies AS runtime-build')[1]
+      .split('FROM runtime-build AS builder')[0];
+    assert.match(runtimeBuild, /COPY packages\/core \.\/packages\/core/);
+    assert.match(runtimeBuild, /COPY packages\/node \.\/packages\/node/);
+    assert.doesNotMatch(runtimeBuild, /COPY packages \.\/packages/);
     assert.match(dockerfile, /COPY --link --from=runtime-dependencies --chown=10001:10001 \/ \//);
   }
 }

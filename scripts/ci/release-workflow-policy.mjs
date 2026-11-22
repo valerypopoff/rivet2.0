@@ -35,6 +35,34 @@ export function assertFastReleasePolicy({ images, verify, publisher, source, bui
     ['source-contracts'],
     'Keep full verification parallel with builds',
   );
+  const producer = images.jobs['build-and-push'];
+  const earlyScan = producer.steps.find((s) => s.name === 'Scan every published architecture immediately');
+  assert.ok(earlyScan, 'Each image must be scanned before its build job completes');
+  assert.equal(earlyScan.if, undefined, 'Reused images must also be freshly scanned');
+  assert.equal(earlyScan['continue-on-error'], undefined, 'Image scan failures must stop verification');
+  assert.match(earlyScan.run, /node scripts\/ci\/scan-container-images\.mjs/);
+  const scanGate = images.jobs['scan-images'];
+  assert.equal(
+    scanGate.name,
+    'Scan runtime image (${{ matrix.service }})',
+    'Preserve existing security status contexts',
+  );
+  assert.deepEqual(needs(scanGate), ['release-manifest']);
+  const scanProof = scanGate.steps.find((s) => s.name === 'Verify every scanned digest and architecture');
+  assert.equal(
+    scanProof?.run,
+    'node scripts/ci/verify-container-scan.mjs --manifest artifacts/studio-server-release-manifest/candidate-release-manifest.json --service ${{ matrix.service }} --input artifacts/container-security/${{ matrix.service }}',
+  );
+  assert.equal(scanProof.if, undefined);
+  assert.equal(scanProof['continue-on-error'], undefined);
+  const scanDownload = scanGate.steps.find((s) => s.name === 'Download component scan evidence');
+  const scanUpload = producer.steps.find((s) => s.name === 'Retain container vulnerability evidence');
+  const artifact = 'container-security-${{ matrix.service }}-${{ github.run_id }}-${{ github.run_attempt }}';
+  assert.equal(scanDownload?.with?.name, artifact);
+  assert.equal(scanDownload.with.path, 'artifacts/container-security/${{ matrix.service }}');
+  assert.equal(scanUpload?.with?.name, artifact);
+  assert.equal(scanUpload.if, '${{ always() }}');
+  assert.equal(scanUpload.with['if-no-files-found'], 'error');
   for (const job of ['build-studio-server', 'repository-contracts', 'host-compatibility', 'deployment-command-tests'])
     depends(verify.jobs[job], 'source-contracts');
   const deploymentCommands = verify.jobs['deployment-command-tests'];

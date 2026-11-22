@@ -76,12 +76,18 @@ FROM scratch AS runtime-dependencies
 # Include the normalized parent: --link otherwise creates it with the build time.
 COPY --link --from=runtime-dependency-copy --chown=10001:10001 /runtime-dependencies/ /
 
-FROM dependencies AS builder
+FROM dependencies AS runtime-build
+COPY packages/core ./packages/core
+COPY packages/node ./packages/node
+COPY scripts/build-wrapper-target.mjs scripts/ci-timing.mjs ./scripts/
+COPY tsconfig.base.json LICENSE README.md ./
+RUN YARN_NODE_LINKER=node-modules yarn build:runtime
+
+FROM runtime-build AS builder
 COPY packages ./packages
 COPY scripts ./scripts
 COPY tsconfig.base.json LICENSE README.md ./
-RUN YARN_NODE_LINKER=node-modules yarn build:runtime && \
-    YARN_NODE_LINKER=node-modules yarn workspace @valerypopoff/rivet2-evaluations run build && \
+RUN YARN_NODE_LINKER=node-modules yarn workspace @valerypopoff/rivet2-evaluations run build && \
     YARN_NODE_LINKER=node-modules yarn workspace @valerypopoff/rivet-studio-server-shared run build && \
     YARN_NODE_LINKER=node-modules yarn workspace @valerypopoff/rivet-studio-server-bootstrap run build && \
     YARN_NODE_LINKER=node-modules yarn workspace @valerypopoff/rivet-studio-server-executor run build && \

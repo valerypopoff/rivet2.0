@@ -743,7 +743,8 @@ test('runtime dependency pruning cannot change the builder or ship its unpruned 
     'RUN node /tmp/remove-runtime-build-globs.mjs /runtime-dependencies/app/node_modules',
     'FROM scratch AS runtime-dependencies',
     'COPY --link --from=runtime-dependency-copy --chown=10001:10001 /runtime-dependencies/ /',
-    'FROM dependencies AS builder',
+    'FROM dependencies AS runtime-build',
+    'FROM runtime-build AS builder',
   ];
   const check = (lines) => assertRuntimeDependencyCopyLayout(lines.join('\n'), 'fixture');
   assert.doesNotThrow(() => check(fixture));
@@ -768,7 +769,11 @@ test('runtime dependency pruning cannot change the builder or ship its unpruned 
     /ship the pruned/,
   );
   assert.throws(
-    () => check(fixture.map((line, i) => (i === 4 ? 'FROM runtime-dependency-copy AS builder' : line))),
+    () => check(fixture.map((line, i) => (i === 4 ? 'FROM runtime-dependency-copy AS runtime-build' : line))),
+    /isolate runtime pruning/,
+  );
+  assert.throws(
+    () => check(fixture.map((line, i) => (i === 5 ? 'FROM runtime-dependency-copy AS builder' : line))),
     /isolate runtime pruning/,
   );
 });

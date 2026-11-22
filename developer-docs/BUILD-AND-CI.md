@@ -954,6 +954,13 @@ surface merely to reduce image size. Included workspaces also retain their
 existing package licenses and readmes. The staging regression verifies that local
 overrides still win over an otherwise loadable hoisted version.
 
+Shared compilation has a separate cache boundary: API/executor `runtime-build`
+copies Core and Node before `build:runtime`; web `hosted-dependencies` copies Core
+and Evaluations before `build:hosted-web-deps`. Both include their wrapper scripts
+and root compiler inputs. The complete package/script sources still enter each
+consumer before its own compilation. Keep those shared build stages derived from
+the unpruned dependency installation; runtime-only pruning must not affect them.
+
 `studio-server:verify:repo-structure` owns the production source-copy contract:
 all manifests precede the immutable install, source directories follow it, and
 `COPY . .` is forbidden because it would recopy the dependency cache. The API
@@ -1233,9 +1240,11 @@ longer requires `dependenciesMeta` or an unplugged package copy.
 ### Dependency security
 
 Container dependencies have a separate fail-closed gate; Yarn/Cargo audits do not
-cover NGINX or Alpine packages. `scan-images` consumes this attempt's immutable
-candidate manifest, scans all four runtime images/platforms with digest-pinned
-Trivy, retains sanitized inventory/finding reports and blocks image promotion on
+cover NGINX or Alpine packages. Each runtime-image build scans its immutable
+digest with pinned Trivy as soon as it is available, retaining sanitized reports
+for the service/run/attempt. After manifest assembly, `scan-images` verifies those
+reports against this attempt's exact source, digests and complete platform set.
+Both stages fail closed and block image promotion on
 High/Critical findings (including unfixed ones), incomplete reports or scanner
 errors. There is no container exception or allow-failure path. See
 [Container security](./studio-server/container-security.md) for local commands,

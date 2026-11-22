@@ -48,9 +48,10 @@ export function assertRuntimeDependencyCopyLayout(source, label) {
   const lines = dockerInstructions(source);
   const copy = lines.indexOf('FROM dependencies AS runtime-dependency-copy');
   const runtime = lines.indexOf('FROM scratch AS runtime-dependencies');
-  const builder = lines.indexOf('FROM dependencies AS builder');
+  const shared = lines.indexOf('FROM dependencies AS runtime-build');
+  const builder = lines.indexOf('FROM runtime-build AS builder');
   assert.ok(
-    copy >= 0 && runtime > copy && builder > runtime,
+    copy >= 0 && runtime > copy && shared > runtime && builder > shared,
     `${label} must isolate runtime pruning from the builder.`,
   );
   const pruning = lines.flatMap((line, index) =>
@@ -66,7 +67,7 @@ export function assertRuntimeDependencyCopyLayout(source, label) {
   );
   assert.ok(
     lines
-      .slice(runtime, builder)
+      .slice(runtime, shared)
       .includes('COPY --link --from=runtime-dependency-copy --chown=10001:10001 /runtime-dependencies/ /'),
     `${label} must ship the pruned runtime copy.`,
   );

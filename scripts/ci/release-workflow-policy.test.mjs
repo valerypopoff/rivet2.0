@@ -42,7 +42,37 @@ function fixture() {
     images: {
       jobs: {
         'source-contracts': { ...shared },
-        'build-and-push': { needs: 'source-contracts' },
+        'build-and-push': {
+          needs: 'source-contracts',
+          steps: [
+            { name: 'Scan every published architecture immediately', run: 'node scripts/ci/scan-container-images.mjs' },
+            {
+              name: 'Retain container vulnerability evidence',
+              if: '${{ always() }}',
+              with: {
+                name: 'container-security-${{ matrix.service }}-${{ github.run_id }}-${{ github.run_attempt }}',
+                'if-no-files-found': 'error',
+              },
+            },
+          ],
+        },
+        'scan-images': {
+          name: 'Scan runtime image (${{ matrix.service }})',
+          needs: ['release-manifest'],
+          steps: [
+            {
+              name: 'Verify every scanned digest and architecture',
+              run: 'node scripts/ci/verify-container-scan.mjs --manifest artifacts/studio-server-release-manifest/candidate-release-manifest.json --service ${{ matrix.service }} --input artifacts/container-security/${{ matrix.service }}',
+            },
+            {
+              name: 'Download component scan evidence',
+              with: {
+                name: 'container-security-${{ matrix.service }}-${{ github.run_id }}-${{ github.run_attempt }}',
+                path: 'artifacts/container-security/${{ matrix.service }}',
+              },
+            },
+          ],
+        },
         'managed-kubernetes-release-gate': {
           needs: ['scan-images'],
           strategy: { 'max-parallel': 3, 'fail-fast': false },
@@ -230,6 +260,36 @@ test('deployment command coverage and failure results are mandatory after splitt
     (f) => (f.verify.jobs.verify.needs = ['source-contracts']),
     (f) => delete f.verify.jobs.verify.steps[0].env.DEPLOYMENT_COMMAND_RESULT,
     (f) => (f.verify.jobs.verify.steps[0].run = 'test "$SOURCE_RESULT" = success'),
+  ]) {
+    const f = fixture();
+    mutate(f);
+    assert.throws(() => assertFastReleasePolicy(f));
+  }
+});
+
+test('early image scans remain mandatory and their evidence must match the final manifest', () => {
+  for (const mutate of [
+    (f) => {
+      f.images.jobs['build-and-push'].steps.shift();
+    },
+    (f) => {
+      f.images.jobs['build-and-push'].steps[0].if = 'false';
+    },
+    (f) => {
+      f.images.jobs['build-and-push'].steps[0]['continue-on-error'] = true;
+    },
+    (f) => {
+      f.images.jobs['scan-images'].steps[0].if = 'false';
+    },
+    (f) => {
+      f.images.jobs['scan-images'].steps[0]['continue-on-error'] = true;
+    },
+    (f) => {
+      f.images.jobs['scan-images'].steps[0].run = 'echo passed';
+    },
+    (f) => {
+      f.images.jobs['scan-images'].steps[1].with.name = 'previous-run';
+    },
   ]) {
     const f = fixture();
     mutate(f);

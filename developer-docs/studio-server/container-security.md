@@ -179,9 +179,18 @@ its normal CI scan before publication; the toolchain check does not replace it.
 
 ## Release gate
 
-- The four service lanes consume the candidate manifest from this workflow
-  attempt and require its source SHA to match `GITHUB_SHA`. They scan immutable
-  image digests, never a mutable `latest`/candidate tag.
+- Each image-build lane resolves its completed candidate tag to an immutable
+  digest and immediately scans all of that service's architectures. Reused
+  proxy images also receive a fresh scan. The component receipt binds the image,
+  service, source SHA and pinned scanner; the same run/attempt owns its artifact.
+- After the candidate manifest is assembled, `scan-images` downloads those
+  receipts and runs `verify-container-scan.mjs`. It verifies the manifest's source
+  SHA against `GITHUB_SHA`, requires the exact platform set, and reassesses the
+  sanitized reports against every declared immutable digest. A producer's success
+  or `passed: true` alone is insufficient; wrong identities, incomplete evidence,
+  stale scans/databases and altered assessments fail closed. Kind and promotion
+  still require this final gate. This separates scan scheduling from the release
+  decision without weakening the vulnerability policy.
 - Proxy and web scan both Linux amd64 and arm64; API and executor scan amd64.
   Workflow validation compares this coverage with the actual build matrix.
   An architecture cannot be added to publication without extending the scan.
