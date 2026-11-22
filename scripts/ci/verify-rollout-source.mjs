@@ -52,6 +52,7 @@ const suites = [
   'deploy/studio-server/scripts/reusable-staging-transport.test.mjs',
   'deploy/studio-server/scripts/retained-staging-application.test.mjs',
   'scripts/ci/release-workflow-policy.test.mjs',
+  'scripts/ci/ha-candidate-admission.test.mjs',
   'scripts/ci/qualification-build-cache.test.mjs',
   'scripts/ci/qualification-admission.test.mjs',
   'scripts/ci/qualification-operator.test.mjs',

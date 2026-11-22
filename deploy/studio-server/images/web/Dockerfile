@@ -49,15 +49,24 @@ RUN --mount=type=cache,target=/root/.cache/yarn \
     ln -sf /usr/local/lib/rivet-yarn.cjs /usr/local/bin/yarn && \
     ln -sf /usr/local/lib/rivet-yarn.cjs /usr/local/bin/yarnpkg && \
     YARN_NODE_LINKER=node-modules YARN_CHECKSUM_BEHAVIOR=ignore yarn install --immutable
-COPY packages ./packages
-COPY scripts ./scripts
-COPY deploy ./deploy
+
+# Compile shared dependencies before unrelated editor/server sources enter the
+# cache key. Keep the complete source checkout in the consumer stages below.
+FROM dependencies AS hosted-dependencies
+COPY packages/core ./packages/core
+COPY packages/evaluations ./packages/evaluations
+COPY scripts/build-wrapper-target.mjs scripts/ci-timing.mjs ./scripts/
 COPY tsconfig.base.json LICENSE README.md ./
 RUN YARN_NODE_LINKER=node-modules yarn build:hosted-web-deps
 
+FROM hosted-dependencies AS source
+COPY packages ./packages
+COPY scripts ./scripts
+COPY deploy ./deploy
+
 # Development serves immutable watched bundles, not an unrestricted Vite source
 # server. Dependencies remain Linux-owned; only selected source paths are bound.
-FROM dependencies AS development
+FROM source AS development
 RUN addgroup -g 10001 -S rivet && \
     adduser -u 10001 -S -D -h /home/rivet -G rivet rivet && \
     mkdir -p /home/rivet/.cache /app/artifacts /opt/rivet && \
@@ -74,7 +83,7 @@ EXPOSE 5174
 USER 10001:10001
 CMD ["sh", "-ec", "cp -R /opt/rivet/web-node-modules/. ./node_modules/; exec node dev/tunnel.mjs"]
 
-FROM dependencies AS builder
+FROM source AS builder
 ARG VITE_RIVET_DEBUG_LOGS=false
 ARG RIVET_PUBLISHED_WORKFLOWS_BASE_PATH=/workflows
 ARG RIVET_LATEST_WORKFLOWS_BASE_PATH=/workflows-latest

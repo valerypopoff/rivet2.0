@@ -79,6 +79,9 @@ test('a lost finish receipt cannot skip execution-profile settlement verificatio
 });
 
 async function publishedApplication(t) {
+  // These cases verify publication identity, not heartbeat expiry. Keep the
+  // fixture's janitor fresh while manifest I/O or host-clock adjustments occur.
+  t.mock.timers.enable({ apis: ['Date'], now: Date.now() });
   const f = await retained(t);
   const tested = createStudioServerReleaseManifest({
     rootDir: fileURLToPath(new URL('../../../', import.meta.url)),

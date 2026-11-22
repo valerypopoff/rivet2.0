@@ -2,9 +2,10 @@ import { expect, test } from '@playwright/test';
 import { serializeProject, type ProjectId, type Project } from '@valerypopoff/rivet2-core';
 import { projectBundleFixture } from '../../studio-server-api/src/tests/helpers/project-bundle-fixture';
 import {
-  openBundleActions,
   authenticateIfNeeded,
   mockHostedEditorBootstrap,
+  openBundleActions,
+  openProjectContextMenu,
   waitForDashboardReady,
 } from './helpers/hostedEditorObserve';
 
@@ -214,6 +215,7 @@ test('Subgraph source separates same-bundle members from ordinary projects and e
   const childOption = menuOptions.getByText('Child', { exact: true });
   if (!(await childOption.isVisible())) await menuOptions.getByText('Sibling project', { exact: true }).click();
   await childOption.click();
+  await openProjectContextMenu(page);
   await page.locator('.active-project-save-button').click();
   await expect.poll(() => saved.length).toBe(1);
   expect(Object.values(saved[0]!.graphs)[0]!.nodes.find((n) => n.id === call.id)!.data).toMatchObject({

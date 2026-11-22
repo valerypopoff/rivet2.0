@@ -1,7 +1,12 @@
 import { expect, test, type Page } from '@playwright/test';
 
 import type { WorkflowProjectItem, WorkflowTreeResponse } from '../dashboard/types';
-import { authenticateIfNeeded, mockHostedEditorBootstrap, waitForDashboardReady } from './helpers/hostedEditorObserve';
+import {
+  authenticateIfNeeded,
+  mockHostedEditorBootstrap,
+  openProjectContextMenu,
+  waitForDashboardReady,
+} from './helpers/hostedEditorObserve';
 
 const projectName = 'Dashboard Save Button';
 const projectId = 'dashboard-save-button-project';
@@ -145,6 +150,7 @@ test('dashboard Save sends a data-only command and remains explicit in Evaluatio
   const active = page.locator('.active-project-section');
   const saveButton = active.locator('.active-project-save-button');
   await dragNode(page, 40);
+  await openProjectContextMenu(page);
   await expect(saveButton).toBeVisible({ timeout: 30_000 });
   await expect(active.getByText('Published', { exact: true })).toBeVisible();
   await expect(projectRow).toHaveClass(/project-row-status-published\b/);
@@ -152,6 +158,7 @@ test('dashboard Save sends a data-only command and remains explicit in Evaluatio
 
   await expect.poll(() => savedPaths).toEqual([projectPath]);
   await expect(saveButton).toHaveCount(0);
+  await openProjectContextMenu(page);
   await expect(active.getByText('Unpublished changes', { exact: true })).toBeVisible();
   await expect(projectRow).toHaveClass(/project-row-status-unpublished_changes\b/);
   expect(pageErrors).toEqual([]);
@@ -162,6 +169,7 @@ test('dashboard Save sends a data-only command and remains explicit in Evaluatio
   ).toBe(false);
 
   await dragNode(page, 30);
+  await openProjectContextMenu(page);
   await expect(saveButton).toBeVisible({ timeout: 30_000 });
   const evaluationsTab = page
     .frameLocator('iframe.dashboard-editor-frame')
@@ -169,6 +177,7 @@ test('dashboard Save sends a data-only command and remains explicit in Evaluatio
     .getByRole('button', { name: 'Evaluations' });
   await evaluationsTab.click();
   await expect(evaluationsTab).toHaveAttribute('aria-pressed', 'true');
+  await openProjectContextMenu(page);
   await saveButton.click();
 
   await expect.poll(() => savedPaths).toEqual([projectPath, projectPath]);

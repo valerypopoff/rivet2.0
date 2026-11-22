@@ -119,7 +119,9 @@ export function useWorkflowLibraryController(options: {
   const runRecordings = useRunRecordingsModalState();
   const [settingsModalProject, setSettingsModalProject] = useState<WorkflowProjectItem | null>(null);
   const [settingsModalInitialTab, setSettingsModalInitialTab] = useState<'workflow' | 'danger'>('workflow');
-  const [runStatisticsRequest, setRunStatisticsRequest] = useState<{ project: WorkflowProjectItem | null } | null>(null);
+  const [runStatisticsRequest, setRunStatisticsRequest] = useState<{ project: WorkflowProjectItem | null } | null>(
+    null,
+  );
   const runStatisticsOpen = runStatisticsRequest !== null;
   const openRunStatisticsModal = useCallback((project: WorkflowProjectItem | null = null) => {
     setRunStatisticsRequest({ project });
@@ -590,14 +592,6 @@ export function useWorkflowLibraryController(options: {
     [],
   );
 
-  const handleOpenSettings = useCallback(() => {
-    if (!activeProject) {
-      return;
-    }
-
-    openProjectSettingsModal(activeProject);
-  }, [activeProject, openProjectSettingsModal]);
-
   const handleDeleteProjectFromContextMenu = useCallback(() => {
     const targetProject = projectContextMenuState?.project;
     if (!targetProject || downloadingProjectPath || duplicatingProjectPath || uploadingFolderPath) {
@@ -784,7 +778,7 @@ export function useWorkflowLibraryController(options: {
     isActiveProjectOpen,
     refresh,
     handleCreateFolder,
-    handleOpenSettings,
+    openProjectSettingsModal,
     closeSettingsModal,
     handlePublishedVersionRestored,
     closeProjectContextMenu,

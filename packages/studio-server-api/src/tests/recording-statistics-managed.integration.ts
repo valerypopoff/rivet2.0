@@ -15,6 +15,7 @@ import { migrateManagedWorkflowSchema } from '../routes/workflows/managed/schema
 import type { ManagedWorkflowContext } from '../routes/workflows/managed/context.js';
 import { queryOne, queryRows } from '../routes/workflows/managed/db.js';
 import * as mappers from '../routes/workflows/managed/mappers.js';
+import { verifyManagedRecordingRetentionContract } from './helpers/managed-recording-retention-contract.js';
 
 type ExplainPlan = {
   'Node Type': string;
@@ -401,6 +402,8 @@ try {
   console.log('PostgreSQL family pagination and complete child browsing passed.');
   await test('PostgreSQL sub-run presence, retention and indexed cost statistics over retained history', () =>
     verifySubRunPresence(database));
+  await test('PostgreSQL retention policy, protected evidence, bounded batches and atomic rollback', () =>
+    verifyManagedRecordingRetentionContract(database));
 } finally {
   await pool?.end();
   if (container) docker('stop', container);

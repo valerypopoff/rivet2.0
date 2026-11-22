@@ -13,6 +13,19 @@ test('qualification cache runtime edits select server verification and images', 
   assert.equal(result.studioImages, true);
 });
 
+test('early HA implementation edits still select the complete Kubernetes verification', () => {
+  for (const file of [
+    '.github/workflows/studio-server-ha-scenario.yml',
+    'scripts/ci/ha-scenario-run.mjs',
+    'scripts/ci/ha-candidate-admission.mjs',
+  ]) {
+    const selected = classifyChangedPaths([file]);
+    assert.equal(selected.studioServer, true);
+    assert.equal(selected.studioImages, true);
+    assert.equal(selected.fullKubernetes, true);
+  }
+});
+
 test('shallow classification fetches exact distant endpoints without downloading intervening history', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'rivet-shallow-ci-'));
   const origin = path.join(root, 'origin');

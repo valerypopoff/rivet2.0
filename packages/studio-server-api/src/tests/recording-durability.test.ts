@@ -77,7 +77,6 @@ test('failed trace preparation holds its reservation until sibling compression s
   const result = spawnSync(
     process.execPath,
     [
-      ...process.execArgv,
       '--input-type=module',
       '-e',
       `

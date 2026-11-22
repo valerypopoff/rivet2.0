@@ -1659,7 +1659,9 @@ test.describe('Run recordings modal', () => {
     const sidebar = modal.getByRole('complementary', { name: 'Recording filters' });
     const footer = modal.locator('.run-recordings-footer');
     await expect(header.getByRole('combobox', { name: 'Project', exact: true })).toBeVisible();
-    await expect(modal.getByText('Choose Any or a project, filter its run history, and open any recording in the editor.')).toHaveCount(0);
+    await expect(
+      modal.getByText('Choose Any or a project, filter its run history, and open any recording in the editor.'),
+    ).toHaveCount(0);
     await expect(sidebar.getByRole('group', { name: 'Filter runs', exact: true })).toBeVisible();
     await expect(footer.getByRole('group', { name: 'Runs per page', exact: true })).toBeInViewport({ ratio: 1 });
     await expect(sidebar.getByRole('group', { name: 'Runs per page', exact: true })).toHaveCount(0);
@@ -1673,40 +1675,95 @@ test.describe('Run recordings modal', () => {
     await expect(filter.getByRole('button', { name: 'Close input filter' })).toBeVisible();
     await expect(sidebar.getByLabel('Input JSON path')).toBeVisible();
     await expect(sidebar.getByRole('button', { name: 'Apply', exact: true })).toBeVisible();
-    const layout = () => modal.evaluate((element) => {
-      const label = element.querySelector('label[for="run-recordings-workflow-select"]')!.getBoundingClientRect();
-      const control = element.querySelector('.run-recordings-selector-section .run-recordings-select__control')!.getBoundingClientRect();
-      const title = element.querySelector('.run-recordings-title')!.getBoundingClientRect();
-      const header = element.querySelector('.run-recordings-header-row')!.getBoundingClientRect();
-      const filters = element.querySelector('.run-recordings-sidebar')!;
-      const filtersRect = filters.getBoundingClientRect();
-      const results = element.querySelector('.run-recordings-runs-panel')!.getBoundingClientRect();
-      const footerElement = element.querySelector('.run-recordings-footer')!;
-      const footer = footerElement.getBoundingClientRect();
-      const footerStyle = getComputedStyle(footerElement);
-      const pagination = footerElement.querySelector('.run-recordings-pagination-footer')!.getBoundingClientRect();
-      const pageSize = footerElement.querySelector('.run-recordings-page-size')!.getBoundingClientRect();
-      return {
-        inlinePicker: label.right < control.left && Math.abs(label.top + label.height / 2 - control.top - control.height / 2) < 1,
-        belowTitle: control.top >= title.bottom + 8,
-        aboveDivider: control.bottom <= header.bottom - 10,
-        besideResults: filtersRect.right + 8 <= results.left,
-        aboveResults: filtersRect.bottom <= results.top,
-        filtersFit: filters.scrollWidth <= filters.clientWidth,
-        footerAtBottom: Math.abs(footer.bottom - element.getBoundingClientRect().bottom) < 2,
-        footerControlsAligned: Math.abs(pageSize.left - footer.left - parseFloat(footerStyle.paddingLeft)) < 1 &&
-          Math.abs(pagination.right - footer.right + parseFloat(footerStyle.paddingRight)) < 1,
-        footerFits: footerElement.scrollWidth <= footerElement.clientWidth,
-      };
+    const layout = () =>
+      modal.evaluate((element) => {
+        const label = element.querySelector('label[for="run-recordings-workflow-select"]')!.getBoundingClientRect();
+        const control = element
+          .querySelector('.run-recordings-selector-section .run-recordings-select__control')!
+          .getBoundingClientRect();
+        const title = element.querySelector('.run-recordings-title')!.getBoundingClientRect();
+        const header = element.querySelector('.run-recordings-header-row')!.getBoundingClientRect();
+        const filters = element.querySelector('.run-recordings-sidebar')!;
+        const filtersRect = filters.getBoundingClientRect();
+        const results = element.querySelector('.run-recordings-runs-panel')!.getBoundingClientRect();
+        const footerElement = element.querySelector('.run-recordings-footer')!;
+        const footer = footerElement.getBoundingClientRect();
+        const footerStyle = getComputedStyle(footerElement);
+        const listElement = element.querySelector('.run-recordings-list')!;
+        const list = listElement.getBoundingClientRect();
+        const card = listElement.querySelector('.run-recordings-run')!.getBoundingClientRect();
+        const pagination = footerElement.querySelector('.run-recordings-pagination-footer')!.getBoundingClientRect();
+        const pageSize = footerElement.querySelector('.run-recordings-page-size')!.getBoundingClientRect();
+        return {
+          inlinePicker:
+            label.right < control.left && Math.abs(label.top + label.height / 2 - control.top - control.height / 2) < 1,
+          belowTitle: control.top >= title.bottom + 8,
+          aboveDivider: control.bottom <= header.bottom - 10,
+          besideResults: filtersRect.right + 8 <= results.left,
+          aboveResults: filtersRect.bottom <= results.top,
+          filtersFit: filters.scrollWidth <= filters.clientWidth,
+          footerAtBottom: Math.abs(footer.bottom - element.getBoundingClientRect().bottom) < 2,
+          footerControlsAligned:
+            Math.abs(pageSize.left - footer.left - parseFloat(footerStyle.paddingLeft)) < 1 &&
+            Math.abs(pagination.right - footer.right + parseFloat(footerStyle.paddingRight)) < 1,
+          footerFits: footerElement.scrollWidth <= footerElement.clientWidth,
+          listHasVerticalSpace: list.top - header.bottom >= 8 && footer.top - list.bottom >= 8,
+          scrollbarSeparated: list.left + listElement.clientWidth - card.right >= 6,
+        };
+      });
+    await expect.poll(layout).toMatchObject({
+      inlinePicker: true,
+      belowTitle: true,
+      aboveDivider: true,
+      besideResults: true,
+      filtersFit: true,
+      footerAtBottom: true,
+      footerControlsAligned: true,
+      footerFits: true,
+      listHasVerticalSpace: true,
+      scrollbarSeparated: true,
     });
-    await expect.poll(layout).toMatchObject({ inlinePicker: true, belowTitle: true, aboveDivider: true, besideResults: true, filtersFit: true, footerAtBottom: true, footerControlsAligned: true, footerFits: true });
+    const list = modal.locator('.run-recordings-list');
+    await list.hover();
+    await page.mouse.wheel(0, 2000);
+    await expect.poll(() => list.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+    await expect(footer.getByRole('navigation', { name: 'Recording pages' })).toBeInViewport({ ratio: 1 });
+    await expect
+      .poll(layout)
+      .toMatchObject({ listHasVerticalSpace: true, scrollbarSeparated: true, footerAtBottom: true });
+    await expect
+      .poll(() =>
+        list.evaluate((element) => {
+          element.scrollTop = element.scrollHeight;
+          const cards = element.querySelectorAll('.run-recordings-run');
+          const lastCard = cards[cards.length - 1];
+          const footer = element
+            .closest('[data-testid="run-recordings-modal"]')!
+            .querySelector('.run-recordings-footer')!;
+          return footer.getBoundingClientRect().top - (lastCard?.getBoundingClientRect().bottom ?? Infinity);
+        }),
+      )
+      .toBeGreaterThanOrEqual(8);
+    await modal.screenshot({ path: test.info().outputPath('run-recordings-list-bottom.png') });
+    await list.evaluate((element) => {
+      element.scrollTop = 0;
+    });
     await modal.screenshot({ path: test.info().outputPath('run-recordings-sidebar.png') });
     await header.getByRole('combobox', { name: 'Project', exact: true }).fill('Latest Flow');
     await page.locator('.run-recordings-select__option').filter({ hasText: 'Latest Flow' }).click();
     await expect(sidebar.locator('.run-recordings-workflow-summary')).toBeVisible();
     await expect(modal.locator('.run-recordings-run').first()).toBeVisible();
     await page.setViewportSize({ width: 390, height: 800 });
-    await expect.poll(layout).toMatchObject({ inlinePicker: true, belowTitle: true, aboveDivider: true, aboveResults: true, filtersFit: true, footerAtBottom: true, footerControlsAligned: true, footerFits: true });
+    await expect.poll(layout).toMatchObject({
+      inlinePicker: true,
+      belowTitle: true,
+      aboveDivider: true,
+      aboveResults: true,
+      filtersFit: true,
+      footerAtBottom: true,
+      footerControlsAligned: true,
+      footerFits: true,
+    });
     await expect(footer.getByRole('group', { name: 'Runs per page', exact: true })).toBeInViewport({ ratio: 1 });
     await header.scrollIntoViewIfNeeded();
     await modal.screenshot({ path: test.info().outputPath('run-recordings-sidebar-narrow.png') });

@@ -28,7 +28,10 @@
   letter-spacing: 0;
   line-height: 1;
   white-space: nowrap;
-  transition: background-color 120ms ease, color 120ms ease, box-shadow 120ms ease;
+  transition:
+    background-color 120ms ease,
+    color 120ms ease,
+    box-shadow 120ms ease;
 }
 
 .segmented-control-button:hover:not(:disabled):not(.is-selected) {
@@ -44,10 +47,62 @@
 .segmented-control-button.is-selected {
   background: rgba(255, 255, 255, 0.13);
   color: var(--grey-lightest);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.28),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06);
 }
 
 .segmented-control-button:disabled {
   cursor: not-allowed;
   opacity: 0.55;
+}
+
+.segmented-control-button.is-loading {
+  position: relative;
+}
+
+.segmented-control-loading-label {
+  animation: segmented-control-hide-label 150ms step-end forwards;
+}
+
+.segmented-control-spinner {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 14px;
+  height: 14px;
+  margin: -7px 0 0 -7px;
+  box-sizing: border-box;
+  border: 2px solid rgba(255, 255, 255, 0.18);
+  border-top-color: currentColor;
+  border-radius: 50%;
+  pointer-events: none;
+  opacity: 0;
+  animation:
+    segmented-control-spin 900ms linear infinite,
+    segmented-control-show-spinner 150ms step-end forwards;
+}
+
+@keyframes segmented-control-hide-label {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+@keyframes segmented-control-show-spinner {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes segmented-control-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }

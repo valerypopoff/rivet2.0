@@ -61,6 +61,8 @@ const npmPrefixes = [
 ];
 
 const fullKubernetesPrefixes = [
+  '.github/workflows/studio-server-ha-scenario.yml',
+  'scripts/ci/ha-',
   '.github/workflows/studio-server-images.yml',
   'deploy/studio-server/compose/',
   'deploy/studio-server/helm/',

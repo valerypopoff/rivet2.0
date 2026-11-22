@@ -101,6 +101,10 @@
   overflow: hidden;
 }
 
+.project-settings-modal-content.run-recordings-content {
+  padding: 0 18px;
+}
+
 .run-recordings-error {
   align-self: stretch;
 }
@@ -136,6 +140,7 @@
 
 .run-recordings-sidebar {
   min-width: 0;
+  padding: 16px 0 18px;
   overflow-y: auto;
 }
 
@@ -148,8 +153,7 @@
   flex-wrap: wrap;
 }
 
-.run-recordings-workflow-summary,
-.run-recordings-runs-panel {
+.run-recordings-workflow-summary {
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 12px;
   background: rgba(255, 255, 255, 0.03);
@@ -182,6 +186,7 @@
 
 .run-recordings-runs-panel {
   flex: 1 1 auto;
+  overflow: hidden;
 }
 
 .run-recordings-workflow-heading-row {
@@ -355,7 +360,8 @@
   justify-content: space-between;
   flex-wrap: wrap;
   gap: 12px;
-  padding: 0 18px 18px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  padding: 12px 18px 18px;
 }
 
 .run-recordings-page-size {
@@ -649,8 +655,12 @@
   flex: 1 1 auto;
   min-height: 0;
   overflow: hidden;
-  padding: 0 4px 12px 0;
+  padding: 12px 0;
   box-sizing: border-box;
+}
+
+.run-recordings-list-row {
+  padding-right: 8px;
 }
 
 .run-recordings-list {

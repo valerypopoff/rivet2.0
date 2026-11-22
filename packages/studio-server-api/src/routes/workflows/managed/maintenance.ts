@@ -403,6 +403,8 @@ export function createManagedWorkflowMaintenance(options: {
 
   const drainOutbox = async (lease: ManagedWorkflowMaintenanceLease): Promise<void> => {
     for (let offset = 0; offset < config.batchSize; offset += 1) {
+      // Tasks can outlive the pass lease. Fence new claims in this statement;
+      // the lease row lock is released before reference checks or blob I/O.
       const row = await queryOne<OutboxRow>(
         options.pool,
         `
@@ -412,6 +414,12 @@ export function createManagedWorkflowMaintenance(options: {
             WHERE status = 'pending'
               AND next_attempt_at <= NOW()
               AND (claim_expires_at IS NULL OR claim_expires_at <= NOW())
+              AND EXISTS (
+                SELECT 1 FROM managed_maintenance_leases
+                WHERE lease_name = $4 AND holder_id = $1 AND fencing_token = $2
+                  AND expires_at > NOW()
+                FOR SHARE
+              )
             ORDER BY enqueued_at ASC, object_key ASC
             FOR UPDATE SKIP LOCKED
             LIMIT 1
@@ -425,7 +433,7 @@ export function createManagedWorkflowMaintenance(options: {
           WHERE outbox.object_key = next_object.object_key
           RETURNING outbox.object_key, outbox.domain, outbox.attempt_count
         `,
-        [lease.holderId, lease.fencingToken, config.leaseMs],
+        [lease.holderId, lease.fencingToken, config.leaseMs, MAINTENANCE_LEASE_NAME],
       );
       if (!row) break;
 

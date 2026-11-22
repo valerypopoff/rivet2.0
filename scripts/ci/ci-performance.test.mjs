@@ -328,6 +328,20 @@ test('desktop Build evidence uses exact owned runs, bounded GETs and fail-closed
   assert.deepEqual(await run('validated', 'ok', { runId: 101, runAttempt: 1 }), { runId: 101, runAttempt: 1 });
   assert.deepEqual(await run('validated', 'advance'), { runId: 101, runAttempt: 1 });
   assert.deepEqual(await run('artifact', 'pending'), { runId: 101, runAttempt: 1, artifactId: 501 });
+  assert.deepEqual(await run('artifact', 'download-pending'), { runId: 101, runAttempt: 1, artifactId: 501 });
+  assert.equal(
+    requests.filter((request) => request === 'GET /download-pending/repos/fixture/repo/actions/artifacts/501/zip')
+      .length,
+    3,
+    'Listed artifacts must not be handed off while their exact download endpoint returns 404.',
+  );
+  for (const [scenario, failure] of [
+    ['download-forbidden', /HTTP 403/],
+    ['download-broken', /HTTP 502/],
+    ['download-rerun', /identity\/attempt changed/],
+    ['download-replaced', /artifact changed/],
+  ])
+    await assert.rejects(run('artifact', scenario), failure, scenario);
   for (const [scenario, failure] of [
     ['failed', /did not succeed/],
     ['cancelled', /did not succeed/],
@@ -354,6 +368,7 @@ test('desktop Build evidence uses exact owned runs, bounded GETs and fail-closed
   for (const [mode, scenario] of [
     ['validated', 'pending'],
     ['artifact', 'empty'],
+    ['artifact', 'download-missing'],
   ])
     await assert.rejects(run(mode, scenario, { maxWaitMs: 60 }), /Timed out|operation was aborted due to timeout/);
   await assert.rejects(run('validated', 'ok', { runId: 101 }), /Pinned/);
@@ -559,6 +574,7 @@ test('balanced editor shards cover every selected spec exactly once and reject i
   assert.ok(editorCiSpecs.includes('run-cost-statistics.spec.ts'));
   assert.ok(editorCiSpecs.includes('data-bus-order.spec.ts'));
   assert.ok(editorCiSpecs.includes('passthrough-port-labels.spec.ts'));
+  assert.ok(editorCiSpecs.includes('ha-browser-contracts.spec.ts'));
   assert.equal(new Set(editorCiSpecs).size, editorCiSpecs.length);
   assert.deepEqual(selectEditorCiSpecs(), editorCiSpecs);
   const selected = ['1/4', '2/4', '3/4', '4/4'].flatMap(selectEditorCiSpecs);
@@ -743,7 +759,8 @@ test('runtime dependency pruning cannot change the builder or ship its unpruned 
     'RUN node /tmp/remove-runtime-build-globs.mjs /runtime-dependencies/app/node_modules',
     'FROM scratch AS runtime-dependencies',
     'COPY --link --from=runtime-dependency-copy --chown=10001:10001 /runtime-dependencies/ /',
-    'FROM dependencies AS builder',
+    'FROM dependencies AS runtime-build',
+    'FROM runtime-build AS builder',
   ];
   const check = (lines) => assertRuntimeDependencyCopyLayout(lines.join('\n'), 'fixture');
   assert.doesNotThrow(() => check(fixture));
@@ -768,7 +785,11 @@ test('runtime dependency pruning cannot change the builder or ship its unpruned 
     /ship the pruned/,
   );
   assert.throws(
-    () => check(fixture.map((line, i) => (i === 4 ? 'FROM runtime-dependency-copy AS builder' : line))),
+    () => check(fixture.map((line, i) => (i === 4 ? 'FROM runtime-dependency-copy AS runtime-build' : line))),
+    /isolate runtime pruning/,
+  );
+  assert.throws(
+    () => check(fixture.map((line, i) => (i === 5 ? 'FROM runtime-dependency-copy AS builder' : line))),
     /isolate runtime pruning/,
   );
 });

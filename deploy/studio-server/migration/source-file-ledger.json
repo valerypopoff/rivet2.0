@@ -4539,7 +4539,9 @@
         {
           "path": "packages/studio-server-web/dashboard/ActiveProjectSection.tsx",
           "migrationMode": "100644",
-          "migrationBlob": "af9e760d3682417169f0d6571361c3c242bb7f9b"
+          "migrationBlob": "af9e760d3682417169f0d6571361c3c242bb7f9b",
+          "currentPath": "packages/studio-server-web/dashboard/WorkflowProjectSummary.tsx",
+          "currentReason": "Project publication details moved from the sidebar into the project context-menu header."
         }
       ]
     },

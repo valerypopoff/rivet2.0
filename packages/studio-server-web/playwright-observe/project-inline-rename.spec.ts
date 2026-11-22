@@ -245,7 +245,7 @@ test.describe('Workflow project inline rename', () => {
 
     renameInput = await startProjectRename(page, state.projectName);
     await renameInput.fill('codex-inline-project-click-away');
-    await page.locator('.workflow-library-panel .active-project-slot').click();
+    await page.locator('.workflow-library-panel .body').click({ position: { x: 2, y: 2 } });
     await expect(page.getByRole('textbox', { name: `Rename ${state.projectName}` })).toHaveCount(0);
     expect(state.renameRequests).toHaveLength(0);
 

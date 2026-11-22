@@ -31,6 +31,11 @@ on:
       - 'security/dependency-audit-exceptions.json'
       - 'yarn.lock'
   workflow_dispatch:
+    inputs:
+      benchmark_macos_intel:
+        description: Compare signed Intel builds on Intel and Apple Silicon without publishing a release.
+        type: boolean
+        default: false
 
 permissions:
   actions: read
@@ -44,6 +49,7 @@ concurrency:
 
 jobs:
   release:
+    if: ${{ !inputs.benchmark_macos_intel }}
     uses: ./.github/workflows/desktop-release.yml
     with:
       branch_ref: refs/heads/develop
@@ -52,4 +58,12 @@ jobs:
       environment_name: developer-windows-pages
       preserve_metadata_file: official-release.json
       allow_docs_only: true
+    secrets: inherit
+
+  benchmark-macos-intel:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/develop' && inputs.benchmark_macos_intel
+    permissions:
+      actions: read
+      contents: read
+    uses: ./.github/workflows/desktop-macos-benchmark.yml
     secrets: inherit

@@ -5,7 +5,13 @@ import { parseDocument } from 'yaml';
 import { imagePlatforms, nginxImage, runtimeNodeImage, esbuildCompilerImage } from '../ci/scan-container-images.mjs';
 import { browserCiEndpoint } from '../ci/verify-browser-environment.mjs';
 import { ACTIONS_QUALIFICATION_MAX_SECONDS } from '../../deploy/studio-server/scripts/lib/runtime-qualification-execution.mjs';
-import { assertFastReleasePolicy, assertPinnedProviderHelm } from '../ci/release-workflow-policy.mjs';
+import {
+  assertFastReleasePolicy,
+  assertEarlyHaPolicy,
+  assertParallelMigrationVerification,
+  assertPinnedProviderHelm,
+  readWorkflowConfiguration,
+} from '../ci/release-workflow-policy.mjs';
 
 const rootDir = process.cwd();
 
@@ -14,12 +20,7 @@ function read(relativePath) {
 }
 
 function parseWorkflow(relativePath) {
-  const source = read(relativePath);
-  const document = parseDocument(source, { prettyErrors: true, strict: true });
-  if (document.errors.length > 0) {
-    throw new Error(`${relativePath} is not valid YAML:\n${document.errors.join('\n')}`);
-  }
-  return { source, workflow: document.toJS() };
+  return readWorkflowConfiguration(path.join(rootDir, relativePath));
 }
 
 function asArray(value) {
@@ -619,11 +620,7 @@ assert.match(
   findStep(studioJobs['editor-regression'], 'Upload Playwright failure artifacts', 'Editor shards').with.name,
   /matrix\.label/,
 );
-const executorRetirement = findStep(
-  studioJobs['editor-regression'],
-  'Verify accepted executor retirement',
-  'Editor regressions',
-);
+const executorRetirement = findStep(studioJobs['web-tests'], 'Verify accepted executor retirement', 'Web tests');
 const serverScripts = JSON.parse(read('package.json')).scripts;
 assert.equal(
   serverScripts['studio-server:verify:executor-retirement'],
@@ -639,10 +636,14 @@ assert.match(
   /studio-server:build && yarn studio-server:verify:executor-retirement/,
 );
 assert.equal(executorRetirement.run, 'yarn studio-server:verify:executor-retirement');
+assert.equal(executorRetirement.if, undefined, 'Retirement coverage is mandatory in the single web-tests job.');
+assert.equal(executorRetirement['continue-on-error'], undefined);
 assert.equal(
-  executorRetirement.if,
-  'matrix.label == 1',
-  'Retirement coverage runs exactly once, not once per browser shard.',
+  Object.values(studioJobs)
+    .flatMap((job) => job.steps ?? [])
+    .filter((step) => step.run === executorRetirement.run).length,
+  1,
+  'Retirement coverage must run exactly once.',
 );
 const subgraphLoader = findStep(studioJobs['web-tests'], 'Verify hosted executor Subgraph loader', 'Web tests');
 assert.equal(subgraphLoader.run, 'yarn workspace @valerypopoff/rivet-studio-server-executor run test:runtime');
@@ -657,13 +658,9 @@ assert.match(serverScripts['studio-server:verify:production-cutover'], /rivet-st
 assert.doesNotMatch(serverScripts['studio-server:verify:production-cutover'], /test:runtime/);
 assert.match(serverScripts['studio-server:test'], /rivet-studio-server-executor run test:runtime/);
 assert.ok(
-  studioJobs['editor-regression'].steps.indexOf(executorRetirement) >
-    studioJobs['editor-regression'].steps.indexOf(
-      findStep(
-        studioJobs['editor-regression'],
-        'Verify restored compiled workspace dependencies',
-        'Editor regressions',
-      ),
+  studioJobs['web-tests'].steps.indexOf(executorRetirement) >
+    studioJobs['web-tests'].steps.indexOf(
+      findStep(studioJobs['web-tests'], 'Verify restored compiled workspace dependencies', 'Web tests'),
     ),
   'Real executor retirement requires verified same-commit Core/Node builds, not source-only contracts.',
 );
@@ -700,11 +697,12 @@ assert.equal(
   findStep(repositoryContracts, 'Report timing', 'Repository contracts').if,
   "${{ !cancelled() && env.RIVET_CI_JOB_STARTED_AT != '' }}",
 );
-assert.deepEqual(asArray(studioJobs['deployment-contracts'].needs), ['changes', 'build-studio-server']);
 const deploymentContracts = studioJobs['deployment-contracts'];
-assert.deepEqual(deploymentContracts.strategy.matrix.lane, ['managed', 'deployment', 'gateway']);
-assert.equal(deploymentContracts.strategy['fail-fast'], false);
-assert.equal(deploymentContracts.strategy['max-parallel'], 3);
+assert.equal(
+  findStep(deploymentContracts, 'Verify Kubernetes and deployment contracts', 'Deployment contracts').run,
+  'yarn studio-server:verify:kubernetes --exclude-deployment-command',
+);
+assertParallelMigrationVerification(studio.workflow);
 for (const [lane, names] of [
   [
     'managed',
@@ -712,7 +710,6 @@ for (const [lane, names] of [
       'Verify compiled migrations on PostgreSQL',
       'Verify async endpoint completion with managed storage',
       'Verify recording crash recovery and immutable handoffs',
-      'Verify VM-to-managed copy, retry, and exact readback',
     ],
   ],
   ['deployment', ['Set Up Kubernetes Tools', 'Verify Kubernetes and deployment contracts']],
@@ -782,6 +779,7 @@ for (const jobName of ['api-tests', 'web-tests', 'editor-regression', 'deploymen
 assertIncludesAll(
   asArray(studioJobs.verify.needs),
   [
+    'deployment-command-tests',
     'changes',
     'build-studio-server',
     'api-tests',
@@ -807,6 +805,9 @@ assert.match(
 );
 
 const images = parseWorkflow('.github/workflows/studio-server-images.yml');
+const haWorkflow = parseWorkflow('.github/workflows/studio-server-ha-scenario.yml');
+const haScenario = haWorkflow.workflow.jobs.scenario;
+assertEarlyHaPolicy(images.workflow, haWorkflow.workflow);
 const imageJobs = images.workflow.jobs;
 for (const pattern of [
   '!deploy/studio-server/scripts/**',
@@ -950,7 +951,7 @@ assert.match(
 );
 assert.match(
   promotionCondition,
-  /require_kind != 'true'.*managed-kubernetes-release-gate\.result == 'skipped'/,
+  /require_kind == 'false'.*managed-kubernetes-release-gate\.result == 'skipped'/,
   'A skipped Kind gate is acceptable only when the classifier explicitly permits it.',
 );
 assert.deepEqual(asArray(imageJobs['fast-container-smoke'].needs), ['build-and-push', 'release-manifest']);
@@ -962,7 +963,7 @@ for (const [id, before] of [
   ['fast-container-smoke', 'Exercise Candidate Image Set'],
   ['managed-kubernetes-release-gate', 'Create Disposable Kind Cluster'],
 ]) {
-  const job = imageJobs[id];
+  const job = id === 'managed-kubernetes-release-gate' ? haScenario : imageJobs[id];
   for (const key of [
     'RIVET_CI_BROWSER_IMAGE',
     'RIVET_CI_PLAYWRIGHT_VERSION',
@@ -1011,12 +1012,23 @@ for (const target of imageJobs['build-and-push'].strategy.matrix.include) {
 }
 assert.equal(scanImages.strategy['fail-fast'], false);
 assert.deepEqual(scanImages.permissions, { actions: 'read', contents: 'read', packages: 'read' });
-const scanStep = findStep(scanImages, 'Scan every published architecture', 'Container security');
-assert.match(scanStep.run, /scan-container-images\.mjs/);
+const scanProducer = imageJobs['build-and-push'];
+const scanNode = findStep(scanProducer, 'Set up Node for image proof and scans', 'Container security');
+assert.equal(scanNode.if, undefined);
+assert.equal(scanNode.with['node-version'], 24);
+for (const input of ['scripts/ci/scan-container-images.mjs', 'scripts/ci/verify-container-scan.mjs'])
+  assert.ok(images.workflow.on.push.paths.includes(input), `${input}: changes must trigger image verification`);
+const earlyScan = findStep(scanProducer, 'Scan every published architecture immediately', 'Container security');
+assert.match(earlyScan.run, /--image "\$\{SCAN_REPOSITORY\}@\$\{digest\}" --service "\$SCAN_SERVICE"/);
+assert.match(earlyScan.run, /--source-sha "\$GITHUB_SHA"/);
+assert.equal(earlyScan.env.SCAN_REPOSITORY, '${{ matrix.image }}');
+assert.equal(earlyScan.env.SCAN_SERVICE, '${{ matrix.service }}');
+const scanStep = findStep(scanImages, 'Verify every scanned digest and architecture', 'Container security');
+assert.match(scanStep.run, /verify-container-scan\.mjs/);
 assert.match(scanStep.run, /--manifest artifacts\/studio-server-release-manifest\/candidate-release-manifest\.json/);
 assert.match(scanStep.run, /--service \$\{\{ matrix\.service \}\}/);
 assert.equal(scanStep['continue-on-error'], undefined, 'Container security must fail closed');
-const scanEvidence = findStep(scanImages, 'Retain container vulnerability evidence', 'Container security');
+const scanEvidence = findStep(scanProducer, 'Retain container vulnerability evidence', 'Container security');
 assert.equal(scanEvidence.if, '${{ always() }}');
 assert.equal(scanEvidence.with['if-no-files-found'], 'error');
 for (const file of [
@@ -1061,6 +1073,16 @@ assert.equal(
 );
 for (const service of ['api', 'executor', 'web']) {
   const dockerfile = read(`deploy/studio-server/images/${service}/Dockerfile`);
+  if (service === 'web') {
+    const shared = dockerfile
+      .split('FROM dependencies AS hosted-dependencies')[1]
+      ?.split('FROM hosted-dependencies AS source')[0];
+    assert.ok(shared, 'Web shared compilation must be separate from complete application sources');
+    for (const pkg of ['core', 'evaluations']) assert.ok(shared.includes(`COPY packages/${pkg} ./packages/${pkg}`));
+    assert.doesNotMatch(shared, /COPY packages \.\/packages/);
+    assert.match(dockerfile, /FROM source AS development/);
+    assert.match(dockerfile, /FROM source AS builder/);
+  }
   const firstYarnCommand = dockerfile.search(/\byarn (?:config|install)\b/);
   assert.ok(firstYarnCommand >= 0, `${service}: missing dependency installation`);
   for (const setup of [
@@ -1102,7 +1124,14 @@ for (const service of ['api', 'executor', 'web']) {
     );
     assert.match(dockerfile, /sh \/rebuild-esbuild\.sh "\$TARGETARCH" runtime/);
     assert.match(dockerfile, /FROM scratch AS runtime-dependencies/);
-    assert.match(dockerfile, /FROM dependencies AS builder/);
+    assert.match(dockerfile, /FROM dependencies AS runtime-build/);
+    assert.match(dockerfile, /FROM runtime-build AS builder/);
+    const runtimeBuild = dockerfile
+      .split('FROM dependencies AS runtime-build')[1]
+      .split('FROM runtime-build AS builder')[0];
+    assert.match(runtimeBuild, /COPY packages\/core \.\/packages\/core/);
+    assert.match(runtimeBuild, /COPY packages\/node \.\/packages\/node/);
+    assert.doesNotMatch(runtimeBuild, /COPY packages \.\/packages/);
     assert.match(dockerfile, /COPY --link --from=runtime-dependencies --chown=10001:10001 \/ \//);
   }
 }
@@ -1283,30 +1312,18 @@ assert.match(
 );
 assert.match(candidatePredecessor.run, /allow_release_lineage_bootstrap/i);
 assert.match(
-  findStep(
-    imageJobs['managed-kubernetes-release-gate'],
-    'Resolve manifest-bound predecessor API image',
-    'Managed Kubernetes release gate',
-  ).run,
+  findStep(haScenario, 'Resolve manifest-bound predecessor API image', 'Managed Kubernetes release gate').run,
   /\.lineage\.predecessor\.images\.api\.digest/,
   'The compatibility rehearsal must use the exact API digest bound into the candidate manifest.',
 );
 assert.doesNotMatch(
-  findStep(
-    imageJobs['managed-kubernetes-release-gate'],
-    'Resolve manifest-bound predecessor API image',
-    'Managed Kubernetes release gate',
-  ).run,
+  findStep(haScenario, 'Resolve manifest-bound predecessor API image', 'Managed Kubernetes release gate').run,
   /api:latest/,
   'A mutable API alias must not authorize predecessor compatibility.',
 );
-const haGate = findStep(
-  imageJobs['managed-kubernetes-release-gate'],
-  'Run HA Kubernetes Gate',
-  'Managed Kubernetes release gate',
-);
-assert.equal(haGate.env.RIVET_K8S_RELEASE_GATE_CONTEXT, '${{ matrix.context }}');
-assert.equal(haGate.env.RIVET_K8S_RELEASE_GATE_ALLOW_CONTEXT, '${{ matrix.context }}');
+const haGate = findStep(haScenario, 'Run HA Kubernetes Gate', 'Managed Kubernetes release gate');
+assert.equal(haGate.env.RIVET_K8S_RELEASE_GATE_CONTEXT, '${{ env.RIVET_HA_CONTEXT }}');
+assert.equal(haGate.env.RIVET_K8S_RELEASE_GATE_ALLOW_CONTEXT, '${{ env.RIVET_HA_CONTEXT }}');
 assert.match(haGate.run, /\.lineage\.predecessor\.manifestDigest/);
 assert.match(haGate.run, /kubernetes-ha-release-gate\.mjs scenario/);
 assert.match(
@@ -1344,53 +1361,48 @@ assert.match(lineageAdvance.run, /release-manifest-oci\.mjs retag/);
 assert.ok(images.workflow.on.push.paths.length > 0, 'Main image builds must be path-gated.');
 assert.ok(images.workflow.on.schedule, 'Weekly full image verification must remain configured.');
 assert.equal(
-  findStep(
-    imageJobs['managed-kubernetes-release-gate'],
-    'Upload Managed Kubernetes Gate Artifacts',
-    'Managed Kubernetes release gate',
-  ).with?.name,
-  'managed-kubernetes-release-gate-${{ matrix.scenario }}-${{ github.run_id }}-${{ github.run_attempt }}',
+  findStep(haScenario, 'Upload Managed Kubernetes Gate Artifacts', 'Managed Kubernetes release gate').with?.name,
+  'managed-kubernetes-release-gate-${{ inputs.scenario }}-${{ github.run_id }}-${{ github.run_attempt }}',
   'Managed Kubernetes release-gate diagnostics must remain distinct per workflow attempt.',
 );
-const proofMatrix = imageJobs['managed-kubernetes-release-gate'];
+const proofMatrix = haScenario;
 const prepareHaRunner = findStep(proofMatrix, 'Prepare disposable runner disk space', 'HA matrix');
 assert.equal(prepareHaRunner.run, 'node deploy/studio-server/scripts/prepare-ha-kind-runner.mjs');
 assert.equal(prepareHaRunner.env?.RIVET_HA_RUNNER_ENVIRONMENT, '${{ runner.environment }}');
 assert.equal(prepareHaRunner['timeout-minutes'], 5);
-assert.equal(prepareHaRunner.if, undefined, 'Every Kind lane needs the same disk preparation.');
+assert.equal(prepareHaRunner.if, "${{ env.RIVET_HA_DEFERRED != 'true' }}");
 assert.ok(
   proofMatrix.steps.indexOf(prepareHaRunner) <
     proofMatrix.steps.indexOf(findStep(proofMatrix, 'Create Disposable Kind Cluster', 'HA matrix')),
   'Prepare the disposable runner before creating the cluster.',
 );
-assert.deepEqual(proofMatrix.strategy.matrix.scenario, ['upgrade', 'lostAcknowledgement', 'leaseLoss']);
-assert.equal(
-  proofMatrix.strategy['fail-fast'],
-  false,
-  'A failed scenario must not cancel evidence/cleanup in its peers.',
-);
-assert.equal(proofMatrix.strategy['max-parallel'], 3);
-assert.deepEqual(
-  proofMatrix.strategy.matrix.include.map((x) => x.context),
-  ['kind-rivet-managed-release', 'kind-rivet-ha-lost-acknowledgement', 'kind-rivet-ha-lease-loss'],
-);
-for (const name of ['Verify hard-spread scheduling with tainted nodes', 'Prepare browser runtime']) {
-  assert.equal(findStep(proofMatrix, name, 'HA matrix').if, "matrix.scenario == 'upgrade'");
-}
+for (const context of ['kind-rivet-managed-release', 'kind-rivet-ha-lost-acknowledgement', 'kind-rivet-ha-lease-loss'])
+  assert.ok(proofMatrix.env.RIVET_HA_CONTEXT.includes(context));
+for (const name of ['Verify hard-spread scheduling with tainted nodes', 'Prepare browser runtime'])
+  assert.equal(
+    findStep(proofMatrix, name, 'HA scenario').if,
+    "${{ env.RIVET_HA_DEFERRED != 'true' && (inputs.scenario == 'upgrade') }}",
+  );
 assert.match(findStep(proofMatrix, 'Delete Disposable Kind Cluster', 'HA matrix').run, /ha-kind-cluster\.mjs cleanup/);
 assert.match(findStep(proofMatrix, 'Delete Disposable Kind Cluster', 'HA matrix').if, /always\(\)/);
 assert.equal(
   findStep(proofMatrix, 'Upload HA Scenario Observations', 'HA matrix').with.name,
-  'studio-server-ha-scenario-${{ matrix.scenario }}-${{ github.run_id }}-${{ github.run_attempt }}',
+  'studio-server-ha-scenario-${{ inputs.scenario }}-${{ github.run_id }}-${{ github.run_attempt }}',
 );
 const assembly = imageJobs['managed-kubernetes-ha-evidence'];
 assert.equal(assembly.name, 'managed-kubernetes-release-gate', 'Keep the stable required-check identity.');
 assert.match(assembly.if, /always\(\)/, 'The required aggregate check must fail, not skip, after a scenario failure.');
 assert.match(
   findStep(assembly, 'Require every HA scenario and its cleanup', 'HA assembler').run,
-  /needs\.managed-kubernetes-release-gate\.result.*!= 'success'/,
+  /ha-candidate-admission\.mjs check-results/,
 );
-assert.deepEqual(assembly.needs, ['changes', 'release-manifest', 'managed-kubernetes-release-gate']);
+assert.deepEqual(assembly.needs, [
+  'changes',
+  'release-manifest',
+  'managed-kubernetes-release-gate',
+  'managed-kubernetes-early-upgrade',
+  'managed-kubernetes-upgrade',
+]);
 const reportDownloads = assembly.steps.filter((step) =>
   String(step.with?.name).startsWith('studio-server-ha-scenario-'),
 );
@@ -1409,7 +1421,7 @@ assert.match(
   /yarn node .*kubernetes-ha-release-gate\.mjs assemble/,
 );
 assert.match(promotionCondition, /require_kind == 'true'[^)]*managed-kubernetes-ha-evidence\.result == 'success'/);
-assert.match(promotionCondition, /require_kind != 'true'[^)]*managed-kubernetes-ha-evidence\.result == 'skipped'/);
+assert.match(promotionCondition, /require_kind == 'false'[^)]*managed-kubernetes-ha-evidence\.result == 'skipped'/);
 assert.deepEqual(
   findStep(proofMatrix, 'Upload Managed Kubernetes Gate Artifacts', 'HA diagnostics').with.path.trim().split(/\s+/),
   [
@@ -1923,6 +1935,72 @@ for (const workflowPath of [
   );
 }
 
+// Runner experiments must be opt-in, nonpublishing and retain native validation.
+const desktopDeveloper = parseWorkflow('.github/workflows/developer-windows-release.yml').workflow;
+assert.equal(desktopDeveloper.on.workflow_dispatch.inputs.benchmark_macos_intel.type, 'boolean');
+assert.equal(desktopDeveloper.on.workflow_dispatch.inputs.benchmark_macos_intel.default, false);
+assert.equal(desktopDeveloper.jobs.release.if, '${{ !inputs.benchmark_macos_intel }}');
+const desktopBenchmark = desktopDeveloper.jobs['benchmark-macos-intel'];
+assert.equal(desktopBenchmark.uses, './.github/workflows/desktop-macos-benchmark.yml');
+assert.equal(
+  desktopBenchmark.if,
+  "github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/develop' && inputs.benchmark_macos_intel",
+);
+const benchmark = parseWorkflow('.github/workflows/desktop-macos-benchmark.yml').workflow;
+assert.deepEqual(Object.keys(benchmark.on), ['workflow_call']);
+assert.deepEqual(benchmark.permissions, { actions: 'read', contents: 'read' });
+assert.deepEqual(desktopBenchmark.permissions, benchmark.permissions);
+assert.deepEqual(Object.keys(benchmark.jobs), ['frontend', 'build', 'verify-native-intel']);
+assert.equal(
+  benchmark.jobs.frontend.if,
+  "github.ref == 'refs/heads/develop' && github.event_name == 'workflow_dispatch'",
+);
+assert.deepEqual(benchmark.jobs.build.strategy.matrix.runner, ['macos-15-intel', 'macos-15']);
+assert.equal(benchmark.jobs.build.env.RIVET_DESKTOP_TARGET, 'x86_64-apple-darwin');
+assert.equal(benchmark.jobs.build.env.PKG_CACHE_PATH, undefined, 'Runner paths must be resolved inside a step');
+assert.match(
+  findStep(benchmark.jobs.build, 'Record toolchain and verify Intel execution', 'macOS benchmark').run,
+  /echo "PKG_CACHE_PATH=\$benchmark_pkg_cache" >> "\$GITHUB_ENV"/,
+);
+assert.ok(!benchmark.jobs.build.steps.some((step) => step.uses === './.github/actions/setup-pkg-cache'));
+assert.equal(benchmark.jobs['verify-native-intel']['runs-on'], 'macos-15-intel');
+assert.deepEqual(asArray(benchmark.jobs['verify-native-intel'].needs), ['build']);
+const benchmarkEvidence = findStep(benchmark.jobs.frontend, 'Require successful exact Build', 'macOS benchmark');
+assert.equal(benchmarkEvidence.run, 'node scripts/ci/desktop-build-evidence.mjs validated');
+assert.equal(benchmarkEvidence.env.BUILD_RUN_ID, '${{ steps.build.outputs.run_id }}');
+assert.equal(benchmarkEvidence.env.BUILD_RUN_ATTEMPT, '${{ steps.build.outputs.run_attempt }}');
+for (const job of Object.values(benchmark.jobs)) {
+  assert.equal(job.permissions, undefined, 'Benchmark jobs inherit read-only permissions');
+  assert.equal(job['continue-on-error'], undefined);
+  for (const step of job.steps) assert.equal(step['continue-on-error'], undefined);
+}
+for (const name of ['Warm dependencies with complete signed Intel build', 'Measure complete signed Intel rebuild']) {
+  const step = findStep(benchmark.jobs.build, name, 'macOS benchmark');
+  const releaseStep = findStep(reusableJobs['build-macos'], 'Build Tauri macOS bundle', 'macOS release');
+  assert.equal(step.run, releaseStep.run.replace('${{ matrix.target }}', 'x86_64-apple-darwin'));
+  assert.equal(step.if, undefined);
+  for (const [key, value] of Object.entries(releaseStep.env).filter(([key]) => key.startsWith('APPLE_')))
+    assert.equal(step.env[key], value, `Benchmark must preserve ${key}`);
+}
+for (const name of ['Notarize macOS DMG', 'Verify macOS signing and notarization']) {
+  const step = findStep(benchmark.jobs.build, name, 'macOS benchmark');
+  assert.equal(step.if, undefined);
+  assert.equal(
+    step.run,
+    findStep(reusableJobs['build-macos'], name, 'macOS release').run.replaceAll(
+      '${{ matrix.target }}',
+      'x86_64-apple-darwin',
+    ),
+  );
+}
+assert.equal(
+  findStep(
+    benchmark.jobs['verify-native-intel'],
+    'Verify candidate signing and notarization on native Intel',
+    'macOS benchmark',
+  ).run,
+  findStep(benchmark.jobs.build, 'Verify macOS signing and notarization', 'macOS benchmark').run,
+);
 const taggedDesktopRelease = parseWorkflow('.github/workflows/release.yml');
 const taggedReleaseJobs = taggedDesktopRelease.workflow.jobs;
 assert.deepEqual(

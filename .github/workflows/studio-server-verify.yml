@@ -174,6 +174,9 @@ jobs:
         run: yarn studio-server:verify:web-pure
       - name: Verify hosted executor Subgraph loader
         run: yarn workspace @valerypopoff/rivet-studio-server-executor run test:runtime
+      # This Node/WebSocket fixture needs the verified runtime builds, not Chromium.
+      - name: Verify accepted executor retirement
+        run: yarn studio-server:verify:executor-retirement
       - name: Report timing
         if: always()
         run: node scripts/ci/job-timing.mjs finish "Studio Server web tests"
@@ -224,11 +227,6 @@ jobs:
           path: packages
       - name: Verify restored compiled workspace dependencies
         run: yarn check:compiled-workspace-exports
-      # The executor subprocess consumes compiled Core/Node exports restored above.
-      # Keep this runtime regression out of the source-only repository-contract job.
-      - name: Verify accepted executor retirement
-        if: matrix.label == 1
-        run: yarn studio-server:verify:executor-retirement
       - name: Prepare browser runtime
         id: browser-runtime
         timeout-minutes: 4
@@ -358,6 +356,24 @@ jobs:
         if: ${{ !cancelled() && env.RIVET_CI_JOB_STARTED_AT != '' }}
         run: node scripts/ci/job-timing.mjs finish "Studio Server repository contracts"
 
+  deployment-command-tests:
+    name: Studio Server deployment command journeys
+    if: needs.changes.outputs.relevant == 'true'
+    needs: [changes, source-contracts]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: ./.github/actions/setup-yarn
+        with:
+          node-version: 24
+      - name: Install source-test dependencies
+        run: node .yarn/releases/yarn-4.17.1.cjs install --immutable --immutable-cache --mode=skip-build
+      - name: Set Up Kubernetes Tools
+        run: yarn studio-server:setup:k8s-tools --github-env
+      - name: Run deployment command journeys
+        run: yarn node --test deploy/studio-server/scripts/deployment-command.test.mjs
+
   deployment-contracts:
     name: Studio Server deployment contracts (${{ matrix.lane }})
     if: needs.changes.outputs.relevant == 'true'
@@ -368,9 +384,9 @@ jobs:
     timeout-minutes: 20
     strategy:
       fail-fast: false
-      max-parallel: 3
+      max-parallel: 4
       matrix:
-        lane: [managed, deployment, gateway]
+        lane: [managed, migration, deployment, gateway]
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - uses: ./.github/actions/setup-yarn
@@ -419,12 +435,27 @@ jobs:
       - name: Verify recording crash recovery and immutable handoffs
         if: matrix.lane == 'managed'
         run: yarn workspace @valerypopoff/rivet-studio-server-api run test:recording-durability-managed
+      - name: Verify compiled migration runtime
+        if: matrix.lane == 'migration'
+        shell: bash
+        run: |
+          for file in \
+            packages/studio-server-api/dist/studio-server-api/src/scripts/migrate-managed-workflow-schema.js \
+            packages/studio-server-api/dist/studio-server-api/src/serve.js \
+            packages/studio-server-executor/dist/executor-bundle.cjs; do
+            if [[ ! -f "$file" || ! -s "$file" ]]; then
+              echo "::error::Missing compiled migration runtime: $file"
+              exit 1
+            fi
+          done
       - name: Verify VM-to-managed copy, retry, and exact readback
-        if: matrix.lane == 'managed'
-        run: yarn workspace @valerypopoff/rivet-studio-server-api run test:migration-managed
+        if: matrix.lane == 'migration'
+        # The producer already built this exact commit. Keep the complete suite
+        # and its fresh child processes, without rebuilding the API in this lane.
+        run: node .yarn/releases/yarn-4.17.1.cjs workspace @valerypopoff/rivet-studio-server-api exec tsx src/tests/workflow-storage-migration-managed.integration.ts
       - name: Verify Kubernetes and deployment contracts
         if: matrix.lane == 'deployment'
-        run: yarn studio-server:verify:kubernetes
+        run: yarn studio-server:verify:kubernetes --exclude-deployment-command
       - name: Verify proxy DNS outages, browser continuity and address recovery
         if: matrix.lane == 'gateway'
         run: node deploy/studio-server/scripts/verify-proxy-dns.mjs
@@ -457,6 +488,7 @@ jobs:
       - editor-regression
       - host-compatibility
       - repository-contracts
+      - deployment-command-tests
       - deployment-contracts
     runs-on: ubuntu-latest
     steps:
@@ -472,6 +504,7 @@ jobs:
           EDITOR_REGRESSION_RESULT: ${{ needs.editor-regression.result }}
           HOST_RESULT: ${{ needs.host-compatibility.result }}
           REPOSITORY_RESULT: ${{ needs.repository-contracts.result }}
+          DEPLOYMENT_COMMAND_RESULT: ${{ needs.deployment-command-tests.result }}
           DEPLOYMENT_RESULT: ${{ needs.deployment-contracts.result }}
         run: |
           if [[ "$CLASSIFICATION_RESULT" != "success" || ( "$RELEVANT" != "true" && "$RELEVANT" != "false" ) ]]; then
@@ -482,7 +515,7 @@ jobs:
             echo "No Studio Server-affecting paths changed; heavy verification was skipped."
             exit 0
           fi
-          for result in "$SOURCE_RESULT" "$BUILD_RESULT" "$API_RESULT" "$WEB_RESULT" "$EDITOR_REGRESSION_RESULT" "$HOST_RESULT" "$REPOSITORY_RESULT" "$DEPLOYMENT_RESULT"; do
+          for result in "$SOURCE_RESULT" "$BUILD_RESULT" "$API_RESULT" "$WEB_RESULT" "$EDITOR_REGRESSION_RESULT" "$HOST_RESULT" "$REPOSITORY_RESULT" "$DEPLOYMENT_COMMAND_RESULT" "$DEPLOYMENT_RESULT"; do
             test "$result" = success
           done
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4

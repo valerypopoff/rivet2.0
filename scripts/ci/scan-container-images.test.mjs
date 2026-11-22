@@ -9,11 +9,13 @@ import { fileURLToPath } from 'node:url';
 import {
   assessContainerReport,
   candidateScanTargets,
+  componentScanTargets,
   imagePlatforms,
   scannerArguments,
   scannerImage,
   sanitizeContainerReport,
 } from './scan-container-images.mjs';
+import { verifyCandidateScanEvidence } from './verify-container-scan.mjs';
 import { createStudioServerReleaseManifest } from '../../deploy/studio-server/scripts/lib/studio-server-release-manifest.mjs';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
@@ -179,6 +181,180 @@ test('candidate targets cover every published platform and refuse stale or mutab
   const changed = structuredClone(input);
   changed.images.proxy.digest = 'latest';
   assert.throws(() => candidateScanTargets(changed, 'proxy', source.sha));
+  assert.deepEqual(componentScanTargets(image, 'proxy'), candidateScanTargets(input, 'proxy', source.sha));
+  assert.throws(() => componentScanTargets('example.test/proxy:latest', 'proxy'));
+  assert.throws(() => componentScanTargets(image, 'unknown'));
+});
+
+function scanEvidenceFixture(service = 'proxy', time = now) {
+  const sourceSha = 'c'.repeat(40);
+  const manifest = createStudioServerReleaseManifest({
+    rootDir: root,
+    source: { repository: 'example/rivet', ref: 'refs/heads/main', sha: sourceSha },
+    images: Object.fromEntries(
+      Object.keys(imagePlatforms).map((name) => [
+        name,
+        {
+          repository: `example.test/${name}`,
+          digest: `sha256:${'a'.repeat(64)}`,
+        },
+      ]),
+    ),
+    candidateEvidence: { workflow: 'fixture', runId: '1', runAttempt: 1 },
+  });
+  const targets = candidateScanTargets(manifest, service, sourceSha);
+  const evidence = {
+    result: { formatVersion: 1, service, sourceSha, image: targets[0].image, scannerImage, passed: true, failures: [] },
+    platforms: Object.fromEntries(
+      targets.map((target) => {
+        const input = report();
+        input.ArtifactName = target.image;
+        input.Metadata.ImageConfig.architecture = target.platform.split('/')[1];
+        const database = { Version: 2, UpdatedAt: new Date(time).toISOString() };
+        return [
+          target.platform,
+          {
+            report: input,
+            assessment: {
+              formatVersion: 1,
+              scannedAt: new Date(time).toISOString(),
+              scannerImage,
+              image: target.image,
+              ...assessContainerReport(input, { ...target, database, now: time }),
+            },
+          },
+        ];
+      }),
+    ),
+  };
+  return { manifest, service, sourceSha, evidence };
+}
+
+test('final manifest verification accepts the complete fresh evidence for every component', () => {
+  for (const service of Object.keys(imagePlatforms)) {
+    const f = scanEvidenceFixture(service);
+    verifyCandidateScanEvidence(f.manifest, service, f.sourceSha, f.evidence, now);
+  }
+});
+
+test('scan receipts cannot hide missing platforms, changed digests, stale evidence or blocking findings', () => {
+  const valid = scanEvidenceFixture();
+  for (const mutate of [
+    (f) => {
+      f.manifest.images.proxy.digest = `sha256:${'e'.repeat(64)}`;
+    },
+    (f) => {
+      f.manifest.source.sha = 'd'.repeat(40);
+    },
+    (f) => {
+      f.evidence.result.passed = false;
+    },
+    (f) => {
+      f.evidence.result.failures = ['scan failed'];
+    },
+    (f) => {
+      f.evidence.result.sourceSha = 'd'.repeat(40);
+    },
+    (f) => {
+      f.evidence.result.image = `example.test/proxy@sha256:${'e'.repeat(64)}`;
+    },
+    (f) => {
+      f.evidence.result.service = 'api';
+    },
+    (f) => {
+      f.evidence.result.scannerImage = 'unreviewed:latest';
+    },
+    (f) => {
+      delete f.evidence.platforms['linux/arm64'];
+    },
+    (f) => {
+      f.evidence.platforms['linux/unknown'] = f.evidence.platforms['linux/amd64'];
+    },
+    (f) => {
+      f.evidence.platforms['linux/amd64'].report.Metadata.ImageConfig.architecture = 'arm64';
+    },
+    (f) => {
+      f.evidence.platforms['linux/amd64'].assessment.image = 'another-image';
+    },
+    (f) => {
+      f.evidence.platforms['linux/amd64'].assessment.scannedAt = '2026-10-20T00:00:00Z';
+    },
+    (f) => {
+      f.evidence.platforms['linux/amd64'].assessment.scannedAt = '2026-10-27T00:00:00Z';
+    },
+    (f) => {
+      f.evidence.platforms['linux/amd64'].assessment.database.UpdatedAt = '2026-10-20T00:00:00Z';
+    },
+    (f) => {
+      f.evidence.platforms['linux/amd64'].assessment.findings = [{ id: 'invented' }];
+    },
+    (f) => {
+      f.evidence.platforms['linux/amd64'].report.Results[0].Vulnerabilities = [
+        {
+          VulnerabilityID: 'CVE-fixture',
+          PkgName: 'fixture',
+          InstalledVersion: '1',
+          Severity: 'HIGH',
+        },
+      ];
+    },
+  ]) {
+    const f = structuredClone(valid);
+    mutate(f);
+    assert.throws(() => verifyCandidateScanEvidence(f.manifest, f.service, f.sourceSha, f.evidence, now));
+  }
+});
+
+test('actual final verifier needs no Docker and rejects incomplete or mismatched downloaded evidence', async () => {
+  const directory = path.join(root, 'artifacts', `scan-proof-${randomUUID()}`);
+  const f = scanEvidenceFixture('proxy', Date.now());
+  const input = path.join(directory, 'proxy');
+  const manifestFile = path.join(directory, 'candidate.json');
+  try {
+    await fs.mkdir(input, { recursive: true });
+    await fs.writeFile(manifestFile, JSON.stringify(f.manifest));
+    const resultFile = path.join(input, 'result.json');
+    await fs.writeFile(resultFile, JSON.stringify(f.evidence.result));
+    for (const [platform, data] of Object.entries(f.evidence.platforms)) {
+      const destination = path.join(input, platform.replace('/', '-'));
+      await fs.mkdir(destination);
+      await fs.writeFile(path.join(destination, 'trivy.json'), JSON.stringify(data.report));
+      await fs.writeFile(path.join(destination, 'assessment.json'), JSON.stringify(data.assessment));
+    }
+    const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => key.toLowerCase() !== 'path'));
+    env.PATH = path.join(directory, 'no-executable');
+    const invoke = () =>
+      spawnSync(
+        process.execPath,
+        [
+          fileURLToPath(new URL('./verify-container-scan.mjs', import.meta.url)),
+          '--manifest',
+          manifestFile,
+          '--service',
+          'proxy',
+          '--source-sha',
+          f.sourceSha,
+          '--input',
+          input,
+        ],
+        { cwd: root, env, encoding: 'utf8', timeout: 15_000, windowsHide: true },
+      );
+    const success = invoke();
+    assert.equal(success.status, 0, success.stderr);
+    const expectedImage = f.evidence.result.image;
+    f.evidence.result.image = `example.test/proxy@sha256:${'e'.repeat(64)}`;
+    await fs.writeFile(resultFile, JSON.stringify(f.evidence.result));
+    assert.equal(invoke().status, 1);
+    f.evidence.result.image = expectedImage;
+    await fs.writeFile(resultFile, JSON.stringify(f.evidence.result));
+    await fs.rm(path.join(input, 'linux-arm64', 'trivy.json'));
+    const missing = invoke();
+    assert.equal(missing.status, 1);
+    assert.match(missing.stderr, /ENOENT/);
+  } finally {
+    assert.equal(path.dirname(directory), path.join(root, 'artifacts'));
+    await fs.rm(directory, { recursive: true, force: true });
+  }
 });
 
 test('scanner is immutable, isolated, bounded and scans all vulnerability statuses without ambient ignores', () => {
@@ -223,34 +399,48 @@ test('scanner is immutable, isolated, bounded and scans all vulnerability status
   assert.throws(() => scannerArguments({ ...settings, gid: -1 }), /Invalid scanner group/);
 });
 
-test('the actual CLI records scanner startup failure, exits nonzero and refuses stale output reuse', async () => {
-  const output = path.join(root, 'artifacts', `scanner-failure-test-${randomUUID()}`);
-  const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => key.toLowerCase() !== 'path'));
-  env.PATH = path.join(output, 'no-executable'); // Never invoke the real Docker daemon.
-  const args = [
-    fileURLToPath(new URL('./scan-container-images.mjs', import.meta.url)),
-    '--image',
-    image,
-    '--platform',
-    'linux/amd64',
-    '--output',
-    output,
-    '--cache',
-    path.join(output, 'cache'),
-  ];
-  try {
-    const first = spawnSync(process.execPath, args, { cwd: root, env, encoding: 'utf8', timeout: 15000 });
-    assert.equal(first.status, 1, first.stderr);
-    const receipt = await fs.readFile(path.join(output, 'result.json'), 'utf8');
-    const result = JSON.parse(receipt);
-    assert.equal(result.passed, false);
-    assert.match(result.failures[0], /ENOENT/);
-    await assert.rejects(fs.stat(path.join(output, 'linux-amd64', 'assessment.json')), { code: 'ENOENT' });
-    const repeat = spawnSync(process.execPath, args, { cwd: root, env, encoding: 'utf8', timeout: 15000 });
-    assert.equal(repeat.status, 1, repeat.stderr);
-    assert.equal(await fs.readFile(path.join(output, 'result.json'), 'utf8'), receipt);
-  } finally {
-    assert.equal(path.dirname(output), path.join(root, 'artifacts'));
-    await fs.rm(output, { recursive: true, force: true });
-  }
-});
+for (const component of [false, true])
+  test(`the actual ${component ? 'component' : 'single-platform'} scanner records failure and refuses output reuse`, async () => {
+    const output = path.join(root, 'artifacts', `scanner-failure-test-${randomUUID()}`);
+    const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => key.toLowerCase() !== 'path'));
+    env.PATH = path.join(output, 'no-executable'); // Never invoke the real Docker daemon.
+    const args = [
+      fileURLToPath(new URL('./scan-container-images.mjs', import.meta.url)),
+      '--image',
+      image,
+      ...(component ? ['--service', 'proxy', '--source-sha', 'c'.repeat(40)] : ['--platform', 'linux/amd64']),
+      '--output',
+      output,
+      '--cache',
+      path.join(output, 'cache'),
+    ];
+    try {
+      const first = spawnSync(process.execPath, args, { cwd: root, env, encoding: 'utf8', timeout: 15000 });
+      assert.equal(first.status, 1, first.stderr);
+      const receipt = await fs.readFile(path.join(output, 'result.json'), 'utf8');
+      const result = JSON.parse(receipt);
+      assert.equal(result.passed, false);
+      assert.equal(result.failures.length, component ? 2 : 1);
+      for (const failure of result.failures) assert.match(failure, /ENOENT/);
+      if (component)
+        assert.deepEqual(
+          { ...result, failures: [] },
+          {
+            formatVersion: 1,
+            service: 'proxy',
+            sourceSha: 'c'.repeat(40),
+            image,
+            scannerImage,
+            passed: false,
+            failures: [],
+          },
+        );
+      await assert.rejects(fs.stat(path.join(output, 'linux-amd64', 'assessment.json')), { code: 'ENOENT' });
+      const repeat = spawnSync(process.execPath, args, { cwd: root, env, encoding: 'utf8', timeout: 15000 });
+      assert.equal(repeat.status, 1, repeat.stderr);
+      assert.equal(await fs.readFile(path.join(output, 'result.json'), 'utf8'), receipt);
+    } finally {
+      assert.equal(path.dirname(output), path.join(root, 'artifacts'));
+      await fs.rm(output, { recursive: true, force: true });
+    }
+  });

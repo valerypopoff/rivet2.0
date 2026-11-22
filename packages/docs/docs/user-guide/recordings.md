@@ -71,7 +71,7 @@ that project's retained endpoint history, not a separate URL: renaming its endpo
 does not split the history. Web-app action
 and editor runs are not mixed into its endpoint statistics.
 
-You can also right-click a project in the tree and choose **Inspect run statistics**
+You can also right-click a project in the tree and choose **Run statistics**
 to open statistics with that project selected, including projects with no recorded
 runs. It appears after **Inspect recordings** in the action group before **Delete project**.
 

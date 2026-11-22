@@ -17,7 +17,8 @@
 
 .app-settings-sidebar {
   min-width: 0;
-  align-self: start;
+  min-height: 0;
+  overflow-y: auto;
 }
 
 .app-settings-tab-list {
@@ -29,13 +30,18 @@
   padding: 5px;
 }
 
-.app-settings-nav-tab {
+.project-settings-tab.app-settings-nav-tab {
   display: flex;
   align-items: center;
   justify-content: flex-start;
   width: 100%;
   min-width: 0;
-  height: 34px;
+  min-height: 34px;
+  height: auto;
+  flex-shrink: 0;
+  padding: 7px 10px;
+  line-height: 1.4;
+  white-space: normal;
   text-align: left;
 }
 
@@ -336,6 +342,10 @@
 
   .app-settings-tab-list {
     width: min(100%, 260px);
+  }
+
+  .app-settings-sidebar {
+    overflow: visible;
   }
 
   .app-settings-panel-region {

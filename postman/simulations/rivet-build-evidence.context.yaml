@@ -1,0 +1,59 @@
+purpose:
+  stands_in_for: GitHub Actions read-only run, artifact-list and artifact-download APIs.
+  unblocks: Local verification of exact-commit desktop frontend acquisition and HA candidate admission.
+assumptions:
+  - id: artifact-listing-implies-immediate-download
+    status: contradicted
+    claim: A newly listed artifact always has an immediately readable ZIP endpoint.
+    reason: The desktop workflow observed the correct artifact in the list and then received HTTP 404 when downloading it.
+    verification: >-
+      On 2026-11-22, workflow 45039671659 observed artifact 14761485924 at
+      15:48:25 UTC and failed its download at 15:48:26 UTC. The local HTTP
+      regression reproduces metadata preceding ZIP availability and verifies
+      that the same artifact is polled before handoff, without following its
+      storage redirect. The observation does not establish a provider-wide
+      propagation limit or guarantee the later storage transfer.
+    source: >-
+      https://github.com/valerypopoff/rivet2.0/actions/runs/45039671659;
+      postman/mocks/github-actions/contract.cjs;
+      scripts/ci/ci-performance.test.mjs
+    updated_at: '2026-11-22'
+  - id: availability-wait-preserves-release-identity
+    status: supported
+    claim: The local availability wait retains the selected artifact and rejects changed Build run, attempt or source identities.
+    reason: Waiting must not authorize fallback to another build or artifact.
+    verification: >-
+      The local HTTP regression passes transient-404 recovery and rejects
+      permanent absence, authorization/server errors, a changed attempt and
+      a replaced artifact. Only GET requests are accepted by the stand-in.
+      These checks cover the caller against synthetic responses; the next
+      complete hosted run must verify the real artifact transfer separately.
+    source: scripts/ci/desktop-build-evidence.mjs; scripts/ci/ci-performance.test.mjs
+    updated_at: '2026-11-22'
+  - id: ha-preparation-admission-and-http-failures
+    status: supported
+    claim: In the modeled cases, early HA preparation admits only exact successful producers and artifacts, and API unavailability cannot admit unchecked work.
+    reason: The early path needs its own read-only barrier while the ordinary path retains native job prerequisites.
+    verification: >-
+      On 2026-11-22 the actual admission client passed local HTTP cases for ready
+      producers, pending producers, failed producers, transient ZIP 404,
+      permission denial, service errors, and stalls before and after headers.
+      Controlled-clock tests also covered rate limits, changed attempts and
+      cancellation, including a rerun or cancellation during ZIP propagation.
+      The adjacent review reproduced unavailable 401/403 error bodies over real
+      local HTTP and verifies these fail instead of deferring. The lean suite
+      closes the 403 stream after the client receives headers, avoiding a short
+      wall-clock race, and verifies actual HTTP cancellation. Numeric and
+      HTTP-date 503 backoff values are exercised with the controlled clock.
+      Tests reuse this repository-owned mock directly; no remote
+      owner search or Postman publication was performed. Real GitHub scheduling,
+      queueing and complete artifact extraction remain hosted validation items.
+    source: scripts/ci/ha-candidate-admission.test.mjs; postman/mocks/github-actions/contract.cjs
+    updated_at: '2026-11-22'
+fingerprints:
+  - id: artifact-availability-repair
+    date: '2026-11-22'
+    commit: 43f1c7f8f797064950c38fd5adf731a23b65f84d
+    cli: null
+# Verification includes the uncommitted availability repair after this commit.
+# Tests run the shared HTTP contract directly, without the optional Postman CLI.

@@ -320,7 +320,7 @@ Current tree-response note:
   holds the initial tree response until it verifies this startup boundary, then
   checks the existing lost-acknowledgement recovery against PostgreSQL/MinIO.
 - each `WorkflowProjectItem` in that response carries the API-derived publication status used by the sidebar and Project Settings flows
-- that same project item also carries per-project `stats` (`graphCount`, `totalNodeCount`), which drive the active project summary shown in the dashboard
+- that same project item also carries per-project `stats` (`graphCount`, `totalNodeCount`), which remain available as catalog metadata but are not rendered in the project context-menu header
 - stats are cached as wrapper-owned metadata (`*.wrapper-stats.json` in filesystem mode, revision columns in managed mode), but publication status stays API-derived from settings/hash/revision state so save refreshes still show the correct `Published` or `Unpublished changes` state
 
 API health routes live on the API service itself. `GET /livez` is shallow liveness, `GET /readyz` is cached required-dependency readiness, and `GET /healthz` remains a legacy liveness alias. The API starts listening only after App Settings, runtime libraries, workflow storage, web-app action coordination, and the first health refresh initialize. Docker healthchecks use `/readyz` with a long cold-start grace period and a stop grace longer than the default application drain window.

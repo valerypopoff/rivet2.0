@@ -28,12 +28,16 @@ const severities = new Set(['UNKNOWN', 'LOW', 'MEDIUM', 'HIGH', 'CRITICAL']);
 const nonEmptyString = (value) => typeof value === 'string' && value.trim().length > 0;
 
 export function candidateScanTargets(input, service, expectedSha) {
-  assert.ok(Object.hasOwn(imagePlatforms, service), 'Unknown runtime image component');
   const manifest = assertStudioServerReleaseManifest(input);
   assert.equal(manifest.state, 'candidate', 'Scan the candidate before promotion');
   assert.match(expectedSha, /^[a-f0-9]{40}$/, 'Expected source SHA is required');
   assert.equal(manifest.source.sha, expectedSha, 'Candidate source differs from this workflow');
-  const image = `${manifest.images[service].repository}@${manifest.images[service].digest}`;
+  assert.ok(Object.hasOwn(imagePlatforms, service), 'Unknown runtime image component');
+  return componentScanTargets(`${manifest.images[service].repository}@${manifest.images[service].digest}`, service);
+}
+
+export function componentScanTargets(image, service) {
+  assert.ok(Object.hasOwn(imagePlatforms, service), 'Unknown runtime image component');
   assert.match(image, immutableImage, 'Immutable image reference is required');
   return imagePlatforms[service].map((platform) => ({ image, platform }));
 }
@@ -292,6 +296,7 @@ async function main() {
   assert.ok(relative && !relative.startsWith('..') && !path.isAbsolute(relative), 'Output must be beneath artifacts/');
   const cache = path.resolve(values.cache ?? path.join(root, 'artifacts/container-security-cache'));
   let targets;
+  let component;
   if (values.manifest) {
     assert.ok(!values.image && !values.archive && !values.platform, 'Manifest mode determines image and platforms');
     targets = candidateScanTargets(
@@ -299,8 +304,14 @@ async function main() {
       values.service,
       values['source-sha'] ?? process.env.GITHUB_SHA,
     );
+  } else if (values.service) {
+    assert.ok(values.image && !values.archive && !values.platform, 'Component mode determines all image platforms');
+    const sourceSha = values['source-sha'] ?? process.env.GITHUB_SHA;
+    assert.match(sourceSha ?? '', /^[a-f0-9]{40}$/, 'Expected source SHA is required');
+    targets = componentScanTargets(values.image, values.service);
+    component = { formatVersion: 1, service: values.service, sourceSha, image: values.image, scannerImage };
   } else {
-    assert.ok(!values.service && !values['source-sha'], 'Service/source SHA require a candidate manifest');
+    assert.ok(!values['source-sha'], 'Source SHA requires manifest or component mode');
     targets = [
       { image: values.image, archive: values.archive && path.resolve(values.archive), platform: values.platform },
     ];
@@ -320,7 +331,7 @@ async function main() {
   }
   await fs.writeFile(
     path.join(output, 'result.json'),
-    JSON.stringify({ passed: failures.length === 0, failures }, null, 2),
+    JSON.stringify({ ...component, passed: failures.length === 0, failures }, null, 2),
     { flag: 'wx' },
   );
   if (failures.length) throw new Error(failures.join('\n'));

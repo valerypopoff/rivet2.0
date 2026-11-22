@@ -74,6 +74,13 @@ const rootDestinations = new Map([
  */
 const currentDestinationSuccessors = new Map([
   [
+    'packages/studio-server-web/dashboard/ActiveProjectSection.tsx',
+    {
+      path: 'packages/studio-server-web/dashboard/WorkflowProjectSummary.tsx',
+      reason: 'Project publication details moved from the sidebar into the project context-menu header.',
+    },
+  ],
+  [
     'packages/studio-server-web/overrides/state/settings.ts',
     {
       path: 'packages/app/src/state/settings.ts',

@@ -7,7 +7,7 @@ import {
   type Project,
   type ProjectId,
 } from '@valerypopoff/rivet2-core';
-import { authenticateIfNeeded, waitForDashboardReady } from './helpers/hostedEditorObserve';
+import { authenticateIfNeeded, openProjectContextMenu, waitForDashboardReady } from './helpers/hostedEditorObserve';
 import {
   createProjectSettingsFixture,
   createProjectSettingsRouteTrackers,
@@ -333,6 +333,7 @@ test.describe('Published revision history', () => {
 
     await modal.getByRole('button', { name: 'Close project settings' }).click();
     const active = page.locator('.active-project-section');
+    await openProjectContextMenu(page);
     await expect(active.getByText('Published', { exact: true })).toBeVisible();
     await expect(active.getByRole('button', { name: 'Changed referenced projects (1)', exact: true })).toHaveCount(0);
     const targetRow = page.locator('.project-row', { hasText: target.name });
@@ -519,6 +520,7 @@ test.describe('Published revision history', () => {
     const rootRow = page.locator('.project-row', { hasText: root.name });
     await rootRow.dblclick();
     const active = page.locator('.active-project-section');
+    await openProjectContextMenu(page);
     await expect(active.getByText('Published', { exact: true })).toBeVisible();
 
     const reportSave = (absolutePath: string) => {
@@ -593,6 +595,7 @@ test.describe('Published revision history', () => {
       await page.unroute(overviewUrl, holdOverview);
     }
 
+    await openProjectContextMenu(page, root.name);
     await active.getByRole('button', { name: 'Changed referenced projects (1)', exact: true }).click();
     const changed = page.getByRole('dialog', { name: 'Changed referenced projects' });
     const inBundleGroup = changed.getByRole('heading', { name: 'In this bundle', exact: true }).locator('..');
@@ -613,6 +616,7 @@ test.describe('Published revision history', () => {
     await expect.poll(() => trackers.projectLoadRequests.map((request) => request.path)).toContain(helper.absolutePath);
 
     await page.locator('.project-row', { hasText: omitted.name }).click();
+    await openProjectContextMenu(page, omitted.name);
     await expect(active.getByText('Dependencies unverified', { exact: true })).toBeVisible();
   });
 
@@ -819,13 +823,13 @@ test.describe('Published revision history', () => {
     await showProjectSettingsModal(page, root);
     await expectHistoryReadCancelled(page, 'preview-tree', startPreview, async () => {
       await liveRow.click();
-      await expect(page.locator('.active-project-name')).toHaveText(unrelated.name);
+      await expect(page.locator('.project-row.active .label')).toHaveText(unrelated.name);
     });
     await expect(preview).toHaveCount(0);
 
     // Exiting while a frozen project is loading must preserve live tab selection.
     await liveRow.dblclick();
-    await expect(page.locator('.active-project-name')).toHaveText(unrelated.name);
+    await expect(page.locator('.project-row.active .label')).toHaveText(unrelated.name);
     await showProjectSettingsModal(page, root);
     await expectHistoryReadCancelled(page, 'preview', startPreview, () =>
       preview.getByRole('button', { name: 'Exit history preview' }).click(),
@@ -833,7 +837,7 @@ test.describe('Published revision history', () => {
     await expect(preview).toHaveCount(0);
     await expect(caller).toHaveCount(0);
     await frame.locator('.projects-container .project', { hasText: unrelated.name }).locator('.project-name').click();
-    await expect(page.locator('.active-project-name')).toHaveText(unrelated.name);
+    await expect(page.locator('.project-row.active .label')).toHaveText(unrelated.name);
   });
 
   test('legacy history preview shows a missing Subgraph target without revealing IDs or reading the live project', async ({
@@ -1042,6 +1046,7 @@ test.describe('Published revision history', () => {
     expect(routeTrackers.projectLoadRequests[0]).toEqual({
       path: project.absolutePath,
     });
+    await openProjectContextMenu(page);
     await page.locator('.active-project-more-button').click();
     await expect(modal).toBeVisible();
     await expect(modal.locator('.project-status-badge.published')).toBeVisible({ timeout: 30_000 });

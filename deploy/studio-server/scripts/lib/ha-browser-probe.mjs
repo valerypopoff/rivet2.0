@@ -32,6 +32,27 @@ export async function selectHaBrowserRecordingWorkflow(page, workflowName, expec
   await expect(modal.locator('.run-recordings-workflow-name')).toHaveText(workflowName);
 }
 
+/** Retained browsers may still have sidebar Save; current browsers put it in
+ * the project's context menu. Open that menu only when actually saving, so it
+ * cannot intercept the paused-run/continuity proof's editor interactions. */
+export async function saveHaBrowserProject(page, projectName, expect) {
+  const save = page.locator('.active-project-save-button');
+  if (!(await save.isVisible())) {
+    const row = page.locator('.project-row').filter({ hasText: projectName });
+    await expect(row).toHaveCount(1);
+    const box = await row.boundingBox();
+    assert.ok(box, 'the retained project must be visible before opening its actions');
+    await row.click({ button: 'right', position: { x: box.width - 2, y: box.height / 2 } });
+    await expect(save).toBeVisible();
+  }
+  await save.click();
+  const menu = page.locator('.workflow-project-context-menu-with-summary');
+  if (await menu.isVisible()) {
+    await page.keyboard.press('Escape');
+    await expect(menu).toBeHidden();
+  }
+}
+
 // Protocol 2's replay-ready frame does not repeat the handshake's resume identity.
 export function observeHaBrowserSessionMessage(state, message) {
   if (message.message === 'executor-session') {
@@ -314,6 +335,7 @@ export async function startHaBrowserProbe(gate, baseUrl, rootDir, { build, label
       window.__haBrowserContinuity = token;
     }, token);
     const iframe = page.frameLocator('iframe');
+    const dirtyProject = iframe.locator('.projects-container .project.active.has-unsaved-changes');
     await iframe
       .locator(`meta[name="rivet-web-build"][content="${originalBuild}"]`)
       .waitFor({ state: 'attached', timeout: 90_000 });
@@ -357,7 +379,7 @@ export async function startHaBrowserProbe(gate, baseUrl, rootDir, { build, label
     const edited = `${marker}-unsaved`;
     await page.keyboard.insertText(edited);
     await input.press('Escape');
-    await expect(page.locator('.active-project-save-button')).toBeVisible({ timeout: 30_000 });
+    await expect(dirtyProject).toBeVisible({ timeout: 30_000 });
     const originalSockets = [...sockets.values()].filter((socket) => !socket.closed);
     assert.ok(originalSockets.length > 0, 'the accepted Node run must have a physical executor observer');
     const capture = async (stage) => {
@@ -372,7 +394,7 @@ export async function startHaBrowserProbe(gate, baseUrl, rootDir, { build, label
         reloads,
         iframeReloads,
         nodeStates: await result.evaluate((node) => node.ownerDocument.defaultView.__haNodeStates),
-        unsavedEditVisible: await page.locator('.active-project-save-button').isVisible(),
+        unsavedEditVisible: await dirtyProject.isVisible(),
         recordings: recordings.map((r) => ({
           status: r.status,
           recordingId: r.result.recordingId,
@@ -429,12 +451,12 @@ export async function startHaBrowserProbe(gate, baseUrl, rootDir, { build, label
         await capture('after-upgrade');
         await expect(result).toHaveClass(/success/, { timeout: 90_000 });
         await expect.poll(() => recordings.length, { timeout: 90_000 }).toBe(1);
-        await expect(page.locator('.active-project-save-button')).toBeVisible();
+        await expect(dirtyProject).toBeVisible();
         await value.locator('.edit-button').dispatchEvent('click');
         await expect(iframe.locator('.monaco-editor .view-lines').first()).toContainText(edited);
         await iframe.locator('.monaco-editor textarea').first().press('Escape');
-        await page.locator('.active-project-save-button').click();
-        await expect(page.locator('.active-project-save-button')).toHaveCount(0, { timeout: 30_000 });
+        await saveHaBrowserProject(page, marker, expect);
+        await expect(dirtyProject).toHaveCount(0, { timeout: 30_000 });
         const saved = await gate.requestWorkflow(baseUrl, '/api/workflows/projects/download', {
           method: 'POST',
           body: JSON.stringify({ relativePath, version: 'live' }),

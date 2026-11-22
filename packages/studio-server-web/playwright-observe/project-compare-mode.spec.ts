@@ -436,7 +436,7 @@ test.describe('Project compare mode', () => {
       await deleted('global').getByRole('button', { name: 'Inspect deleted node' }).click();
       await expect(editor.locator('[role="dialog"]')).toContainText('replacement-global');
       await page.locator('.project-row', { hasText: referenceItem.name }).dblclick();
-      await expect(page.locator('.active-project-name')).toHaveText(referenceItem.name);
+      await expect(page.locator('.project-row.active .label')).toHaveText(referenceItem.name);
       await expect(editor.getByText('Deleted node details', { exact: true })).toHaveCount(0);
       await expect(editor.locator('.node.compare-removed')).toHaveCount(0);
     });
@@ -482,7 +482,7 @@ test.describe('Project compare mode', () => {
     const editorFrame = page.frameLocator('iframe.dashboard-editor-frame');
 
     await currentRow.dblclick();
-    await expect(page.locator('.active-project-name')).toHaveText(currentProject.name, { timeout: 120_000 });
+    await expect(page.locator('.project-row.active .label')).toHaveText(currentProject.name, { timeout: 120_000 });
     await expect(editorFrame.locator('.node-canvas')).toBeVisible({ timeout: 120_000 });
 
     await currentRow.click({ button: 'right' });
@@ -594,7 +594,7 @@ test.describe('Project compare mode', () => {
     await page.keyboard.press('Escape');
 
     await currentRow.dblclick();
-    await expect(page.locator('.active-project-name')).toHaveText(currentProject.name, { timeout: 120_000 });
+    await expect(page.locator('.project-row.active .label')).toHaveText(currentProject.name, { timeout: 120_000 });
     await expect(editorFrame.locator('.node-canvas')).toBeVisible({ timeout: 120_000 });
 
     await currentRow.click({ button: 'right' });
@@ -655,7 +655,7 @@ test.describe('Project compare mode', () => {
     const editorFrame = page.frameLocator('iframe.dashboard-editor-frame');
 
     await currentRow.dblclick();
-    await expect(page.locator('.active-project-name')).toHaveText(currentProject.name, { timeout: 120_000 });
+    await expect(page.locator('.project-row.active .label')).toHaveText(currentProject.name, { timeout: 120_000 });
     await expect(editorFrame.locator('.node-canvas')).toBeVisible({ timeout: 120_000 });
 
     await referenceRow.click({ button: 'right' });

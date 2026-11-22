@@ -4,7 +4,12 @@ import type {
   WorkflowProjectStatus,
   WorkflowProjectWebAppSummary,
 } from '../../studio-server-shared/workflow-types';
-import { authenticateIfNeeded, mockHostedEditorBootstrap, waitForDashboardReady } from './helpers/hostedEditorObserve';
+import {
+  authenticateIfNeeded,
+  mockHostedEditorBootstrap,
+  openProjectContextMenu,
+  waitForDashboardReady,
+} from './helpers/hostedEditorObserve';
 
 const STATUS_DOT_BACKGROUND: Record<WorkflowProjectStatus, string> = {
   unpublished: 'rgb(187, 187, 187)',
@@ -1416,8 +1421,10 @@ test.describe('Workflow library layout', () => {
     expect(Math.abs(statusDotBox!.y + statusDotBox!.height / 2 - (sidebarBox!.y + 18.5))).toBeLessThan(2);
   });
 
-  test('tints the active project summary by publication status', async ({ page }) => {
+  test('shows project details in the context menu with publication fills and no outline', async ({ page }) => {
     const projects = (['unpublished', 'published', 'unpublished_changes'] as const).map(createStatusProject);
+    projects[1]!.settings.publishedEndpointName = 'currently-serving-endpoint';
+    projects[1]!.settings.endpointName = 'draft-endpoint-name';
     await installStatusDotTreeRoute(page, projects);
 
     await page.goto('/', { waitUntil: 'domcontentloaded' });
@@ -1426,14 +1433,34 @@ test.describe('Workflow library layout', () => {
 
     const activeProjectSection = page.locator('.workflow-library-panel .active-project-section');
 
+    await expect(activeProjectSection).toHaveCount(0);
+    await expect(page.locator('.active-project-slot')).toHaveCount(0);
+
     for (const project of projects) {
-      await page.getByRole('button', { name: project.name, exact: true }).click();
+      await openProjectContextMenu(page, project.name);
       await expect(activeProjectSection).toHaveClass(new RegExp(`\\b${project.settings.status}\\b`));
+      await expect(activeProjectSection).toHaveCSS('border-width', '0px');
+      await expect(activeProjectSection.locator('.active-project-stats')).toHaveCount(0);
+      if (project.settings.status === 'unpublished') {
+        await expect(activeProjectSection.locator('.active-project-status-list')).toHaveCount(0);
+      } else {
+        const badge = activeProjectSection.locator('.project-status-badge');
+        await expect(badge).toHaveCSS('background-color', STATUS_DOT_BACKGROUND[project.settings.status]);
+        await expect(badge).toHaveCSS('border-color', 'rgba(0, 0, 0, 0)');
+        await expect(badge).toHaveCSS('color', 'rgb(31, 34, 40)');
+        await expect(activeProjectSection.locator('.active-project-endpoint-name')).toHaveText(
+          project.settings.publishedEndpointName || project.settings.endpointName,
+        );
+      }
       await expect(activeProjectSection).toHaveCSS(
         'background-color',
         ACTIVE_PROJECT_BACKGROUND[project.settings.status],
       );
     }
+    await activeProjectSection.getByRole('button', { name: 'Settings', exact: true }).click();
+    const modal = page.getByTestId('workflow-project-settings-modal');
+    await expect(modal.locator('.project-settings-modal-title')).toHaveText(projects.at(-1)!.name);
+    await expect(page.getByRole('menu', { name: `Actions for ${projects.at(-1)!.name}` })).toHaveCount(0);
   });
 
   for (const fails of [false, true]) {
@@ -1478,18 +1505,17 @@ test.describe('Workflow library layout', () => {
       await page.goto('/', { waitUntil: 'domcontentloaded' });
       await authenticateIfNeeded(page);
       await waitForDashboardReady(page);
-      await page.getByRole('button', { name: project.name, exact: true }).click();
+      await openProjectContextMenu(page, project.name);
       const lines = page.locator('.active-project-section .active-project-status-line');
       await expect(page.locator('.active-project-section')).toHaveClass(/\bunpublished_changes\b/);
-      await expect(lines.first()).toContainText('Endpoint:');
-      await expect(lines.first().locator('.project-status-badge')).toHaveText('Unpublished');
-      await expect(lines.nth(1)).toContainText('Web app:');
-      await expect(lines.nth(1)).toContainText(fails ? 'Unavailable' : 'Unpublished changes');
-      await expect(lines.nth(1)).not.toContainText('none');
+      await expect(lines).toHaveCount(1);
+      await expect(lines.first()).toContainText('Web app:');
+      await expect(lines.first()).toContainText(fails ? 'Unavailable' : 'Unpublished changes');
+      await expect(lines.first()).not.toContainText('none');
     });
   }
 
-  test('shows workflow and web app publication status lines in the active project summary', async ({ page }) => {
+  test('shows workflow and web app publication status lines in the project menu header', async ({ page }) => {
     const noAppsProject = createStatusProject('unpublished');
     noAppsProject.name = 'codex-summary-no-apps';
     noAppsProject.fileName = 'codex-summary-no-apps.rivet-project';
@@ -1510,7 +1536,7 @@ test.describe('Workflow library layout', () => {
     sameStatusAppsProject.fileName = 'codex-summary-same-apps.rivet-project';
     sameStatusAppsProject.relativePath = 'codex-summary-same-apps.rivet-project';
     sameStatusAppsProject.absolutePath = '/managed/workflows/codex-summary-same-apps.rivet-project';
-    sameStatusAppsProject.stats = { graphCount: 1, totalNodeCount: 2, webAppCount: 2 };
+    sameStatusAppsProject.stats = { graphCount: 1, totalNodeCount: 2, webAppCount: 3 };
     sameStatusAppsProject.settings.publicationStatus = 'unpublished_changes';
 
     const mixedStatusAppsProject = createStatusProject('unpublished_changes');
@@ -1554,6 +1580,14 @@ test.describe('Workflow library layout', () => {
           status: 'unpublished_changes',
           isMissingFromProject: false,
         },
+        {
+          uiGraphId: 'draft-only-app',
+          name: 'Draft only',
+          publishedSlug: null,
+          publishedAt: null,
+          status: 'unpublished',
+          isMissingFromProject: false,
+        },
       ],
       [mixedStatusAppsProject.relativePath]: [
         {
@@ -1567,9 +1601,9 @@ test.describe('Workflow library layout', () => {
         {
           uiGraphId: 'mixed-app-b',
           name: 'Mixed App B',
-          publishedSlug: null,
-          publishedAt: null,
-          status: 'unpublished',
+          publishedSlug: 'mixed-app-b',
+          publishedAt: '2026-05-15T09:00:00.000Z',
+          status: 'unpublished_changes',
           isMissingFromProject: false,
         },
       ],
@@ -1579,12 +1613,9 @@ test.describe('Workflow library layout', () => {
     await authenticateIfNeeded(page);
     await waitForDashboardReady(page);
 
-    const activeProjectSlot = page.locator('.workflow-library-panel .active-project-slot');
     const activeProjectSection = page.locator('.workflow-library-panel .active-project-section');
     const statusLines = activeProjectSection.locator('.active-project-status-line');
 
-    await expect(activeProjectSlot).toHaveCSS('height', '166px');
-    await expect(activeProjectSection).toHaveCSS('height', '166px');
     await expect(
       page.getByRole('button', { name: noAppsProject.name, exact: true }).locator('.project-status-dot'),
     ).toBeHidden();
@@ -1595,33 +1626,25 @@ test.describe('Workflow library layout', () => {
       page.getByRole('button', { name: sameStatusAppsProject.name, exact: true }).locator('.project-status-dot'),
     ).toHaveClass(/\bunpublished_changes\b/);
 
-    await page.getByRole('button', { name: noAppsProject.name, exact: true }).click();
+    await openProjectContextMenu(page, noAppsProject.name);
     await expect(activeProjectSection.locator('.active-project-details > :first-child')).toHaveClass(
       /active-project-name-row/,
     );
     await expect(activeProjectSection.locator('.active-project-name')).toHaveText(noAppsProject.name);
-    await expect(statusLines).toHaveCount(2);
-    await expect(statusLines.first()).toContainText('Endpoint:');
-    await expect(statusLines.first().locator('.project-status-badge')).toHaveText('Unpublished');
-    await expect(statusLines.nth(1)).toContainText('Web app:');
-    await expect(statusLines.nth(1).locator('.active-project-status-text')).toHaveText('none');
-    await expect(statusLines.first()).toHaveCSS('height', '22px');
-    await expect(statusLines.nth(1)).toHaveCSS('height', '22px');
-    await expect(statusLines.nth(1).locator('.active-project-status-text')).toHaveCSS('height', '22px');
-    await expect(activeProjectSection.locator('.active-project-stats')).toHaveText('1 graph, 2 nodes');
+    await expect(statusLines).toHaveCount(0);
+    await expect(activeProjectSection).not.toContainText('Web app:');
+    await expect(activeProjectSection).not.toContainText('Endpoint:');
     await expect(activeProjectSection.locator('.active-project-actions-row')).toHaveCSS('margin-top', '8px');
 
-    await page.getByRole('button', { name: oneAppProject.name, exact: true }).click();
+    await openProjectContextMenu(page, oneAppProject.name);
     await expect(activeProjectSection.locator('.active-project-name')).toHaveText(oneAppProject.name);
     await expect(activeProjectSection).toHaveClass(/\bpublished\b/);
     await expect(activeProjectSection).toHaveCSS('background-color', ACTIVE_PROJECT_BACKGROUND.published);
-    await expect(statusLines).toHaveCount(2);
-    await expect(statusLines.first().locator('.project-status-badge')).toHaveText('Unpublished');
-    await expect(statusLines.nth(1)).toContainText('Web app:');
-    await expect(statusLines.nth(1).locator('.project-status-badge')).toHaveText('Published');
-    await expect(activeProjectSection.locator('.active-project-stats')).toHaveText('1 graph, 2 nodes, 1 web app');
+    await expect(statusLines).toHaveCount(1);
+    await expect(statusLines.first()).toContainText('Web app:');
+    await expect(statusLines.first().locator('.project-status-badge')).toHaveText('Published');
 
-    await page.getByRole('button', { name: sameStatusAppsProject.name, exact: true }).click();
+    await openProjectContextMenu(page, sameStatusAppsProject.name);
     await expect(activeProjectSection.locator('.active-project-name')).toHaveText(sameStatusAppsProject.name);
     await expect(activeProjectSection).toHaveClass(/\bunpublished_changes\b/);
     await expect(activeProjectSection).toHaveCSS('background-color', ACTIVE_PROJECT_BACKGROUND.unpublished_changes);
@@ -1629,15 +1652,11 @@ test.describe('Workflow library layout', () => {
     await expect(statusLines.first().locator('.project-status-badge')).toHaveText('Published');
     await expect(statusLines.nth(1)).toContainText('Web apps:');
     await expect(statusLines.nth(1).locator('.project-status-badge')).toHaveText('Unpublished changes');
-    await expect(activeProjectSection.locator('.active-project-stats')).toHaveText('1 graph, 2 nodes, 2 web apps');
 
-    await page.getByRole('button', { name: mixedStatusAppsProject.name, exact: true }).click();
+    await openProjectContextMenu(page, mixedStatusAppsProject.name);
     await expect(activeProjectSection.locator('.active-project-name')).toHaveText(mixedStatusAppsProject.name);
     await expect(statusLines).toHaveCount(2);
     await expect(statusLines.nth(1)).toContainText('Web apps:');
     await expect(statusLines.nth(1).locator('.active-project-various-statuses')).toHaveText('various statuses');
-    await expect(activeProjectSection.locator('.active-project-stats')).toHaveText('1 graph, 2 nodes, 2 web apps');
-    await expect(activeProjectSlot).toHaveCSS('height', '166px');
-    await expect(activeProjectSection).toHaveCSS('height', '166px');
   });
 });

@@ -5,10 +5,6 @@
   gap: 12px;
   flex-wrap: wrap;
 }
-.resource-monitoring .resource-periods {
-  display: flex;
-  gap: 4px;
-}
 .resource-monitoring .resource-stats {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
@@ -30,12 +26,14 @@
 .resource-monitoring .resource-chart h4 {
   margin: 0 0 8px;
 }
-.resource-monitoring .resource-views {
+.resource-monitoring .resource-views,
+.resource-monitoring .resource-periods {
   display: flex;
   flex-wrap: wrap;
   width: fit-content;
 }
-.resource-monitoring .resource-views .segmented-control-button {
+.resource-monitoring .resource-views .segmented-control-button,
+.resource-monitoring .resource-periods .segmented-control-button {
   height: auto;
   min-height: 28px;
   line-height: 1.4;

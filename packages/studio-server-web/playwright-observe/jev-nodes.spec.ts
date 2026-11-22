@@ -1,6 +1,6 @@
 import { expect, test, type FrameLocator, type Locator, type Page } from '@playwright/test';
 import { deserializeProject } from '@valerypopoff/rivet2-core';
-import { authenticateIfNeeded, waitForDashboardReady } from './helpers/hostedEditorObserve';
+import { authenticateIfNeeded, openProjectContextMenu, waitForDashboardReady } from './helpers/hostedEditorObserve';
 import type { WorkflowProjectItem, WorkflowTreeResponse } from '../dashboard/types';
 
 test.use({ actionTimeout: 15_000 });
@@ -310,6 +310,7 @@ test('Decision AI configuration exports a wired profile and suspension administr
     await route.fulfill({ json: family === 'classifier' ? classifierHealth : [] });
   });
   await page.locator('.project-row', { hasText: projectName }).click();
+  await openProjectContextMenu(page);
   await page.locator('.active-project-more-button').click();
   const modal = page.locator('[data-testid="workflow-project-settings-modal"]');
   await modal.getByRole('tab', { name: 'Decision AI profile suspension', exact: true }).click();

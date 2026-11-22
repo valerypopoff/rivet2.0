@@ -32,7 +32,8 @@ function groupBundleReferences(projects: WorkflowBundleReferenceDetails['project
         sources.set(use.sourcePath, source);
       }
 
-      const location = [use.sourceGraphName, use.nodeTitle].filter(Boolean).join(' / ') || 'Reference location unavailable';
+      const location =
+        [use.sourceGraphName, use.nodeTitle].filter(Boolean).join(' / ') || 'Reference location unavailable';
       let targets = source.sites.get(location);
       if (!targets) {
         targets = new Map();
@@ -82,7 +83,7 @@ export function useWorkflowReferenceOverview(projects: WorkflowProjectItem[], tr
   return { value, dialog, close: () => setDialog(null) };
 }
 
-export function PublicationReferencePill({ project }: { project: WorkflowProjectItem }) {
+export function PublicationReferencePill({ project, onOpen }: { project: WorkflowProjectItem; onOpen?: () => void }) {
   const context = useWorkflowPublicationReferences();
   const id = getWorkflowReferenceProjectId(project);
   const changed = context?.changedByCaller.get(id);
@@ -93,7 +94,10 @@ export function PublicationReferencePill({ project }: { project: WorkflowProject
         type="button"
         aria-label={`Changed referenced projects (${changed.length})`}
         title="See changed referenced projects"
-        onClick={() => context.open({ callerId: id })}
+        onClick={() => {
+          context.open({ callerId: id });
+          onOpen?.();
+        }}
       >
         <SubgraphLinkIcon />
       </button>
@@ -218,7 +222,9 @@ export function WorkflowReferenceDetailsModal({
             {sources?.length === 0 && <div>No references to show.</div>}
             {sources?.map(([sourcePath, source]) => (
               <section key={sourcePath} className="workflow-external-reference-source">
-                <h3 title={`${projectPath(sourcePath)}\nSource revision saved ${new Date(source.savedAt).toLocaleString()}`}>
+                <h3
+                  title={`${projectPath(sourcePath)}\nSource revision saved ${new Date(source.savedAt).toLocaleString()}`}
+                >
                   {source.name}
                 </h3>
                 {[...source.sites]

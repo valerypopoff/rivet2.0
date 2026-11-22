@@ -954,6 +954,13 @@ surface merely to reduce image size. Included workspaces also retain their
 existing package licenses and readmes. The staging regression verifies that local
 overrides still win over an otherwise loadable hoisted version.
 
+Shared compilation has a separate cache boundary: API/executor `runtime-build`
+copies Core and Node before `build:runtime`; web `hosted-dependencies` copies Core
+and Evaluations before `build:hosted-web-deps`. Both include their wrapper scripts
+and root compiler inputs. The complete package/script sources still enter each
+consumer before its own compilation. Keep those shared build stages derived from
+the unpruned dependency installation; runtime-only pruning must not affect them.
+
 `studio-server:verify:repo-structure` owns the production source-copy contract:
 all manifests precede the immutable install, source directories follow it, and
 `COPY . .` is forbidden because it would recopy the dependency cache. The API
@@ -1233,9 +1240,11 @@ longer requires `dependenciesMeta` or an unplugged package copy.
 ### Dependency security
 
 Container dependencies have a separate fail-closed gate; Yarn/Cargo audits do not
-cover NGINX or Alpine packages. `scan-images` consumes this attempt's immutable
-candidate manifest, scans all four runtime images/platforms with digest-pinned
-Trivy, retains sanitized inventory/finding reports and blocks image promotion on
+cover NGINX or Alpine packages. Each runtime-image build scans its immutable
+digest with pinned Trivy as soon as it is available, retaining sanitized reports
+for the service/run/attempt. After manifest assembly, `scan-images` verifies those
+reports against this attempt's exact source, digests and complete platform set.
+Both stages fail closed and block image promotion on
 High/Critical findings (including unfixed ones), incomplete reports or scanner
 errors. There is no container exception or allow-failure path. See
 [Container security](./studio-server/container-security.md) for local commands,
@@ -1906,7 +1915,12 @@ the cancellation-settlement delay. A stale or failed freshness check prevents
 the second deployment; the old check is never reused to authorize another write.
 
 Evidence waits are bounded to 20 minutes, with individual HTTP calls bounded to
-10 seconds and no redirect-following or modifying API calls. Missing or expired
+10 seconds and no redirect-following or modifying API calls. A listed artifact
+must also expose its ZIP download redirect before handoff to the download action.
+That read-only check polls a 404 for at most one minute within the original
+deadline, retaining the same artifact ID and rechecking the Build identity and
+attempt. Other errors fail immediately; the helper never follows the signed
+storage URL or sends it credentials. Missing or expired
 frontend artifacts require rerunning Build before the desktop workflow. Artifacts
 are retained seven days. Do not bypass the gate or rebuild an unqualified
 frontend inside Desktop Release. Existing workflow triggers, manual entry points,

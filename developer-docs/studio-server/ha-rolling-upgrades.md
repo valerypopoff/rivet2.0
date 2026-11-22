@@ -144,9 +144,18 @@ not a relaxation of recording durability or a production runtime change.
 The retained-browser proof likewise selects its exact fixture through the normal
 Run recordings workflow dropdown before opening either acknowledged recording.
 It must not assume that the default Any/page-one view contains its run while
-continuous endpoint traffic is active. `ha-recording-selection.spec.ts`, enrolled
+continuous endpoint traffic is active. `ha-browser-contracts.spec.ts`, enrolled
 in the editor CI lane, exercises the shared probe action against 120 newer foreign
 runs and verifies both successful and failed fixture recordings remain reachable.
+
+Observe unsaved continuity through the active editor tab's dirty marker. Save
+visibility depends on the retained UI: older builds have sidebar Save, while
+current builds expose it in the project's context-menu header. The shared probe
+uses either location and closes the menu before resuming editor actions. Its
+browser regression loads a real saved revision before editing, saves exactly
+once, waits for the dirty marker to clear and checks that the overlay is closed.
+The HA journey still verifies the actual saved bytes and a new recorded execution
+against the candidate backend; opening a menu alone cannot satisfy the proof.
 
 ### Latest regional follow-up: DNS gap fixed locally, provider proof unchanged
 
@@ -1256,7 +1265,14 @@ An uncertain Resume is not sent again by cleanup.
 Bounded control/event traces retain owner names, timings, request IDs and replay
 readiness, never signed owner paths, capabilities or request/response bodies.
 
-CI runs `yarn node deploy/studio-server/scripts/kubernetes-ha-release-gate.mjs certify` with
+CI runs the three independent `scenario` commands in the shared
+`.github/workflows/studio-server-ha-scenario.yml`, then the required assembler
+checks all reports and cleanup outcomes before promotion. The normal path keeps
+native image/manifest/scan dependencies. The optional early-upgrade path may
+prepare an empty cluster sooner, but cannot use a candidate until exact-run
+artifact admission; see [early HA preparation](ha-ci-early-preparation-plan.md).
+Local full certification uses
+`yarn node deploy/studio-server/scripts/kubernetes-ha-release-gate.mjs certify` with
 `RIVET_HA_CANDIDATE_MANIFEST` and, when lineage exists,
 `RIVET_HA_PREDECESSOR_MANIFEST`. The Yarn Node wrapper is required for Plug'n'Play dependencies such as
 `yaml`; bare `node` fails before certification starts. CI policy checks enforce

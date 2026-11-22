@@ -3,6 +3,7 @@ import {
   authenticateIfNeeded,
   mockHostedEditorBootstrap,
   openHostedDashboardFixture,
+  openProjectContextMenu,
   waitForDashboardReady,
 } from './helpers/hostedEditorObserve';
 
@@ -259,6 +260,7 @@ test('hosted dialogs render the shared theme and project health uses the metadat
   }
   const row = page.locator('.project-row', { hasText: project.name });
   await row.click();
+  await openProjectContextMenu(page);
   await page.locator('.active-project-more-button').click();
   const settings = await checkTheme('workflow-project-settings-modal');
   await expect(settings.getByRole('tab')).toHaveText([

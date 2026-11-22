@@ -1,5 +1,4 @@
-import { useEffect, useState } from 'react';
-import Button from '@atlaskit/button';
+import { memo, useDeferredValue, useEffect, useState } from 'react';
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import type {
   ResourceHistory,
@@ -38,6 +37,12 @@ const sessionView = (identity: ResourceIdentity): Pick<ResourcePoolHistory, 'sco
   scope: identity.source === 'node-process' ? 'process' : 'container',
   role: identity.role === 'control' ? 'control' : 'execution',
 });
+const resourceViews: ReadonlyArray<Pick<ResourcePoolHistory, 'scope' | 'role'>> = [
+  { scope: 'container', role: 'execution' },
+  { scope: 'container', role: 'control' },
+  { scope: 'process', role: 'execution' },
+  { scope: 'process', role: 'control' },
+];
 
 function Statistics({
   label,
@@ -63,7 +68,7 @@ function Statistics({
   );
 }
 
-function ResourceChart({
+const ResourceChart = memo(function ResourceChart({
   points,
   metric,
   title,
@@ -98,6 +103,12 @@ function ResourceChart({
           <Tooltip
             labelFormatter={(at) => when(Number(at))}
             formatter={(value) => format(value == null ? null : Number(value))}
+            contentStyle={{
+              background: 'var(--grey-darkest, #1f2228)',
+              border: '1px solid var(--border-color, #444)',
+              borderRadius: 6,
+            }}
+            labelStyle={{ color: 'var(--grey-lightest, #dfe1e6)' }}
           />
           <Line
             type="linear"
@@ -112,12 +123,13 @@ function ResourceChart({
       </ResponsiveContainer>
     </div>
   );
-}
+});
 
 export function ResourceMonitoringPanel() {
   const [period, setPeriod] = useState<ResourcePeriod>('1h');
   const [data, setData] = useState<ResourceHistory | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState('pool:container:execution');
   const [now, setNow] = useState(Date.now);
   useEffect(() => {
@@ -129,6 +141,7 @@ export function ResourceMonitoringPanel() {
       if (flight) return;
       const controller = new AbortController();
       flight = controller;
+      setLoading(true);
       let timedOut = false;
       const timeout = window.setTimeout(() => {
         timedOut = true;
@@ -156,6 +169,7 @@ export function ResourceMonitoringPanel() {
       } finally {
         window.clearTimeout(timeout);
         flight = undefined;
+        if (!disposed) setLoading(false);
       }
     };
     void refresh();
@@ -167,18 +181,21 @@ export function ResourceMonitoringPanel() {
     };
   }, [period]);
 
+  const availableViews = new Set(
+    [...(data?.pools ?? []), ...(data?.instances.map((i) => sessionView(i.identity)) ?? [])].map(viewKey),
+  );
   const views = new Map(
-    [...(data?.pools ?? []), ...(data?.instances.map((i) => sessionView(i.identity)) ?? [])].map((view) => [
-      viewKey(view),
-      view,
-    ]),
+    resourceViews.filter((view) => availableViews.has(viewKey(view))).map((view) => [viewKey(view), view]),
   );
   const chosen = views.has(selected) ? selected : views.keys().next().value ?? '';
-  const effective = data?.pools.find((p) => viewKey(p) === chosen);
-  const processOnly = views.get(chosen)?.scope === 'process';
+  const deferredView = useDeferredValue(chosen);
+  const displayed = views.has(deferredView) ? deferredView : chosen;
+  const viewLoading = chosen !== displayed;
+  const effective = data?.pools.find((p) => viewKey(p) === displayed);
+  const processOnly = views.get(displayed)?.scope === 'process';
   const latest = effective?.latest;
   const latestComplete = latest?.complete;
-  const visibleInstances = data?.instances.filter((i) => viewKey(sessionView(i.identity)) === chosen) ?? [];
+  const visibleInstances = data?.instances.filter((i) => viewKey(sessionView(i.identity)) === displayed) ?? [];
   const recentSessionCount = data ? data.instances.filter((i) => now - i.lastSampleAt <= data.staleAfterMs).length : 0;
   return (
     <section
@@ -187,13 +204,22 @@ export function ResourceMonitoringPanel() {
     >
       <div className="resource-header">
         <div className="app-settings-section-title">CPU and RAM monitoring</div>
-        <div className="resource-periods" aria-label="Resource history period">
+        <SegmentedControl className="resource-periods" label="Resource history period">
           {(['1h', '24h', '7d'] as const).map((p) => (
-            <Button key={p} isSelected={period === p} onClick={() => setPeriod(p)}>
+            <SegmentedControlButton
+              key={p}
+              selected={period === p}
+              isLoading={period === p && loading}
+              onClick={() => {
+                if (period === p) return;
+                setLoading(true);
+                setPeriod(p);
+              }}
+            >
               {p === '1h' ? '1 hour' : p === '24h' ? '24 hours' : '7 days'}
-            </Button>
+            </SegmentedControlButton>
           ))}
-        </div>
+        </SegmentedControl>
       </div>
       <p className="app-settings-field-help">
         Collected in the background every 5 seconds. History is retained for 7 days. Peaks are the highest observed
@@ -205,33 +231,20 @@ export function ResourceMonitoringPanel() {
         </div>
       ) : null}
       {!data && !error ? <p role="status">Loading resource observations…</p> : null}
-      {data?.period !== period && data ? <p role="status">Loading selected period…</p> : null}
       {data && (
         <>
-          <p className="app-settings-field-help">
-            Across all views: {data.omittedInstances > 0 ? 'At least ' : ''}
-            {recentSessionCount} monitoring session{recentSessionCount === 1 ? '' : 's'} reported within the last{' '}
-            {Math.round(data.staleAfterMs / 1000)} seconds · {data.instances.length} session
-            {data.instances.length === 1 ? '' : 's'} available for this period.
-          </p>
-          <p className="app-settings-field-help">
-            Each start of a monitored server process creates a new monitoring session. Data covers execution and
-            editor/dashboard replicas. Session counts are not live replica or Kubernetes Pod counts.
-          </p>
-          {data.omittedInstances > 0 ? (
-            <p role="status">
-              At least {data.omittedInstances} additional monitoring{' '}
-              {data.omittedInstances === 1 ? 'session is' : 'sessions are'} not shown. Totals cover only the sessions
-              included in this view.
-            </p>
-          ) : null}
           {!data.instances.length ? <p>No resource samples have arrived yet.</p> : null}
           {views.size > 0 ? (
             <div className="app-settings-field">
               <span className="app-settings-field-label">Resource view</span>
               <SegmentedControl className="resource-views" label="Resource view">
                 {[...views].map(([key, view]) => (
-                  <SegmentedControlButton key={key} selected={chosen === key} onClick={() => setSelected(key)}>
+                  <SegmentedControlButton
+                    key={key}
+                    selected={chosen === key}
+                    isLoading={chosen === key && viewLoading}
+                    onClick={() => setSelected(key)}
+                  >
                     {view.role === 'execution' ? 'Execution replicas' : 'Editor and dashboard replicas'}
                     {view.scope === 'process' ? ' — server process only (RSS)' : ''}
                   </SegmentedControlButton>
@@ -286,6 +299,23 @@ export function ResourceMonitoringPanel() {
           ) : views.size > 0 ? (
             <p role="status">Historical totals are not available yet. Latest session readings are shown below.</p>
           ) : null}
+          {data.omittedInstances > 0 ? (
+            <p role="status">
+              At least {data.omittedInstances} additional monitoring{' '}
+              {data.omittedInstances === 1 ? 'session is' : 'sessions are'} not shown. Totals cover only the sessions
+              included in this view.
+            </p>
+          ) : null}
+          <p className="app-settings-field-help">
+            Across all views: {data.omittedInstances > 0 ? 'At least ' : ''}
+            {recentSessionCount} monitoring session{recentSessionCount === 1 ? '' : 's'} reported within the last{' '}
+            {Math.round(data.staleAfterMs / 1000)} seconds · {data.instances.length} session
+            {data.instances.length === 1 ? '' : 's'} available for this period.
+          </p>
+          <p className="app-settings-field-help">
+            Each start of a monitored server process creates a new monitoring session. Data covers execution and
+            editor/dashboard replicas. Session counts are not live replica or Kubernetes Pod counts.
+          </p>
           <div className="resource-instances">
             {visibleInstances.map((i) => (
               <article className="resource-instance" key={i.identity.incarnation}>

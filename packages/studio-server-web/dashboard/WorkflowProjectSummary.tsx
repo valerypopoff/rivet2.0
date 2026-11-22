@@ -3,7 +3,10 @@ import { useEffect, useState, type FC } from 'react';
 
 import { fetchWorkflowProjectWebApps } from './workflowApi';
 import { PublicationReferencePill, useWorkflowPublicationReferences } from './WorkflowPublicationReferences';
-import { getWorkflowProjectEndpointStatus, getWorkflowProjectPublicationStatus } from './workflowProjectPublicationStatus';
+import {
+  getWorkflowProjectEndpointStatus,
+  getWorkflowProjectPublicationStatus,
+} from './workflowProjectPublicationStatus';
 import type { WorkflowProjectItem, WorkflowProjectStatus, WorkflowProjectWebAppSummary } from './types';
 
 const STATUS_LABELS: Record<WorkflowProjectStatus, string> = {
@@ -12,13 +15,14 @@ const STATUS_LABELS: Record<WorkflowProjectStatus, string> = {
   unpublished_changes: 'Unpublished changes',
 };
 
-type ActiveProjectSectionProps = {
-  activeProject: WorkflowProjectItem | null;
+type WorkflowProjectSummaryProps = {
+  project: WorkflowProjectItem;
   isCurrentlyOpen: boolean;
   hasUnsavedChanges: boolean;
   editorReady: boolean;
   onSave: () => void;
   onOpenSettings: () => void;
+  onOpenReferenceDetails: () => void;
 };
 
 type LoadedWebApps = {
@@ -51,7 +55,7 @@ function getWebAppStatusSummary(
   }
 
   // A removed draft graph can still have a live, immutable publication.
-  const visibleWebApps = webApps.filter((webApp) => !webApp.isMissingFromProject || webApp.publishedSlug != null);
+  const visibleWebApps = webApps.filter((webApp) => webApp.publishedSlug != null);
   if (visibleWebApps.length === 0) {
     return {
       label: 'Web app',
@@ -75,13 +79,14 @@ function getWebAppStatusSummary(
   };
 }
 
-export const ActiveProjectSection: FC<ActiveProjectSectionProps> = ({
-  activeProject,
+export const WorkflowProjectSummary: FC<WorkflowProjectSummaryProps> = ({
+  project: activeProject,
   isCurrentlyOpen,
   hasUnsavedChanges,
   editorReady,
   onSave,
   onOpenSettings,
+  onOpenReferenceDetails,
 }) => {
   const references = useWorkflowPublicationReferences();
   const activeProjectRelativePath = activeProject?.relativePath ?? null;
@@ -131,70 +136,60 @@ export const ActiveProjectSection: FC<ActiveProjectSectionProps> = ({
     webAppCount,
   ]);
 
-  if (!activeProject) {
-    return (
-      <div className="active-project-section active-project-section-empty">
-        <div className="active-project-placeholder">
-          Select a project <br /> to see its properties
-        </div>
-      </div>
-    );
-  }
-
   const activeProjectStatus = getWorkflowProjectEndpointStatus(activeProject, references);
   const statusLabel = STATUS_LABELS[activeProjectStatus];
+  const endpointName =
+    (activeProjectStatus === 'unpublished' ? '' : activeProject.settings.publishedEndpointName?.trim()) ||
+    activeProject.settings.endpointName.trim();
   const loadedCurrentWebApps =
     loadedWebApps?.relativePath === activeProject.relativePath ? loadedWebApps.webApps : null;
   const webAppStatusSummary = getWebAppStatusSummary(
-    Math.max(webAppCount, publishedWebAppCount),
+    publishedWebAppCount,
     loadedCurrentWebApps,
     loadedWebApps?.relativePath === activeProject.relativePath && loadedWebApps.webApps === null,
   );
   const aggregatePublicationStatus = getWorkflowProjectPublicationStatus(activeProject, references);
-  const baseName = activeProject.fileName.replace(/\.[^.]+$/, '');
-  const graphCount = activeProject.stats?.graphCount ?? 0;
-  const totalNodeCount = activeProject.stats?.totalNodeCount ?? 0;
-  const projectStatsParts = [
-    `${graphCount} ${graphCount === 1 ? 'graph' : 'graphs'}`,
-    `${totalNodeCount} ${totalNodeCount === 1 ? 'node' : 'nodes'}`,
-  ];
-  if (webAppCount > 0) {
-    projectStatsParts.push(`${webAppCount} web ${webAppCount === 1 ? 'app' : 'apps'}`);
-  }
-  const projectStatsLabel = projectStatsParts.join(', ');
+  const baseName = activeProject.name;
   const showSaveButton = isCurrentlyOpen && hasUnsavedChanges;
+  const showEndpoint = activeProjectStatus !== 'unpublished';
 
   return (
-    <div className={`active-project-section ${aggregatePublicationStatus}`}>
+    <div className={`active-project-section ${aggregatePublicationStatus}`} role="group" aria-label="Project details">
       <div className="active-project-section-content">
         <div className="active-project-details">
           <div className="active-project-name-row" title={baseName}>
             <span className="active-project-name">{baseName}</span>
           </div>
-          <div className="active-project-status-list">
-            <div className="active-project-status-line">
-              <span className="active-project-status-label">Endpoint:</span>
-              <span className={`project-status-badge ${activeProjectStatus}`}>{statusLabel}</span>
-              <PublicationReferencePill project={activeProject} />
+          {showEndpoint || webAppStatusSummary.status !== 'none' ? (
+            <div className="active-project-status-list">
+              {showEndpoint ? (
+                <>
+                  <div className="active-project-status-line">
+                    <span className="active-project-status-label">Endpoint:</span>
+                    <span className={`project-status-badge ${activeProjectStatus}`}>{statusLabel}</span>
+                    <PublicationReferencePill project={activeProject} onOpen={onOpenReferenceDetails} />
+                  </div>
+                  {endpointName ? <div className="active-project-endpoint-name">{endpointName}</div> : null}
+                </>
+              ) : null}
+              {webAppStatusSummary.status !== 'none' ? (
+                <div className="active-project-status-line">
+                  <span className="active-project-status-label">{webAppStatusSummary.label}:</span>
+                  {webAppStatusSummary.status === 'various' ? (
+                    <span className="active-project-status-text active-project-various-statuses">various statuses</span>
+                  ) : webAppStatusSummary.status === 'loading' ? (
+                    <span className="active-project-status-text">...</span>
+                  ) : webAppStatusSummary.status === 'unavailable' ? (
+                    <span className="active-project-status-text">Unavailable</span>
+                  ) : (
+                    <span className={`project-status-badge ${webAppStatusSummary.status}`}>
+                      {STATUS_LABELS[webAppStatusSummary.status]}
+                    </span>
+                  )}
+                </div>
+              ) : null}
             </div>
-            <div className="active-project-status-line">
-              <span className="active-project-status-label">{webAppStatusSummary.label}:</span>
-              {webAppStatusSummary.status === 'various' ? (
-                <span className="active-project-status-text active-project-various-statuses">various statuses</span>
-              ) : webAppStatusSummary.status === 'none' ? (
-                <span className="active-project-status-text">none</span>
-              ) : webAppStatusSummary.status === 'loading' ? (
-                <span className="active-project-status-text">...</span>
-              ) : webAppStatusSummary.status === 'unavailable' ? (
-                <span className="active-project-status-text">Unavailable</span>
-              ) : (
-                <span className={`project-status-badge ${webAppStatusSummary.status}`}>
-                  {STATUS_LABELS[webAppStatusSummary.status]}
-                </span>
-              )}
-            </div>
-          </div>
-          <div className="active-project-stats">{projectStatsLabel}</div>
+          ) : null}
           <div className="active-project-actions-row">
             <Button
               appearance="subtle"

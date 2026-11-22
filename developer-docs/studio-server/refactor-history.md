@@ -4,6 +4,33 @@ This document records intentional architecture and cleanup changes that future m
 
 It is not a changelog. Keep entries focused on why a refactor happened, which ownership boundary changed, and which verification paths should be kept alive.
 
+## 2026-11-22 - Managed Recording Retention Ownership
+
+`managed/recording-retention.ts` owns the existing PostgreSQL retention task,
+protected-evidence parsing and independent JavaScript policy reference.
+`managed/recordings.ts` composes the callback and preserves its selector export,
+task registration, startup recovery gate and public cleanup method. Scheduling,
+leases, outbox draining and shared-snapshot protection retain their owners.
+
+The SQL and transaction body were moved unchanged. Current settings are read per
+pass; lease validation, metadata deletion and outbox writes commit together.
+Input-cache invalidation retains its storage-owner namespace and pre-commit
+placement. Recovery becomes enabled when startup maintenance settles, including
+logged failures; offline-mode suppression remains in the backend.
+
+The adjacent ownership fix validates the current pass lease inside each outbox
+claim. An expired or replaced owner leaves new work for a later owner instead of
+claiming it. Already issued object-store calls keep their per-key claim fencing.
+
+The real PostgreSQL characterization ran before extraction and after it. It
+reuses the existing statistics integration database, covering conditional policy
+paths, protected evidence, bounded tied batches and failure after real enqueue.
+It also covers blocked-intent reopening and expiry with a real lease successor.
+Keep those checks alongside service lifecycle/cache tests and the independent
+PostgreSQL/MinIO recovery/shared-snapshot suite. The
+[extraction record](managed-recording-retention-refactor-plan.md) records the
+scope and final validation boundaries.
+
 ## 2026-11-15 - Project-tree Bundle Action Ownership
 
 `useWorkflowBundleActions.ts` collects bundle modal state, conversion and

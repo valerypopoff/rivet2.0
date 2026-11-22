@@ -34,17 +34,28 @@ export async function desktopBuildEvidence({
   if (runId || runAttempt) assert.ok(positiveId(runId) && positiveId(runAttempt), 'Pinned Build run/attempt required.');
   const branch = ref.slice('refs/heads/'.length);
   const deadline = Date.now() + maxWaitMs;
-  const get = async (endpoint) => {
-    const response = await fetch(new URL(`repos/${repository}/${endpoint}`, base), {
+  let pendingArtifact;
+  const request = (endpoint, redirect = 'error') =>
+    fetch(new URL(`repos/${repository}/${endpoint}`, base), {
       headers: {
         authorization: `Bearer ${token}`,
         accept: 'application/vnd.github+json',
         'X-GitHub-Api-Version': '2022-11-28',
       },
-      redirect: 'error',
-      signal: AbortSignal.timeout(Math.max(1, Math.min(requestTimeoutMs, deadline - Date.now()))),
+      redirect,
+      signal: AbortSignal.timeout(
+        Math.max(
+          1,
+          Math.min(requestTimeoutMs, deadline - Date.now(), (pendingArtifact?.deadline ?? deadline) - Date.now()),
+        ),
+      ),
     });
-    if (!response.ok) throw Error(`Build evidence API returned HTTP ${response.status}; refusing release.`);
+  const get = async (endpoint) => {
+    const response = await request(endpoint);
+    if (!response.ok) {
+      await response.body?.cancel();
+      throw Error(`Build evidence API returned HTTP ${response.status}; refusing release.`);
+    }
     return response.json();
   };
   const ownsRun = (run) =>
@@ -60,6 +71,8 @@ export async function desktopBuildEvidence({
     positiveId(run.run_attempt);
   let pinned;
   while (Date.now() < deadline) {
+    if (pendingArtifact && Date.now() >= pendingArtifact.deadline)
+      throw Error('Timed out waiting for the exact Build artifact download; refusing release.');
     if (!pinned) {
       if (runId) pinned = { id: Number(runId), attempt: Number(runAttempt) };
       else {
@@ -101,12 +114,20 @@ export async function desktopBuildEvidence({
               owner?.head_repository_id === run.repository.id,
             'Desktop artifact ownership does not match the pinned Build.',
           );
-          return { runId: pinned.id, runAttempt: pinned.attempt, artifactId: Number(artifact.id) };
-        }
-        if (run.status === 'completed') throw Error('The exact Build has no desktop artifact; rerun Build.');
+          pendingArtifact ??= { id: Number(artifact.id), deadline: Math.min(deadline, Date.now() + 60_000) };
+          assert.equal(Number(artifact.id), pendingArtifact.id, 'Build artifact changed while awaiting download.');
+          // Listing visibility can precede ZIP availability. Check the exact
+          // download endpoint without following its signed storage redirect.
+          const download = await request(`actions/artifacts/${pendingArtifact.id}/zip`, 'manual');
+          await download.body?.cancel();
+          if (download.status === 302 && download.headers.get('location'))
+            return { runId: pinned.id, runAttempt: pinned.attempt, artifactId: pendingArtifact.id };
+          if (download.status !== 404)
+            throw Error(`Build artifact download API returned HTTP ${download.status}; refusing release.`);
+        } else if (run.status === 'completed') throw Error('The exact Build has no desktop artifact; rerun Build.');
       }
     }
-    await sleep(Math.min(pollMs, Math.max(1, deadline - Date.now())));
+    await sleep(Math.min(pollMs, Math.max(1, (pendingArtifact?.deadline ?? deadline) - Date.now())));
   }
   throw Error('Timed out waiting for exact Build evidence; no release is authorized. Rerun after Build settles.');
 }

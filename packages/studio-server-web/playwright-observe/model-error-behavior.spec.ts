@@ -6,7 +6,12 @@ import {
   serializeProject,
   type Project,
 } from '@valerypopoff/rivet2-core';
-import { authenticateIfNeeded, mockHostedEditorBootstrap, waitForDashboardReady } from './helpers/hostedEditorObserve';
+import {
+  authenticateIfNeeded,
+  mockHostedEditorBootstrap,
+  openProjectContextMenu,
+  waitForDashboardReady,
+} from './helpers/hostedEditorObserve';
 
 test.use({ actionTimeout: 15_000, navigationTimeout: 30_000 });
 
@@ -153,6 +158,7 @@ for (const type of ['llmChatV2', 'classifierEvaluate'] as const) {
     await editor.getByText('Throw exception on non-2XX status code', { exact: true }).click();
     await expect(card.getByText('Run failed', { exact: true })).toHaveCount(0);
     await editor.getByText('Catch all exceptions', { exact: true }).click();
+    await openProjectContextMenu(page);
     await page.locator('.active-project-save-button').click();
     await expect.poll(() => saved.length).toBe(1);
     await expect(editor.locator('.projects-container .project.active')).not.toHaveClass(/\bhas-unsaved-changes\b/);

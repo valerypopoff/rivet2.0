@@ -1,6 +1,10 @@
 import { expect, test } from '@playwright/test';
 import { deserializeProject, serializeProject, type NodePrefabId, type Project } from '@valerypopoff/rivet2-core';
-import { mockHostedEditorBootstrap, waitForDashboardReady } from './helpers/hostedEditorObserve';
+import {
+  mockHostedEditorBootstrap,
+  openProjectContextMenu,
+  waitForDashboardReady,
+} from './helpers/hostedEditorObserve';
 
 for (const type of ['object', 'codeNew']) {
   test(`${type}: library source editing is isolated from graphs, other sources and cloned projects`, async ({
@@ -104,6 +108,7 @@ for (const type of ['object', 'codeNew']) {
     await expect(view).toContainText('A-second-edited');
     await openSource('shared-node');
     await expect(view).toContainText('A-first-edited');
+    await openProjectContextMenu(page);
     await page.locator('.active-project-save-button').click();
     await expect.poll(() => saves.length).toBe(1);
     const a = saves[0]!;
@@ -116,6 +121,7 @@ for (const type of ['object', 'codeNew']) {
     await tab('B').click();
     await expect(view).toContainText('B-first-edited');
     await expect(tab('B')).toHaveClass(/\bhas-unsaved-changes\b/);
+    await openProjectContextMenu(page);
     await page.locator('.active-project-save-button').click();
     await expect.poll(() => saves.length).toBe(2);
     expect(saves[1]!.nodePrefabs![firstId]!.sourceNode.data).toMatchObject({ [field]: value('B-first-edited') });
@@ -317,6 +323,7 @@ for (const fixture of cases) {
     await frame.getByText('(Current)', { exact: true }).click();
     await expect(view).toContainText('original-A');
     await edit(fixture.a);
+    await openProjectContextMenu(page);
     await page.locator('.active-project-save-button').click();
     await expect.poll(() => saves.find((entry) => entry.path === projects[0]!.absolutePath)?.value).toBe(fixture.a);
     await expect(tab('A')).not.toHaveClass(/\bhas-unsaved-changes\b/);
@@ -328,6 +335,7 @@ for (const fixture of cases) {
       await expect(frame.getByRole('button', { name: 'Edit node title', exact: true })).toHaveText('Edited B node');
       await expect(frame.locator('.description-read-content')).toHaveText('Edited B description');
     }
+    await openProjectContextMenu(page);
     await page.locator('.active-project-save-button').click();
     await expect.poll(() => saves.find((entry) => entry.path === projects[1]!.absolutePath)?.value).toBe(blurredB);
     if (fixture.type === 'codeNew') {
@@ -461,6 +469,7 @@ test('JSON object drafts stay with their owner and formatting acknowledgements p
   // A canonical pretty-printed object acknowledgement must not reformat the
   // user's compact text or reset their cursor on every valid keystroke.
   await expect(view).toHaveText('{"marker":"A"}');
+  await openProjectContextMenu(page);
   await page.locator('.active-project-save-button').click();
   await expect.poll(() => savedMetadata).toEqual({ marker: 'A' });
   await tab('B').click();

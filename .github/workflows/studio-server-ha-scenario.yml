@@ -1,0 +1,311 @@
+name: Managed HA scenario
+on:
+  workflow_call:
+    inputs:
+      scenario:
+        required: true
+        type: string
+      mode:
+        required: true
+        type: string
+      run_managed_disruption:
+        required: true
+        type: boolean
+    outputs:
+      outcome:
+        description: Proof or clean pre-admission deferral, only after cleanup
+        value: ${{ jobs.scenario.outputs.outcome }}
+permissions:
+  actions: read
+  contents: read
+  packages: read
+jobs:
+  scenario:
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.mode == 'early' && 95 || 75 }}
+    env:
+      SOURCE_TAG: candidate-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+      CANDIDATE_RELEASE_MANIFEST: artifacts/studio-server-release-manifest/candidate-release-manifest.json
+      RIVET_HA_SCENARIO: ${{ inputs.scenario }}
+      RIVET_HA_CLUSTER_RECEIPT: artifacts/ha-cluster-receipt.json
+      KUBECONFIG: ${{ github.workspace }}/artifacts/ha-kind-kubeconfig
+      RIVET_CI_BROWSER_IMAGE: mcr.microsoft.com/playwright:v1.62.1-noble@sha256:dcc5531e97840b9b5e794f2814476b21571c5124a3fca2267d73041f56e7580e
+      RIVET_CI_PLAYWRIGHT_VERSION: 1.62.1
+      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
+      PW_TEST_CONNECT_WS_ENDPOINT: ws://127.0.0.1:3100/
+      PW_TEST_CONNECT_EXPOSE_NETWORK: <loopback>
+      IMAGE_NAMESPACE: ghcr.io/valerypopoff/rivet2.0-studio-server
+      RIVET_HA_MODE: ${{ inputs.mode }}
+      RIVET_HA_PHASE: prepare
+      RIVET_HA_DEFERRED: "false"
+      RIVET_HA_CONTEXT: ${{ inputs.scenario == 'upgrade' && 'kind-rivet-managed-release' || inputs.scenario ==
+        'lostAcknowledgement' && 'kind-rivet-ha-lost-acknowledgement' || 'kind-rivet-ha-lease-loss' }}
+    steps:
+      - name: Start bounded HA preparation
+        shell: bash
+        run: |-
+          set -euo pipefail
+          case "$RIVET_HA_MODE:$RIVET_HA_SCENARIO" in
+            early:upgrade|after-gates:upgrade|after-gates:lostAcknowledgement|after-gates:leaseLoss) ;;
+            *) echo 'Invalid HA scenario/mode'; exit 1 ;;
+          esac
+          echo "RIVET_HA_PREP_DEADLINE_MS=$(( $(date +%s%3N) + 600000 ))" >> "$GITHUB_ENV"
+      - name: Check Out Repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        if: ${{ env.RIVET_HA_DEFERRED != 'true' }}
+        timeout-minutes: 5
+      - name: Set Up Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24
+        if: ${{ env.RIVET_HA_DEFERRED != 'true' }}
+        timeout-minutes: 3
+      - name: Prepare disposable runner disk space
+        timeout-minutes: 5
+        env:
+          RIVET_HA_RUNNER_ENVIRONMENT: ${{ runner.environment }}
+        run: node deploy/studio-server/scripts/prepare-ha-kind-runner.mjs
+        if: ${{ env.RIVET_HA_DEFERRED != 'true' }}
+      - name: Install Workspace Dependencies
+        run: |
+          corepack enable
+          yarn install --immutable
+        if: ${{ env.RIVET_HA_DEFERRED != 'true' }}
+      - name: Prepare browser runtime
+        if: ${{ env.RIVET_HA_DEFERRED != 'true' && (inputs.scenario == 'upgrade') }}
+        id: browser-runtime
+        timeout-minutes: 4
+        run: |
+          node scripts/ci/pull-docker-image.mjs "$RIVET_CI_BROWSER_IMAGE"
+          container_id=$(docker create --pull=never --init --ipc=host --publish 127.0.0.1:3100:3100 \
+            --label "rivet.ci.browser=$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-ha-${{ inputs.scenario }}" \
+            --mount "type=bind,source=$GITHUB_WORKSPACE,target=/workspace,readonly" \
+            --workdir /workspace --env PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 \
+            "$RIVET_CI_BROWSER_IMAGE" node .yarn/releases/yarn-4.17.1.cjs \
+            workspace @valerypopoff/rivet-studio-server-web exec playwright run-server \
+            --host 0.0.0.0 --port 3100)
+          [[ "$container_id" =~ ^[a-f0-9]{64}$ ]]
+          echo "container_id=$container_id" >> "$GITHUB_OUTPUT"
+          docker start "$container_id"
+          ready=false
+          for attempt in {1..30}; do
+            if docker logs "$container_id" 2>&1 | grep -Fq 'Listening on ws://0.0.0.0:3100/'; then
+              ready=true
+              break
+            fi
+            test "$(docker inspect --format '{{.State.Running}}' "$container_id")" = true
+            sleep 1
+          done
+          docker logs "$container_id"
+          test "$ready" = true
+          yarn node scripts/ci/verify-browser-environment.mjs
+      - name: Set Up Kubernetes Tools
+        run: yarn studio-server:setup:k8s-tools
+        if: ${{ env.RIVET_HA_DEFERRED != 'true' }}
+      - name: Install Kind
+        run: |
+          set -euo pipefail
+          go install sigs.k8s.io/kind@v0.27.0
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+        if: ${{ env.RIVET_HA_DEFERRED != 'true' }}
+      - name: Create Disposable Kind Cluster
+        id: kind-cluster
+        run: |
+          set -euo pipefail
+          yarn node deploy/studio-server/scripts/ha-kind-cluster.mjs create
+          kubectl --context '${{ env.RIVET_HA_CONTEXT }}' cluster-info
+        if: ${{ env.RIVET_HA_DEFERRED != 'true' }}
+      - name: Verify hard-spread scheduling with tainted nodes
+        if: ${{ env.RIVET_HA_DEFERRED != 'true' && (inputs.scenario == 'upgrade') }}
+        env:
+          RIVET_HA_SCHEDULING_CONTEXT: kind-rivet-managed-release
+          RIVET_HA_SCHEDULING_ARTIFACTS: artifacts/ha-scheduling
+        run: yarn node deploy/studio-server/scripts/verify-ha-scheduling.mjs
+      - name: Admit exact-run candidate
+        id: admission
+        if: ${{ inputs.mode == 'early' && env.RIVET_HA_DEFERRED != 'true' }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RIVET_HA_PHASE: admission
+        run: node scripts/ci/ha-candidate-admission.mjs wait
+      - name: Log In to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+        if: ${{ env.RIVET_HA_DEFERRED != 'true' }}
+        env:
+          RIVET_HA_PHASE: candidate
+      - name: Download candidate release manifest
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: studio-server-candidate-release-manifest-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/studio-server-release-manifest
+        if: ${{ inputs.mode == 'after-gates' && env.RIVET_HA_DEFERRED != 'true' }}
+        env:
+          RIVET_HA_PHASE: candidate
+      - name: Download admitted candidate release manifest
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          artifact-ids: ${{ steps.admission.outputs.artifact_id }}
+          path: artifacts/studio-server-release-manifest
+          merge-multiple: true
+        if: ${{ inputs.mode == 'early' && env.RIVET_HA_DEFERRED != 'true' }}
+        env:
+          RIVET_HA_PHASE: candidate
+      - name: Validate candidate before use
+        if: ${{ env.RIVET_HA_DEFERRED != 'true' }}
+        env:
+          RIVET_HA_PHASE: candidate
+        run: yarn node scripts/ci/ha-candidate-admission.mjs validate "$CANDIDATE_RELEASE_MANIFEST"
+      - name: Resolve manifest-bound predecessor API image
+        run: >
+          set -euo pipefail
+
+          if jq -e '.lineage.predecessor != null' "$CANDIDATE_RELEASE_MANIFEST" >/dev/null; then
+            repository="$(jq -er '.lineage.predecessor.images.api.repository' "$CANDIDATE_RELEASE_MANIFEST")"
+            digest="$(jq -er '.lineage.predecessor.images.api.digest' "$CANDIDATE_RELEASE_MANIFEST")"
+            schema="$(jq -er '.lineage.predecessor.managedWorkflowSchemaVersion | select(type == "number" and . >= 1 and floor == .)' "$CANDIDATE_RELEASE_MANIFEST")"
+            if [[ ! "$digest" =~ ^sha256:[a-f0-9]{64}$ ]]; then
+              echo "::error::Candidate predecessor API digest is invalid: $digest"
+              exit 1
+            fi
+            {
+              echo "RIVET_K8S_RELEASE_GATE_PREVIOUS_API_IMAGE_REPOSITORY=$repository"
+              echo "RIVET_K8S_RELEASE_GATE_PREVIOUS_API_IMAGE_DIGEST=$digest"
+              echo "RIVET_K8S_RELEASE_GATE_PREVIOUS_API_SCHEMA_VERSION=$schema"
+            } >> "$GITHUB_ENV"
+            echo "Using exact predecessor API image $repository@$digest for schema compatibility."
+          else
+            echo "::notice::The bootstrap candidate has no verified predecessor to exercise."
+          fi
+        if: ${{ env.RIVET_HA_DEFERRED != 'true' }}
+        env:
+          RIVET_HA_PHASE: candidate
+      - name: Resolve Candidate Image Digests
+        run: >
+          set -euo pipefail
+
+          for service in proxy web api executor; do
+            image="${IMAGE_NAMESPACE}/${service}:${SOURCE_TAG}"
+            digest="$(docker buildx imagetools inspect "$image" --format '{{.Manifest.Digest}}')"
+            if [[ ! "$digest" =~ ^sha256:[a-f0-9]{64}$ ]]; then
+              echo "::error::Could not resolve immutable digest for $image: $digest"
+              exit 1
+            fi
+            test "$digest" = "$(jq -er --arg service "$service" '.images[$service].digest' "$CANDIDATE_RELEASE_MANIFEST")"
+            test "${IMAGE_NAMESPACE}/$service" = "$(jq -er --arg service "$service" '.images[$service].repository' "$CANDIDATE_RELEASE_MANIFEST")"
+            upper_service="$(tr '[:lower:]' '[:upper:]' <<< "$service")"
+            echo "RIVET_K8S_RELEASE_GATE_${upper_service}_IMAGE_REPOSITORY=${IMAGE_NAMESPACE}/${service}" >> "$GITHUB_ENV"
+            echo "RIVET_K8S_RELEASE_GATE_${upper_service}_IMAGE_DIGEST=$digest" >> "$GITHUB_ENV"
+          done
+        if: ${{ env.RIVET_HA_DEFERRED != 'true' }}
+        env:
+          RIVET_HA_PHASE: candidate
+      - name: Run Managed Kubernetes Gate
+        if: ${{ env.RIVET_HA_DEFERRED != 'true' && (inputs.scenario == 'lostAcknowledgement') }}
+        env:
+          RIVET_K8S_RELEASE_GATE_CONTEXT: ${{ env.RIVET_HA_CONTEXT }}
+          RIVET_K8S_RELEASE_GATE_ALLOW_CONTEXT: ${{ env.RIVET_HA_CONTEXT }}
+          RIVET_K8S_RELEASE_GATE_REGISTRY_SERVER: ghcr.io
+          RIVET_K8S_RELEASE_GATE_REGISTRY_USERNAME: ${{ github.actor }}
+          RIVET_K8S_RELEASE_GATE_REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+          RIVET_HA_PHASE: candidate
+        run: |
+          set -euo pipefail
+          gate_script=studio-server:verify:kubernetes:managed-live
+          if [[ "${{ inputs.run_managed_disruption }}" == "true" ]]; then
+            gate_script=studio-server:verify:kubernetes:managed-disruption
+          fi
+          yarn "$gate_script"
+      - name: Run HA Kubernetes Gate
+        env:
+          RIVET_K8S_RELEASE_GATE_CONTEXT: ${{ env.RIVET_HA_CONTEXT }}
+          RIVET_K8S_RELEASE_GATE_ALLOW_CONTEXT: ${{ env.RIVET_HA_CONTEXT }}
+          RIVET_K8S_RELEASE_GATE_NAMESPACE: rivet-ha-release
+          RIVET_K8S_RELEASE_GATE_RELEASE: rivet-ha-release
+          RIVET_K8S_RELEASE_GATE_ARTIFACTS_DIR: artifacts/kubernetes-ha-release-gate
+          RIVET_K8S_RELEASE_GATE_REGISTRY_SERVER: ghcr.io
+          RIVET_K8S_RELEASE_GATE_REGISTRY_USERNAME: ${{ github.actor }}
+          RIVET_K8S_RELEASE_GATE_REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+          RIVET_HA_CANDIDATE_MANIFEST: artifacts/studio-server-release-manifest/candidate-release-manifest.json
+          RIVET_HA_PHASE: candidate
+        run: |
+          set -euo pipefail
+          if jq -e '.lineage.predecessor != null' "$CANDIDATE_RELEASE_MANIFEST" >/dev/null; then
+            digest="$(jq -er '.lineage.predecessor.manifestDigest' "$CANDIDATE_RELEASE_MANIFEST")"
+            export RIVET_HA_PREDECESSOR_MANIFEST=artifacts/studio-server-release-manifest/ha-predecessor.json
+            node deploy/studio-server/scripts/release-manifest-oci.mjs pull \
+              --reference "${IMAGE_NAMESPACE}/release-manifest:manifest-${digest#sha256:}" \
+              --output "$RIVET_HA_PREDECESSOR_MANIFEST"
+          fi
+          yarn node deploy/studio-server/scripts/kubernetes-ha-release-gate.mjs scenario "$RIVET_HA_SCENARIO"
+        if: ${{ env.RIVET_HA_DEFERRED != 'true' }}
+        id: ha-test
+      - name: Upload HA Scenario Observations
+        uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808
+        with:
+          name: studio-server-ha-scenario-${{ inputs.scenario }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/kubernetes-ha-release-gate/ha-scenario-report.json
+          if-no-files-found: error
+          retention-days: 14
+        if: ${{ env.RIVET_HA_DEFERRED != 'true' }}
+        env:
+          RIVET_HA_PHASE: candidate
+      - name: Stop owned browser runtime
+        if: ${{ always() && steps.browser-runtime.outputs.container_id != '' }}
+        env:
+          CONTAINER_ID: ${{ steps.browser-runtime.outputs.container_id }}
+          EXPECTED_OWNER: ${{ github.run_id }}-${{ github.run_attempt }}-ha-${{ inputs.scenario }}
+          RIVET_HA_PHASE: cleanup
+        run: >
+          [[ "$CONTAINER_ID" =~ ^[a-f0-9]{64}$ ]]
+
+          test "$(docker inspect --format '{{ index .Config.Labels "rivet.ci.browser" }}' "$CONTAINER_ID")" =
+          "$EXPECTED_OWNER"
+
+          docker rm -f "$CONTAINER_ID"
+        timeout-minutes: 5
+      - name: Delete Disposable Kind Cluster
+        if: ${{ always() && steps.kind-cluster.outcome != 'skipped' }}
+        run: yarn node deploy/studio-server/scripts/ha-kind-cluster.mjs cleanup
+        env:
+          RIVET_HA_PHASE: cleanup
+        timeout-minutes: 5
+      - name: Upload Managed Kubernetes Gate Artifacts
+        if: ${{ always() }}
+        uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808
+        with:
+          name: managed-kubernetes-release-gate-${{ inputs.scenario }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            artifacts/kubernetes-managed-release-gate
+            artifacts/kubernetes-ha-release-gate
+            artifacts/ha-scheduling
+            artifacts/ha-cluster-receipt.json
+          if-no-files-found: warn
+          retention-days: 14
+        env:
+          RIVET_HA_PHASE: cleanup
+        timeout-minutes: 5
+      - name: Report completed HA path
+        id: result
+        shell: bash
+        env:
+          HA_TEST_OUTCOME: ${{ steps.ha-test.outcome }}
+        run: |-
+          set -euo pipefail
+          if [[ "$RIVET_HA_DEFERRED" == true ]]; then
+            test "$RIVET_HA_MODE" = early
+            test "$HA_TEST_OUTCOME" = skipped
+            echo 'outcome=deferred' >> "$GITHUB_OUTPUT"
+          else
+            test "$HA_TEST_OUTCOME" = success
+            echo 'outcome=proved' >> "$GITHUB_OUTPUT"
+          fi
+    name: HA ${{ inputs.scenario }} (${{ inputs.mode }})
+    outputs:
+      outcome: ${{ steps.result.outputs.outcome }}
+    defaults:
+      run:
+        shell: node scripts/ci/ha-scenario-run.mjs {0}

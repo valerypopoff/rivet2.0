@@ -5,6 +5,162 @@ gates or reusing an unverified build from another commit. Standard GitHub-hosted
 runners for public repositories are free; these changes need no paid runner.
 Branch targeting, signing and protected deployment safeguards remain unchanged.
 
+Measure elapsed time from the push to the last required workflow completion,
+including runner queues and prerequisites. Parallel job durations must not be
+added together. Local compiler timings establish cache behavior, not an
+end-to-end CI speedup; compare the hosted critical path before making that claim.
+For reference, main Build Images `44965926486` took 33m36s: 9m38s before the
+longest HA lane, 22m16s in that lane and 1m42s for final assembly/promotion.
+Its other HA lanes took about 17 minutes each. Optimizing only the longest lane
+therefore saves at most about five minutes before another becomes critical.
+Keep the full real-time routing-withdrawal, accepted-work and recovery proofs;
+look for independent preparation and duplicated work around them, rather than
+reducing their protection windows or assuming a faster compiler halves the run.
+
+## Current priorities: November 22, 2026
+
+Use this ranking for new performance work; later sections retain earlier evidence
+and procedures, including proposals that have since been measured or superseded.
+
+The baseline [full verification](https://github.com/valerypopoff/rivet2.0/actions/runs/45048439797)
+passed all 19 jobs and 396 browser cases in **18m46s**. Its managed-storage lane
+took **13m25s**, including **8m07s** in VM-to-managed migration verification.
+The slowest browser job took **10m29s**; the gateway lane took **9m50s**. These
+are parallel job times, not durations to add together. The source/build path
+finished about 5m12s after the workflow started.
+
+**Implemented and verified on GitHub: the complete VM-migration integration suite
+has its own required parallel job, alongside the other managed-storage checks.**
+It owns its temporary roots, PostgreSQL and MinIO containers, environment and
+cleanup. It does not require the preceding managed tests' data. Preserve the existing serial order
+inside `workflow-storage-migration-managed.integration.ts`: its negative cases,
+idempotent retries, source mutations, rollback checks and supervised restores
+deliberately share fixture state.
+
+`studio-server-verify.yml` now has four deployment-contract lanes: `managed`,
+`migration`, `deployment` and `gateway`, with up to four separate standard runners.
+They retain the same source/build prerequisites, verified exact-commit artifact,
+20-minute job limits and fail-fast-disabled behavior. The existing final status
+requires the entire matrix, including the migration job.
+
+The migration job checks its compiled schema CLI, serving API and executor bundle
+before running the unchanged, complete integration entry through the pinned Yarn
+CLI. This avoids the redundant API rebuild in `test:migration-managed`. That
+ordinary local build-and-test command remains unchanged; so do the fixture's
+fresh child processes, internal ordering, resource limits and cleanup. Missing
+or empty compiled artifacts fail before test infrastructure starts. The reduced
+`--supervised-restore-only` feedback mode is not used by CI.
+
+`assertParallelMigrationVerification` guards lane membership, concurrency,
+artifact-verification ordering, exactly one complete migration invocation and
+the final required result. Regression mutations cover omitted prerequisites,
+serialization, skipped/filtered/duplicated commands and ignored failures.
+
+Local validation passed the unchanged complete migration suite through the new
+CI command, including both supervised restores. The independent PostgreSQL
+schema suite also passed while migration was running. Missing/empty runtime
+artifacts and failed/cancelled/skipped final results were rejected. All ten
+workflow-policy tests, `yarn test:style` and actionlint passed; the fixture cleaned
+up its containers without changing the existing local development stack.
+
+Hosted validation on `d10faabc9` passed both workflows on their first attempts:
+20 Studio Server jobs, 17 Build jobs and all 396 browser cases. The migration
+log confirms the complete copy/retry/verification fixture and both supervised
+restore variants; CI did not use the reduced feedback mode.
+
+| Workflow | Previous full run | After the split | Observed reduction |
+| --- | --- | --- | --- |
+| Studio Server verification | [18m46s](https://github.com/valerypopoff/rivet2.0/actions/runs/45048439797) | [16m10s](https://github.com/valerypopoff/rivet2.0/actions/runs/45052324511) | 2m36s (13.9%) |
+| Build | [10m17s](https://github.com/valerypopoff/rivet2.0/actions/runs/45048208040) | [9m33s](https://github.com/valerypopoff/rivet2.0/actions/runs/45052324608) | 44s (7.1%) |
+
+These timings run from workflow creation through the last job's completion,
+including setup, artifact transfers and runner queueing. The Studio baseline
+was a full manual run on `0c4461315`; its preceding filtered push skipped heavy
+verification and is not a comparable baseline. This is one before/after pair,
+not a guaranteed saving on every push. Build was not the optimization target;
+its timing difference can reflect runner/cache variation.
+
+The managed/migration section fell from 13m25s to 7m55s, including the new
+migration job's 37-second later start. Managed checks took 3m40s; the separate
+migration job took 7m18s, with 6m42s in the complete integration step. The slowest
+browser job now took 10m40s and determined the overall finish. Further migration
+optimization alone will not shorten that browser-bound path. Profile the
+remaining browser work before increasing its runner count.
+
+Summed Studio job time fell from 109m21s to 101m50s; Build increased from 41m11s
+to 45m17s. These sums describe concurrent runner work, not wall-clock durations
+or billed minutes. Preserve full coverage and compare both measures in future
+experiments. Exact job metadata and migration logs are in ignored
+`artifacts/ci-migration-split-20261122/hosted/`.
+
+The migration harness also repeatedly launches the CLI through Yarn/tsx, and
+logs show roughly ten-second intervals between many child results. That is a
+profiling lead, not proof that TypeScript translation dominates. A small local
+Windows invalid-command startup probe measured median source startup **7.74s**
+and compiled startup **8.56s** (three launches each). Simply switching to compiled
+JavaScript has **no demonstrated startup benefit**; do not count it as a saving
+or replace process-isolation tests with in-process calls. Profile imports and
+startup separately if that work is pursued later. Evidence is in ignored
+`artifacts/ci-critical-path-20261122/`.
+
+The [Intel-on-Apple-Silicon experiment](https://github.com/valerypopoff/rivet2.0/actions/runs/45047306470)
+passed signing, notarization and native Intel checks with matched Rust/Xcode/SDK
+versions. Its warm rebuild was 108s versus 170s on Intel, but the additional
+native verification cost 203s. Removing intentional warm-ups gives an estimated
+checked path of 8m02s versus 7m43s, excluding queueing. Keep the normal native
+release runners; this did not establish an overall warm-path speedup.
+
+For **main**, `Build Images` invokes this same verification with `force: true`,
+so it can benefit from a shorter verification lane. However, the reviewed main
+33m36s baseline used source `9e0506a39`, before the current develop optimizations;
+its 22m16s HA lane was longer than verification. Do not claim a three-minute
+main workflow saving from this split. At the next approved merge, measure the
+updated image/HA path first, then target independent cluster/image preparation
+and repeated setup if they remain dominant. Preserve actual drain, routing and
+recovery observation windows. Bundler replacement and additional browser
+parallelism are lower priorities until a current critical path justifies them.
+
+The next main optimization is implemented locally in
+[earlier HA CI preparation](ha-ci-early-preparation-plan.md). The shared
+`studio-server-ha-scenario.yml` keeps one upgrade proof and both recovery proofs.
+Only the upgrade runner can prepare early, with exact-run admission and clean
+fallback before admission; recovery runners keep their native prerequisites.
+`workflow_dispatch.early_ha_preparation` defaults to false, so normal runs retain
+the gated schedule. Enable the default only after measuring the complete path
+and sibling queues. No hosted speedup or full exact-image certificate is claimed.
+
+Admission has a ten-minute opportunity distinct from the five-minute setup-command
+cap. It verifies the current run and attempt again after pinned ZIP propagation;
+failed gates, authorization failures and post-admission errors block qualification.
+Server-directed backoff cannot extend the opportunity. Pre-admission deferral
+requires owned cleanup; skipped cluster creation needs no cluster cleanup, while
+attempted creation always does. No HA test or uncertain operation is replayed.
+
+Local validation on November 22 passed all 922 release-source tests and all 25
+final focused admission/policy tests in a disposable four-CPU Linux container.
+The independent HA evidence and retained-application checks passed 60 cases.
+Actionlint, workflow policy, formatting, root and Studio Server test-style gates,
+file-tree checks and documentation-link checks passed. The publication-identity
+fixture freezes its clock so manifest work cannot
+age its synthetic janitor heartbeat. No application runtime code changed.
+
+The admission and workflow-policy test cleanup removed 121 lines. Policy mutations
+use the actual YAML; producer expectations remain independent of the implementation.
+Transport stalls, authorization-body failures, ZIP propagation, rerun races,
+deadlines and real child cancellation retain coverage. Local mutation checks
+rejected omission of each of the five required producer jobs. These checks do not
+replace full image-backed Kind certification or queue-inclusive hosted timing
+trials; both remain required before default activation.
+
+The first develop pushes exposed stale image/launcher (`45060256869`) and
+repository-structure (`45060581836`) guards: they searched the caller for commands
+and per-scenario artifact names moved into the reusable workflow. Both now check
+the call and their original guarantees in the owning workflow, including the
+`inputs.scenario`/run/attempt artifact binding. Their source restrictions cover
+caller and callee. Run Build's separate `proxy-image-contract.test.ts` command and
+`yarn studio-server:verify:repo-structure` alongside root style/source checks when
+extracting workflow steps; those checks do not select these independent guards.
+
 ## Local pre-push recurrence checklist
 
 Keep repeatable CI findings in `developer-docs/studio-server/ci-pre-push.local.md`.
@@ -19,6 +175,18 @@ to distinguish real failures from expected negative-test errors, downstream
 refusals and unstarted jobs. This is a local preparation aid, not another CI gate
 or cloud-test requirement.
 
+For workflow YAML changes, also run [actionlint](https://github.com/rhysd/actionlint)
+on the changed files before pushing, alongside the repository's workflow policy
+check. YAML parsing does not validate GitHub expression-context availability.
+The cache-isolation repair in `3c8dbba1a` passed the YAML/policy checks but GitHub
+rejected `runner.temp` in job-level `env`. Local actionlint 1.7.12 reproduced the
+same error. Resolve `$RUNNER_TEMP` inside a step and export through `$GITHUB_ENV`;
+do not rely on a step-only expression context while defining the job.
+For the expression/type check alone, use `actionlint -shellcheck= -pyflakes=`
+with the changed workflow paths. Keep shell/Python validation separate when
+those bodies change; disabling their external lint integrations does not disable
+GitHub-expression checks.
+
 The pinned-Yarn API shard smoke test accepts both TAP and spec-reporter summary
 prefixes. Node's default reporter can vary with the output stream; a successful
 selected shard must report a nonzero passing count, zero failures and exit zero,
@@ -32,6 +200,40 @@ current findings. A failed security gate also blocks exact-commit desktop
 publication after successful compilation. The developer release tracks
 `security/dependency-audit-exceptions.json` in its push paths so an audit-policy
 repair can start publication for the corrected commit.
+
+Refresh Rust's audit too, even for CI-only changes. The November 22 push found
+new `RUSTSEC-2026-0592` in the unchanged desktop lockfile: `url` through 2.5.8
+can overflow the process stack while resolving nested `blob:` origins. The
+lockfile now selects patched `url` 2.5.9 and its required `form_urlencoded` 1.2.3.
+No advisory exception was added. Validate both the unfiltered audit through
+`check-rust-audit-exceptions.mjs --audit-report` and the configured
+`cargo audit --no-fetch` from `packages/app/src-tauri`; a policy-only check does
+not detect new findings in the live database.
+
+After moving a file imported by the Studio Server consolidation, update its
+reviewed successor in `verify-migration-ledger.mjs`, regenerate
+`source-file-ledger.json` and run `studio-server:verify:migration-ledger`.
+The November 22 context-menu move keeps project-summary behavior in
+`WorkflowProjectSummary.tsx`; its ledger entry retains the original
+`ActiveProjectSection.tsx` migration blob and records that current successor.
+Repository style checks alone do not exercise this historical-source contract.
+
+Desktop frontend handoff also checks the exact artifact's ZIP endpoint before
+returning its ID. In run `45039671659`, GitHub listed a newly uploaded artifact
+but its download returned 404 less than a second later. The listing alone is
+insufficient evidence of immediate download availability. Poll only that 404,
+for up to one minute within the existing overall deadline, and keep validating
+the same Build SHA, run, attempt and artifact ID. Permission/server errors and
+changed identities still fail; redirects are inspected without being followed.
+The local GitHub contract covers delayed availability, permanent absence and
+identity changes. Actual transfer still requires a successful hosted run.
+
+Browser fixtures must follow the current UI ownership. After moving project
+details into the context-menu header, the bundle-deletion survivor check opens
+that menu before asserting Save availability; it still verifies the surviving
+project ID, graph and dirty state. Settings padding checks explicitly constrain
+the tab's width to exercise wrapped text across native fonts, then restore it.
+They keep the production height/padding rules and the two-line assertions.
 
 The November 18, 2026 withdrawal of the
 [`picomatch` advisory](https://github.com/advisories/GHSA-fc5q-39xc-vjpf)
@@ -54,7 +256,84 @@ Their Linux images omit only the hash-reviewed Windows node-gyp discovery parser
 while final-image installation/native-build probes preserve Linux functionality.
 Review dependency ownership again when the execution graph changes.
 
+## Image scan and compilation boundaries
+
+Runtime-image builds scan their own completed immutable image immediately,
+including reused proxy images. The existing `scan-images` matrix then verifies
+those per-service/run/attempt artifacts against the final release manifest.
+It recomputes assessments from sanitized inventories, checks scanner and source
+identity, complete platform coverage, freshness and the unchanged High/Critical
+policy. Missing, failed or mismatched evidence blocks qualification and promotion.
+Both scanning and verification scripts are explicit Build Images push inputs.
+No scan result from another release or workflow attempt substitutes for this gate.
+
+API/executor `runtime-build` stages copy only Core, Node and their wrapper build
+inputs before compiling the shared SDK. The web `hosted-dependencies` stage does
+the same for Core and Evaluations. Consumers still receive the complete source
+checkout before their own compilation and runtime packaging. This preserves
+development targets and existing source resolution while keeping unrelated
+application or rollout edits out of the expensive shared compilation cache key.
+Dependency installation continues to depend on the complete workspace manifests,
+lockfile, vendored Yarn and package-manager checks.
+
+Keep external cache `mode=max` until a controlled cold/source/dependency-change
+comparison establishes a better total cost. Docker's [cache modes](https://docs.docker.com/build/cache/backends/)
+export different intermediate layers; a shorter export alone is not a faster
+sequence of builds. Local BuildKit measurements and input-invalidation evidence
+do not establish hosted GHA transfer costs or total workflow savings.
+
+The November 22 local comparison built the original and revised web, API and
+executor builder stages, then changed an unrelated package source input. Shared
+compilation was reused by the revised stages. Single repeat-build observations
+were web 80.2s to 66.4s, API 36.8s to 23.5s, and executor 26.2s to 12.9s. Initial
+priming durations are not comparable cold-build measurements. All 3,786 checked
+compiled/staged files matched byte-for-byte between the original and revised
+builds. These are builder-output checks, not final-image scan qualification.
+
+A separate disposable-builder pilot exercised fresh cache imports and a harmless
+root-manifest input change. Both configurations rebuilt after the manifest change.
+Its cache-only `min` and `max` exports had identical manifests and byte counts
+(1,039,790,081 bytes each), so their elapsed times do not compare distinct policies
+or justify changing GHA exports. Use an actual image/registry export and inspect
+cache identities before drawing that conclusion in a future experiment.
+
+Local validation passed the scan/policy tests on Windows and offline unprivileged
+Linux, the 26 source image/launcher contracts, repository-wide `test:style`, Studio
+Server test-style checks and five headless dashboard/dialog cases against the
+actual compiled web output. Temporary container builders and the UI container
+were removed; the existing development stack and build cache were preserved.
+Evidence is under ignored `artifacts/ci-early-scans-20261122/`. Hosted timings and
+exact-image scans remain the next normal CI run's responsibility.
+
 ## Rollout and chart contracts
+
+The required deployment-command job starts after the source contracts pass, in
+parallel with Studio compilation. It runs the complete `deployment-command.test.mjs`
+file with the pinned Kubernetes tools and an immutable source-only Yarn install.
+The post-build deployment job passes `--exclude-deployment-command` to avoid
+repeating those journeys. For local verification, use `yarn studio-server:verify:kubernetes`
+without arguments to run both groups. The final Studio verification requires both
+jobs on applicable pushes, including when Build Images invokes the workflow.
+
+Deployment-command tests compile their Helm/kubectl stand-in once per suite with
+the existing esbuild dependency. Helper processes run that self-contained file
+with the fixture clock preload, avoiding repeated Yarn loader initialization.
+Each scenario retains its own state, locks and receipts. The deployment CLI
+continues to run from the scenario's source checkout with normal Yarn resolution;
+the real Helm binary still renders and validates the charts. The suite removes
+its compiled helper during cleanup. Compare complete suite timings with identical
+test selection and concurrency when changing this boundary.
+
+The workflow policy rejects conditional or tolerated deployment-command tests,
+filtered test selection and a missing final job result. Its failure-mutation tests
+cover the early job as well as its source prerequisite. The fixture boundary test
+checks that both simulated tools inherit the clock and caller-supplied environment,
+while ordinary adapter children also retain the caller's Node preloads.
+
+The November 22 commit preparation passed the complete 31-test deployment-command
+suite with the cached pinned Helm and Node 24, plus the repository-wide
+`test:style` checks. This is local coverage evidence; hosted job duration and
+workflow success still require the next GitHub run.
 
 Changes to release selection, editor topology or chart validation need both
 `yarn studio-server:verify:production-cutover` and
@@ -120,6 +399,16 @@ from the ready frame. Keep both protocols in `ha-release-gate.test.mjs`; preserv
 the original-socket closure and resumed-session checks. A successful image build
 does not establish promotion when this main-only gate fails.
 
+The HA proof observes retained edits through the editor's dirty project tab,
+not through Save-button visibility. Current Save lives in the project context
+menu, while an older retained browser can still have sidebar Save. At the actual
+save step, use the existing button when visible or open the named project's
+context menu; close that overlay before further editor interactions. The proof
+still verifies the saved bytes through the API and a second recorded execution.
+`ha-browser-contracts.spec.ts` exercises both Save locations and project-scoped
+recording selection. Keep these local browser checks before running main's
+exact-image HA gate; a develop browser success alone does not exercise that gate.
+
 ## Browser shard budget and hosted variability
 
 [Verify Studio Server 43434671248, editor shard 3](https://github.com/valerypopoff/rivet2.0/actions/runs/43434671248/job/131919256700)
@@ -136,23 +425,90 @@ parallel files contribute their total case work, not their shorter wall time.
 The earlier completed run also supplies the two cases interrupted in the later
 run. These measurements are scheduling estimates, not runtime guarantees.
 
-The November 21, 2026 local inventory has 394 cases in 42 selected specs, in four
+The November 22, 2026 local inventory has 396 cases in 42 selected specs, in four
 independent jobs with two browser workers each. The authoritative selection and
 weights live in [editor-test-shards.mjs](../../scripts/ci/editor-test-shards.mjs).
-The original 38-spec estimates come from the hosted runs above; later additions
-include Bus ordering, Passthrough labels, published history and graph-call paths,
-with local-work hints pending hosted timing refresh. Current combined work
-estimates are 1,015-1,025 seconds per shard, not measured elapsed times. The shard
+Weights now use the highest total per-file case work from successful hosted runs
+`44964153448`, `45041549860` and `45045691893`, rounded up to five seconds.
+The renamed `ha-browser-contracts.spec.ts` adds the two Save checks; its 25-second
+hint retains headroom over their complete measured file work. Current combined
+work estimates are 1,075-1,080 seconds per shard, not measured elapsed times. The shard
 contract checks exact-once coverage, balanced weights and a
 75% work budget against the existing 12-minute/two-worker step limit (1,080
 seconds). This leaves room for setup, serial tails and runner variation; increasing
 the suite requires reviewing that headroom rather than merely keeping equal sums.
 The browser image, isolation, assertions, retry policy and timeouts stay unchanged.
 
+The Node/WebSocket executor-retirement fixture runs once in the web-tests job,
+after restoring and verifying the same-commit Core/Node builds. It needs no
+Chromium. This removes unrelated work from browser shard 1 without omitting it
+from the final required verification. The workflow guard rejects skipped,
+duplicated or source-only retirement placement.
+
 Validate `ci-performance.test.mjs` and the workflow guard, list all four selections
 to confirm exact-once test coverage, and run the affected real browser journeys.
 After pushing, confirm every hosted shard's final result and elapsed time before
 calling the repair complete. Keep this budget guidance in the local checklist.
+
+Run `45041549860` completed Verify in 16m27s; its slowest browser job took
+10m52s including setup. Developer Desktop Release `45041549856` took 17m17s,
+with Intel packaging the longest native lane. These gates are close: shortening
+only one does not remove the other from the all-green critical path. Rebalancing
+is expected to trim browser tails, not halve the workflow. Evidence and timing
+inputs are in ignored `artifacts/ci-critical-path-20261122/`.
+
+The first revised hosted run (`45045691893`) passed all 396 browser cases,
+but Verify took 16m51s, 24 seconds longer than the previous sample. The slowest
+browser job remained 10m52s; other files slowed while recordings got faster.
+The elapsed time to all-green was 16m51s instead of 17m17s because native desktop
+packaging finished sooner. This does not establish a causal browser speedup.
+Keep the slower per-file observations in the weights rather than selecting only
+favorable timings. The managed integration lane was also near ten minutes after
+compilation, limiting the possible benefit from adding more browser jobs alone.
+
+## Intel macOS runner experiment
+
+The normal release matrix still builds Intel on `macos-15-intel` and Apple Silicon
+on `macos-15`. Developer Desktop Release has an explicit manual
+`benchmark_macos_intel=true` option on `develop`; that mode skips release/Pages
+publication and calls the read-only `desktop-macos-benchmark.yml` workflow.
+Its default is false, so push and ordinary manual releases keep their behavior.
+
+The experiment builds the same `x86_64-apple-darwin` source and verified exact-Build
+frontend on both hosts. Both use Rust 1.100.0 and the normal signing, notarization,
+architecture, executor and pnpm checks. The Apple Silicon host must already be
+able to execute Intel binaries through Rosetta; no automatic license installation
+or fallback is permitted. Its signed candidate is also transferred as a tar
+archive, preserving executable modes, and checked on a native Intel runner.
+No artifact is published as a release, and no GCP qualification or rollout runs.
+
+Initial dependency-cache availability differs across hosts. Both perform a full
+warm-up build, then clean only the app's release artifacts and bundle directory
+before the measured complete rebuild. Dependency caches survive that cleanup;
+benchmark jobs do not save Rust caches and use a separate temporary pkg cache,
+so an experiment cannot populate a normal release cache with the other target's
+base binaries. Compare measured rebuild, signing,
+notarization and native-verification time separately from warm-up/setup/cache
+transfer time. A warm rebuild result is not a cold-build result. Compare the
+recorded Xcode/SDK versions before interpreting timings; mismatched toolchains
+need a matched repeat, not a speed claim.
+
+Use job/step durations and include the extra native verification, transfer and
+runner-queue costs when estimating release benefit. One run is a feasibility
+measurement, not grounds to switch regular hosts. Retain current release runners
+until repeated representative runs demonstrate a useful all-green reduction
+with every native/signing check passing. Local workflow and browser validation
+cannot establish a macOS speedup on the Windows development machine.
+
+After publishing the reviewed workflow changes, run the existing manual entry:
+
+```sh
+gh workflow run developer-windows-release.yml --ref develop -f benchmark_macos_intel=true
+```
+
+The entry already exists on the default branch. Select the reviewed `develop`
+ref; the experiment's exact-source Build must have succeeded before signing.
+Do not merge main or run the ordinary publication mode just to start an experiment.
 
 For the original 38-spec repair, local verification passed all 17 CI-performance
 tests, workflow/style/import and documentation checks, and its unchanged
@@ -674,10 +1030,10 @@ promotion. It does not replace Yarn/Cargo audits or introduce a cloud rehearsal.
   The shared isolated-editor bootstrap mocks optional provider-environment
   lookups as unset; it must not contact an ambient API or read local credentials.
   Individual provider tests can override that route with their own fixture.
-- Deployment contracts have three required, isolated matrix lanes: managed
-  storage/schema/restore, deployment-command/Helm contracts, and gateway/proxy
-  behavior. Deployment checks no longer wait behind PostgreSQL/restore fixtures.
-  All three consume verified same-commit compiled artifacts. Proxy templates still run
+- Deployment contracts have four required, isolated matrix lanes: managed
+  storage/schema, VM migration/restore, deployment/Helm contracts, and gateway/proxy
+  behavior. The full VM migration suite runs independently of other PostgreSQL
+  checks. All four consume verified same-commit compiled artifacts. Proxy templates still run
   serially through real DNS expiry, address replacement and unhealthy/healthy
   transitions; no TTL or outage assertion is shortened to improve timings.
   Fixture phases within each lane remain ordered. Only the deployment lane

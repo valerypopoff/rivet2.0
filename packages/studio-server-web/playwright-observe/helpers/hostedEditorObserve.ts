@@ -10,6 +10,25 @@ type Point = {
   y: number;
 };
 
+/** Open details/actions for a named project or the currently selected editable row. */
+export async function openProjectContextMenu(page: Page, projectName?: string) {
+  const menu = page.locator('.workflow-project-context-menu-with-summary');
+  if (await menu.isVisible()) {
+    if (!projectName || (await menu.getAttribute('aria-label')) === `Actions for ${projectName}`) return menu;
+    await page.keyboard.press('Escape');
+    await expect(menu).toBeHidden();
+  }
+  const rows = page.locator('.workflow-library-panel .project-row');
+  const row = projectName
+    ? rows.filter({ has: page.getByText(projectName, { exact: true }) })
+    : page.locator('.workflow-library-panel .project-row.active:not([data-comparison-role="older"])').first();
+  await expect(row).toBeVisible();
+  const box = (await row.boundingBox())!;
+  await row.click({ button: 'right', position: { x: box.width - 2, y: box.height / 2 } });
+  await expect(menu).toBeVisible();
+  return menu;
+}
+
 /** Open the bundle-only submenu when the current folder menu provides it. */
 export async function openBundleActions(page: Page): Promise<void> {
   const trigger = page.getByRole('menuitem', { name: 'Bundle actions', exact: true });

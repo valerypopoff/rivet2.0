@@ -8,7 +8,10 @@ type WorkflowLibraryController = ReturnType<typeof useWorkflowLibraryController>
 export const WorkflowLibraryContextMenus: FC<{
   controller: WorkflowLibraryController;
   onCompareBundle?: (bundleId: string, opener?: HTMLElement) => void;
-}> = ({ controller, onCompareBundle }) => {
+  openedProjectPath: string;
+  hasUnsavedChanges: boolean;
+  onSave: () => void;
+}> = ({ controller, onCompareBundle, openedProjectPath, hasUnsavedChanges, onSave }) => {
   const {
     folderContextMenuState,
     projectContextMenuState,
@@ -31,6 +34,10 @@ export const WorkflowLibraryContextMenus: FC<{
     handleDeleteProjectFromContextMenu,
     isFolderEmpty,
   } = controller;
+  const project = projectContextMenuState
+    ? controller.allProjects.find((item) => item.absolutePath === projectContextMenuState.project.absolutePath) ??
+      projectContextMenuState.project
+    : null;
 
   return (
     <>
@@ -86,14 +93,22 @@ export const WorkflowLibraryContextMenus: FC<{
           onDelete={() => void handleDeleteFolderFromContextMenu()}
         />
       ) : null}
-      {projectContextMenuState ? (
+      {projectContextMenuState && project ? (
         <WorkflowProjectContextMenu
           key={`${projectContextMenuState.project.relativePath}:${projectContextMenuState.x}:${projectContextMenuState.y}`}
           isOpen
-          project={projectContextMenuState.project}
+          project={project}
           x={projectContextMenuState.x}
           y={projectContextMenuState.y}
           onClose={closeProjectContextMenu}
+          isCurrentlyOpen={project.absolutePath === openedProjectPath}
+          hasUnsavedChanges={hasUnsavedChanges}
+          editorReady={controller.editorReady}
+          onSave={onSave}
+          onOpenSettings={() => {
+            closeProjectContextMenu();
+            controller.openProjectSettingsModal(project);
+          }}
           onRename={() => void handleRenameProjectFromContextMenu()}
           onInspectRecordings={handleInspectProjectRecordingsFromContextMenu}
           onInspectStatistics={handleInspectProjectStatisticsFromContextMenu}

@@ -192,7 +192,7 @@ test.describe('Run statistics modal', () => {
   });
 
   for (const empty of [false, true]) {
-    test(`Inspect run statistics selects the tree project${empty ? ' without recordings' : ''} and the picker accepts typing`, async ({ page }) => {
+    test(`Run statistics selects the tree project${empty ? ' without recordings' : ''} and the picker accepts typing`, async ({ page }) => {
       const { statisticsRequests, releaseArchiveStatistics } = await installRunStatisticsRoutes(page, 'available');
       releaseArchiveStatistics();
       const name = empty ? 'Empty project' : 'Archive project';
@@ -215,14 +215,14 @@ test.describe('Run statistics modal', () => {
       await waitForDashboardReady(page);
       await page.locator('.project-row').filter({ hasText: name }).click({ button: 'right' });
       const menu = page.getByRole('menu', { name: `Actions for ${name}` });
-      await expect(menu.locator(':scope > *')).toHaveCount(9);
-      expect(await menu.locator(':scope > *').evaluateAll((items) => items.map((item) =>
+      await expect(menu.locator(':scope > button, :scope > [role="separator"]')).toHaveCount(9);
+      expect(await menu.locator(':scope > button, :scope > [role="separator"]').evaluateAll((items) => items.map((item) =>
         item.getAttribute('role') === 'separator' ? '---' : item.textContent?.trim(),
       ))).toEqual([
         'Rename project', '---', 'Download project', 'Duplicate', '---',
-        'Inspect recordings', 'Inspect run statistics', '---', 'Delete project',
+        'Inspect recordings', 'Run statistics', '---', 'Delete project',
       ]);
-      const inspect = menu.getByRole('menuitem', { name: 'Inspect run statistics', exact: true });
+      const inspect = menu.getByRole('menuitem', { name: 'Run statistics', exact: true });
       await expect(inspect.locator('svg')).toHaveCount(1);
       const modal = page.getByTestId('run-statistics-modal');
       try {

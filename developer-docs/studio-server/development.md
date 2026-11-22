@@ -513,6 +513,10 @@ rebuild Core outputs, which runtime fixtures import from `dist`.
 
 ## Recordings architecture and extension points
 
+The [managed recording retention extraction record](managed-recording-retention-refactor-plan.md)
+describes the retained behavior, baseline coverage and local verification of the
+retention boundary.
+
 Recording capture, replay availability and execution outcome have separate owners.
 New shared evidence types use the declared Studio Server shared workspace package
 through type-only imports. Runtime imports keep the API's compiled sibling layout:
@@ -525,15 +529,16 @@ recording must never execute the graph again. Keep production bookkeeping in the
 background; the accepted crash window and durable editor protocol are documented
 in [Recording durability](./recording-durability.md).
 
-| Responsibility                        | Owner                                                                                                                            | Extension rule                                                                                                                                          |
-| ------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Capture graph events                  | Core `ExecutionRecorder`, API `ExecutionSession`, and the endpoint/editor/web-app/schedule adapters                              | Reuse the session recorder. Keep storage I/O out of Core and avoid serializing replay payloads on the production response path.                         |
-| Admit and drain recording work        | `recordings-store.ts`, `recording-evidence-work.ts` and `storage-composition.ts`                                                 | Use the existing bounded queues and storage lifecycle. Drain accepted work before closing evidence heartbeats or stores.                                |
-| Persist and repair managed recordings | `managed/recordings.ts`, `managed/recording-evidence.ts` and the existing maintenance owner                                      | Keep one stable recording identity. Publish artifacts and evidence together; retry persistence, never execution.                                        |
-| Browse projects and run history       | `managed/recordings.ts` for the catalog; `managed/recording-history.ts` for history pagination                                   | Count playable recordings and unrepresented attempts once. Include projects with only pending/unavailable runs. Read metadata rather than replay blobs. |
-| Search captured inputs                | `recording-input-filter.ts` with its source, extractor worker and cache                                                          | Preserve bounded reads, cancellation and progressive results. Missing replay data is unsearchable, not evidence that an input field is absent.          |
-| Aggregate outcomes and costs          | `recording-statistics.ts` and `recording-statistics-sql.ts`                                                                      | Keep execution outcome and telemetry completeness independent of replay availability; exclude duplicate evidence.                                       |
-| Present and operate history           | `useRunRecordingsModalState.ts`, `useRunRecordingsController.ts`, `recording-run-hierarchy.ts` and the table/selector components | Keep session lifetime, request effects, pure family grouping and presentation separate. Invalidate stale requests when the view changes.                |
+| Responsibility                        | Owner                                                                                                                            | Extension rule                                                                                                                                                  |
+| ------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Capture graph events                  | Core `ExecutionRecorder`, API `ExecutionSession`, and the endpoint/editor/web-app/schedule adapters                              | Reuse the session recorder. Keep storage I/O out of Core and avoid serializing replay payloads on the production response path.                                 |
+| Admit and drain recording work        | `recordings-store.ts`, `recording-evidence-work.ts` and `storage-composition.ts`                                                 | Use the existing bounded queues and storage lifecycle. Drain accepted work before closing evidence heartbeats or stores.                                        |
+| Persist and repair managed recordings | `managed/recordings.ts`, `managed/recording-evidence.ts` and the existing maintenance owner                                      | Keep one stable recording identity. Publish artifacts and evidence together; retry persistence, never execution.                                                |
+| Retain managed recording history      | `managed/recording-retention.ts`; composed and registered by `managed/recordings.ts`                                             | Read current limits each pass. Keep lease fencing, recording deletion and outbox insertion in one transaction; preserve protected evidence and cache ownership. |
+| Browse projects and run history       | `managed/recordings.ts` for the catalog; `managed/recording-history.ts` for history pagination                                   | Count playable recordings and unrepresented attempts once. Include projects with only pending/unavailable runs. Read metadata rather than replay blobs.         |
+| Search captured inputs                | `recording-input-filter.ts` with its source, extractor worker and cache                                                          | Preserve bounded reads, cancellation and progressive results. Missing replay data is unsearchable, not evidence that an input field is absent.                  |
+| Aggregate outcomes and costs          | `recording-statistics.ts` and `recording-statistics-sql.ts`                                                                      | Keep execution outcome and telemetry completeness independent of replay availability; exclude duplicate evidence.                                               |
+| Present and operate history           | `useRunRecordingsModalState.ts`, `useRunRecordingsController.ts`, `recording-run-hierarchy.ts` and the table/selector components | Keep session lifetime, request effects, pure family grouping and presentation separate. Invalidate stale requests when the view changes.                        |
 
 The project picker and its global totals use one managed catalog query. Filtering
 projects before merging evidence would hide an unpublished project's first run;
@@ -546,11 +551,49 @@ are worth watching, but splitting them by line count alone creates more boundari
 without reducing responsibility. Extract a helper when it owns a distinct rule or
 removes duplicated behavior.
 
+The retention factory only captures existing dependencies and returns a task;
+it does not initialize storage, read settings or start maintenance. The recording
+service retains registration, repeated initialization, the startup recovery gate
+and its compatibility export for `selectManagedRecordingRowsForCleanup`. Recovery
+becomes ready after the initial maintenance pass settles, including a logged task
+failure. The backend still suppresses serving maintenance for offline modes.
+Retention limits apply to stored per-recording byte columns, not physical bucket
+size. The SQL batch limits selected/deleted rows, not the work of its window scans.
+
+The final serial case in `recording-statistics-managed.integration.ts` invokes
+`helpers/managed-recording-retention-contract.ts` on its disposable PostgreSQL
+database. It covers individual and combined age/count/byte policies, byte-limit
+equality and each artifact's contribution, count exclusions freeing byte quota,
+endpoint identity, protected evidence, tied batch boundaries, disabled/live limits
+and rollback/retry after real outbox insertion. Policy cases share one maintenance
+owner; the final expiry/handoff case also creates a controlled successor. Dispose
+both before closing the pool; no extra database or MinIO service is needed.
+Service tests separately protect
+startup/failure ordering, the default settings reader and cache invalidation.
+
+`managed-maintenance.test.ts` uses one disposable unit fixture for deletion
+transitions and observational metrics. Keep completion, live-reference blocking,
+disabled-policy blocking, failed reference reads and failed storage calls as
+separate cases. Assert claim owner/token on the resulting metadata update.
+Blocked-intent reopening is checked in PostgreSQL, including retry/claim reset
+and immediate readiness; query-text matching is not proof of that SQL behavior.
+The blocked-metrics test uses a deferred result, releases it before disposal and
+has a test-level failure timeout; it does not race an arbitrary one-second delay.
+The native-compression reservation test retains its fresh process and compiled
+imports, without forwarding the parent's test/transpiler arguments.
+
+Outbox claims check the current maintenance holder, fencing token and expiry in
+the claim statement. A short shared lease-row lock ends before reference checks
+or object-store I/O. Long tasks cannot continue claiming work after their lease
+expires or another owner takes over. Existing per-key claims still govern already
+issued deletions; this does not cancel storage calls or replay workflows.
+
 `recording-durability-managed.integration.ts` covers real PostgreSQL/MinIO recovery
 and the catalog transitions from pending to unavailable to playable to deleted.
 `run-recordings-modal.spec.ts` covers the corresponding browser controls. Keep
 mocked UI checks and actual storage checks separate: neither substitutes for the
-other or for production activation of the default-off durability feature.
+other or for production release qualification. Durable recording defaults on;
+an installation can explicitly opt out.
 
 Keep recording tests at the layer that owns the behavior. Duration-format edge
 cases belong in App's `recordingPresentation.test.ts`; one browser case verifies
@@ -3134,11 +3177,13 @@ When adding new code, keep the post-refactor ownership seams explicit instead of
   - editor startup/loading feedback belongs in the editor area, not the project tree. Keep the tree's own folder-loading/error states and editor-readiness interaction guards, but do not duplicate "Loading editor" above the rows, in their filename tooltips, or on sidebar action labels/tooltips. Save keeps its stable name while disabled before readiness. `hosted-dashboard-contracts.spec.ts` holds editor startup to check this boundary before and after readiness.
   - `useWorkflowLibraryController.ts`, `useRunRecordingsController.ts`, `useProjectSettingsActions.ts`, `useDashboardSidebar.ts`, and `useEditorBridgeEvents.ts` are composition/orchestration seams; tree fetching, selection/preview debounce, drag/drop, project/folder mutations, version actions, and retained recording-modal state stay in their focused hooks instead of returning to the workflow controller
   - `AppSettingsModal.tsx` stays a tab-composition shell; each settings domain owns its form hook under `packages/studio-server-web/dashboard/app-settings/`, and all forms use `useSettingsFormResource.ts` for revision-aware load/save/conflict handling. A tab save must send only its scoped draft and must not reset unsaved fields in another tab
-  - keep the workflow-library header block at `37px` high without a bottom divider; the whole open-state header row is the collapse control with square hover corners and the sidebar icon before the `Rivet Studio Server` title; collapsed mode should be a persistent full-height `30px` rail button with a centered `>` chevron rather than a small header button, show the opened project's larger status dot in the former header slot only when its aggregate endpoint/web-app publication status is `Published` or `Unpublished changes`, keep the active project card grey/green/yellow tinted from that same aggregate status where any `Unpublished changes` wins over `Published`, keep the workflow tree mounted while folded, reveal the contents only after the reopen width animation completes, and keep resize behavior pointer-captured with a forgiving splitter hit target, no width transition while dragging, and fold/unfold thresholding at half the minimum sidebar width
+  - keep the workflow-library header block at `37px` high without a bottom divider; the whole open-state header row is the collapse control with square hover corners and the sidebar icon before the `Rivet Studio Server` title; collapsed mode should be a persistent full-height `30px` rail button with a centered `>` chevron rather than a small header button, show the opened project's larger status dot in the former header slot only when its aggregate endpoint/web-app publication status is `Published` or `Unpublished changes`, keep the workflow tree mounted while folded, reveal the contents only after the reopen width animation completes, and keep resize behavior pointer-captured with a forgiving splitter hit target, no width transition while dragging, and fold/unfold thresholding at half the minimum sidebar width
   - single-clicking a project row should open it through the bridge as a preview tab; double-clicking, editing, running, saving, activating Remote Debugger on the active preview, or any unsafe replacement condition promotes that tab to persistent. For a not-yet-open workflow project, the dashboard should send the tree display title with `open-project`, and the iframe should call `RivetWorkspaceHost.startOpeningProjectTab(...)` before loading the file so Rivet owns the immediate tab/preloader UI. Finish that same tab with `finishOpeningProjectTab(...)` after `HostedIOProvider` returns the real snapshot, or cancel it on load/duplicate-id failure; never fake a temporary project snapshot or write upstream tab state directly. Preview replacement belongs in `usePreviewProjectLifecycle.ts` plus the serialized open handler in `useEditorCommandBridge.ts`, where the bridge can read Rivet's dirty/run/session state and close only clean known preview tabs through `RivetWorkspaceHost.closeProject(...)`. A single-click on an already-open persistent project should only activate that tab and should not close the current preview slot; the slot is replaced only when another not-yet-open project opens as preview. Keep the single-click preview debounce in `useWorkflowLibrarySelection.ts`, not per project row, so clicking a different row cancels any older pending preview open before it can reselect the previous project. When the active editor tab is the clean preview being replaced, use `replaceCurrent` through `RivetWorkspaceHost` instead of closing it first, so the dashboard does not blink back to a persistent tab while the next preview loads. When replacing an inactive preview, keep `DashboardPage.tsx`'s pending-open guard intact so intermediate active-project callbacks from closing the old preview do not briefly select the persistent project before the new preview opens. Pass `tabUi: { preview: true }` for preview opens/replaces and clear it with `setProjectTabUiState(..., { preview: false })` when promoting, so upstream Rivet owns the italic editor-tab rendering. Remote Debugger promotion should observe only Rivet's `external-debugger` executor-session target, not hosted internal executor reconnects. The active project card should not reintroduce a separate `Edit` button; row click/double-click owns open intent, empty workflow-library body clicks clear only the selected card, and the 166px minimum-height card keeps the project name above endpoint/web-app status lines, then the graph/node/web-app count line. Long project, graph, and folder names wrap in their respective left-panel rows instead of being ellipsized, including unbroken strings; the active project card instead clips its name to one line and retains the full name in its hover title. The endpoint line and web-app line should always render for selected projects with the same status-row height whether the row contains a pill or plain text; projects with no current web apps show `Web app: none`, while projects with web apps load status from the existing project web-app summary endpoint only for the selected project. The tree project dots and collapsed rail dot should use the same aggregate status as the summary card: grey means no dot, green means green dot, and yellow means yellow dot. The card keeps a clear vertical gap before the visibly button-like `Settings` action and conditional `Save` button, and must reserve at least its default height when no project is selected so the project tree below it does not jump. `Save` is shown only when the selected workflow is the active editor project and Rivet reports unsaved changes through the editor bridge.
   - keep bottom panel actions in the mounted workflow-library panel, ordered as `Run recordings`, `Run statistics`, and `Settings`; the app-level `Settings` modal uses a left vertical tab rail, shows general runtime config, owns the Run recordings retention form and Runtime libraries administration, and owns the Node executor proxy form plus websocket URL override fields
   - App settings navigation uses four groups separated by the shared project-settings divider: `General`; `Endpoints`, `Web apps`, `Environment variables`; `Run recordings`, `Shell execution`, `Node executor proxy`, `Runtime libraries`, `OAuth`; `Rivet Server UI access`, `Storage`, `Docker`, `Deployment`, `CPU and RAM monitoring`. Conditional `Local storage upgrade` and `Migration` tabs follow `Storage` only while their existing eligibility checks allow them. Tab IDs remain stable when display labels change.
   - `deployment-status.spec.ts` verifies the settings tab labels, order and divider positions, including mouse access to the last tab in a 1280×720 viewport. Update label-based consumers in `workflow-library-layout.spec.ts` when renaming tabs, while preserving their stable IDs and conditional migration controls.
+  - Settings navigation tabs use natural height, a 34px minimum and symmetric vertical padding, so wrapped labels such as `CPU and RAM monitoring` remain inside the selected background. The desktop navigation scrolls independently; narrow layouts retain the shared layout scroller. Keep the scoped tab selector stronger than the shared project-tab styles so lazy stylesheet order cannot restore a fixed height.
+  - Project context menus own `WorkflowProjectSummary.tsx`: use the clicked project, preserve Settings and dirty-open-project Save, and keep the normal sidebar free of summary/placeholder cards. The header keeps its original gray fill for fully unpublished projects and uses green/yellow aggregate publication fills without a colored border. Bound its intrinsic menu width to 75% of `--workflow-library-max-width` from the same sidebar limit; wrap long names, constrain height to the viewport and update floating geometry after metadata/viewport changes. Show endpoint/web-app lines only for live publications (including unpublished draft changes), prefer the published endpoint name, and exclude draft-only web apps. Reference-detail navigation closes the menu before opening its modal.
   - keep project-settings validation and labels in `projectSettingsForm.ts`
   - keep run-recordings modal shell logic in `RunRecordingsModal.tsx` and its focused UI slices in `RecordingWorkflowSelect.tsx` and `RecordingRunsTable.tsx`
   - Run statistics targets are a catalog of every retained endpoint or web-app action for the selected surface. Period, published/latest version, and outcome checkboxes apply only to the selected target's query; when they match no runs, preserve the target selection and state that result directly below the filters.

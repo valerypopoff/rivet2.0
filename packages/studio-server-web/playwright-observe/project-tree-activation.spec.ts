@@ -1,6 +1,11 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
 import type { WorkflowFolderItem, WorkflowProjectItem, WorkflowTreeResponse } from '../dashboard/types';
-import { authenticateIfNeeded, mockHostedEditorBootstrap, waitForDashboardReady } from './helpers/hostedEditorObserve';
+import {
+  authenticateIfNeeded,
+  mockHostedEditorBootstrap,
+  openProjectContextMenu,
+  waitForDashboardReady,
+} from './helpers/hostedEditorObserve';
 import { readCommittedWorkspaceCheckpoint } from './helpers/workspaceRecovery';
 
 // Valid two-sample silent WAV; media decode errors must not obscure regressions.
@@ -112,13 +117,11 @@ test('tree selection survives folder toggles and row padding until another proje
   await page.getByRole('button', { name: 'Expand Owner folder', exact: true }).click();
   const aRow = page.locator('.project-row', { hasText: a.project.name });
   const bRow = page.locator('.project-row', { hasText: b.project.name });
-  const card = page.locator('.active-project-section');
   const tabs = page.frameLocator('iframe.dashboard-editor-frame').locator('.projects-container .project:not(.opening)');
   await expect(aRow).toBeEnabled({ timeout: 120_000 });
   await aRow.dblclick();
   await expect(tabs.filter({ hasText: a.project.name })).toHaveClass(/\bactive\b/);
   const expectSelection = async () => {
-    await expect(card).toContainText(a.project.name);
     await expect(aRow).toHaveClass(/\bactive\b/);
   };
   await expectSelection();
@@ -154,13 +157,13 @@ test('tree selection survives folder toggles and row padding until another proje
   await expectSelection();
   await page.getByRole('button', { name: 'Collapse Owner folder', exact: true }).click();
   await expect(aRow).toHaveCount(0);
-  await expect(card).toContainText(a.project.name);
+  await expect(tabs.filter({ hasText: a.project.name })).toHaveClass(/\bactive\b/);
   await page.getByRole('button', { name: 'Expand Owner folder', exact: true }).click();
   await expectSelection();
   await expect(aRow).toBeInViewport();
   await page.getByRole('button', { name: 'Collapse Owner folder', exact: true }).click({ modifiers: ['Control'] });
   await expect(aRow).toHaveCount(0);
-  await expect(card).toContainText(a.project.name);
+  await expect(tabs.filter({ hasText: a.project.name })).toHaveClass(/\bactive\b/);
   await page.getByRole('button', { name: 'Expand Owner folder', exact: true }).click({ modifiers: ['Control'] });
   await expectSelection();
   await expect(aRow).toBeInViewport();
@@ -171,7 +174,6 @@ test('tree selection survives folder toggles and row padding until another proje
   await bRow.click();
   await expect(bRow).toHaveClass(/\bactive\b/);
   await expect(aRow).not.toHaveClass(/\bactive\b/);
-  await expect(card).toContainText(b.project.name);
   await expect(tabs.filter({ hasText: b.project.name })).toHaveClass(/\bactive\b/);
 });
 
@@ -354,6 +356,7 @@ test('tree activation preserves active and inactive edits, dirty dots, and the s
   await page.mouse.move(x + 80, y + 40, { steps: 8 });
   await page.mouse.up();
   await expect(aTab).toHaveClass(/\bhas-unsaved-changes\b/);
+  await openProjectContextMenu(page);
   await expect(saveButton).toBeVisible();
   const editedPosition = await node.evaluate((element) => (element as HTMLElement).style.transform);
   expect(editedPosition).not.toBe(initialPosition);
@@ -364,9 +367,14 @@ test('tree activation preserves active and inactive edits, dirty dots, and the s
   await expect(aTab).toHaveClass(/\bactive\b/);
   await expect(aTab).toHaveClass(/\bhas-unsaved-changes\b/);
   await expect.poll(() => node.evaluate((element) => (element as HTMLElement).style.transform)).toBe(editedPosition);
+  await openProjectContextMenu(page);
   await expect(saveButton).toBeVisible();
 
   // Inactive tab activation must preserve both content and its original baseline.
+  await openProjectContextMenu(page, b.project.name);
+  await expect(saveButton).toHaveCount(0);
+  await expect(aTab).toHaveClass(/\bactive\b/);
+  await page.keyboard.press('Escape');
   await activateRow(bRow);
   await expect(bTab).toHaveClass(/\bactive\b/);
   await expect(aTab).toHaveClass(/\bhas-unsaved-changes\b/);
@@ -374,6 +382,7 @@ test('tree activation preserves active and inactive edits, dirty dots, and the s
   await expect(aTab).toHaveClass(/\bactive\b/);
   await expect(aTab).toHaveClass(/\bhas-unsaved-changes\b/);
   await expect.poll(() => node.evaluate((element) => (element as HTMLElement).style.transform)).toBe(editedPosition);
+  await openProjectContextMenu(page);
   await expect(saveButton).toBeVisible();
   await expect(tabs).toHaveCount(2);
   expect(loads).toEqual([a.project.absolutePath, b.project.absolutePath]);
@@ -433,6 +442,7 @@ test('tree activation preserves active and inactive edits, dirty dots, and the s
   await expect.poll(() => node.evaluate((element) => (element as HTMLElement).style.transform)).toBe(editedPosition);
 
   // Only an actual save may clear the dirty state. All IO remains mocked.
+  await openProjectContextMenu(page);
   await saveButton.click();
   await expect.poll(() => saves.length).toBe(1);
   await expect(aTab).not.toHaveClass(/\bhas-unsaved-changes\b/);
@@ -932,6 +942,7 @@ test('persistent recovery failure warns about unsaved work, not a successfully s
     timeout: 15_000,
   });
   await expect(frame.getByRole('button', { name: 'Recover workspace', exact: true })).toHaveCount(0);
+  await openProjectContextMenu(page);
   await page.locator('.active-project-save-button').click();
   await expect(frame.locator('.projects-container .project')).not.toHaveClass(/has-unsaved-changes/);
   await expect(frame.getByRole('region', { name: 'Workspace recovery', exact: true })).toHaveCount(0);
@@ -1036,6 +1047,7 @@ test('memory-only browser recovery warns before losing edits and does not claim 
     }),
   ).toBe(true);
   // A real server save is still valid even when browser recovery is volatile.
+  await openProjectContextMenu(page);
   await page.locator('.active-project-save-button').click();
   await expect(frame.locator('.projects-container .project')).not.toHaveClass(/has-unsaved-changes/);
   await expect(warning).toHaveCount(0);
@@ -1187,6 +1199,7 @@ test('another window save cannot authorize a recovered tab to overwrite its newe
     savedRevision = 'other-window';
     return route.fulfill({ json: { path: a.project.absolutePath, revisionId: savedRevision } });
   });
+  await openProjectContextMenu(second);
   await second.locator('.active-project-save-button').click();
   await expect(secondFrame.locator('.projects-container .project')).not.toHaveClass(/has-unsaved-changes/);
   await expect.poll(() => checkpointAcceptedRevision(second, a.project.id)).toBe('other-window');
@@ -1204,6 +1217,7 @@ test('another window save cannot authorize a recovered tab to overwrite its newe
     rejected = true;
     return route.fulfill({ status: 409, json: { error: 'The saved project changed in another window.' } });
   });
+  await openProjectContextMenu(page);
   await page.locator('.active-project-save-button').click();
   await expect.poll(() => rejected).toBe(true);
   await expect(firstFrame.locator('.projects-container .project')).toHaveClass(/has-unsaved-changes/);
@@ -1236,6 +1250,7 @@ test('a saved project with failed recovery cannot authorize an older checkpoint 
     expect(route.request().postDataJSON().expectedRevisionId).toBe('original');
     return route.fulfill({ json: { path: a.project.absolutePath, revisionId: 'saved-but-not-checkpointed' } });
   });
+  await openProjectContextMenu(page);
   await page.locator('.active-project-save-button').click();
   await expect(frame.locator('.projects-container .project')).not.toHaveClass(/has-unsaved-changes/);
   await expect(frame.getByRole('region', { name: 'Workspace recovery', exact: true })).toHaveCount(0);
@@ -1251,6 +1266,7 @@ test('a saved project with failed recovery cannot authorize an older checkpoint 
     rejected = true;
     return route.fulfill({ status: 409, json: { error: 'The saved project is newer than its recovered checkpoint.' } });
   });
+  await openProjectContextMenu(page);
   await page.locator('.active-project-save-button').click();
   await expect.poll(() => rejected).toBe(true);
   await expect(frame.locator('.projects-container .project')).toHaveClass(/has-unsaved-changes/);

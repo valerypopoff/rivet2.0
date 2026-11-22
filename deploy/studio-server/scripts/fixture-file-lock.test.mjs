@@ -5,6 +5,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
+import { pathToFileURL } from 'node:url';
 
 // test-style: fixture-read: Read only generated clock snapshots in the owned temporary fixture directory.
 test('deployment fixture clock readers retain a complete snapshot while the next value is written', async (t) => {
@@ -52,6 +53,64 @@ test('deployment fixture clock readers retain a complete snapshot while the next
     },
   );
   assert.match(output, /Complete clock snapshot preserved/);
+});
+
+test('deployment helpers share the clock while real child programs retain the caller environment', async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-fixture-children-'));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const marker = path.join(directory, 'caller.mjs');
+  const tool = path.join(directory, 'tool.cjs');
+  const entry = path.join(directory, 'deploy-kubernetes-release.mjs');
+  await fs.writeFile(path.join(directory, 'clock-offset.json'), '600000');
+  await fs.writeFile(marker, 'globalThis.fixtureCallerLoaded = true;');
+  await fs.writeFile(
+    tool,
+    `console.log(JSON.stringify({
+      kind: process.argv[2], caller: Boolean(globalThis.fixtureCallerLoaded),
+      elapsed: Date.now() - performance.timeOrigin, value: process.env.FIXTURE_VALUE
+    }));`,
+  );
+  await fs.writeFile(
+    entry,
+    `import { spawn } from 'node:child_process';
+    const run = (program, args) => new Promise((resolve, reject) => {
+      const child = spawn(program, args, { env: { ...process.env, FIXTURE_VALUE: 'preserved' } });
+      let stdout = '', stderr = '';
+      child.stdout.on('data', data => stdout += data);
+      child.stderr.on('data', data => stderr += data);
+      child.once('error', reject);
+      child.once('close', code => code === 0 ? resolve(JSON.parse(stdout)) : reject(Error(stderr)));
+    });
+    console.log(JSON.stringify(await Promise.all([
+      run(process.env.RIVET_K8S_HELM_BIN, ['version']),
+      run(process.env.RIVET_K8S_KUBECTL_BIN, ['version']),
+      run(process.execPath, [process.env.RIVET_FIXTURE_COMMAND_TOOL, 'adapter'])
+    ])));`,
+  );
+  const preload = new URL('./fixtures/deployment-command-preload.mjs', import.meta.url).href;
+  const output = execFileSync(process.execPath, [entry], {
+    encoding: 'utf8',
+    timeout: 10000,
+    windowsHide: true,
+    env: {
+      ...process.env,
+      NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ''} --import=${preload} --import=${pathToFileURL(marker).href}`,
+      RIVET_COMMAND_FIXTURE: directory,
+      RIVET_FIXTURE_COMMAND_TOOL: tool,
+      RIVET_K8S_HELM_BIN: 'fixture-helm',
+      RIVET_K8S_KUBECTL_BIN: 'fixture-kubectl',
+    },
+  });
+  const children = JSON.parse(output);
+  assert.deepEqual(
+    children.map(({ kind, caller, value }) => ({ kind, caller, value })),
+    [
+      { kind: 'helm', caller: false, value: 'preserved' },
+      { kind: 'kubectl', caller: false, value: 'preserved' },
+      { kind: 'adapter', caller: true, value: 'preserved' },
+    ],
+  );
+  for (const child of children) assert.ok(child.elapsed >= 599000 && child.elapsed < 610000);
 });
 
 test('fixture lock bounds Windows contention without hiding permissions, links or stealing locks', () => {

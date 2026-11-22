@@ -316,7 +316,7 @@ function VirtualizedRecordingRow({ index, style, data }: ListChildComponentProps
   const recording = data.recordings[index]!;
 
   return (
-    <div style={{ ...style, boxSizing: 'border-box' }}>
+    <div className="run-recordings-list-row" style={{ ...style, boxSizing: 'border-box' }}>
       <MeasuredRecordingRow
         row={recording}
         isDeleting={data.deletingRecordingId !== null}

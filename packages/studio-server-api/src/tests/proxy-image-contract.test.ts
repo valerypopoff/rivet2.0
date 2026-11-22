@@ -826,6 +826,7 @@ void test('images and local launchers build directly from the monorepo workspace
 
 void test('CI and production launchers publish and run the Studio Server image set from one commit', () => {
   const imageBuildWorkflow = readRepoFile('.github/workflows/studio-server-images.yml').replace(/\r\n/g, '\n');
+  const haScenarioWorkflow = readRepoFile('.github/workflows/studio-server-ha-scenario.yml').replace(/\r\n/g, '\n');
   const verificationWorkflow = readRepoFile('.github/workflows/studio-server-verify.yml').replace(/\r\n/g, '\n');
   const prodCompose = readRepoFile('deploy/studio-server/compose/docker-compose.yml');
   const prodDockerLauncher = readRepoFile('deploy/studio-server/scripts/prod-docker.mjs');
@@ -866,11 +867,12 @@ void test('CI and production launchers publish and run the Studio Server image s
   assert.match(imageBuildWorkflow, /continue-on-error: true/);
   assert.match(imageBuildWorkflow, /steps\.build\.outcome == 'failure'/);
   assert.match(imageBuildWorkflow, /docker buildx imagetools create/);
-  assert.match(imageBuildWorkflow, /gate_script=studio-server:verify:kubernetes:managed-live/);
-  assert.match(imageBuildWorkflow, /gate_script=studio-server:verify:kubernetes:managed-disruption/);
+  assert.match(imageBuildWorkflow, /uses: \.\/\.github\/workflows\/studio-server-ha-scenario\.yml/);
+  assert.match(haScenarioWorkflow, /gate_script=studio-server:verify:kubernetes:managed-live/);
+  assert.match(haScenarioWorkflow, /gate_script=studio-server:verify:kubernetes:managed-disruption/);
   assert.ok(imageBuildWorkflow.includes("type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}"));
   assert.doesNotMatch(
-    `${imageBuildWorkflow}\n${verificationWorkflow}`,
+    `${imageBuildWorkflow}\n${haScenarioWorkflow}\n${verificationWorkflow}`,
     /resolve-rivet|RIVET_REPO_|build-contexts|rivet_source|rivet_dependency_metadata|(?:^|\s)wrapper\//m,
   );
 

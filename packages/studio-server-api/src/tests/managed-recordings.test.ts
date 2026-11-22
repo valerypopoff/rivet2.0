@@ -10,9 +10,14 @@ import type {
   ManagedWorkflowMaintenanceLease,
   ManagedWorkflowMaintenanceTask,
 } from '../routes/workflows/managed/maintenance.js';
-import type { RecordingInsertRowData, RecordingRow, TransactionHooks } from '../routes/workflows/managed/types.js';
+import type { RecordingInsertRowData, RecordingRow } from '../routes/workflows/managed/types.js';
 import { prepareManagedTextArtifact } from '../routes/workflows/managed/artifact-descriptor.js';
-import { workflowRecordingInputCache } from '../routes/workflows/recording-input-cache.js';
+import {
+  getManagedRecordingInputCacheKey,
+  workflowRecordingInputCache,
+} from '../routes/workflows/recording-input-cache.js';
+import { runRecordingsSettingsRepository } from '../routes/workflows/recordings-config.js';
+import { withScopedEnv } from './helpers/runtime-library-harness.js';
 import { getWorkflowRecordingCreatedAt } from '../../../studio-server-shared/workflow-recording-time.js';
 import { getManagedWorkflowProjectVirtualPath } from '../routes/workflows/virtual-paths.js';
 import type { Project } from '@valerypopoff/rivet2-node';
@@ -821,119 +826,143 @@ test('managed input search supplies descriptor bounds only for encoded byte read
   }
 });
 
-test('managed startup cleanup queues only the bounded claimed recording batch', async () => {
-  const oldestRow = createRecordingRow('oldest', 'endpoint', '2019-01-01T00:00:00.000Z');
-  const oldRow = createRecordingRow('old', 'endpoint', '2020-01-01T00:00:00.000Z');
-  const currentRow = createRecordingRow('current', 'endpoint', new Date().toISOString());
-  const deletedIds: string[] = [];
-  let retentionQuery: { sql: string; parameters: unknown[] } | undefined;
-  const commitTasks: Array<() => Promise<void>> = [];
-  let leaseAssertions = 0;
-  const maintenanceTasks = new Map<string, ManagedWorkflowMaintenanceTask>();
-  const enqueuedObjectKeys: Array<{ domain: string; keys: Array<string | null | undefined> }> = [];
-  const lease: ManagedWorkflowMaintenanceLease = {
-    holderId: 'test-maintainer',
-    fencingToken: 1,
-    assertCurrent: async () => {
-      leaseAssertions += 1;
-    },
-  };
-  const maintenance = {
-    config: { enabled: true, intervalMs: 60_000, leaseMs: 60_000, batchSize: 1 },
-    registerTask(name: string, task: ManagedWorkflowMaintenanceTask) {
-      maintenanceTasks.set(name, task);
-      return () => maintenanceTasks.delete(name);
-    },
-    enqueueObjectDeletions: async (_client: object, domain: string, keys: Array<string | null | undefined>) => {
-      enqueuedObjectKeys.push({ domain, keys });
-    },
-    initialize: async () => {},
-    requestRun: async () => {},
-    runNow: async () => {
-      for (const task of maintenanceTasks.values()) {
-        await task(lease);
-      }
-    },
-    dispose: async () => {},
-  };
-
-  const context = {
-    pool: {},
-    initialize: async () => {},
-    withTransaction: async (run: (client: object, hooks: TransactionHooks) => Promise<unknown>) => {
-      const result = await run(
-        {},
-        {
-          onCommit(task) {
-            commitTasks.push(task);
-          },
-          onRollback() {},
-        },
-      );
-      for (const task of commitTasks.splice(0)) {
-        await task();
-      }
-      return result;
-    },
-    revisions: {
-      uploadRecordingBlobs: async () => ({
-        recordingBlobKey: 'recording',
-        replayProjectBlobKey: 'project',
-        replayDatasetBlobKey: null,
-      }),
-      insertRecordingRow: async () => {},
-      deleteBlobKeysBestEffort: async () => {},
-    },
-    db: {
-      queryOne: async () => null,
-      queryRows: async (_client: object, sql: string, params: unknown[] = []) => {
-        if (sql.includes('DELETE FROM workflow_recordings')) {
-          const ids = params[0] as string[];
-          deletedIds.push(...ids);
-          return [oldestRow, oldRow].filter((row) => ids.includes(row.recording_id));
-        }
-        retentionQuery = { sql, parameters: params };
-        return [oldestRow];
-      },
-    },
-    maintenance,
-    blobStore: { getText: async () => '' },
-    mappers: {
-      getWorkflowStatus: () => 'unpublished',
-      mapWorkflowRowToProjectItem: () => ({}),
-      toIsoString: (value: unknown) => String(value),
-      WORKFLOW_COLUMNS_QUALIFIED: '',
-      RECORDING_COLUMNS: 'recording_id',
-    },
-  } as unknown as ManagedWorkflowContext;
-
-  const service = createManagedWorkflowRecordingService({
-    context,
-    getRecordingConfig: () => ({
-      enabled: true,
-      compression: 'gzip',
-      gzipLevel: 4,
+test('managed retention preserves startup recovery, live settings, fencing and cache invalidation', async (t) => {
+  await withScopedEnv(['RIVET_RECORDINGS_MAX_TOTAL_BYTES'], { RIVET_RECORDINGS_MAX_TOTAL_BYTES: '0' }, async () => {
+    const settings = {
       maxPendingWrites: 100,
-      includePartialOutputs: false,
-      includeTrace: false,
-      datasetMode: 'none',
       retentionDays: 14,
       maxRunsPerEndpoint: 100,
-      maxTotalBytes: 0,
-    }),
-  });
-  await service.initialize();
+      updatedAt: null,
+      source: 'app-settings' as const,
+    };
+    const readSettings = t.mock.method(runRecordingsSettingsRepository, 'readSync', () => ({
+      path: 'fixture',
+      revision: 'fixture',
+      value: settings,
+    }));
+    const oldestRow = createRecordingRow('oldest', 'endpoint', '2019-01-01T00:00:00.000Z');
+    const deletedIds: string[] = [];
+    let retentionQuery: { sql: string; parameters: unknown[] } | undefined;
+    let leaseAssertions = 0;
+    let initialized = false;
+    let committed = false;
+    let fault: string | null = 'health';
+    let recoveries = 0;
+    const taskFailures: unknown[] = [];
+    const invalidated: string[] = [];
+    t.mock.method(workflowRecordingInputCache, 'invalidate', (key: string) => {
+      assert.equal(committed, false, 'cache invalidation remains before transaction commit');
+      invalidated.push(key);
+    });
+    const maintenanceTasks = new Map<string, ManagedWorkflowMaintenanceTask>();
+    const enqueuedObjectKeys: Array<{ domain: string; keys: Array<string | null | undefined> }> = [];
+    const lease: ManagedWorkflowMaintenanceLease = {
+      holderId: 'test-maintainer',
+      fencingToken: 1,
+      assertCurrent: async () => {
+        assert.ok(initialized);
+        leaseAssertions += 1;
+        if (fault === 'lease') throw new Error('fixture lease failure');
+      },
+    };
+    const maintenance = {
+      config: { enabled: true, intervalMs: 60_000, leaseMs: 60_000, batchSize: 1 },
+      registerTask(name: string, task: ManagedWorkflowMaintenanceTask) {
+        assert.equal(maintenanceTasks.has(name), false, 'register each task only once');
+        maintenanceTasks.set(name, task);
+        return () => maintenanceTasks.delete(name);
+      },
+      enqueueObjectDeletions: async (_client: object, domain: string, keys: Array<string | null | undefined>) => {
+        enqueuedObjectKeys.push({ domain, keys });
+      },
+      runNow: async () => {
+        for (const [, task] of [...maintenanceTasks].sort(([left], [right]) => left.localeCompare(right))) {
+          try {
+            await task(lease);
+          } catch (error) {
+            taskFailures.push(error);
+          }
+        }
+      },
+    };
 
-  assert.match(retentionQuery?.sql ?? '', /WITH eligible_recordings/u);
-  assert.deepEqual(retentionQuery?.parameters, [14, 100, [], 1]);
-  assert.deepEqual(deletedIds, ['oldest']);
-  assert.equal(leaseAssertions, 1);
-  assert.deepEqual(enqueuedObjectKeys, [
-    {
-      domain: 'workflow-recording-retention',
-      keys: ['oldest/recording', 'oldest/project', null],
-    },
-  ]);
+    const context = {
+      pool: {},
+      initialize: async () => {
+        initialized = true;
+      },
+      withTransaction: async (run: (client: object) => Promise<unknown>) => {
+        committed = false;
+        const result = await run({});
+        committed = true;
+        return result;
+      },
+      revisions: {},
+      db: {
+        queryOne: async () => null,
+        queryRows: async (_client: object, sql: string, params: unknown[] = []) => {
+          if (sql.includes('FROM llm_profile_health')) {
+            if (fault === 'health') throw new Error('fixture health failure');
+            return fault === 'parse' ? [{ entry_json: 'invalid-json' }] : [];
+          }
+          if (sql.includes('DELETE FROM workflow_recordings')) {
+            const ids = params[0] as string[];
+            deletedIds.push(...ids);
+            return [oldestRow];
+          }
+          retentionQuery = { sql, parameters: params };
+          return [oldestRow];
+        },
+      },
+      maintenance,
+      blobStore: { getText: async () => '' },
+      mappers: { RECORDING_COLUMNS: 'recording_id' },
+    } as unknown as ManagedWorkflowContext;
+
+    const service = createManagedWorkflowRecordingService({
+      context,
+      evidence: {
+        recover: async () => {
+          recoveries++;
+        },
+      } as never,
+    });
+    assert.equal(readSettings.mock.callCount(), 0, 'construction must not read settings');
+    await service.initialize();
+    assert.equal(recoveries, 0, 'recovery is suppressed during the first startup pass');
+    assert.equal(deletedIds.length, 0);
+    assert.equal(taskFailures.length, 1);
+    assert.match(String(taskFailures[0]), /fixture health failure/, 'context initialization must precede the pass');
+    fault = null;
+    await service.initialize();
+    assert.equal(recoveries, 1, 'recovery becomes ready after even a logged failed pass settles');
+    assert.equal(maintenanceTasks.size, 2);
+
+    assert.deepEqual(retentionQuery?.parameters, [14, 100, [], 1]);
+    assert.deepEqual(deletedIds, ['oldest']);
+    assert.equal(leaseAssertions, 2);
+    assert.deepEqual(invalidated, [getManagedRecordingInputCacheKey(context.blobStore, oldestRow.recording_blob_key)]);
+    assert.deepEqual(enqueuedObjectKeys, [
+      {
+        domain: 'workflow-recording-retention',
+        keys: ['oldest/recording', 'oldest/project', null],
+      },
+    ]);
+    for (const failure of ['lease', 'health', 'parse']) {
+      fault = failure;
+      await service.cleanupWorkflowRecordingStorage();
+      assert.equal(deletedIds.length, 1, `${failure} failure must not delete recordings`);
+      assert.equal(enqueuedObjectKeys.length, 1, `${failure} failure must not enqueue deletions`);
+      assert.equal(invalidated.length, 1, `${failure} failure must not invalidate inputs`);
+    }
+    assert.equal(taskFailures.length, 4);
+    fault = null;
+    settings.retentionDays = settings.maxRunsPerEndpoint = 0;
+    const assertionsBefore = leaseAssertions;
+    await service.cleanupWorkflowRecordingStorage();
+    assert.equal(leaseAssertions, assertionsBefore, 'new disabled limits take effect without another transaction');
+    assert.equal(readSettings.mock.callCount(), 6, 'the production settings reader is consulted for every pass');
+  });
 });
 
 test('managed recording imports account for UTF-8 bytes instead of JavaScript characters', async () => {

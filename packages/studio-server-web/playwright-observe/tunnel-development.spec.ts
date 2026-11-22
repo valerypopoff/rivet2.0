@@ -1,6 +1,11 @@
 import { expect, test } from '@playwright/test';
 import { serializeProject, PromptNodeImpl, type Project } from '@valerypopoff/rivet2-core';
-import { authenticateIfNeeded, mockHostedEditorBootstrap, waitForDashboardReady } from './helpers/hostedEditorObserve';
+import {
+  authenticateIfNeeded,
+  mockHostedEditorBootstrap,
+  openProjectContextMenu,
+  waitForDashboardReady,
+} from './helpers/hostedEditorObserve';
 
 async function prepare(page: import('@playwright/test').Page) {
   await mockHostedEditorBootstrap(page);
@@ -594,6 +599,7 @@ test('backend outage preserves dirty edits; retry save permits safe bundle refre
   await page.mouse.move(box.x + 90, box.y + box.height / 2, { steps: 5 });
   await page.mouse.up();
   const save = page.locator('.active-project-save-button');
+  await openProjectContextMenu(page);
   await expect(save).toBeVisible();
   await save.click();
   await expect.poll(() => saves).toBe(1);
@@ -604,6 +610,7 @@ test('backend outage preserves dirty edits; retry save permits safe bundle refre
   ).toBeVisible();
   await expect(editor.locator('.projects-container .project').filter({ hasText: 'A' })).toHaveClass(/unsaved/);
   unavailable = false;
+  await openProjectContextMenu(page);
   await save.click();
   await expect.poll(() => saves).toBe(2);
   await expect(save).toHaveCount(0);
