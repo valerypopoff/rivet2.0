@@ -99,3 +99,18 @@ It checks the selected project during and after catalog loading and verifies
 the refreshed runs request uses that project ID. All seven focused browser
 tests passed against a fresh local build. See
 [the refresh lifecycle](recording-search-performance.md#refresh-and-session-lifecycle).
+
+## List viewport follow-up (2026-11-22)
+
+- [x] Remove the recordings list's outer visual frame and keep a horizontal
+      separator above the fixed footer.
+- [x] Keep 12 px above and below the list and 8 px between cards and the scrollbar.
+- [x] Preserve independent sidebar spacing, measured row heights, pagination and
+      the stacked layout on narrow windows.
+
+The local web build and seven focused headless Playwright journeys passed. They
+cover scroll-limit spacing, desktop/narrow layout, pagination, filtering, filter
+cancellation, empty histories and virtualized sub-run ordering in both ordinary
+and bad-only input searches. Documentation links, formatting and the Studio
+Server test-style checks passed. This is a presentation change; recording storage
+and production recompression are unchanged.
