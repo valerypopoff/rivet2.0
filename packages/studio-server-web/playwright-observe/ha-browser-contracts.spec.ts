@@ -1,6 +1,87 @@
 import { expect, test } from '@playwright/test';
-import { selectHaBrowserRecordingWorkflow } from '../../../deploy/studio-server/scripts/lib/ha-browser-probe.mjs';
+import { serializeProject, TextNodeImpl, type GraphId, type Project, type ProjectId } from '@valerypopoff/rivet2-core';
+import {
+  saveHaBrowserProject,
+  selectHaBrowserRecordingWorkflow,
+} from '../../../deploy/studio-server/scripts/lib/ha-browser-probe.mjs';
 import { mockHostedEditorBootstrap, waitForDashboardReady } from './helpers/hostedEditorObserve';
+
+test('HA retained browser can still save through the legacy sidebar', async ({ page }) => {
+  await page.setContent('<button class="active-project-save-button" onclick="this.remove()">Save</button>');
+  await saveHaBrowserProject(page, 'Legacy project', expect);
+  await expect(page.locator('.active-project-save-button')).toHaveCount(0);
+});
+
+test('HA browser saves a real retained edit through the current project menu and closes the overlay', async ({
+  page,
+}) => {
+  const name = 'HA retained project';
+  const path = `/workflows/${name}.rivet-project`;
+  const graphId = 'ha-save-graph' as GraphId;
+  const node = TextNodeImpl.create();
+  node.title = 'Retained text';
+  node.data.text = 'retained content';
+  node.visualData = { x: 100, y: 100, width: 250 };
+  const project: Project = {
+    metadata: { id: 'ha-save-project' as ProjectId, title: name, description: '', mainGraphId: graphId },
+    graphs: {
+      [graphId]: { metadata: { id: graphId, name: 'Main Graph', description: '' }, nodes: [node], connections: [] },
+    },
+  };
+  await mockHostedEditorBootstrap(page);
+  await page.route('**/api/projects/load', (route) =>
+    route.fulfill({
+      json: { contents: serializeProject(project), datasetsContents: null, revisionId: 'ha-open-revision' },
+    }),
+  );
+  await page.route('**/api/workflows/tree', (route) =>
+    route.fulfill({
+      json: {
+        root: '/workflows',
+        folders: [],
+        sync: { epoch: 'ha-save', revision: 0 },
+        projects: [
+          {
+            id: 'ha-save-project',
+            name,
+            fileName: `${name}.rivet-project`,
+            relativePath: `${name}.rivet-project`,
+            absolutePath: path,
+            updatedAt: '',
+            settings: { status: 'unpublished', endpointName: '', lastPublishedAt: null, publishedWebApps: [] },
+          },
+        ],
+      },
+    }),
+  );
+  const saved: string[] = [];
+  await page.route('**/api/projects/save', (route) => {
+    const body = route.request().postDataJSON() as { path: string; contents: string };
+    expect(body.path).toBe(path);
+    saved.push(body.contents);
+    return route.fulfill({ json: { path, revisionId: 'ha-save-revision' } });
+  });
+  await page.goto('/');
+  await waitForDashboardReady(page);
+  await page.locator('.project-row').filter({ hasText: name }).dblclick();
+  const editor = page.frameLocator('iframe.dashboard-editor-frame');
+  const title = editor.locator(`.node[data-nodeid="${node.id}"] .node-title`);
+  await expect(title).toBeVisible();
+  const box = (await title.boundingBox())!;
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width / 2 + 70, box.y + box.height / 2 + 40, { steps: 5 });
+  await page.mouse.up();
+  const dirty = editor.locator('.projects-container .project.active.has-unsaved-changes');
+  await expect(dirty).toBeVisible();
+  await expect(page.locator('.active-project-save-button')).toHaveCount(0);
+  await saveHaBrowserProject(page, name, expect);
+  await expect(dirty).toHaveCount(0);
+  expect(saved).toHaveLength(1);
+  expect(saved[0]).toContain('retained content');
+  await expect(page.locator('.workflow-project-context-menu-with-summary')).toBeHidden();
+  await title.click(); // A forgotten overlay must not intercept subsequent editor actions.
+});
 
 for (const status of ['succeeded', 'failed'] as const) {
   test(`HA browser proof finds its ${status} recording beyond the global first page`, async ({ page }) => {

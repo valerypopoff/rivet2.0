@@ -243,6 +243,16 @@ from the ready frame. Keep both protocols in `ha-release-gate.test.mjs`; preserv
 the original-socket closure and resumed-session checks. A successful image build
 does not establish promotion when this main-only gate fails.
 
+The HA proof observes retained edits through the editor's dirty project tab,
+not through Save-button visibility. Current Save lives in the project context
+menu, while an older retained browser can still have sidebar Save. At the actual
+save step, use the existing button when visible or open the named project's
+context menu; close that overlay before further editor interactions. The proof
+still verifies the saved bytes through the API and a second recorded execution.
+`ha-browser-contracts.spec.ts` exercises both Save locations and project-scoped
+recording selection. Keep these local browser checks before running main's
+exact-image HA gate; a develop browser success alone does not exercise that gate.
+
 ## Browser shard budget and hosted variability
 
 [Verify Studio Server 43434671248, editor shard 3](https://github.com/valerypopoff/rivet2.0/actions/runs/43434671248/job/131919256700)
@@ -259,23 +269,79 @@ parallel files contribute their total case work, not their shorter wall time.
 The earlier completed run also supplies the two cases interrupted in the later
 run. These measurements are scheduling estimates, not runtime guarantees.
 
-The November 21, 2026 local inventory has 394 cases in 42 selected specs, in four
+The November 22, 2026 local inventory has 396 cases in 42 selected specs, in four
 independent jobs with two browser workers each. The authoritative selection and
 weights live in [editor-test-shards.mjs](../../scripts/ci/editor-test-shards.mjs).
-The original 38-spec estimates come from the hosted runs above; later additions
-include Bus ordering, Passthrough labels, published history and graph-call paths,
-with local-work hints pending hosted timing refresh. Current combined work
-estimates are 1,015-1,025 seconds per shard, not measured elapsed times. The shard
+Weights now use the higher total per-file case work from successful hosted runs
+`44964153448` and `45041549860`, rounded up to five seconds. The renamed
+`ha-browser-contracts.spec.ts` adds the two Save checks; its temporary 25-second
+hint includes headroom over the measured recording-selection cases. Current
+combined work estimates are 980-990 seconds per shard, not measured elapsed times. The shard
 contract checks exact-once coverage, balanced weights and a
 75% work budget against the existing 12-minute/two-worker step limit (1,080
 seconds). This leaves room for setup, serial tails and runner variation; increasing
 the suite requires reviewing that headroom rather than merely keeping equal sums.
 The browser image, isolation, assertions, retry policy and timeouts stay unchanged.
 
+The Node/WebSocket executor-retirement fixture runs once in the web-tests job,
+after restoring and verifying the same-commit Core/Node builds. It needs no
+Chromium. This removes unrelated work from browser shard 1 without omitting it
+from the final required verification. The workflow guard rejects skipped,
+duplicated or source-only retirement placement.
+
 Validate `ci-performance.test.mjs` and the workflow guard, list all four selections
 to confirm exact-once test coverage, and run the affected real browser journeys.
 After pushing, confirm every hosted shard's final result and elapsed time before
 calling the repair complete. Keep this budget guidance in the local checklist.
+
+Run `45041549860` completed Verify in 16m27s; its slowest browser job took
+10m52s including setup. Developer Desktop Release `45041549856` took 17m17s,
+with Intel packaging the longest native lane. These gates are close: shortening
+only one does not remove the other from the all-green critical path. Rebalancing
+is expected to trim browser tails, not halve the workflow. Evidence and timing
+inputs are in ignored `artifacts/ci-critical-path-20261122/`.
+
+## Intel macOS runner experiment
+
+The normal release matrix still builds Intel on `macos-15-intel` and Apple Silicon
+on `macos-15`. Developer Desktop Release has an explicit manual
+`benchmark_macos_intel=true` option on `develop`; that mode skips release/Pages
+publication and calls the read-only `desktop-macos-benchmark.yml` workflow.
+Its default is false, so push and ordinary manual releases keep their behavior.
+
+The experiment builds the same `x86_64-apple-darwin` source and verified exact-Build
+frontend on both hosts. Both use Rust 1.100.0 and the normal signing, notarization,
+architecture, executor and pnpm checks. The Apple Silicon host must already be
+able to execute Intel binaries through Rosetta; no automatic license installation
+or fallback is permitted. Its signed candidate is also transferred as a tar
+archive, preserving executable modes, and checked on a native Intel runner.
+No artifact is published as a release, and no GCP qualification or rollout runs.
+
+Initial dependency-cache availability differs across hosts. Both perform a full
+warm-up build, then clean only the app's release artifacts and bundle directory
+before the measured complete rebuild. Dependency caches survive that cleanup;
+benchmark jobs do not save Rust caches. Compare measured rebuild, signing,
+notarization and native-verification time separately from warm-up/setup/cache
+transfer time. A warm rebuild result is not a cold-build result. Compare the
+recorded Xcode/SDK versions before interpreting timings; mismatched toolchains
+need a matched repeat, not a speed claim.
+
+Use job/step durations and include the extra native verification, transfer and
+runner-queue costs when estimating release benefit. One run is a feasibility
+measurement, not grounds to switch regular hosts. Retain current release runners
+until repeated representative runs demonstrate a useful all-green reduction
+with every native/signing check passing. Local workflow and browser validation
+cannot establish a macOS speedup on the Windows development machine.
+
+After publishing the reviewed workflow changes, run the existing manual entry:
+
+```sh
+gh workflow run developer-windows-release.yml --ref develop -f benchmark_macos_intel=true
+```
+
+The entry already exists on the default branch. Select the reviewed `develop`
+ref; the experiment's exact-source Build must have succeeded before signing.
+Do not merge main or run the ordinary publication mode just to start an experiment.
 
 For the original 38-spec repair, local verification passed all 17 CI-performance
 tests, workflow/style/import and documentation checks, and its unchanged

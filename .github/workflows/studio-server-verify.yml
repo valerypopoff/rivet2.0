@@ -174,6 +174,9 @@ jobs:
         run: yarn studio-server:verify:web-pure
       - name: Verify hosted executor Subgraph loader
         run: yarn workspace @valerypopoff/rivet-studio-server-executor run test:runtime
+      # This Node/WebSocket fixture needs the verified runtime builds, not Chromium.
+      - name: Verify accepted executor retirement
+        run: yarn studio-server:verify:executor-retirement
       - name: Report timing
         if: always()
         run: node scripts/ci/job-timing.mjs finish "Studio Server web tests"
@@ -224,11 +227,6 @@ jobs:
           path: packages
       - name: Verify restored compiled workspace dependencies
         run: yarn check:compiled-workspace-exports
-      # The executor subprocess consumes compiled Core/Node exports restored above.
-      # Keep this runtime regression out of the source-only repository-contract job.
-      - name: Verify accepted executor retirement
-        if: matrix.label == 1
-        run: yarn studio-server:verify:executor-retirement
       - name: Prepare browser runtime
         id: browser-runtime
         timeout-minutes: 4

@@ -144,9 +144,18 @@ not a relaxation of recording durability or a production runtime change.
 The retained-browser proof likewise selects its exact fixture through the normal
 Run recordings workflow dropdown before opening either acknowledged recording.
 It must not assume that the default Any/page-one view contains its run while
-continuous endpoint traffic is active. `ha-recording-selection.spec.ts`, enrolled
+continuous endpoint traffic is active. `ha-browser-contracts.spec.ts`, enrolled
 in the editor CI lane, exercises the shared probe action against 120 newer foreign
 runs and verifies both successful and failed fixture recordings remain reachable.
+
+Observe unsaved continuity through the active editor tab's dirty marker. Save
+visibility depends on the retained UI: older builds have sidebar Save, while
+current builds expose it in the project's context-menu header. The shared probe
+uses either location and closes the menu before resuming editor actions. Its
+browser regression loads a real saved revision before editing, saves exactly
+once, waits for the dirty marker to clear and checks that the overlay is closed.
+The HA journey still verifies the actual saved bytes and a new recorded execution
+against the candidate backend; opening a menu alone cannot satisfy the proof.
 
 ### Latest regional follow-up: DNS gap fixed locally, provider proof unchanged
 

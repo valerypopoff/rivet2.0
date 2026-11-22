@@ -619,11 +619,7 @@ assert.match(
   findStep(studioJobs['editor-regression'], 'Upload Playwright failure artifacts', 'Editor shards').with.name,
   /matrix\.label/,
 );
-const executorRetirement = findStep(
-  studioJobs['editor-regression'],
-  'Verify accepted executor retirement',
-  'Editor regressions',
-);
+const executorRetirement = findStep(studioJobs['web-tests'], 'Verify accepted executor retirement', 'Web tests');
 const serverScripts = JSON.parse(read('package.json')).scripts;
 assert.equal(
   serverScripts['studio-server:verify:executor-retirement'],
@@ -639,10 +635,14 @@ assert.match(
   /studio-server:build && yarn studio-server:verify:executor-retirement/,
 );
 assert.equal(executorRetirement.run, 'yarn studio-server:verify:executor-retirement');
+assert.equal(executorRetirement.if, undefined, 'Retirement coverage is mandatory in the single web-tests job.');
+assert.equal(executorRetirement['continue-on-error'], undefined);
 assert.equal(
-  executorRetirement.if,
-  'matrix.label == 1',
-  'Retirement coverage runs exactly once, not once per browser shard.',
+  Object.values(studioJobs)
+    .flatMap((job) => job.steps ?? [])
+    .filter((step) => step.run === executorRetirement.run).length,
+  1,
+  'Retirement coverage must run exactly once.',
 );
 const subgraphLoader = findStep(studioJobs['web-tests'], 'Verify hosted executor Subgraph loader', 'Web tests');
 assert.equal(subgraphLoader.run, 'yarn workspace @valerypopoff/rivet-studio-server-executor run test:runtime');
@@ -657,13 +657,9 @@ assert.match(serverScripts['studio-server:verify:production-cutover'], /rivet-st
 assert.doesNotMatch(serverScripts['studio-server:verify:production-cutover'], /test:runtime/);
 assert.match(serverScripts['studio-server:test'], /rivet-studio-server-executor run test:runtime/);
 assert.ok(
-  studioJobs['editor-regression'].steps.indexOf(executorRetirement) >
-    studioJobs['editor-regression'].steps.indexOf(
-      findStep(
-        studioJobs['editor-regression'],
-        'Verify restored compiled workspace dependencies',
-        'Editor regressions',
-      ),
+  studioJobs['web-tests'].steps.indexOf(executorRetirement) >
+    studioJobs['web-tests'].steps.indexOf(
+      findStep(studioJobs['web-tests'], 'Verify restored compiled workspace dependencies', 'Web tests'),
     ),
   'Real executor retirement requires verified same-commit Core/Node builds, not source-only contracts.',
 );
@@ -1956,6 +1952,66 @@ for (const workflowPath of [
   );
 }
 
+// Runner experiments must be opt-in, nonpublishing and retain native validation.
+const desktopDeveloper = parseWorkflow('.github/workflows/developer-windows-release.yml').workflow;
+assert.equal(desktopDeveloper.on.workflow_dispatch.inputs.benchmark_macos_intel.type, 'boolean');
+assert.equal(desktopDeveloper.on.workflow_dispatch.inputs.benchmark_macos_intel.default, false);
+assert.equal(desktopDeveloper.jobs.release.if, '${{ !inputs.benchmark_macos_intel }}');
+const desktopBenchmark = desktopDeveloper.jobs['benchmark-macos-intel'];
+assert.equal(desktopBenchmark.uses, './.github/workflows/desktop-macos-benchmark.yml');
+assert.equal(
+  desktopBenchmark.if,
+  "github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/develop' && inputs.benchmark_macos_intel",
+);
+const benchmark = parseWorkflow('.github/workflows/desktop-macos-benchmark.yml').workflow;
+assert.deepEqual(Object.keys(benchmark.on), ['workflow_call']);
+assert.deepEqual(benchmark.permissions, { actions: 'read', contents: 'read' });
+assert.deepEqual(desktopBenchmark.permissions, benchmark.permissions);
+assert.deepEqual(Object.keys(benchmark.jobs), ['frontend', 'build', 'verify-native-intel']);
+assert.equal(
+  benchmark.jobs.frontend.if,
+  "github.ref == 'refs/heads/develop' && github.event_name == 'workflow_dispatch'",
+);
+assert.deepEqual(benchmark.jobs.build.strategy.matrix.runner, ['macos-15-intel', 'macos-15']);
+assert.equal(benchmark.jobs.build.env.RIVET_DESKTOP_TARGET, 'x86_64-apple-darwin');
+assert.equal(benchmark.jobs['verify-native-intel']['runs-on'], 'macos-15-intel');
+assert.deepEqual(asArray(benchmark.jobs['verify-native-intel'].needs), ['build']);
+const benchmarkEvidence = findStep(benchmark.jobs.frontend, 'Require successful exact Build', 'macOS benchmark');
+assert.equal(benchmarkEvidence.run, 'node scripts/ci/desktop-build-evidence.mjs validated');
+assert.equal(benchmarkEvidence.env.BUILD_RUN_ID, '${{ steps.build.outputs.run_id }}');
+assert.equal(benchmarkEvidence.env.BUILD_RUN_ATTEMPT, '${{ steps.build.outputs.run_attempt }}');
+for (const job of Object.values(benchmark.jobs)) {
+  assert.equal(job.permissions, undefined, 'Benchmark jobs inherit read-only permissions');
+  assert.equal(job['continue-on-error'], undefined);
+  for (const step of job.steps) assert.equal(step['continue-on-error'], undefined);
+}
+for (const name of ['Warm dependencies with complete signed Intel build', 'Measure complete signed Intel rebuild']) {
+  const step = findStep(benchmark.jobs.build, name, 'macOS benchmark');
+  const releaseStep = findStep(reusableJobs['build-macos'], 'Build Tauri macOS bundle', 'macOS release');
+  assert.equal(step.run, releaseStep.run.replace('${{ matrix.target }}', 'x86_64-apple-darwin'));
+  assert.equal(step.if, undefined);
+  for (const [key, value] of Object.entries(releaseStep.env).filter(([key]) => key.startsWith('APPLE_')))
+    assert.equal(step.env[key], value, `Benchmark must preserve ${key}`);
+}
+for (const name of ['Notarize macOS DMG', 'Verify macOS signing and notarization']) {
+  const step = findStep(benchmark.jobs.build, name, 'macOS benchmark');
+  assert.equal(step.if, undefined);
+  assert.equal(
+    step.run,
+    findStep(reusableJobs['build-macos'], name, 'macOS release').run.replaceAll(
+      '${{ matrix.target }}',
+      'x86_64-apple-darwin',
+    ),
+  );
+}
+assert.equal(
+  findStep(
+    benchmark.jobs['verify-native-intel'],
+    'Verify candidate signing and notarization on native Intel',
+    'macOS benchmark',
+  ).run,
+  findStep(benchmark.jobs.build, 'Verify macOS signing and notarization', 'macOS benchmark').run,
+);
 const taggedDesktopRelease = parseWorkflow('.github/workflows/release.yml');
 const taggedReleaseJobs = taggedDesktopRelease.workflow.jobs;
 assert.deepEqual(

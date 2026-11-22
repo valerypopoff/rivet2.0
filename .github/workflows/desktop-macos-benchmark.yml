@@ -1,0 +1,169 @@
+name: Intel macOS runner comparison
+
+on:
+  workflow_call:
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  frontend:
+    if: github.ref == 'refs/heads/develop' && github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22.21.1'
+      - name: Locate exact Build frontend
+        id: build
+        run: node scripts/ci/desktop-build-evidence.mjs artifact
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+      - name: Require successful exact Build
+        run: node scripts/ci/desktop-build-evidence.mjs validated
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          BUILD_RUN_ID: ${{ steps.build.outputs.run_id }}
+          BUILD_RUN_ATTEMPT: ${{ steps.build.outputs.run_attempt }}
+      - name: Download exact Build frontend
+        uses: actions/download-artifact@v7
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ steps.build.outputs.run_id }}
+          artifact-ids: ${{ steps.build.outputs.artifact_id }}
+          path: packages/app
+      - name: Verify exact Build frontend
+        run: node scripts/ci/desktop-web-artifact.mjs verify
+      - uses: actions/upload-artifact@v7
+        with:
+          name: macos-benchmark-web-${{ github.sha }}
+          path: |
+            packages/app/dist
+            packages/app/desktop-web-artifact.json
+          if-no-files-found: error
+          retention-days: 3
+
+  build:
+    needs: frontend
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-15-intel, macos-15]
+    env:
+      # Both hosts build the SAME Intel package. Keep normal release hosts unchanged.
+      RIVET_DESKTOP_TARGET: x86_64-apple-darwin
+      NODE_OPTIONS: --max-old-space-size=6000
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/setup-yarn
+      - uses: ./.github/actions/setup-pkg-cache
+      - uses: dtolnay/rust-toolchain@1.100.0
+        with:
+          targets: x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: packages/app/src-tauri -> target
+          key: x86_64-apple-darwin
+          save-if: false
+      - name: Record toolchain and verify Intel execution
+        run: |
+          uname -a
+          sysctl -n machdep.cpu.brand_string
+          xcodebuild -version
+          xcrun --sdk macosx --show-sdk-version
+          rustc -Vv
+          node --version
+          arch -x86_64 /usr/bin/true
+      - name: Install dependencies
+        run: node .yarn/releases/yarn-4.17.1.cjs install --immutable --immutable-cache
+      - name: Sync desktop version metadata
+        run: yarn sync:desktop-version
+      - uses: actions/download-artifact@v7
+        with:
+          name: macos-benchmark-web-${{ github.sha }}
+          path: packages/app
+      - name: Prepare Apple signing and notarization
+        run: bash .github/scripts/prepare-macos-signing-env.sh
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_PRIVATE_KEY: ${{ secrets.APPLE_API_PRIVATE_KEY }}
+      # The first build primes dependencies on BOTH hosts. Do not compare its
+      # asymmetric cache-restore timings with the measured warm rebuild below.
+      - name: Warm dependencies with complete signed Intel build
+        run: node .github/scripts/build-macos-dmg.mjs x86_64-apple-darwin --prebuilt-web
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+      - name: Remove only app outputs before measurement
+        run: |
+          cargo clean --manifest-path packages/app/src-tauri/Cargo.toml --package app --release --target x86_64-apple-darwin
+          rm -rf packages/app/src-tauri/target/x86_64-apple-darwin/release/bundle
+      - name: Measure complete signed Intel rebuild
+        run: node .github/scripts/build-macos-dmg.mjs x86_64-apple-darwin --prebuilt-web
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+      - name: Verify packaged executor project bundles
+        run: |
+          yarn workspace @valerypopoff/rivet2-core run build
+          yarn workspace @valerypopoff/rivet-app-executor exec tsx --test bin/executor.projectBundle.test.mts
+        env:
+          RIVET_TEST_PACKAGED_EXECUTOR: ${{ github.workspace }}/packages/app-executor/dist/app-executor-x86_64-apple-darwin
+      - name: Notarize macOS DMG
+        run: bash .github/scripts/notarize-macos-dmg.sh packages/app/src-tauri/target/x86_64-apple-darwin/release/bundle
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+      - name: Verify macOS signing and notarization
+        run: bash .github/scripts/verify-macos-dmg.sh packages/app/src-tauri/target/x86_64-apple-darwin/release/bundle x86_64-apple-darwin
+      - name: Archive candidate for native Intel verification
+        if: matrix.runner == 'macos-15'
+        run: |
+          tar -czf macos-intel-candidate.tgz \
+            packages/app/src-tauri/target/x86_64-apple-darwin/release/bundle \
+            packages/app-executor/dist/app-executor-x86_64-apple-darwin
+      - uses: actions/upload-artifact@v7
+        if: matrix.runner == 'macos-15'
+        with:
+          name: macos-intel-candidate-${{ github.sha }}
+          path: macos-intel-candidate.tgz
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 3
+
+  verify-native-intel:
+    needs: build
+    runs-on: macos-15-intel
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/setup-yarn
+      - run: node .yarn/releases/yarn-4.17.1.cjs install --immutable --immutable-cache
+      - uses: actions/download-artifact@v7
+        with:
+          name: macos-intel-candidate-${{ github.sha }}
+      - run: tar -xzf macos-intel-candidate.tgz
+      - name: Verify packaged executor project bundles on native Intel
+        run: |
+          yarn workspace @valerypopoff/rivet2-core run build
+          yarn workspace @valerypopoff/rivet-app-executor exec tsx --test bin/executor.projectBundle.test.mts
+        env:
+          RIVET_TEST_PACKAGED_EXECUTOR: ${{ github.workspace }}/packages/app-executor/dist/app-executor-x86_64-apple-darwin
+      - name: Verify candidate signing and notarization on native Intel
+        run: bash .github/scripts/verify-macos-dmg.sh packages/app/src-tauri/target/x86_64-apple-darwin/release/bundle x86_64-apple-darwin

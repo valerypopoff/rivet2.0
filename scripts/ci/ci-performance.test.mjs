@@ -574,6 +574,7 @@ test('balanced editor shards cover every selected spec exactly once and reject i
   assert.ok(editorCiSpecs.includes('run-cost-statistics.spec.ts'));
   assert.ok(editorCiSpecs.includes('data-bus-order.spec.ts'));
   assert.ok(editorCiSpecs.includes('passthrough-port-labels.spec.ts'));
+  assert.ok(editorCiSpecs.includes('ha-browser-contracts.spec.ts'));
   assert.equal(new Set(editorCiSpecs).size, editorCiSpecs.length);
   assert.deepEqual(selectEditorCiSpecs(), editorCiSpecs);
   const selected = ['1/4', '2/4', '3/4', '4/4'].flatMap(selectEditorCiSpecs);
