@@ -415,6 +415,11 @@ their children in cleanup even when an assertion or test timeout interrupts them
   on the final code, including both recovery scenarios and retained-browser acceptance. Use the
   existing `kubernetes-ha-release-gate.mjs certify` owner and required explicit
   disposable context; do not substitute unit tests for its certificates.
+- Run Build's separate image/launcher contract command:
+  `yarn workspace @valerypopoff/rivet-studio-server-api run test:files src/tests/proxy-image-contract.test.ts`.
+  Its managed-test command assertions follow the reusable scenario workflow; the
+  caller must still invoke that workflow. Root style/source checks do not run this
+  independent contract suite.
 
 ## Hosted validation and completion criteria
 
