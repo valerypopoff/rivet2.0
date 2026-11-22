@@ -152,12 +152,14 @@ rejected omission of each of the five required producer jobs. These checks do no
 replace full image-backed Kind certification or queue-inclusive hosted timing
 trials; both remain required before default activation.
 
-The first develop push (`45060256869`) exposed a stale image/launcher contract:
-it searched the caller for managed-test commands moved into the reusable scenario.
-The contract now checks the call and both commands in their owning workflow,
-and its source restrictions cover caller and callee. Run this separate Build
-command alongside root style/source checks when extracting workflow steps; those
-checks do not select `proxy-image-contract.test.ts`.
+The first develop pushes exposed stale image/launcher (`45060256869`) and
+repository-structure (`45060581836`) guards: they searched the caller for commands
+and per-scenario artifact names moved into the reusable workflow. Both now check
+the call and their original guarantees in the owning workflow, including the
+`inputs.scenario`/run/attempt artifact binding. Their source restrictions cover
+caller and callee. Run Build's separate `proxy-image-contract.test.ts` command and
+`yarn studio-server:verify:repo-structure` alongside root style/source checks when
+extracting workflow steps; those checks do not select these independent guards.
 
 ## Local pre-push recurrence checklist
 

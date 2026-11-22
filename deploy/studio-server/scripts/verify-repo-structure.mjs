@@ -33,6 +33,7 @@ const requiredPaths = [
   '.yarnrc.yml',
   'scripts/checks/check-package-manager.mjs',
   '.github/workflows/studio-server-images.yml',
+  '.github/workflows/studio-server-ha-scenario.yml',
   '.github/workflows/studio-server-verify.yml',
   'deploy/studio-server/scripts/api-test-files.mjs',
   'deploy/studio-server/scripts/run-api-tests.mjs',
@@ -306,6 +307,8 @@ assert.match(compatibilityScanner, /SCRIPT_DIR\/\.\.\/\.\.\/\.\./);
 assert.doesNotMatch(compatibilityScanner, /replacing rivet\//i);
 
 const imageWorkflow = readText('.github/workflows/studio-server-images.yml');
+const haScenarioWorkflow = readText('.github/workflows/studio-server-ha-scenario.yml');
+assert.match(imageWorkflow, /uses: \.\/\.github\/workflows\/studio-server-ha-scenario\.yml/);
 assert.match(imageWorkflow, /verify-repository:\s*\r?\n\s+uses: \.\/\.github\/workflows\/studio-server-verify\.yml/);
 assert.match(imageWorkflow, /fast-container-smoke:[\s\S]*studio-server:verify:candidate-images/);
 const imageWorkflowPermissions = /^permissions:\r?\n((?:^[ \t]+[^\r\n]*\r?\n)+)/m.exec(imageWorkflow)?.[1] ?? '';
@@ -314,14 +317,14 @@ assert.match(imageWorkflowPermissions, /^\s+contents:\s+read\s*$/m);
 assert.match(imageWorkflowPermissions, /^\s+packages:\s+write\s*$/m);
 assert.match(imageWorkflow, /IMAGE_NAMESPACE: ghcr\.io\/valerypopoff\/rivet2\.0-studio-server/);
 assert.match(
-  imageWorkflow,
-  /name: managed-kubernetes-release-gate-\$\{\{ matrix\.scenario \}\}-\$\{\{ github\.run_id \}\}-\$\{\{ github\.run_attempt \}\}/,
+  haScenarioWorkflow,
+  /name: managed-kubernetes-release-gate-\$\{\{ inputs\.scenario \}\}-\$\{\{ github\.run_id \}\}-\$\{\{ github\.run_attempt \}\}/,
 );
 assert.match(
   imageWorkflow,
   /name: managed-kubernetes-provider-gate-\$\{\{ github\.run_id \}\}-\$\{\{ github\.run_attempt \}\}/,
 );
-assert.doesNotMatch(imageWorkflow, /cloud-hosted-rivet2-wrapper/);
+assert.doesNotMatch(`${imageWorkflow}\n${haScenarioWorkflow}`, /cloud-hosted-rivet2-wrapper/);
 
 const dockerfiles = [
   'deploy/studio-server/images/api/Dockerfile',

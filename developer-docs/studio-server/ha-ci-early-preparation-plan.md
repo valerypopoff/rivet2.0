@@ -420,6 +420,8 @@ their children in cleanup even when an assertion or test timeout interrupts them
   Its managed-test command assertions follow the reusable scenario workflow; the
   caller must still invoke that workflow. Root style/source checks do not run this
   independent contract suite.
+- Run `yarn studio-server:verify:repo-structure` too. Its per-scenario artifact
+  guard follows the reusable workflow and retains scenario/run/attempt binding.
 
 ## Hosted validation and completion criteria
 
