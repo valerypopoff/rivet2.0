@@ -1974,7 +1974,11 @@ assert.equal(
 );
 assert.deepEqual(benchmark.jobs.build.strategy.matrix.runner, ['macos-15-intel', 'macos-15']);
 assert.equal(benchmark.jobs.build.env.RIVET_DESKTOP_TARGET, 'x86_64-apple-darwin');
-assert.equal(benchmark.jobs.build.env.PKG_CACHE_PATH, '${{ runner.temp }}/rivet-macos-benchmark-pkg');
+assert.equal(benchmark.jobs.build.env.PKG_CACHE_PATH, undefined, 'Runner paths must be resolved inside a step');
+assert.match(
+  findStep(benchmark.jobs.build, 'Record toolchain and verify Intel execution', 'macOS benchmark').run,
+  /echo "PKG_CACHE_PATH=\$benchmark_pkg_cache" >> "\$GITHUB_ENV"/,
+);
 assert.ok(!benchmark.jobs.build.steps.some((step) => step.uses === './.github/actions/setup-pkg-cache'));
 assert.equal(benchmark.jobs['verify-native-intel']['runs-on'], 'macos-15-intel');
 assert.deepEqual(asArray(benchmark.jobs['verify-native-intel'].needs), ['build']);

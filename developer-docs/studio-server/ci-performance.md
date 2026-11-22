@@ -31,6 +31,18 @@ to distinguish real failures from expected negative-test errors, downstream
 refusals and unstarted jobs. This is a local preparation aid, not another CI gate
 or cloud-test requirement.
 
+For workflow YAML changes, also run [actionlint](https://github.com/rhysd/actionlint)
+on the changed files before pushing, alongside the repository's workflow policy
+check. YAML parsing does not validate GitHub expression-context availability.
+The cache-isolation repair in `3c8dbba1a` passed the YAML/policy checks but GitHub
+rejected `runner.temp` in job-level `env`. Local actionlint 1.7.12 reproduced the
+same error. Resolve `$RUNNER_TEMP` inside a step and export through `$GITHUB_ENV`;
+do not rely on a step-only expression context while defining the job.
+For the expression/type check alone, use `actionlint -shellcheck= -pyflakes=`
+with the changed workflow paths. Keep shell/Python validation separate when
+those bodies change; disabling their external lint integrations does not disable
+GitHub-expression checks.
+
 The pinned-Yarn API shard smoke test accepts both TAP and spec-reporter summary
 prefixes. Node's default reporter can vary with the output stream; a successful
 selected shard must report a nonzero passing count, zero failures and exit zero,
