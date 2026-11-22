@@ -17,6 +17,92 @@ Keep the full real-time routing-withdrawal, accepted-work and recovery proofs;
 look for independent preparation and duplicated work around them, rather than
 reducing their protection windows or assuming a faster compiler halves the run.
 
+## Current priorities: November 22, 2026
+
+Use this ranking for new performance work; later sections retain earlier evidence
+and procedures, including proposals that have since been measured or superseded.
+
+The latest [full verification](https://github.com/valerypopoff/rivet2.0/actions/runs/45048439797)
+passed all 19 jobs and 396 browser cases in **18m46s**. Its managed-storage lane
+took **13m25s**, including **8m07s** in VM-to-managed migration verification.
+The slowest browser job took **10m29s**; the gateway lane took **9m50s**. These
+are parallel job times, not durations to add together. The source/build path
+finished about 5m12s after the workflow started.
+
+**Implemented locally: the complete VM-migration integration suite has its own
+required parallel job, alongside the other managed-storage checks.** It owns its temporary
+roots, PostgreSQL and MinIO containers, environment and cleanup. It does not
+require the preceding managed tests' data. Preserve the existing serial order
+inside `workflow-storage-migration-managed.integration.ts`: its negative cases,
+idempotent retries, source mutations, rollback checks and supervised restores
+deliberately share fixture state.
+
+`studio-server-verify.yml` now has four deployment-contract lanes: `managed`,
+`migration`, `deployment` and `gateway`, with up to four separate standard runners.
+They retain the same source/build prerequisites, verified exact-commit artifact,
+20-minute job limits and fail-fast-disabled behavior. The existing final status
+requires the entire matrix, including the migration job.
+
+The migration job checks its compiled schema CLI, serving API and executor bundle
+before running the unchanged, complete integration entry through the pinned Yarn
+CLI. This avoids the redundant API rebuild in `test:migration-managed`. That
+ordinary local build-and-test command remains unchanged; so do the fixture's
+fresh child processes, internal ordering, resource limits and cleanup. Missing
+or empty compiled artifacts fail before test infrastructure starts. The reduced
+`--supervised-restore-only` feedback mode is not used by CI.
+
+`assertParallelMigrationVerification` guards lane membership, concurrency,
+artifact-verification ordering, exactly one complete migration invocation and
+the final required result. Regression mutations cover omitted prerequisites,
+serialization, skipped/filtered/duplicated commands and ignored failures.
+
+Local validation passed the unchanged complete migration suite through the new
+CI command, including both supervised restores. The independent PostgreSQL
+schema suite also passed while migration was running. Missing/empty runtime
+artifacts and failed/cancelled/skipped final results were rejected. All ten
+workflow-policy tests, `yarn test:style` and actionlint passed; the fixture cleaned
+up its containers without changing the existing local development stack.
+
+Hosted validation still needs every lane and browser case on the same source.
+Include cold image pulls, checkout/install time and account-level queueing in
+the comparison. Compare total elapsed time and runner-minutes, not only test
+time. No hosted speedup is claimed yet.
+
+With the last run's timings, separating an approximately eight-minute test from
+the other approximately five minutes of managed checks would put both below the
+current browser limit. This suggests **roughly three minutes** off full develop
+verification (about 18m46s to around 16 minutes), subject to cold setup and queues.
+It cannot remove eight minutes from the workflow: the browser and gateway jobs
+then become the limits. Reassess after a complete hosted run rather than adding
+more browser jobs immediately.
+
+The migration harness also repeatedly launches the CLI through Yarn/tsx, and
+logs show roughly ten-second intervals between many child results. That is a
+profiling lead, not proof that TypeScript translation dominates. A small local
+Windows invalid-command startup probe measured median source startup **7.74s**
+and compiled startup **8.56s** (three launches each). Simply switching to compiled
+JavaScript has **no demonstrated startup benefit**; do not count it as a saving
+or replace process-isolation tests with in-process calls. Profile imports and
+startup separately if that work is pursued later. Evidence is in ignored
+`artifacts/ci-critical-path-20261122/`.
+
+The [Intel-on-Apple-Silicon experiment](https://github.com/valerypopoff/rivet2.0/actions/runs/45047306470)
+passed signing, notarization and native Intel checks with matched Rust/Xcode/SDK
+versions. Its warm rebuild was 108s versus 170s on Intel, but the additional
+native verification cost 203s. Removing intentional warm-ups gives an estimated
+checked path of 8m02s versus 7m43s, excluding queueing. Keep the normal native
+release runners; this did not establish an overall warm-path speedup.
+
+For **main**, `Build Images` invokes this same verification with `force: true`,
+so it benefits from a shorter verification lane. However, main's most recent
+33m36s run still used source `9e0506a39`, before the current develop optimizations;
+its 22m16s HA lane was longer than verification. Do not claim a three-minute
+main workflow saving from this split. At the next approved merge, measure the
+updated image/HA path first, then target independent cluster/image preparation
+and repeated setup if they remain dominant. Preserve actual drain, routing and
+recovery observation windows. Bundler replacement and additional browser
+parallelism are lower priorities until a current critical path justifies them.
+
 ## Local pre-push recurrence checklist
 
 Keep repeatable CI findings in `developer-docs/studio-server/ci-pre-push.local.md`.
@@ -886,10 +972,10 @@ promotion. It does not replace Yarn/Cargo audits or introduce a cloud rehearsal.
   The shared isolated-editor bootstrap mocks optional provider-environment
   lookups as unset; it must not contact an ambient API or read local credentials.
   Individual provider tests can override that route with their own fixture.
-- Deployment contracts have three required, isolated matrix lanes: managed
-  storage/schema/restore, deployment-command/Helm contracts, and gateway/proxy
-  behavior. Deployment checks no longer wait behind PostgreSQL/restore fixtures.
-  All three consume verified same-commit compiled artifacts. Proxy templates still run
+- Deployment contracts have four required, isolated matrix lanes: managed
+  storage/schema, VM migration/restore, deployment/Helm contracts, and gateway/proxy
+  behavior. The full VM migration suite runs independently of other PostgreSQL
+  checks. All four consume verified same-commit compiled artifacts. Proxy templates still run
   serially through real DNS expiry, address replacement and unhealthy/healthy
   transitions; no TTL or outage assertion is shortened to improve timings.
   Fixture phases within each lane remain ordered. Only the deployment lane

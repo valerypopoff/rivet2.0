@@ -5,7 +5,11 @@ import { parseDocument } from 'yaml';
 import { imagePlatforms, nginxImage, runtimeNodeImage, esbuildCompilerImage } from '../ci/scan-container-images.mjs';
 import { browserCiEndpoint } from '../ci/verify-browser-environment.mjs';
 import { ACTIONS_QUALIFICATION_MAX_SECONDS } from '../../deploy/studio-server/scripts/lib/runtime-qualification-execution.mjs';
-import { assertFastReleasePolicy, assertPinnedProviderHelm } from '../ci/release-workflow-policy.mjs';
+import {
+  assertFastReleasePolicy,
+  assertParallelMigrationVerification,
+  assertPinnedProviderHelm,
+} from '../ci/release-workflow-policy.mjs';
 
 const rootDir = process.cwd();
 
@@ -696,15 +700,12 @@ assert.equal(
   findStep(repositoryContracts, 'Report timing', 'Repository contracts').if,
   "${{ !cancelled() && env.RIVET_CI_JOB_STARTED_AT != '' }}",
 );
-assert.deepEqual(asArray(studioJobs['deployment-contracts'].needs), ['changes', 'build-studio-server']);
 const deploymentContracts = studioJobs['deployment-contracts'];
 assert.equal(
   findStep(deploymentContracts, 'Verify Kubernetes and deployment contracts', 'Deployment contracts').run,
   'yarn studio-server:verify:kubernetes --exclude-deployment-command',
 );
-assert.deepEqual(deploymentContracts.strategy.matrix.lane, ['managed', 'deployment', 'gateway']);
-assert.equal(deploymentContracts.strategy['fail-fast'], false);
-assert.equal(deploymentContracts.strategy['max-parallel'], 3);
+assertParallelMigrationVerification(studio.workflow);
 for (const [lane, names] of [
   [
     'managed',
@@ -712,7 +713,6 @@ for (const [lane, names] of [
       'Verify compiled migrations on PostgreSQL',
       'Verify async endpoint completion with managed storage',
       'Verify recording crash recovery and immutable handoffs',
-      'Verify VM-to-managed copy, retry, and exact readback',
     ],
   ],
   ['deployment', ['Set Up Kubernetes Tools', 'Verify Kubernetes and deployment contracts']],

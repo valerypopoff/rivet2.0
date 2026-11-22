@@ -384,9 +384,9 @@ jobs:
     timeout-minutes: 20
     strategy:
       fail-fast: false
-      max-parallel: 3
+      max-parallel: 4
       matrix:
-        lane: [managed, deployment, gateway]
+        lane: [managed, migration, deployment, gateway]
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - uses: ./.github/actions/setup-yarn
@@ -435,9 +435,24 @@ jobs:
       - name: Verify recording crash recovery and immutable handoffs
         if: matrix.lane == 'managed'
         run: yarn workspace @valerypopoff/rivet-studio-server-api run test:recording-durability-managed
+      - name: Verify compiled migration runtime
+        if: matrix.lane == 'migration'
+        shell: bash
+        run: |
+          for file in \
+            packages/studio-server-api/dist/studio-server-api/src/scripts/migrate-managed-workflow-schema.js \
+            packages/studio-server-api/dist/studio-server-api/src/serve.js \
+            packages/studio-server-executor/dist/executor-bundle.cjs; do
+            if [[ ! -f "$file" || ! -s "$file" ]]; then
+              echo "::error::Missing compiled migration runtime: $file"
+              exit 1
+            fi
+          done
       - name: Verify VM-to-managed copy, retry, and exact readback
-        if: matrix.lane == 'managed'
-        run: yarn workspace @valerypopoff/rivet-studio-server-api run test:migration-managed
+        if: matrix.lane == 'migration'
+        # The producer already built this exact commit. Keep the complete suite
+        # and its fresh child processes, without rebuilding the API in this lane.
+        run: node .yarn/releases/yarn-4.17.1.cjs workspace @valerypopoff/rivet-studio-server-api exec tsx src/tests/workflow-storage-migration-managed.integration.ts
       - name: Verify Kubernetes and deployment contracts
         if: matrix.lane == 'deployment'
         run: yarn studio-server:verify:kubernetes --exclude-deployment-command

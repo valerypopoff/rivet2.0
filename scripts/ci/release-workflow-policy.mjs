@@ -22,6 +22,54 @@ const depends = (job, expected) => {
   );
 };
 
+/** The migration fixture is stateful inside its job, but owns no other lane's
+ * database or files. Keep the full fixture mandatory and parallel to that lane. */
+export function assertParallelMigrationVerification(workflow) {
+  const job = workflow.jobs['deployment-contracts'];
+  assert.deepEqual(needs(job), ['changes', 'build-studio-server']);
+  assert.deepEqual(job.strategy.matrix.lane, ['managed', 'migration', 'deployment', 'gateway']);
+  assert.equal(job.strategy['max-parallel'], 4);
+  assert.equal(job.strategy['fail-fast'], false);
+  assert.equal(job['continue-on-error'], undefined);
+  const find = (name) => {
+    const steps = job.steps.filter((step) => step.name === name);
+    assert.equal(steps.length, 1, `${name} must occur once`);
+    return steps[0];
+  };
+  const runtime = find('Verify compiled migration runtime');
+  const migration = find('Verify VM-to-managed copy, retry, and exact readback');
+  for (const step of [runtime, migration]) {
+    assert.equal(step.if, "matrix.lane == 'migration'");
+    assert.equal(step['continue-on-error'], undefined);
+  }
+  assert.equal(
+    migration.run,
+    'node .yarn/releases/yarn-4.17.1.cjs workspace @valerypopoff/rivet-studio-server-api exec tsx src/tests/workflow-storage-migration-managed.integration.ts',
+  );
+  assert.equal(
+    Object.values(workflow.jobs)
+      .flatMap((job) => job.steps ?? [])
+      .filter((step) => /workflow-storage-migration-managed\.integration|test:migration-managed/.test(step.run ?? ''))
+      .length,
+    1,
+    'The full migration fixture must run once, without the old serial invocation',
+  );
+  assert.ok(job.steps.indexOf(runtime) > job.steps.indexOf(find('Verify restored compiled workspace dependencies')));
+  assert.ok(job.steps.indexOf(migration) > job.steps.indexOf(runtime));
+  const gate = workflow.jobs.verify;
+  assert.ok(needs(gate).includes('deployment-contracts'));
+  assert.equal(gate.if, 'always()');
+  assert.equal(gate['continue-on-error'], undefined);
+  const requireAll = gate.steps.find((step) => step.name === 'Require every applicable Studio Server gate');
+  assert.equal(requireAll.if, undefined);
+  assert.equal(requireAll['continue-on-error'], undefined);
+  assert.equal(requireAll.env.DEPLOYMENT_RESULT, '${{ needs.deployment-contracts.result }}');
+  assert.match(
+    requireAll.run,
+    /for result in [^\n]*"\$DEPLOYMENT_RESULT"[^\n]*; do\s+test "\$result" = success\s+done\s*$/,
+  );
+}
+
 /** Structural owner for prerequisite failure/skip/cancellation propagation.
  * Uses GitHub's default success condition, never a custom status evaluator. */
 export function assertFastReleasePolicy({ images, verify, publisher, source, build }) {
