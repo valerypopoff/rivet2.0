@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
-import test from 'node:test';
+import test, { type TestContext } from 'node:test';
+import { setImmediate as nextTurn } from 'node:timers/promises';
 
 import { configureStudioMetrics, getStudioMetrics, resetStudioMetricsForTests } from '../metrics.js';
 import {
@@ -7,13 +8,51 @@ import {
   getManagedWorkflowMaintenanceConfig,
   getManagedWorkflowMaintenanceRetryDelayMs,
   isManagedObjectDeletionReason,
-  normalizeManagedObjectDeletionKeys,
 } from '../routes/workflows/managed/maintenance.js';
+import { createDeferred } from './helpers/managed-backend-harness.js';
 
-test('managed maintenance defaults to the control plane and never to execution replicas', () => {
-  assert.equal(getManagedWorkflowMaintenanceConfig({ RIVET_API_PROFILE: 'control' }).enabled, true);
-  assert.equal(getManagedWorkflowMaintenanceConfig({ RIVET_API_PROFILE: 'combined' }).enabled, true);
-  assert.equal(getManagedWorkflowMaintenanceConfig({ RIVET_API_PROFILE: 'execution' }).enabled, false);
+function maintenanceFixture(
+  t: TestContext,
+  options: {
+    rows?: (sql: string) => unknown[] | Promise<unknown[]>;
+    onDelete?: () => void | Promise<void>;
+  } = {},
+) {
+  const queries: Array<{ sql: string; parameters?: unknown[] }> = [];
+  const deleteCalls: string[] = [];
+  const maintenance = createManagedWorkflowMaintenance({
+    holderId: 'test-maintainer',
+    pool: {
+      query: async (sql: string, parameters?: unknown[]) => {
+        queries.push({ sql, parameters });
+        return {
+          rows: sql.includes('INSERT INTO managed_maintenance_leases')
+            ? [{ fencing_token: 7 }]
+            : (await options.rows?.(sql)) ?? [],
+        };
+      },
+    } as never,
+    blobStore: {
+      delete: async (key: string) => {
+        deleteCalls.push(key);
+        await options.onDelete?.();
+      },
+    } as never,
+    config: { enabled: true, intervalMs: 60_000, leaseMs: 60_000, batchSize: 1 },
+    staleUploadDeletionEnabled: false,
+    logger: { error() {}, info() {}, warn() {} },
+  });
+  t.after(() => maintenance.dispose());
+  return { maintenance, queries, deleteCalls };
+}
+
+test('maintenance defaults to the control plane; execution requires explicit enablement', () => {
+  for (const [profile, enabled] of [
+    ['control', true],
+    ['combined', true],
+    ['execution', false],
+  ] as const)
+    assert.equal(getManagedWorkflowMaintenanceConfig({ RIVET_API_PROFILE: profile }).enabled, enabled);
   assert.equal(
     getManagedWorkflowMaintenanceConfig({
       RIVET_API_PROFILE: 'execution',
@@ -24,381 +63,173 @@ test('managed maintenance defaults to the control plane and never to execution r
 });
 
 test('managed maintenance rejects unsafe scheduling configuration', () => {
-  assert.throws(
-    () => getManagedWorkflowMaintenanceConfig({ RIVET_MANAGED_MAINTENANCE_INTERVAL_MS: '1' }),
-    /RIVET_MANAGED_MAINTENANCE_INTERVAL_MS/,
-  );
-  assert.throws(
-    () => getManagedWorkflowMaintenanceConfig({ RIVET_MANAGED_MAINTENANCE_LEASE_MS: 'not-a-number' }),
-    /RIVET_MANAGED_MAINTENANCE_LEASE_MS/,
-  );
-  assert.throws(
-    () => getManagedWorkflowMaintenanceConfig({ RIVET_MANAGED_MAINTENANCE_ENABLED: 'sometimes' }),
-    /boolean value/,
-  );
+  for (const [name, value, message] of [
+    ['RIVET_MANAGED_MAINTENANCE_INTERVAL_MS', '1', /RIVET_MANAGED_MAINTENANCE_INTERVAL_MS/],
+    ['RIVET_MANAGED_MAINTENANCE_LEASE_MS', 'not-a-number', /RIVET_MANAGED_MAINTENANCE_LEASE_MS/],
+    ['RIVET_MANAGED_MAINTENANCE_ENABLED', 'sometimes', /boolean value/],
+  ] as const)
+    assert.throws(() => getManagedWorkflowMaintenanceConfig({ [name]: value }), message);
 });
 
-test('managed object deletions are normalized and failures back off without becoming terminal', () => {
-  assert.deepEqual(normalizeManagedObjectDeletionKeys([' key-a ', '', null, 'key-a', 'key-b']), ['key-a', 'key-b']);
+test('deletion reasons fail closed and retry delays remain bounded', () => {
   assert.equal(getManagedWorkflowMaintenanceRetryDelayMs(1), 1_000);
   assert.equal(getManagedWorkflowMaintenanceRetryDelayMs(4), 8_000);
   assert.equal(getManagedWorkflowMaintenanceRetryDelayMs(99), 60 * 60 * 1000);
   assert.equal(isManagedObjectDeletionReason('workflow-recording-deletion'), true);
   assert.equal(isManagedObjectDeletionReason('future-object-payload'), false);
 });
-test('managed deletion enqueue batches keys and reopens a blocked key after a new deletion intent', async () => {
-  const queries: Array<{ sql: string; parameters: unknown[] | undefined }> = [];
-  const maintenance = createManagedWorkflowMaintenance({
-    pool: {} as never,
-    blobStore: {} as never,
-    config: { enabled: false, intervalMs: 60_000, leaseMs: 60_000, batchSize: 100 },
+
+test('enqueue normalizes a deletion batch in one query', async (t) => {
+  const { maintenance, queries } = maintenanceFixture(t, {
+    rows: () => [{ object_key: 'key-a' }, { object_key: 'key-b' }],
   });
-  const client = {
-    query: async (sql: string, parameters?: unknown[]) => {
-      queries.push({ sql, parameters });
-      return { rows: [{ object_key: 'key-a' }, { object_key: 'key-b' }] };
-    },
-  } as never;
-
-  const queued = await maintenance.enqueueObjectDeletions(client, 'workflow-recording-deletion', [
-    ' key-a ',
-    'key-a',
-    null,
-    'key-b',
-  ]);
-
-  assert.equal(queued, 2);
+  assert.equal(
+    await maintenance.queueObjectDeletions('workflow-recording-deletion', [' key-a ', '', 'key-a', null, 'key-b']),
+    2,
+  );
   assert.equal(queries.length, 1);
-  assert.deepEqual(queries[0]?.parameters, [['key-a', 'key-b'], 'workflow-recording-deletion']);
-  assert.match(queries[0]?.sql ?? '', /UNNEST\(\$1::text\[\]\)/u);
-  assert.match(queries[0]?.sql ?? '', /WHERE managed_object_deletion_outbox\.status = 'blocked'/u);
-  assert.match(queries[0]?.sql ?? '', /status = 'pending'/u);
-  assert.match(queries[0]?.sql ?? '', /RETURNING object_key/u);
+  assert.deepEqual(queries[0].parameters, [['key-a', 'key-b'], 'workflow-recording-deletion']);
 });
-function createMaintenanceLogger() {
-  return {
-    error: () => {},
-    info: () => {},
-    warn: () => {},
-  };
-}
 
-test('maintenance runs tasks immediately and on schedule, coalesces overlapping requests and stops on disposal', async (t) => {
+test('maintenance runs immediately and on schedule, coalesces requests and stops on disposal', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
-  const maintenance = createManagedWorkflowMaintenance({
-    pool: {
-      query: async (sql: string) => ({
-        rows: sql.includes('INSERT INTO managed_maintenance_leases') ? [{ fencing_token: 7 }] : [],
-      }),
-    } as never,
-    blobStore: {} as never,
-    config: { enabled: true, intervalMs: 60_000, leaseMs: 60_000, batchSize: 1 },
-  });
+  const { maintenance } = maintenanceFixture(t);
   let runs = 0;
-  maintenance.registerTask('retention', async () => void runs++);
-  try {
-    await maintenance.initialize();
-    assert.equal(runs, 0);
-    await maintenance.runNow();
-    assert.equal(runs, 1);
-    t.mock.timers.tick(60_000);
-    await maintenance.runNow();
-    assert.equal(runs, 2);
-  } finally {
-    await maintenance.dispose();
-  }
+  maintenance.registerTask('retention', async () => {
+    runs++;
+  });
+  await maintenance.initialize();
+  assert.equal(runs, 0);
+  await maintenance.runNow();
+  assert.equal(runs, 1);
+  t.mock.timers.tick(60_000);
+  await maintenance.runNow();
+  assert.equal(runs, 2);
+  await maintenance.dispose();
   t.mock.timers.tick(60_000);
   await maintenance.runNow();
   assert.equal(runs, 2);
 });
 
-test('managed maintenance claims an orphaned key once and marks it completed after object deletion', async () => {
-  const queries: Array<{ sql: string; parameters: unknown[] | undefined }> = [];
-  let claimCount = 0;
-  const deletedKeys: string[] = [];
-  const pool = {
-    query: async (sql: string, parameters?: unknown[]) => {
-      queries.push({ sql, parameters });
-      if (sql.includes('INSERT INTO managed_maintenance_leases')) {
-        return { rows: [{ fencing_token: 7 }] };
-      }
-      if (sql.includes('WITH next_object')) {
-        claimCount += 1;
-        return {
-          rows:
-            claimCount === 1
-              ? [{ object_key: 'orphan/key', domain: 'workflow-recording-deletion', attempt_count: 0 }]
-              : [],
-        };
-      }
-      if (sql.includes('FROM (') && sql.includes('referenced_objects')) {
-        return { rows: [] };
-      }
-      return { rows: [] };
-    },
-  } as never;
-  const maintenance = createManagedWorkflowMaintenance({
-    pool,
-    blobStore: {
-      delete: async (key: string) => {
-        deletedKeys.push(key);
-      },
-    } as never,
-    config: { enabled: true, intervalMs: 60_000, leaseMs: 60_000, batchSize: 1 },
-    logger: createMaintenanceLogger(),
-  });
-
-  await maintenance.runNow();
-
-  assert.deepEqual(deletedKeys, ['orphan/key']);
-  assert.ok(
-    queries.some(({ sql, parameters }) => sql.includes("SET status = 'completed'") && parameters?.[0] === 'orphan/key'),
-  );
-});
-
-test('audit or disabled stale-upload policy blocks queued stale work instead of deleting after rollback', async () => {
-  const queries: Array<{ sql: string; parameters: unknown[] | undefined }> = [];
-  const deletedKeys: string[] = [];
-  let claimCount = 0;
-  const maintenance = createManagedWorkflowMaintenance({
-    pool: {
-      query: async (sql: string, parameters?: unknown[]) => {
-        queries.push({ sql, parameters });
-        if (sql.includes('INSERT INTO managed_maintenance_leases')) return { rows: [{ fencing_token: 8 }] };
-        if (sql.includes('WITH next_object')) {
-          claimCount += 1;
-          return {
-            rows:
-              claimCount === 1
-                ? [
-                    {
-                      object_key: 'workflow-a/revisions/revision-a/project.rivet-project',
-                      domain: 'workflow-stale-upload-reconciliation',
-                      attempt_count: 0,
-                    },
-                  ]
-                : [],
-          };
+const deletionCases: Array<{
+  name: string;
+  result: 'completed' | 'blocked' | 'retry';
+  blockedBy?: 'reference' | 'policy';
+  failure?: 'lookup' | 'storage';
+}> = [
+  { name: 'deletes and completes an unreferenced object', result: 'completed' },
+  { name: 'blocks a live object', result: 'blocked', blockedBy: 'reference' },
+  { name: 'blocks stale uploads when enforcement is disabled', result: 'blocked', blockedBy: 'policy' },
+  { name: 'retries a failed reference lookup without deleting', result: 'retry', failure: 'lookup' },
+  { name: 'retains a failed storage deletion for retry', result: 'retry', failure: 'storage' },
+];
+for (const scenario of deletionCases)
+  test(`outbox ${scenario.name}`, async (t) => {
+    const key = 'fixture/key';
+    const domain =
+      scenario.blockedBy === 'policy' ? 'workflow-stale-upload-reconciliation' : 'workflow-recording-deletion';
+    const failure = new Error('fixture dependency failure');
+    let claims = 0;
+    const { maintenance, queries, deleteCalls } = maintenanceFixture(t, {
+      rows: (sql) => {
+        if (sql.includes('WITH next_object'))
+          return claims++ === 0 ? [{ object_key: key, domain, attempt_count: 2 }] : [];
+        if (sql.includes('WITH referenced_objects')) {
+          if (scenario.failure === 'lookup') throw failure;
+          return scenario.blockedBy === 'reference' ? [{ object_key: key }] : [];
         }
-        if (sql.includes("SET status = 'blocked'"))
-          return { rows: [{ object_key: 'workflow-a/revisions/revision-a/project.rivet-project' }] };
-        return { rows: [] };
+        return sql.includes('RETURNING object_key') ? [{ object_key: key }] : [];
       },
-    } as never,
-    blobStore: { delete: async (key: string) => deletedKeys.push(key) } as never,
-    config: { enabled: true, intervalMs: 60_000, leaseMs: 60_000, batchSize: 1 },
-    logger: createMaintenanceLogger(),
-    staleUploadDeletionEnabled: false,
-  });
-
-  await maintenance.runNow();
-
-  assert.deepEqual(deletedKeys, []);
-  assert.ok(
-    queries.some(
-      ({ sql, parameters }) =>
-        sql.includes("SET status = 'blocked'") &&
-        parameters?.[1] === 'The current deletion policy is audit-only or disabled.',
-    ),
-  );
-});
-test('managed maintenance publishes bounded pass and durable outbox observations outside the scrape path', async () => {
-  configureStudioMetrics('control', { RIVET_METRICS_ENABLED: 'true' });
-  const pool = {
-    query: async (sql: string) => {
-      if (sql.includes('INSERT INTO managed_maintenance_leases')) return { rows: [{ fencing_token: 5 }] };
-      if (sql.includes('WITH next_object')) return { rows: [] };
-      if (sql.includes('WITH observable_outbox')) {
-        return {
-          rows: [
-            { entries: '3', oldest_age_seconds: '12.5', state: 'pending' },
-            { entries: '1', oldest_age_seconds: '30', state: 'blocked' },
-          ],
-        };
-      }
-      return { rows: [] };
-    },
-  } as never;
-  const maintenance = createManagedWorkflowMaintenance({
-    pool,
-    blobStore: { delete: async () => {} } as never,
-    config: { enabled: true, intervalMs: 60_000, leaseMs: 60_000, batchSize: 1 },
-    logger: createMaintenanceLogger(),
-  });
-
-  try {
-    await maintenance.runNow();
-    await new Promise<void>((resolve) => setImmediate(resolve));
-    const rendered = getStudioMetrics().render();
-    assert.match(rendered, /rivet_managed_maintenance_passes_total\{outcome="completed",profile="control"\} 1/);
-    assert.match(rendered, /rivet_managed_maintenance_last_success_timestamp_seconds\{profile="control"\} \d/);
-    assert.match(rendered, /rivet_managed_object_deletion_outbox_entries\{profile="control",state="pending"\} 3/);
-    assert.match(
-      rendered,
-      /rivet_managed_object_deletion_outbox_oldest_entry_age_seconds\{profile="control",state="blocked"\} 30/,
-    );
-    assert.match(rendered, /rivet_managed_object_deletion_outbox_entries\{profile="control",state="claimed"\} 0/);
-  } finally {
-    resetStudioMetricsForTests();
-  }
-});
-
-test('managed maintenance keeps a successful pass successful when its observational outbox snapshot fails', async () => {
-  resetStudioMetricsForTests();
-  configureStudioMetrics('control', { RIVET_METRICS_ENABLED: 'true' });
-  const maintenance = createManagedWorkflowMaintenance({
-    pool: {
-      query: async (sql: string) => {
-        if (sql.includes('INSERT INTO managed_maintenance_leases')) return { rows: [{ fencing_token: 6 }] };
-        if (sql.includes('WITH next_object')) return { rows: [] };
-        if (sql.includes('WITH observable_outbox')) throw new Error('metrics query unavailable');
-        return { rows: [] };
+      onDelete: () => {
+        if (scenario.failure === 'storage') throw failure;
       },
-    } as never,
-    blobStore: { delete: async () => {} } as never,
-    config: { enabled: true, intervalMs: 60_000, leaseMs: 60_000, batchSize: 1 },
-    logger: createMaintenanceLogger(),
-  });
-
-  try {
-    await maintenance.runNow();
-    assert.match(
-      getStudioMetrics().render(),
-      /rivet_managed_maintenance_passes_total\{outcome="completed",profile="control"\} 1/,
-    );
-  } finally {
-    resetStudioMetricsForTests();
-  }
-});
-
-test('managed maintenance does not wait for an in-flight outbox metrics snapshot', async () => {
-  resetStudioMetricsForTests();
-  configureStudioMetrics('control', { RIVET_METRICS_ENABLED: 'true' });
-
-  let startSnapshot: () => void = () => {};
-  let releaseSnapshot: () => void = () => {};
-  const snapshotStarted = new Promise<void>((resolve) => {
-    startSnapshot = resolve;
-  });
-  const snapshotResult = new Promise<{ rows: unknown[] }>((resolve) => {
-    releaseSnapshot = () => resolve({ rows: [] });
-  });
-  const maintenance = createManagedWorkflowMaintenance({
-    pool: {
-      query: async (sql: string) => {
-        if (sql.includes('INSERT INTO managed_maintenance_leases')) return { rows: [{ fencing_token: 7 }] };
-        if (sql.includes('WITH next_object')) return { rows: [] };
-        if (sql.includes('WITH observable_outbox')) {
-          startSnapshot();
-          return snapshotResult;
-        }
-        return { rows: [] };
-      },
-    } as never,
-    blobStore: { delete: async () => {} } as never,
-    config: { enabled: true, intervalMs: 60_000, leaseMs: 60_000, batchSize: 1 },
-    logger: createMaintenanceLogger(),
-  });
-
-  let timeout: NodeJS.Timeout | undefined;
-  const run = maintenance.runNow();
-  try {
-    await snapshotStarted;
-    const completion = await Promise.race([
-      run.then(() => 'completed' as const),
-      new Promise<'timed_out'>((resolve) => {
-        timeout = setTimeout(() => resolve('timed_out'), 1_000);
-      }),
-    ]);
-    assert.equal(completion, 'completed');
-  } finally {
-    if (timeout) clearTimeout(timeout);
-    releaseSnapshot();
-    await new Promise<void>((resolve) => setImmediate(resolve));
-    await run;
-    resetStudioMetricsForTests();
-  }
-});
-
-test('managed maintenance blocks live references and retains transient object-store failures for retry', async (context) => {
-  await context.test('live reference is never deleted', async () => {
-    const deletedKeys: string[] = [];
-    let claimCount = 0;
-    const queries: Array<{ sql: string; parameters: unknown[] | undefined }> = [];
-    const maintenance = createManagedWorkflowMaintenance({
-      pool: {
-        query: async (sql: string, parameters?: unknown[]) => {
-          queries.push({ sql, parameters });
-          if (sql.includes('INSERT INTO managed_maintenance_leases')) return { rows: [{ fencing_token: 3 }] };
-          if (sql.includes('WITH next_object')) {
-            claimCount += 1;
-            return {
-              rows:
-                claimCount === 1
-                  ? [{ object_key: 'live/key', domain: 'workflow-recording-deletion', attempt_count: 0 }]
-                  : [],
-            };
-          }
-          if (sql.includes('WITH referenced_objects')) return { rows: [{ object_key: 'live/key' }] };
-          return { rows: [] };
-        },
-      } as never,
-      blobStore: {
-        delete: async (key: string) => {
-          deletedKeys.push(key);
-        },
-      } as never,
-      config: { enabled: true, intervalMs: 60_000, leaseMs: 60_000, batchSize: 1 },
-      logger: createMaintenanceLogger(),
     });
-
     await maintenance.runNow();
-
-    assert.deepEqual(deletedKeys, []);
-    assert.ok(
-      queries.some(({ sql, parameters }) => sql.includes("SET status = 'blocked'") && parameters?.[0] === 'live/key'),
-    );
-  });
-
-  await context.test('a storage failure remains pending with the bounded retry delay', async () => {
-    const queries: Array<{ sql: string; parameters: unknown[] | undefined }> = [];
-    let claimCount = 0;
-    const maintenance = createManagedWorkflowMaintenance({
-      pool: {
-        query: async (sql: string, parameters?: unknown[]) => {
-          queries.push({ sql, parameters });
-          if (sql.includes('INSERT INTO managed_maintenance_leases')) return { rows: [{ fencing_token: 4 }] };
-          if (sql.includes('WITH next_object')) {
-            claimCount += 1;
-            return {
-              rows:
-                claimCount === 1
-                  ? [{ object_key: 'retry/key', domain: 'workflow-recording-deletion', attempt_count: 2 }]
-                  : [],
-            };
-          }
-          if (sql.includes('WITH referenced_objects')) return { rows: [] };
-          return { rows: [] };
-        },
-      } as never,
-      blobStore: {
-        delete: async () => {
-          throw new Error('object store unavailable');
-        },
-      } as never,
-      config: { enabled: true, intervalMs: 60_000, leaseMs: 60_000, batchSize: 1 },
-      logger: createMaintenanceLogger(),
-    });
-
-    await maintenance.runNow();
-
-    assert.ok(
-      queries.some(
-        ({ sql, parameters }) =>
-          sql.includes('SET attempt_count = attempt_count + 1') &&
-          parameters?.[0] === 'retry/key' &&
-          parameters?.[1] === 4_000,
+    assert.equal(claims, 1, 'one configured batch must issue only one claim');
+    assert.deepEqual(deleteCalls, scenario.result === 'completed' || scenario.failure === 'storage' ? [key] : []);
+    const transition = queries.find(({ sql }) =>
+      sql.includes(
+        scenario.result === 'retry' ? 'SET attempt_count = attempt_count + 1' : `SET status = '${scenario.result}'`,
       ),
     );
+    assert.ok(transition, 'the claimed object must reach its expected durable state');
+    const parameters = transition.parameters!;
+    assert.equal(parameters[0], key);
+    assert.deepEqual(parameters.slice(-2), ['test-maintainer', 7], 'updates retain the claim owner and token');
+    if (scenario.result === 'retry') assert.deepEqual(parameters.slice(1, -2), [4_000, failure.message]);
+    else if (scenario.result === 'blocked')
+      assert.match(
+        String(parameters[1]),
+        scenario.blockedBy === 'policy' ? /audit-only or disabled/ : /still referenced/,
+      );
+    else assert.equal(parameters.length, 3);
   });
+
+test('maintenance publishes pass and outbox observations outside the scrape path', async (t) => {
+  configureStudioMetrics('control', { RIVET_METRICS_ENABLED: 'true' });
+  let reads = 0;
+  const { maintenance } = maintenanceFixture(t, {
+    rows: (sql) => {
+      if (!sql.includes('WITH observable_outbox')) return [];
+      reads++;
+      return [
+        { entries: '3', oldest_age_seconds: '12.5', state: 'pending' },
+        { entries: '1', oldest_age_seconds: '30', state: 'blocked' },
+      ];
+    },
+  });
+  t.after(resetStudioMetricsForTests);
+  await maintenance.runNow();
+  await nextTurn();
+  assert.equal(reads, 1);
+  const rendered = getStudioMetrics().render();
+  assert.match(rendered, /rivet_managed_maintenance_passes_total\{outcome="completed",profile="control"\} 1/);
+  assert.match(rendered, /rivet_managed_maintenance_last_success_timestamp_seconds\{profile="control"\} \d/);
+  assert.match(rendered, /rivet_managed_object_deletion_outbox_entries\{profile="control",state="pending"\} 3/);
+  assert.match(
+    rendered,
+    /rivet_managed_object_deletion_outbox_oldest_entry_age_seconds\{profile="control",state="blocked"\} 30/,
+  );
+  assert.match(rendered, /rivet_managed_object_deletion_outbox_entries\{profile="control",state="claimed"\} 0/);
+});
+
+test('an observational query failure cannot fail a successful maintenance pass', async (t) => {
+  configureStudioMetrics('control', { RIVET_METRICS_ENABLED: 'true' });
+  let reads = 0;
+  const { maintenance } = maintenanceFixture(t, {
+    rows: (sql) => {
+      if (sql.includes('WITH observable_outbox')) {
+        reads++;
+        throw new Error('metrics query unavailable');
+      }
+      return [];
+    },
+  });
+  t.after(resetStudioMetricsForTests);
+  await maintenance.runNow();
+  await nextTurn();
+  assert.equal(reads, 1, 'exercise the failing snapshot, not just a completed pass');
+  assert.match(
+    getStudioMetrics().render(),
+    /rivet_managed_maintenance_passes_total\{outcome="completed",profile="control"\} 1/,
+  );
+});
+
+test('maintenance completes while its metrics snapshot remains blocked', { timeout: 5_000 }, async (t) => {
+  configureStudioMetrics('control', { RIVET_METRICS_ENABLED: 'true' });
+  const started = createDeferred<void>();
+  const snapshot = createDeferred<unknown[]>();
+  // Release before fixture disposal, including when a regression hits the test timeout.
+  t.after(() => snapshot.resolve([]));
+  const { maintenance } = maintenanceFixture(t, {
+    rows: (sql) => {
+      if (!sql.includes('WITH observable_outbox')) return [];
+      started.resolve();
+      return snapshot.promise;
+    },
+  });
+  t.after(resetStudioMetricsForTests);
+  const run = maintenance.runNow();
+  await started.promise;
+  await run;
 });

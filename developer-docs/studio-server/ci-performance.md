@@ -56,6 +56,34 @@ Review dependency ownership again when the execution graph changes.
 
 ## Rollout and chart contracts
 
+The required deployment-command job starts after the source contracts pass, in
+parallel with Studio compilation. It runs the complete `deployment-command.test.mjs`
+file with the pinned Kubernetes tools and an immutable source-only Yarn install.
+The post-build deployment job passes `--exclude-deployment-command` to avoid
+repeating those journeys. For local verification, use `yarn studio-server:verify:kubernetes`
+without arguments to run both groups. The final Studio verification requires both
+jobs on applicable pushes, including when Build Images invokes the workflow.
+
+Deployment-command tests compile their Helm/kubectl stand-in once per suite with
+the existing esbuild dependency. Helper processes run that self-contained file
+with the fixture clock preload, avoiding repeated Yarn loader initialization.
+Each scenario retains its own state, locks and receipts. The deployment CLI
+continues to run from the scenario's source checkout with normal Yarn resolution;
+the real Helm binary still renders and validates the charts. The suite removes
+its compiled helper during cleanup. Compare complete suite timings with identical
+test selection and concurrency when changing this boundary.
+
+The workflow policy rejects conditional or tolerated deployment-command tests,
+filtered test selection and a missing final job result. Its failure-mutation tests
+cover the early job as well as its source prerequisite. The fixture boundary test
+checks that both simulated tools inherit the clock and caller-supplied environment,
+while ordinary adapter children also retain the caller's Node preloads.
+
+The November 22 commit preparation passed the complete 31-test deployment-command
+suite with the cached pinned Helm and Node 24, plus the repository-wide
+`test:style` checks. This is local coverage evidence; hosted job duration and
+workflow success still require the next GitHub run.
+
 Changes to release selection, editor topology or chart validation need both
 `yarn studio-server:verify:production-cutover` and
 `yarn studio-server:verify:kubernetes` with pinned Helm. The rollout source

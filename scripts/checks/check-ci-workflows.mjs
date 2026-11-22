@@ -702,6 +702,10 @@ assert.equal(
 );
 assert.deepEqual(asArray(studioJobs['deployment-contracts'].needs), ['changes', 'build-studio-server']);
 const deploymentContracts = studioJobs['deployment-contracts'];
+assert.equal(
+  findStep(deploymentContracts, 'Verify Kubernetes and deployment contracts', 'Deployment contracts').run,
+  'yarn studio-server:verify:kubernetes --exclude-deployment-command',
+);
 assert.deepEqual(deploymentContracts.strategy.matrix.lane, ['managed', 'deployment', 'gateway']);
 assert.equal(deploymentContracts.strategy['fail-fast'], false);
 assert.equal(deploymentContracts.strategy['max-parallel'], 3);
@@ -782,6 +786,7 @@ for (const jobName of ['api-tests', 'web-tests', 'editor-regression', 'deploymen
 assertIncludesAll(
   asArray(studioJobs.verify.needs),
   [
+    'deployment-command-tests',
     'changes',
     'build-studio-server',
     'api-tests',

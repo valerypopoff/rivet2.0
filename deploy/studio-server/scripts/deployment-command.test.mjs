@@ -1,4 +1,4 @@
-import test, { describe } from 'node:test';
+import test, { after, before, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -8,6 +8,7 @@ import { execFileSync, spawn } from 'node:child_process';
 import { Worker } from 'node:worker_threads';
 import { tmpdir } from 'node:os';
 import { parse, parseAllDocuments } from 'yaml';
+import { build } from 'esbuild';
 import { resolveHelmBinOrThrow } from './lib/k8s-tools.mjs';
 import { releaseOperationJournalName } from './lib/release-operation-journal.mjs';
 import { assertNoOperatorRolloutGuards } from './deploy-kubernetes-release.mjs';
@@ -101,6 +102,26 @@ async function createFixtureDirectory(workspaceRoot) {
   await fs.mkdir(artifacts, { recursive: true });
   return fs.mkdtemp(path.join(artifacts, 'deployment-command-'));
 }
+
+let commandToolDirectory;
+let commandTool;
+before(async () => {
+  commandToolDirectory = await createFixtureDirectory(root);
+  commandTool = path.join(commandToolDirectory, 'deployment-command-tool.cjs');
+  // Compile only the test's Helm/kubectl stand-in once. Every journey still
+  // executes the actual deployment CLI from its isolated source checkout.
+  await build({
+    entryPoints: [path.join(root, 'deploy/studio-server/scripts/fixtures/deployment-command-tool.mjs')],
+    outfile: commandTool,
+    bundle: true,
+    platform: 'node',
+    format: 'cjs',
+    target: 'node22',
+  });
+});
+after(async () => {
+  if (commandToolDirectory) await fs.rm(commandToolDirectory, { recursive: true, force: true });
+});
 
 test('deployment fixtures initialize an absent artifacts directory and remain isolated', async (t) => {
   const checkout = await fs.mkdtemp(path.join(tmpdir(), 'rivet-command-checkout-'));
@@ -426,6 +447,7 @@ async function fixture(t, mode, fault, schemaChange = false, recordingCoordinati
   const env = {
     ...process.env,
     RIVET_COMMAND_FIXTURE: directory,
+    RIVET_FIXTURE_COMMAND_TOOL: commandTool,
     RIVET_FIXTURE_REAL_HELM: realHelm,
     KUBECONFIG: path.join(directory, 'empty-kubeconfig'),
     RIVET_K8S_HELM_BIN: path.join(bin, 'helm.exe'),
@@ -446,11 +468,10 @@ async function fixture(t, mode, fault, schemaChange = false, recordingCoordinati
         recordingGuard.postMessage('close');
       }),
   );
-  const tool = path.join(directory, 'deploy/studio-server/scripts/fixtures/deployment-command-tool.mjs');
   execFileSync(
     process.execPath,
     [
-      tool,
+      commandTool,
       'helm',
       'upgrade',
       '--install',
@@ -461,7 +482,7 @@ async function fixture(t, mode, fault, schemaChange = false, recordingCoordinati
       '--values',
       initialFile,
     ],
-    { cwd: directory, env },
+    { cwd: directory, env: { ...env, NODE_OPTIONS: '' } },
   );
   const seeded = JSON.parse(await fs.readFile(path.join(directory, 'state.json'), 'utf8'));
   seeded.fault = fault;

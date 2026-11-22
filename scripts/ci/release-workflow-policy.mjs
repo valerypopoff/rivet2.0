@@ -35,8 +35,16 @@ export function assertFastReleasePolicy({ images, verify, publisher, source, bui
     ['source-contracts'],
     'Keep full verification parallel with builds',
   );
-  for (const job of ['build-studio-server', 'repository-contracts', 'host-compatibility'])
+  for (const job of ['build-studio-server', 'repository-contracts', 'host-compatibility', 'deployment-command-tests'])
     depends(verify.jobs[job], 'source-contracts');
+  const deploymentCommands = verify.jobs['deployment-command-tests'];
+  assert.deepEqual(needs(deploymentCommands), ['changes', 'source-contracts']);
+  assert.equal(deploymentCommands.if, verify.jobs['build-studio-server'].if);
+  assert.equal(deploymentCommands['continue-on-error'], undefined);
+  const commandTests = deploymentCommands.steps.find((step) => step.name === 'Run deployment command journeys');
+  assert.equal(commandTests?.run, 'yarn node --test deploy/studio-server/scripts/deployment-command.test.mjs');
+  assert.equal(commandTests.if, undefined, 'Deployment command tests must not be conditional');
+  assert.equal(commandTests['continue-on-error'], undefined, 'Deployment command failures must block verification');
   depends(publisher.jobs.publish, 'source-contracts');
   const builder = publisher.jobs.publish.steps.find(
     (s) => s.name === 'Configure cache builder with classic-store output',
@@ -64,6 +72,12 @@ export function assertFastReleasePolicy({ images, verify, publisher, source, bui
   assert.ok(needs(verify.jobs.verify).includes('source-contracts'));
   assert.equal(verify.jobs.verify.steps[0].env.SOURCE_RESULT, '${{ needs.source-contracts.result }}');
   assert.match(verify.jobs.verify.steps[0].run, /"\$SOURCE_RESULT"/);
+  assert.ok(needs(verify.jobs.verify).includes('deployment-command-tests'));
+  assert.equal(
+    verify.jobs.verify.steps[0].env.DEPLOYMENT_COMMAND_RESULT,
+    '${{ needs.deployment-command-tests.result }}',
+  );
+  assert.match(verify.jobs.verify.steps[0].run, /for result in [^\n]*"\$DEPLOYMENT_COMMAND_RESULT"/);
   assert.deepEqual(Object.keys(source.on), ['workflow_call']);
   assert.deepEqual(source.permissions, { contents: 'read' });
   assert.equal(source.jobs.source['timeout-minutes'], 8);

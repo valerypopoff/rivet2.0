@@ -358,6 +358,24 @@ jobs:
         if: ${{ !cancelled() && env.RIVET_CI_JOB_STARTED_AT != '' }}
         run: node scripts/ci/job-timing.mjs finish "Studio Server repository contracts"
 
+  deployment-command-tests:
+    name: Studio Server deployment command journeys
+    if: needs.changes.outputs.relevant == 'true'
+    needs: [changes, source-contracts]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: ./.github/actions/setup-yarn
+        with:
+          node-version: 24
+      - name: Install source-test dependencies
+        run: node .yarn/releases/yarn-4.17.1.cjs install --immutable --immutable-cache --mode=skip-build
+      - name: Set Up Kubernetes Tools
+        run: yarn studio-server:setup:k8s-tools --github-env
+      - name: Run deployment command journeys
+        run: yarn node --test deploy/studio-server/scripts/deployment-command.test.mjs
+
   deployment-contracts:
     name: Studio Server deployment contracts (${{ matrix.lane }})
     if: needs.changes.outputs.relevant == 'true'
@@ -424,7 +442,7 @@ jobs:
         run: yarn workspace @valerypopoff/rivet-studio-server-api run test:migration-managed
       - name: Verify Kubernetes and deployment contracts
         if: matrix.lane == 'deployment'
-        run: yarn studio-server:verify:kubernetes
+        run: yarn studio-server:verify:kubernetes --exclude-deployment-command
       - name: Verify proxy DNS outages, browser continuity and address recovery
         if: matrix.lane == 'gateway'
         run: node deploy/studio-server/scripts/verify-proxy-dns.mjs
@@ -457,6 +475,7 @@ jobs:
       - editor-regression
       - host-compatibility
       - repository-contracts
+      - deployment-command-tests
       - deployment-contracts
     runs-on: ubuntu-latest
     steps:
@@ -472,6 +491,7 @@ jobs:
           EDITOR_REGRESSION_RESULT: ${{ needs.editor-regression.result }}
           HOST_RESULT: ${{ needs.host-compatibility.result }}
           REPOSITORY_RESULT: ${{ needs.repository-contracts.result }}
+          DEPLOYMENT_COMMAND_RESULT: ${{ needs.deployment-command-tests.result }}
           DEPLOYMENT_RESULT: ${{ needs.deployment-contracts.result }}
         run: |
           if [[ "$CLASSIFICATION_RESULT" != "success" || ( "$RELEVANT" != "true" && "$RELEVANT" != "false" ) ]]; then
@@ -482,7 +502,7 @@ jobs:
             echo "No Studio Server-affecting paths changed; heavy verification was skipped."
             exit 0
           fi
-          for result in "$SOURCE_RESULT" "$BUILD_RESULT" "$API_RESULT" "$WEB_RESULT" "$EDITOR_REGRESSION_RESULT" "$HOST_RESULT" "$REPOSITORY_RESULT" "$DEPLOYMENT_RESULT"; do
+          for result in "$SOURCE_RESULT" "$BUILD_RESULT" "$API_RESULT" "$WEB_RESULT" "$EDITOR_REGRESSION_RESULT" "$HOST_RESULT" "$REPOSITORY_RESULT" "$DEPLOYMENT_COMMAND_RESULT" "$DEPLOYMENT_RESULT"; do
             test "$result" = success
           done
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4

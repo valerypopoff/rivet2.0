@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
+import { parseArgs } from 'node:util';
 import { resolveHelmBinOrThrow } from './lib/k8s-tools.mjs';
 import { readManagedWorkflowSchemaReleaseContract } from './lib/studio-server-release-manifest.mjs';
 import { singleMachineConfig, singleMachineValues } from './lib/single-machine-kubernetes.mjs';
@@ -195,6 +196,7 @@ async function verifyProdRender(helmBin, managedWorkflowSchemaVersion, singleMac
 }
 
 async function main() {
+  const { values } = parseArgs({ options: { 'exclude-deployment-command': { type: 'boolean' } } });
   const helmBin = resolveHelmBinOrThrow(rootDir, { env: process.env, launcherName });
   const nodeBin = process.execPath;
   const { tempDir, envPath } = writeLocalVerificationEnv();
@@ -220,7 +222,7 @@ async function main() {
       'deploy/studio-server/scripts/backend-overlap-preflight.test.mjs',
       'deploy/studio-server/scripts/backend-overlap-helm.test.mjs',
       'deploy/studio-server/scripts/deployment-safety.test.mjs',
-      'deploy/studio-server/scripts/deployment-command.test.mjs',
+      ...(values['exclude-deployment-command'] ? [] : ['deploy/studio-server/scripts/deployment-command.test.mjs']),
       'deploy/studio-server/scripts/fixture-file-lock.test.mjs',
       'deploy/studio-server/scripts/execution-fence-recovery.test.mjs',
       'deploy/studio-server/scripts/installed-upgrade-plan.test.mjs',

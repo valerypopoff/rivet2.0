@@ -513,6 +513,10 @@ rebuild Core outputs, which runtime fixtures import from `dist`.
 
 ## Recordings architecture and extension points
 
+The [managed recording retention extraction record](managed-recording-retention-refactor-plan.md)
+describes the retained behavior, baseline coverage and local verification of the
+retention boundary.
+
 Recording capture, replay availability and execution outcome have separate owners.
 New shared evidence types use the declared Studio Server shared workspace package
 through type-only imports. Runtime imports keep the API's compiled sibling layout:
@@ -525,15 +529,16 @@ recording must never execute the graph again. Keep production bookkeeping in the
 background; the accepted crash window and durable editor protocol are documented
 in [Recording durability](./recording-durability.md).
 
-| Responsibility                        | Owner                                                                                                                            | Extension rule                                                                                                                                          |
-| ------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Capture graph events                  | Core `ExecutionRecorder`, API `ExecutionSession`, and the endpoint/editor/web-app/schedule adapters                              | Reuse the session recorder. Keep storage I/O out of Core and avoid serializing replay payloads on the production response path.                         |
-| Admit and drain recording work        | `recordings-store.ts`, `recording-evidence-work.ts` and `storage-composition.ts`                                                 | Use the existing bounded queues and storage lifecycle. Drain accepted work before closing evidence heartbeats or stores.                                |
-| Persist and repair managed recordings | `managed/recordings.ts`, `managed/recording-evidence.ts` and the existing maintenance owner                                      | Keep one stable recording identity. Publish artifacts and evidence together; retry persistence, never execution.                                        |
-| Browse projects and run history       | `managed/recordings.ts` for the catalog; `managed/recording-history.ts` for history pagination                                   | Count playable recordings and unrepresented attempts once. Include projects with only pending/unavailable runs. Read metadata rather than replay blobs. |
-| Search captured inputs                | `recording-input-filter.ts` with its source, extractor worker and cache                                                          | Preserve bounded reads, cancellation and progressive results. Missing replay data is unsearchable, not evidence that an input field is absent.          |
-| Aggregate outcomes and costs          | `recording-statistics.ts` and `recording-statistics-sql.ts`                                                                      | Keep execution outcome and telemetry completeness independent of replay availability; exclude duplicate evidence.                                       |
-| Present and operate history           | `useRunRecordingsModalState.ts`, `useRunRecordingsController.ts`, `recording-run-hierarchy.ts` and the table/selector components | Keep session lifetime, request effects, pure family grouping and presentation separate. Invalidate stale requests when the view changes.                |
+| Responsibility                        | Owner                                                                                                                            | Extension rule                                                                                                                                                  |
+| ------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Capture graph events                  | Core `ExecutionRecorder`, API `ExecutionSession`, and the endpoint/editor/web-app/schedule adapters                              | Reuse the session recorder. Keep storage I/O out of Core and avoid serializing replay payloads on the production response path.                                 |
+| Admit and drain recording work        | `recordings-store.ts`, `recording-evidence-work.ts` and `storage-composition.ts`                                                 | Use the existing bounded queues and storage lifecycle. Drain accepted work before closing evidence heartbeats or stores.                                        |
+| Persist and repair managed recordings | `managed/recordings.ts`, `managed/recording-evidence.ts` and the existing maintenance owner                                      | Keep one stable recording identity. Publish artifacts and evidence together; retry persistence, never execution.                                                |
+| Retain managed recording history      | `managed/recording-retention.ts`; composed and registered by `managed/recordings.ts`                                             | Read current limits each pass. Keep lease fencing, recording deletion and outbox insertion in one transaction; preserve protected evidence and cache ownership. |
+| Browse projects and run history       | `managed/recordings.ts` for the catalog; `managed/recording-history.ts` for history pagination                                   | Count playable recordings and unrepresented attempts once. Include projects with only pending/unavailable runs. Read metadata rather than replay blobs.         |
+| Search captured inputs                | `recording-input-filter.ts` with its source, extractor worker and cache                                                          | Preserve bounded reads, cancellation and progressive results. Missing replay data is unsearchable, not evidence that an input field is absent.                  |
+| Aggregate outcomes and costs          | `recording-statistics.ts` and `recording-statistics-sql.ts`                                                                      | Keep execution outcome and telemetry completeness independent of replay availability; exclude duplicate evidence.                                               |
+| Present and operate history           | `useRunRecordingsModalState.ts`, `useRunRecordingsController.ts`, `recording-run-hierarchy.ts` and the table/selector components | Keep session lifetime, request effects, pure family grouping and presentation separate. Invalidate stale requests when the view changes.                        |
 
 The project picker and its global totals use one managed catalog query. Filtering
 projects before merging evidence would hide an unpublished project's first run;
@@ -546,11 +551,49 @@ are worth watching, but splitting them by line count alone creates more boundari
 without reducing responsibility. Extract a helper when it owns a distinct rule or
 removes duplicated behavior.
 
+The retention factory only captures existing dependencies and returns a task;
+it does not initialize storage, read settings or start maintenance. The recording
+service retains registration, repeated initialization, the startup recovery gate
+and its compatibility export for `selectManagedRecordingRowsForCleanup`. Recovery
+becomes ready after the initial maintenance pass settles, including a logged task
+failure. The backend still suppresses serving maintenance for offline modes.
+Retention limits apply to stored per-recording byte columns, not physical bucket
+size. The SQL batch limits selected/deleted rows, not the work of its window scans.
+
+The final serial case in `recording-statistics-managed.integration.ts` invokes
+`helpers/managed-recording-retention-contract.ts` on its disposable PostgreSQL
+database. It covers individual and combined age/count/byte policies, byte-limit
+equality and each artifact's contribution, count exclusions freeing byte quota,
+endpoint identity, protected evidence, tied batch boundaries, disabled/live limits
+and rollback/retry after real outbox insertion. Policy cases share one maintenance
+owner; the final expiry/handoff case also creates a controlled successor. Dispose
+both before closing the pool; no extra database or MinIO service is needed.
+Service tests separately protect
+startup/failure ordering, the default settings reader and cache invalidation.
+
+`managed-maintenance.test.ts` uses one disposable unit fixture for deletion
+transitions and observational metrics. Keep completion, live-reference blocking,
+disabled-policy blocking, failed reference reads and failed storage calls as
+separate cases. Assert claim owner/token on the resulting metadata update.
+Blocked-intent reopening is checked in PostgreSQL, including retry/claim reset
+and immediate readiness; query-text matching is not proof of that SQL behavior.
+The blocked-metrics test uses a deferred result, releases it before disposal and
+has a test-level failure timeout; it does not race an arbitrary one-second delay.
+The native-compression reservation test retains its fresh process and compiled
+imports, without forwarding the parent's test/transpiler arguments.
+
+Outbox claims check the current maintenance holder, fencing token and expiry in
+the claim statement. A short shared lease-row lock ends before reference checks
+or object-store I/O. Long tasks cannot continue claiming work after their lease
+expires or another owner takes over. Existing per-key claims still govern already
+issued deletions; this does not cancel storage calls or replay workflows.
+
 `recording-durability-managed.integration.ts` covers real PostgreSQL/MinIO recovery
 and the catalog transitions from pending to unavailable to playable to deleted.
 `run-recordings-modal.spec.ts` covers the corresponding browser controls. Keep
 mocked UI checks and actual storage checks separate: neither substitutes for the
-other or for production activation of the default-off durability feature.
+other or for production release qualification. Durable recording defaults on;
+an installation can explicitly opt out.
 
 Keep recording tests at the layer that owns the behavior. Duration-format edge
 cases belong in App's `recordingPresentation.test.ts`; one browser case verifies

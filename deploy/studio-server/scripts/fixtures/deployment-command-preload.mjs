@@ -27,7 +27,12 @@ if (process.argv[1]?.endsWith('deploy-kubernetes-release.mjs')) {
           ? 'kubectl'
           : null;
     return kind
-      ? spawn(process.execPath, [path.join(import.meta.dirname, 'deployment-command-tool.mjs'), kind, ...args], options)
+      ? spawn(process.execPath, [process.env.RIVET_FIXTURE_COMMAND_TOOL, kind, ...args], {
+          ...options,
+          // The bundled stand-in needs only the shared fixture clock. Real
+          // deployment/adapter children keep their original Node environment.
+          env: { ...(options?.env ?? process.env), NODE_OPTIONS: `--import=${import.meta.url}` },
+        })
       : spawn(program, args, options);
   };
   syncBuiltinESMExports();

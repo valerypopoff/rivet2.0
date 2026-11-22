@@ -66,10 +66,25 @@ function fixture() {
         'build-studio-server': { needs: ['changes', 'source-contracts'] },
         'repository-contracts': { needs: ['changes', 'source-contracts'] },
         'host-compatibility': { needs: ['changes', 'source-contracts'] },
-        verify: {
-          needs: ['source-contracts'],
+        'deployment-command-tests': {
+          needs: ['changes', 'source-contracts'],
           steps: [
-            { env: { SOURCE_RESULT: '${{ needs.source-contracts.result }}' }, run: 'test "$SOURCE_RESULT" = success' },
+            {
+              name: 'Run deployment command journeys',
+              run: 'yarn node --test deploy/studio-server/scripts/deployment-command.test.mjs',
+            },
+          ],
+        },
+        verify: {
+          needs: ['source-contracts', 'deployment-command-tests'],
+          steps: [
+            {
+              env: {
+                SOURCE_RESULT: '${{ needs.source-contracts.result }}',
+                DEPLOYMENT_COMMAND_RESULT: '${{ needs.deployment-command-tests.result }}',
+              },
+              run: 'for result in "$SOURCE_RESULT" "$DEPLOYMENT_COMMAND_RESULT"; do test "$result" = success; done',
+            },
           ],
         },
       },
@@ -150,9 +165,14 @@ test('cold checkout allowance stays distinct from stalled transfers and the sour
 });
 test('failed, skipped or cancelled prerequisites cannot be bypassed by permissive conditions', () => {
   for (const condition of ['always()', 'failure()', 'cancelled()']) {
-    const f = fixture();
-    f.images.jobs['managed-kubernetes-release-gate'].if = condition;
-    assert.throws(() => assertFastReleasePolicy(f), /successful prerequisites/);
+    for (const [workflow, job] of [
+      ['images', 'managed-kubernetes-release-gate'],
+      ['verify', 'deployment-command-tests'],
+    ]) {
+      const f = fixture();
+      f[workflow].jobs[job].if = condition;
+      assert.throws(() => assertFastReleasePolicy(f), /successful prerequisites/);
+    }
   }
 });
 
@@ -194,6 +214,24 @@ test('removing source/scan barriers, losing cleanup or reserializing expensive w
     const f = fixture();
     // Use an array for the mutation that adds a dependency.
     f.images.jobs['build-and-push'].needs = ['source-contracts'];
+    mutate(f);
+    assert.throws(() => assertFastReleasePolicy(f));
+  }
+});
+
+test('deployment command coverage and failure results are mandatory after splitting the jobs', () => {
+  for (const mutate of [
+    (f) => (f.verify.jobs['deployment-command-tests'].needs = ['changes', 'build-studio-server']),
+    (f) => (f.verify.jobs['deployment-command-tests'].if = 'false'),
+    (f) => (f.verify.jobs['deployment-command-tests']['continue-on-error'] = true),
+    (f) => (f.verify.jobs['deployment-command-tests'].steps[0].if = 'false'),
+    (f) => (f.verify.jobs['deployment-command-tests'].steps[0]['continue-on-error'] = true),
+    (f) => (f.verify.jobs['deployment-command-tests'].steps[0].run += ' --test-name-pattern=smoke'),
+    (f) => (f.verify.jobs.verify.needs = ['source-contracts']),
+    (f) => delete f.verify.jobs.verify.steps[0].env.DEPLOYMENT_COMMAND_RESULT,
+    (f) => (f.verify.jobs.verify.steps[0].run = 'test "$SOURCE_RESULT" = success'),
+  ]) {
+    const f = fixture();
     mutate(f);
     assert.throws(() => assertFastReleasePolicy(f));
   }
