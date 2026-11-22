@@ -31,6 +31,7 @@ type HostedProjectApiServerHarnessOptions = WorkflowApiServerHarnessOptions & {
 };
 
 type WorkflowExecutionServerUrls = {
+  server: http.Server;
   apiBaseUrl: string;
   publishedBaseUrl: string;
   internalPublishedBaseUrl: string;
@@ -184,6 +185,7 @@ export function createWorkflowExecutionServerHarness(options: WorkflowExecutionS
 
     try {
       await run({
+        server,
         apiBaseUrl: `${listener.baseUrl}/api/workflows`,
         publishedBaseUrl: `${listener.baseUrl}/workflows`,
         internalPublishedBaseUrl: `${listener.baseUrl}/internal/workflows`,

@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomUUID } from 'node:crypto';
+import { EventEmitter } from 'node:events';
+import { PublicEndpointLookups } from '../public-endpoint-lookups.js';
+import { createDeferred } from './helpers/managed-backend-harness.js';
 import { Client, Pool } from 'pg';
 import { performance } from 'node:perf_hooks';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -241,6 +244,41 @@ try {
   b = await publish(b, 'endpoint-b');
   standalone = await publish(standalone, 'standalone-endpoint');
   const frozenStandalone = await profileEndpoint('standalone-endpoint', true);
+  // A request queued behind a warm lookup must observe the next committed policy
+  // even when the writer sends no cache notification to this reader.
+  const gate = new PublicEndpointLookups(2, 1, 10_000);
+  const client = Object.assign(new EventEmitter(), { destroyed: false });
+  for (const change of ['private', 'unpublished'] as const) {
+    const selected = createDeferred<void>();
+    const release = createDeferred<void>();
+    const lookup = () => reader.resolvePublishedExecutionTarget('standalone-endpoint', true);
+    const original = gate.resolve(client, async () => {
+      const target = await lookup();
+      selected.resolve();
+      await release.promise;
+      return target;
+    });
+    await Promise.race([selected.promise, original]);
+    const queued = gate.resolve(client, lookup);
+    const statement =
+      change === 'private'
+        ? 'UPDATE workflows SET endpoint_access = $1 WHERE workflow_id = $2'
+        : "UPDATE workflow_endpoints SET is_published = $1 WHERE workflow_id = $2 AND lookup_name = 'standalone-endpoint'";
+    try {
+      const [before, after] = await Promise.all([
+        original,
+        queued,
+        fresh.query(statement, [change === 'private' ? 'internal' : false, standalone.projectMetadataId])
+          .finally(() => release.resolve()),
+      ]);
+      assert.equal(before?.endpointAccess, 'public');
+      assert.equal(after?.endpointAccess, change === 'private' ? 'internal' : undefined);
+    } finally {
+      release.resolve();
+      await Promise.allSettled([original, queued]);
+      await fresh.query(statement, [change === 'private' ? 'public' : true, standalone.projectMetadataId]);
+    }
+  }
   const frozenBundle = await profileEndpoint('endpoint-a', true);
   for (const [floating, frozen] of [
     [floatingStandalone, frozenStandalone],
@@ -269,6 +307,18 @@ try {
   );
   await setStandaloneHistory('missing-active-history');
   try {
+    const db = createManagedWorkflowQueries(fresh);
+    const lookup = (name: string) => db.resolveExecutionPointerFromDatabase(fresh, 'published', name, true);
+    const burst = await measureIo(() => Promise.all([
+      lookup('endpoint-a'), lookup('endpoint-b'), lookup('missing'), lookup('endpoint-a'),
+      assert.rejects(lookup('standalone-endpoint'), { status: 503 }),
+    ]));
+    assert.equal(burst.queries, 2, 'One immediate read and one multi-name read serve the burst.');
+    const [first, second, missing, repeated] = burst.result;
+    assert.equal(first?.pointer.workflowId, a.projectMetadataId);
+    assert.equal(second?.pointer.workflowId, b.projectMetadataId);
+    assert.equal(missing, null);
+    assert.deepEqual(repeated, first);
     await assert.rejects(writer.loadPublishedExecutionProject('standalone-endpoint', true), {
       status: 503,
       message: /active endpoint revision is missing from history/i,

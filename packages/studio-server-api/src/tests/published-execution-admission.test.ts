@@ -40,30 +40,30 @@ test('live limits preserve accepted permits, draining and the caller configurati
   assert.equal(admission.getSnapshot().activeRuns, 0);
 });
 
-test('enforced published execution admission rejects without queueing and releases a completed permit once', () => {
-  const admission = createPublishedExecutionAdmission({
-    maxActiveRuns: 1,
-    mode: 'enforce',
-    retryAfterSeconds: 7,
-  });
-
-  const first = admission.acquire('workflow-endpoint');
-  assert.equal(first.kind, 'accepted');
-  if (first.kind !== 'accepted') return;
-
-  const rejected = admission.acquire('web-app-action');
-  assert.equal(rejected.kind, 'capacity-exceeded');
-  if (rejected.kind !== 'capacity-exceeded') return;
-  const error = toPublishedExecutionAdmissionError(rejected);
-  assert.equal(error.status, 429);
-  assert.equal(error.code, 'execution_capacity_exceeded');
-  assert.equal(error.retryAfterSeconds, 7);
-  assert.equal(admission.getSnapshot().activeRuns, 1);
-
-  first.permit.release();
-  first.permit.release();
-  assert.equal(admission.getSnapshot().activeRuns, 0);
-  assert.equal(admission.acquire('workflow-endpoint').kind, 'accepted');
+test('enforced admission rejects immediately, reports each saturation period once and reopens on release', () => {
+  const events: string[] = [];
+  const admission = createPublishedExecutionAdmission(
+    { maxActiveRuns: 1, mode: 'enforce', retryAfterSeconds: 7 },
+    { onEvent: (event) => events.push(event.type) },
+  );
+  for (const surface of ['workflow-endpoint', 'web-app-action'] as const) {
+    const periods = events.length;
+    const accepted = admission.acquire(surface);
+    assert.ok(accepted.kind === 'accepted');
+    const rejected = admission.acquire('web-app-action');
+    assert.ok(rejected.kind === 'capacity-exceeded');
+    const error = toPublishedExecutionAdmissionError(rejected);
+    assert.equal(error.status, 429);
+    assert.equal(error.code, 'execution_capacity_exceeded');
+    assert.equal(error.retryAfterSeconds, 7);
+    assert.equal(admission.acquire('workflow-endpoint').kind, 'capacity-exceeded');
+    assert.equal(events.length, periods + 1);
+    assert.equal(admission.getSnapshot().activeRuns, 1);
+    accepted.permit.release();
+    accepted.permit.release();
+    assert.equal(admission.getSnapshot().activeRuns, 0);
+  }
+  assert.deepEqual(events, ['capacity-exceeded', 'capacity-exceeded']);
 });
 
 test('observe mode reports only threshold crossings while continuing work', () => {
@@ -91,20 +91,23 @@ test('observe mode reports only threshold crossings while continuing work', () =
   assert.deepEqual(events, ['observe-over-capacity', 'observe-over-capacity']);
 });
 
-test('draining rejects even when admission mode is disabled', () => {
-  const admission = createPublishedExecutionAdmission({
-    maxActiveRuns: 1,
-    mode: 'disabled',
-    retryAfterSeconds: 3,
-  });
-
+test('draining rejects every surface and reports once even in disabled mode', () => {
+  const events: string[] = [];
+  const admission = createPublishedExecutionAdmission(
+    { maxActiveRuns: 1, mode: 'disabled', retryAfterSeconds: 3 },
+    { onEvent: (event) => events.push(event.type) },
+  );
   assert.equal(admission.acquire('workflow-endpoint').kind, 'accepted');
   admission.beginDrain();
-  const rejected = admission.acquire('workflow-endpoint');
-  assert.equal(rejected.kind, 'draining');
-  if (rejected.kind !== 'draining') return;
-  assert.equal(toPublishedExecutionAdmissionError(rejected).status, 503);
-  assert.equal(toPublishedExecutionAdmissionError(rejected).code, 'execution_draining');
+  for (const surface of ['workflow-endpoint', 'web-app-action', 'scheduled-run'] as const) {
+    const rejected = admission.acquire(surface);
+    assert.ok(rejected.kind === 'draining');
+    const error = toPublishedExecutionAdmissionError(rejected);
+    assert.equal(error.status, 503);
+    assert.equal(error.code, 'execution_draining');
+    assert.equal(error.retryAfterSeconds, 3);
+  }
+  assert.deepEqual(events, ['draining']);
 });
 
 test('environment configuration is strict when a non-disabled mode is selected', () => {
@@ -124,38 +127,6 @@ test('environment configuration is strict when a non-disabled mode is selected',
     () => getPublishedExecutionAdmissionConfig({ RIVET_PUBLISHED_EXECUTION_ADMISSION_MODE: 'queue' }),
     /must be disabled, observe, or enforce/,
   );
-});
-test('enforced admission reports each saturation period once and reports again after capacity reopens', () => {
-  const events: string[] = [];
-  const admission = createPublishedExecutionAdmission(
-    { maxActiveRuns: 1, mode: 'enforce', retryAfterSeconds: 1 },
-    { onEvent: (event) => events.push(event.type) },
-  );
-
-  const first = admission.acquire('workflow-endpoint');
-  assert.equal(first.kind, 'accepted');
-  assert.equal(admission.acquire('workflow-endpoint').kind, 'capacity-exceeded');
-  assert.equal(admission.acquire('web-app-action').kind, 'capacity-exceeded');
-  assert.deepEqual(events, ['capacity-exceeded']);
-
-  if (first.kind === 'accepted') first.permit.release();
-  const second = admission.acquire('web-app-action');
-  assert.equal(second.kind, 'accepted');
-  assert.equal(admission.acquire('workflow-endpoint').kind, 'capacity-exceeded');
-  assert.deepEqual(events, ['capacity-exceeded', 'capacity-exceeded']);
-  if (second.kind === 'accepted') second.permit.release();
-});
-test('draining reports once while consistently rejecting new public work', () => {
-  const events: string[] = [];
-  const admission = createPublishedExecutionAdmission(
-    { maxActiveRuns: 1, mode: 'disabled', retryAfterSeconds: 1 },
-    { onEvent: (event) => events.push(event.type) },
-  );
-
-  admission.beginDrain();
-  assert.equal(admission.acquire('workflow-endpoint').kind, 'draining');
-  assert.equal(admission.acquire('web-app-action').kind, 'draining');
-  assert.deepEqual(events, ['draining']);
 });
 test('admission snapshots expose fixed public surfaces and never change permit decisions when observers fail', () => {
   const decisions: string[] = [];

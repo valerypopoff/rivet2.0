@@ -5,6 +5,16 @@ those audits does not certify NGINX, Alpine libraries or binaries copied into a
 container. Build Images now requires `scan-images` before promotion, alongside
 the existing functional, migration and HA gates. Scanning does not deploy anything.
 
+## Alpine XML and font libraries (November 22, 2026)
+
+The [proxy scan](https://github.com/valerypopoff/rivet2.0/actions/runs/44955294272/job/137004350908)
+found `libxml2 2.13.9-r2` on both amd64 and arm64 (CVE-2026-86144). The
+[qualification actor scan](https://github.com/valerypopoff/rivet2.0/actions/runs/44955294272/job/137002454530)
+found the same library and `libfontenc 1.1.9-r0` (CVE-2026-109908). Both images
+require `libxml2>=2.13.9-r3` in their APK install layer. The actor also requires
+`libfontenc>=1.1.10-r0`. Raising these floors makes cached vulnerable layers
+ineligible for reuse. The platform-specific artifact scans still gate promotion.
+
 ## Go and NGINX security updates: November 19, 2026
 
 Build Images reported [CVE-2026-97054](https://pkg.go.dev/vuln/GO-2026-6859)

@@ -20,8 +20,8 @@ FROM node:24.22.1-alpine@sha256:06d7adf3e0ef61a13f1d28682726366f97a15aa1888c934d
 ARG TARGETARCH=amd64
 COPY source/deploy/studio-server/images/lib/harden-package-manager-caches.mjs /opt/rivet/harden-package-manager-caches.mjs
 COPY source/deploy/studio-server/images/lib/remove-package-manager-windows-globs.mjs /opt/rivet/remove-package-manager-windows-globs.mjs
-# Refresh cached Git/init templates and Chromium's libxslt security dependencies.
-RUN apk add --no-cache 'git>=2.54.1-r0' 'git-init-template>=2.54.1-r0' chromium ffmpeg openssl util-linux curl ca-certificates bash 'libxslt>=1.1.43-r4' && corepack enable && \
+# Require patched Git, XML and font libraries in the actor's runtime layer.
+RUN apk add --no-cache 'git>=2.54.1-r0' 'git-init-template>=2.54.1-r0' chromium ffmpeg openssl util-linux curl ca-certificates bash 'libxslt>=1.1.43-r4' 'libxml2>=2.13.9-r3' 'libfontenc>=1.1.10-r0' && corepack enable && \
     npm install -g npm@11.21.1 && \
     npm install --prefix /tmp/rivet-npm-security --ignore-scripts --no-audit --no-fund --package-lock=false --save-exact undici@6.29.1 && \
     rm -rf /usr/local/lib/node_modules/npm/node_modules/undici && \

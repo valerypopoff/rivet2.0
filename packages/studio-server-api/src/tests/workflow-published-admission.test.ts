@@ -3,7 +3,7 @@ import test from 'node:test';
 import { createFilesystemWorkflowSuiteHarness } from './helpers/workflow-filesystem-suite-harness.js';
 import { createDeferred } from './helpers/managed-backend-harness.js';
 import { withAsyncDeadline } from './helpers/workflow-async-process.js';
-import { getPublishedExecutionAdmission } from '../published-execution-admission.js';
+import { getPublishedExecutionAdmission, PublishedExecutionAdmissionError } from '../published-execution-admission.js';
 import { abortActiveHttpExecutions, getActiveHttpExecutionCount } from '../active-http-executions.js';
 import { writeWorkflowEndpointAuthSettings } from '../workflow-endpoint-auth-settings.js';
 import type { WorkflowPublishedExecutionTarget } from '../routes/workflows/data-backend.js';
@@ -46,22 +46,20 @@ test('saturation preserves authentication and 404s while skipping all rejected m
       const target = await resolve(...args);
       return target && { ...target, load: () => { loads++; return target.load(); } };
     });
-    const held = Array.from({ length: 32 }, () => admission.acquire('workflow-endpoint'));
+    admission.setMaxActiveRuns(1);
+    const held = admission.acquire('workflow-endpoint');
+    assert.ok(held.kind === 'accepted');
     try {
-      assert.ok(held.every((entry) => entry.kind === 'accepted'));
-      const responses = await Promise.all(Array.from({ length: 64 }, () =>
-        fetch(`${publishedBaseUrl}/admission`, { method: 'POST', headers })));
-      for (const response of responses) {
-        assert.equal(response.status, 429);
-        assert.equal(response.headers.get('retry-after'), '1');
-        assert.equal((await response.json()).error.code, 'execution_capacity_exceeded');
-      }
-      assert.equal(lookups, 64);
+      const response = await fetch(`${publishedBaseUrl}/admission`, { method: 'POST', headers });
+      assert.equal(response.status, 429);
+      assert.equal(response.headers.get('retry-after'), '1');
+      assert.equal((await response.json()).error.code, 'execution_capacity_exceeded');
+      assert.equal(lookups, 1);
       assert.equal(loads, 0);
       const unauthorized = await fetch(`${publishedBaseUrl}/admission`, { method: 'POST' });
       assert.equal(unauthorized.status, 401);
       await unauthorized.arrayBuffer();
-      assert.equal(lookups, 64, 'Authentication precedes storage and execution admission.');
+      assert.equal(lookups, 1, 'Authentication precedes storage and execution admission.');
       for (const endpoint of ['missing', 'private']) {
         const response = await fetch(`${publishedBaseUrl}/${endpoint}`, { method: 'POST', headers });
         assert.equal(response.status, 404);
@@ -69,7 +67,7 @@ test('saturation preserves authentication and 404s while skipping all rejected m
       }
       assert.equal(loads, 0, 'Private endpoints do not materialize even at full capacity.');
     } finally {
-      for (const entry of held) if (entry.kind === 'accepted') entry.permit.release();
+      held.permit.release();
     }
     const accepted = await fetch(`${publishedBaseUrl}/admission`, { method: 'POST', headers });
     assert.equal(accepted.status, 200);
@@ -78,8 +76,34 @@ test('saturation preserves authentication and 404s while skipping all rejected m
   });
 });
 
+test('disconnect during public metadata lookup skips execution admission', async (t) => {
+  const entered = createDeferred<void>();
+  const closed = createDeferred<void>();
+  const release = createDeferred<void>();
+  const acquire = t.mock.method(admission, 'acquire');
+  await suite.withWorkflowExecutionServer(async ({ publishedBaseUrl, server }) => {
+    server.prependOnceListener('request', (_req, res) => res.once('close', closed.resolve));
+    t.mock.method(suite.filesystemExecutionCache.getFilesystemExecutionCache(), 'resolvePublishedExecutionTarget', async () => {
+      entered.resolve();
+      await release.promise;
+      return { endpointAccess: 'public', load: async () => null } satisfies WorkflowPublishedExecutionTarget;
+    });
+    const client = new AbortController();
+    const request = fetch(`${publishedBaseUrl}/admission`, { method: 'POST', signal: client.signal });
+    try {
+      await withAsyncDeadline(entered.promise, 'metadata lookup');
+      client.abort();
+      await assert.rejects(request, { name: 'AbortError' });
+      await withAsyncDeadline(closed.promise, 'server response closure');
+    } finally {
+      release.resolve();
+    }
+    await new Promise<void>(resolve => setImmediate(resolve));
+    assert.equal(acquire.mock.callCount(), 0);
+  });
+});
+
 test('preparation counts against the live limit and shutdown registry', async (t) => {
-  await publish();
   admission.setMaxActiveRuns(1);
   const entered = createDeferred<void>();
   const release = createDeferred<void>();
@@ -156,13 +180,19 @@ test('missing, newly private and failed preparation release the permit before th
   });
 });
 
-test('draining rejects before materialization and keeps its existing retry response', async (t) => {
-  await publish();
+test('lookup overload and execution drain keep distinct retry responses before materialization', async (t) => {
   await suite.withWorkflowExecutionServer(async ({ publishedBaseUrl }) => {
-    t.mock.method(suite.filesystemExecutionCache.getFilesystemExecutionCache(), 'resolvePublishedExecutionTarget', async () => ({
+    const resolver = t.mock.method(suite.filesystemExecutionCache.getFilesystemExecutionCache(), 'resolvePublishedExecutionTarget', async () => ({
       endpointAccess: 'public',
-      load: async () => assert.fail('Draining must not start project preparation.'),
+      load: async () => assert.fail('Rejected requests must not start project preparation.'),
     } satisfies WorkflowPublishedExecutionTarget));
+    resolver.mock.mockImplementationOnce(async () => {
+      throw new PublishedExecutionAdmissionError(503, 'endpoint_lookup_busy', 1);
+    });
+    const busy = await fetch(`${publishedBaseUrl}/admission`, { method: 'POST' });
+    assert.equal(busy.status, 503);
+    assert.equal(busy.headers.get('retry-after'), '1');
+    assert.equal((await busy.json()).error.code, 'endpoint_lookup_busy');
     admission.beginDrain();
     const response = await fetch(`${publishedBaseUrl}/admission`, { method: 'POST' });
     assert.equal(response.status, 503);

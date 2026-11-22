@@ -73,13 +73,15 @@ export type PublishedExecutionAdmission = {
 export class PublishedExecutionAdmissionError extends Error {
   constructor(
     readonly status: 429 | 503,
-    readonly code: 'execution_capacity_exceeded' | 'execution_draining',
+    readonly code: 'execution_capacity_exceeded' | 'execution_draining' | 'endpoint_lookup_busy',
     readonly retryAfterSeconds: number,
   ) {
     super(
       code === 'execution_capacity_exceeded'
         ? 'Published execution capacity is temporarily full. Retry later.'
-        : 'Published execution is draining. Retry later.',
+        : code === 'endpoint_lookup_busy'
+          ? 'Published endpoint lookup capacity is temporarily full. Retry later.'
+          : 'Published execution is draining. Retry later.',
     );
     this.name = 'PublishedExecutionAdmissionError';
   }

@@ -349,6 +349,19 @@ export class StudioMetrics {
     this.observeHistogram('rivet_recording_input_query_seconds', { stage }, Math.max(0, durationMs) / 1000);
   }
 
+  setEndpointLookupState(input: { active: number; queued: number }): void {
+    this.setGauge('rivet_endpoint_lookups_active', {}, input.active);
+    this.setGauge('rivet_endpoint_lookups_queued', {}, input.queued);
+  }
+
+  recordEndpointLookupRejection(reason: 'full' | 'expired' | 'draining' | 'disconnected'): void {
+    this.incrementCounter('rivet_endpoint_lookup_rejections_total', { reason });
+  }
+
+  observeEndpointLookupWait(waitMs: number): void {
+    this.observeHistogram('rivet_endpoint_lookup_wait_seconds', {}, waitMs / 1000);
+  }
+
   setPostgresPool(input: { idle: number; pools: number; total: number; waiting: number }): void {
     this.setGauge('rivet_postgres_pool_connections', { state: 'idle' }, input.idle);
     this.setGauge('rivet_postgres_pool_connections', { state: 'total' }, input.total);

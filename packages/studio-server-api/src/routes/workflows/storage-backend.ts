@@ -1,3 +1,5 @@
+import type { ServerResponse } from 'node:http';
+import { getPublicEndpointLookups } from '../../public-endpoint-lookups.js';
 import { createLegacyWorkflowCommands } from './legacy-workflow-commands.js';
 import { recordingMemory } from './recording-memory.js';
 import type { ExecutionRecorder } from '@valerypopoff/rivet2-core';
@@ -742,14 +744,15 @@ export async function deleteWorkflowProjectItemWithBackend(relativePath: string)
 export async function resolvePublishedExecutionTarget(
   endpointName: string,
   requireFreshPointer = false,
+  client?: ServerResponse,
 ): Promise<WorkflowPublishedExecutionTarget | null> {
-  if (usesDatabaseCatalog()) {
-    return (await getWorkflowStorageServices().getRepository('execution')).resolvePublishedExecutionTarget(
-      endpointName,
-      requireFreshPointer,
-    );
-  }
-  return resolveLegacyPublishedExecutionTarget(endpointName);
+  const services = getWorkflowStorageServices();
+  if (services.mode === 'legacy') return resolveLegacyPublishedExecutionTarget(endpointName);
+  const resolve = async () =>
+    (await services.getRepository('execution')).resolvePublishedExecutionTarget(endpointName, requireFreshPointer);
+  return services.mode === 'managed' && requireFreshPointer && client
+    ? getPublicEndpointLookups().resolve(client, resolve)
+    : resolve();
 }
 
 export async function resolvePublishedExecutionProject(
