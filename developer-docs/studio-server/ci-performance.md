@@ -22,17 +22,17 @@ reducing their protection windows or assuming a faster compiler halves the run.
 Use this ranking for new performance work; later sections retain earlier evidence
 and procedures, including proposals that have since been measured or superseded.
 
-The latest [full verification](https://github.com/valerypopoff/rivet2.0/actions/runs/45048439797)
+The baseline [full verification](https://github.com/valerypopoff/rivet2.0/actions/runs/45048439797)
 passed all 19 jobs and 396 browser cases in **18m46s**. Its managed-storage lane
 took **13m25s**, including **8m07s** in VM-to-managed migration verification.
 The slowest browser job took **10m29s**; the gateway lane took **9m50s**. These
 are parallel job times, not durations to add together. The source/build path
 finished about 5m12s after the workflow started.
 
-**Implemented locally: the complete VM-migration integration suite has its own
-required parallel job, alongside the other managed-storage checks.** It owns its temporary
-roots, PostgreSQL and MinIO containers, environment and cleanup. It does not
-require the preceding managed tests' data. Preserve the existing serial order
+**Implemented and verified on GitHub: the complete VM-migration integration suite
+has its own required parallel job, alongside the other managed-storage checks.**
+It owns its temporary roots, PostgreSQL and MinIO containers, environment and
+cleanup. It does not require the preceding managed tests' data. Preserve the existing serial order
 inside `workflow-storage-migration-managed.integration.ts`: its negative cases,
 idempotent retries, source mutations, rollback checks and supervised restores
 deliberately share fixture state.
@@ -63,18 +63,35 @@ artifacts and failed/cancelled/skipped final results were rejected. All ten
 workflow-policy tests, `yarn test:style` and actionlint passed; the fixture cleaned
 up its containers without changing the existing local development stack.
 
-Hosted validation still needs every lane and browser case on the same source.
-Include cold image pulls, checkout/install time and account-level queueing in
-the comparison. Compare total elapsed time and runner-minutes, not only test
-time. No hosted speedup is claimed yet.
+Hosted validation on `d10faabc9` passed both workflows on their first attempts:
+20 Studio Server jobs, 17 Build jobs and all 396 browser cases. The migration
+log confirms the complete copy/retry/verification fixture and both supervised
+restore variants; CI did not use the reduced feedback mode.
 
-With the last run's timings, separating an approximately eight-minute test from
-the other approximately five minutes of managed checks would put both below the
-current browser limit. This suggests **roughly three minutes** off full develop
-verification (about 18m46s to around 16 minutes), subject to cold setup and queues.
-It cannot remove eight minutes from the workflow: the browser and gateway jobs
-then become the limits. Reassess after a complete hosted run rather than adding
-more browser jobs immediately.
+| Workflow | Previous full run | After the split | Observed reduction |
+| --- | --- | --- | --- |
+| Studio Server verification | [18m46s](https://github.com/valerypopoff/rivet2.0/actions/runs/45048439797) | [16m10s](https://github.com/valerypopoff/rivet2.0/actions/runs/45052324511) | 2m36s (13.9%) |
+| Build | [10m17s](https://github.com/valerypopoff/rivet2.0/actions/runs/45048208040) | [9m33s](https://github.com/valerypopoff/rivet2.0/actions/runs/45052324608) | 44s (7.1%) |
+
+These timings run from workflow creation through the last job's completion,
+including setup, artifact transfers and runner queueing. The Studio baseline
+was a full manual run on `0c4461315`; its preceding filtered push skipped heavy
+verification and is not a comparable baseline. This is one before/after pair,
+not a guaranteed saving on every push. Build was not the optimization target;
+its timing difference can reflect runner/cache variation.
+
+The managed/migration section fell from 13m25s to 7m55s, including the new
+migration job's 37-second later start. Managed checks took 3m40s; the separate
+migration job took 7m18s, with 6m42s in the complete integration step. The slowest
+browser job now took 10m40s and determined the overall finish. Further migration
+optimization alone will not shorten that browser-bound path. Profile the
+remaining browser work before increasing its runner count.
+
+Summed Studio job time fell from 109m21s to 101m50s; Build increased from 41m11s
+to 45m17s. These sums describe concurrent runner work, not wall-clock durations
+or billed minutes. Preserve full coverage and compare both measures in future
+experiments. Exact job metadata and migration logs are in ignored
+`artifacts/ci-migration-split-20261122/hosted/`.
 
 The migration harness also repeatedly launches the CLI through Yarn/tsx, and
 logs show roughly ten-second intervals between many child results. That is a
@@ -94,8 +111,8 @@ checked path of 8m02s versus 7m43s, excluding queueing. Keep the normal native
 release runners; this did not establish an overall warm-path speedup.
 
 For **main**, `Build Images` invokes this same verification with `force: true`,
-so it benefits from a shorter verification lane. However, main's most recent
-33m36s run still used source `9e0506a39`, before the current develop optimizations;
+so it can benefit from a shorter verification lane. However, the reviewed main
+33m36s baseline used source `9e0506a39`, before the current develop optimizations;
 its 22m16s HA lane was longer than verification. Do not claim a three-minute
 main workflow saving from this split. At the next approved merge, measure the
 updated image/HA path first, then target independent cluster/image preparation
