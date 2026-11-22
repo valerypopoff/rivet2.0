@@ -69,6 +69,11 @@ test('resource monitoring distinguishes container and process data, unknown allo
     periods: string[] = [];
   let deploymentStatusRequests = 0;
   let hang = false;
+  let holdPeriod = false;
+  let releasePeriod!: () => void;
+  const periodGate = new Promise<void>((resolve) => {
+    releasePeriod = resolve;
+  });
   const releaseRequests: Array<() => void> = [];
   const stat = { average: 1250, p95: 1800, peak: 2000, coverageMs: 3500000 };
   const point = {
@@ -134,6 +139,7 @@ test('resource monitoring distinguishes container and process data, unknown allo
       await route.abort().catch(() => {});
       return;
     }
+    if (holdPeriod && period === '24h') await periodGate;
     return route.fulfill({
       json: {
         available: true,
@@ -180,7 +186,9 @@ test('resource monitoring distinguishes container and process data, unknown allo
               memoryLimitBytes: null,
             },
           },
-        ].filter((i) => period === '24h' || i.identity.incarnation !== 'fallback-two'),
+        ]
+          .filter((i) => period === '24h' || i.identity.incarnation !== 'fallback-two')
+          .sort((a, b) => (period === '24h' ? a.identity.role.localeCompare(b.identity.role) : 0)),
         pools: [
           {
             scope: 'container',
@@ -198,7 +206,7 @@ test('resource monitoring distinguishes container and process data, unknown allo
             latest: { ...control.latest, reporters: 1 },
             points: control.points.map((p) => ({ ...p, complete: false })),
           },
-        ],
+        ].sort((a, b) => (period === '24h' ? a.role.localeCompare(b.role) : 0)),
       },
     });
   });
@@ -242,8 +250,19 @@ test('resource monitoring distinguishes container and process data, unknown allo
   expect(periods).toEqual([]);
   await modal.getByRole('complementary', { name: 'Settings navigation' }).hover();
   await page.mouse.wheel(0, 800);
-  await expect(modal.getByRole('tab', { name: 'CPU and RAM monitoring', exact: true })).toBeInViewport();
-  await modal.getByRole('tab', { name: 'CPU and RAM monitoring', exact: true }).click();
+  const monitoringTab = modal.getByRole('tab', { name: 'CPU and RAM monitoring', exact: true });
+  await expect(monitoringTab).toBeInViewport({ ratio: 1 });
+  const tabSpacing = await monitoringTab.evaluate((element) => {
+    const range = document.createRange();
+    range.selectNodeContents(element);
+    const text = range.getBoundingClientRect();
+    const button = element.getBoundingClientRect();
+    return { lines: range.getClientRects().length, above: text.top - button.top, below: button.bottom - text.bottom };
+  });
+  expect(tabSpacing.lines).toBeGreaterThan(1);
+  expect(tabSpacing.above).toBeGreaterThanOrEqual(6);
+  expect(tabSpacing.below).toBeGreaterThanOrEqual(6);
+  await monitoringTab.click();
   const panel = modal.getByRole('region', { name: 'Resource monitoring' });
   await expect(panel).toContainText(
     '2 monitoring sessions reported within the last 90 seconds · 3 sessions available for this period.',
@@ -261,8 +280,34 @@ test('resource monitoring distinguishes container and process data, unknown allo
     const curve = chart.locator('.recharts-line-curve');
     await expect(curve).toHaveAttribute('d', /L/);
     expect((await curve.getAttribute('d'))?.match(/M/g)).toHaveLength(2);
+    await chart.scrollIntoViewIfNeeded();
+    await chart.locator('svg.recharts-surface').hover({ position: { x: 100, y: 50 } });
+    const timestamp = chart.locator('.recharts-tooltip-label');
+    await expect(timestamp).toHaveText(
+      await page.evaluate((at) => new Date(at).toLocaleString(), partialPoints[0]!.at),
+    );
+    const contrast = await timestamp.evaluate((element) => {
+      const luminance = (color: string) => {
+        const channels = color
+          .match(/[\d.]+/g)!
+          .slice(0, 3)
+          .map(Number)
+          .map((value) => {
+            const channel = value / 255;
+            return channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4;
+          });
+        return channels[0]! * 0.2126 + channels[1]! * 0.7152 + channels[2]! * 0.0722;
+      };
+      const foreground = luminance(getComputedStyle(element).color);
+      const background = luminance(getComputedStyle(element.closest('.recharts-default-tooltip')!).backgroundColor);
+      return (Math.max(foreground, background) + 0.05) / (Math.min(foreground, background) + 0.05);
+    });
+    expect(contrast).toBeGreaterThanOrEqual(4.5);
   }
   const resourceView = panel.getByRole('group', { name: 'Resource view', exact: true });
+  const periodControl = panel.getByRole('group', { name: 'Resource history period', exact: true });
+  await expect(periodControl).toHaveClass(/segmented-control/);
+  await expect(periodControl.getByRole('button')).toHaveText(['1 hour', '24 hours', '7 days']);
   await expect(panel.getByRole('combobox', { name: 'Resource view' })).toHaveCount(0);
   await expect(resourceView).toHaveClass(/segmented-control/);
   await expect(resourceView.getByRole('button')).toHaveText(['Execution replicas', 'Editor and dashboard replicas']);
@@ -287,9 +332,27 @@ test('resource monitoring distinguishes container and process data, unknown allo
   await expect(modal.getByRole('button', { name: 'Revert', exact: true })).toHaveCount(0);
   await expect(panel).toContainText('7 / 32');
   const executionStats = await panel.locator('.resource-stats').innerText();
+  const requestsBeforeViewChange = periods.length;
   const controlView = resourceView.getByRole('button', { name: 'Editor and dashboard replicas', exact: true });
   await controlView.focus();
-  await page.keyboard.press('Enter');
+  const pendingView = await controlView.evaluate(async (element) => {
+    (element as HTMLButtonElement).click();
+    await new Promise<void>((resolve) => queueMicrotask(resolve));
+    return {
+      selected: element.getAttribute('aria-pressed'),
+      busy: element.getAttribute('aria-busy'),
+      spinner: element.querySelector('.segmented-control-spinner') !== null,
+      spinnerOpacity: getComputedStyle(element.querySelector('.segmented-control-spinner')!).opacity,
+      labelOpacity: getComputedStyle(element.querySelector('.segmented-control-loading-label')!).opacity,
+    };
+  });
+  expect(pendingView).toEqual({
+    selected: 'true',
+    busy: 'true',
+    spinner: true,
+    spinnerOpacity: '0',
+    labelOpacity: '1',
+  });
   await expect(controlView).toHaveAttribute('aria-pressed', 'true');
   await expect(resourceView.getByRole('button', { name: 'Execution replicas', exact: true })).toHaveAttribute(
     'aria-pressed',
@@ -298,13 +361,67 @@ test('resource monitoring distinguishes container and process data, unknown allo
   await expect(sessionCards).toHaveCount(1);
   await expect(sessionCards.first()).toContainText('control-one');
   await expect(panel.locator('.resource-stats').first()).toContainText('Average 250m');
+  await expect(controlView).not.toHaveAttribute('aria-busy', 'true');
+  await expect(controlView.locator('.segmented-control-spinner')).toHaveCount(0);
   await expect(panel.locator('.resource-stats')).not.toHaveText(executionStats, { useInnerText: true });
   for (const chart of [cpuChart, memoryChart]) {
     await expect(chart.locator('.recharts-line-dot')).toHaveCount(1);
   }
-  await panel.getByRole('button', { name: '24 hours', exact: true }).click();
+  await resourceView.getByRole('button', { name: 'Execution replicas', exact: true }).focus();
+  await page.keyboard.press('Enter');
+  await expect(panel.locator('.resource-stats')).toContainText('Average 1,250m');
+  await controlView.click();
+  await expect(panel.locator('.resource-stats')).toContainText('Average 250m');
+  expect(periods).toHaveLength(requestsBeforeViewChange);
+  const day = periodControl.getByRole('button', { name: '24 hours', exact: true });
+  const hour = periodControl.getByRole('button', { name: '1 hour', exact: true });
+  const periodButtonWidth = (await day.boundingBox())!.width;
+  const layout = () =>
+    panel.evaluate((element) => {
+      const top = element.getBoundingClientRect().top;
+      return [
+        ...element.querySelectorAll('.app-settings-field-label, .resource-views, .resource-stats, .resource-chart'),
+      ].map((item) => item.getBoundingClientRect().top - top);
+    });
+  const beforeLoading = await layout();
+  holdPeriod = true;
+  try {
+    await day.click();
+    await expect(day).toHaveAttribute('aria-pressed', 'true');
+    await expect(day).toHaveAttribute('aria-busy', 'true');
+    expect(await layout()).toEqual(beforeLoading);
+    const appearanceAt = (elapsed: number) =>
+      day.evaluate((element, at) => {
+        const spinner = element.querySelector('.segmented-control-spinner')!;
+        const label = element.querySelector('.segmented-control-loading-label')!;
+        for (const target of [spinner, label])
+          for (const animation of target.getAnimations()) {
+            animation.pause();
+            animation.currentTime = at;
+          }
+        return { spinner: getComputedStyle(spinner).opacity, label: getComputedStyle(label).opacity };
+      }, elapsed);
+    expect(await appearanceAt(149)).toEqual({ spinner: '0', label: '1' });
+    expect(await appearanceAt(151)).toEqual({ spinner: '1', label: '0' });
+    await expect(day).toBeEnabled();
+    expect((await day.boundingBox())!.width).toBe(periodButtonWidth);
+    await expect(panel.locator('.resource-chart')).toHaveCount(2);
+    expect(await layout()).toEqual(beforeLoading);
+    await hour.click();
+    await expect(hour).toHaveAttribute('aria-pressed', 'true');
+    await expect(hour).not.toHaveAttribute('aria-busy', 'true');
+    await expect(day).not.toHaveAttribute('aria-busy', 'true');
+    await expect(day.locator('.segmented-control-spinner')).toHaveCount(0);
+    expect(await layout()).toEqual(beforeLoading);
+  } finally {
+    holdPeriod = false;
+    releasePeriod();
+  }
+  await day.click();
   await expect.poll(() => periods.includes('24h')).toBe(true);
   await expect(panel).toContainText('At least 2 additional monitoring sessions are not shown.');
+  await expect(day).not.toHaveAttribute('aria-busy', 'true');
+  expect((await layout()).slice(0, 2)).toEqual(beforeLoading.slice(0, 2));
   await expect(resourceView.getByRole('button')).toHaveText([
     'Execution replicas',
     'Editor and dashboard replicas',
@@ -343,10 +460,21 @@ test('resource monitoring distinguishes container and process data, unknown allo
   await page.clock.install();
   hang = true;
   try {
-    await panel.getByRole('button', { name: '7 days', exact: true }).click();
+    const week = periodControl.getByRole('button', { name: '7 days', exact: true });
+    const beforeTimeout = await layout();
+    await week.click();
     await expect.poll(() => periods.includes('7d')).toBe(true);
+    await expect(week).toHaveAttribute('aria-busy', 'true');
+    await expect(week.locator('.segmented-control-spinner')).toHaveCSS('opacity', '1');
+    expect(await layout()).toEqual(beforeTimeout);
     await page.clock.fastForward(10100);
     await expect(panel).toContainText('Monitoring request timed out.');
+    await expect(week).not.toHaveAttribute('aria-busy', 'true');
+    const beforeRetry = await layout();
+    await hour.click();
+    await expect(hour).toHaveAttribute('aria-busy', 'true');
+    await expect(panel).toContainText('Monitoring request timed out.');
+    expect(await layout()).toEqual(beforeRetry);
     await page.clock.fastForward(120000);
     await expect(currentExecution).toContainText('No recent samples');
     await expect(panel).toContainText('0 monitoring sessions reported within the last 90 seconds');

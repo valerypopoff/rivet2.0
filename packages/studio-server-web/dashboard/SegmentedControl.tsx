@@ -23,12 +23,14 @@ export function SegmentedControl({
 export function SegmentedControlButton({
   children,
   className,
+  isLoading = false,
   role,
   selected,
   type = 'button',
   ...props
 }: ButtonHTMLAttributes<HTMLButtonElement> & {
   children: ReactNode;
+  isLoading?: boolean;
   selected: boolean;
 }) {
   return (
@@ -36,10 +38,12 @@ export function SegmentedControlButton({
       {...props}
       type={type}
       role={role}
+      aria-busy={isLoading || props['aria-busy']}
       aria-pressed={role === 'tab' ? undefined : selected}
-      className={`segmented-control-button${selected ? ' is-selected' : ''}${className ? ` ${className}` : ''}`}
+      className={`segmented-control-button${selected ? ' is-selected' : ''}${isLoading ? ' is-loading' : ''}${className ? ` ${className}` : ''}`}
     >
-      {children}
+      {isLoading ? <span className="segmented-control-loading-label">{children}</span> : children}
+      {isLoading ? <span className="segmented-control-spinner" aria-hidden="true" /> : null}
     </button>
   );
 }

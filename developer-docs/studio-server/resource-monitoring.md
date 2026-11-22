@@ -1,6 +1,6 @@
 # Built-in resource monitoring
 
-Implemented in Settings → CPU and RAM monitoring. Cloud deployment is not part of this work.
+Available in Settings → CPU and RAM monitoring.
 
 ## Contract
 
@@ -39,10 +39,15 @@ Pool totals describe reporting instances, not an authoritative Pod inventory.
 - The summary counts sessions with samples within the freshness threshold and
   histories available across all views for the requested period. It does not claim current liveness or
   a complete replica/Pod inventory. Omitted sessions remain an explicit warning.
+  The omitted-session warning, cross-view session summary and explanation appear below the charts,
+  immediately above the session detail cards.
 - **Execution replicas** and **Editor and dashboard replicas** identify the
   roles represented by totals. **Resource view** uses the shared segmented
   switcher with one button per role and measurement scope, normally these two
-  choices. It supports keyboard activation, indicates the selected button and
+  choices. Container totals keep **Execution replicas** before **Editor and
+  dashboard replicas**; process-only choices follow in the same role order. API
+  ordering and period changes cannot reorder available choices. The switcher
+  supports keyboard activation, indicates the selected button and
   wraps within narrow panels. Individual sessions and
   restarts do not add duplicate buttons; their detail cards appear
   below the selected role's charts and statistics. Container and process-only
@@ -50,6 +55,22 @@ Pool totals describe reporting instances, not an authoritative Pod inventory.
   only (RSS)**. Combined servers belong to execution totals, matching the history
   query, and remain labelled as combined servers on their detail cards.
   The latest total identifies how many sessions contributed to that observation.
+  Period choices (**1 hour**, **24 hours**, **7 days**) use the same segmented
+  switcher. Its selected button shows the shared loading spinner while history
+  is requested; role changes show it during deferred chart rendering. The visual
+  spinner replaces the label only after 150 ms of continuous loading, avoiding
+  flashes on fast updates. Completion or cancellation removes the pending
+  animation, and a subsequent load starts a fresh delay. Accessible busy state
+  updates immediately. Labels and button widths stay stable, and other choices
+  remain available during loading.
+  Retained controls, statistics and charts stay in place while requests are
+  pending. The selected button provides loading feedback without inserting a
+  temporary status paragraph above the content. Omitted-session warnings stay
+  with session details rather than moving the resource controls when a response arrives.
+  A retry retains the previous refresh error until a response succeeds, so starting
+  another request does not briefly clear a known failure or collapse its message.
+  Cancelled or failed requests cannot leave a spinner active or replace a newer
+  selection. Background polling retains its existing interval and cancellation.
   If live session readings have arrived before historical totals are available,
   the group remains selectable with its detail cards and an explicit status;
   the UI does not invent aggregate statistics or chart values. A selection that
@@ -63,9 +84,38 @@ Pool totals describe reporting instances, not an authoritative Pod inventory.
   is explicitly separate from the selected period's highest observed sample.
 - CPU help defines `1000m = 1 CPU core`. Approximate p95 is explained in terms
   of sampled time; its duration weighting and histogram approximation are unchanged.
+- CPU and RAM tooltips show the hovered observation's local date and time along
+  with its metric, using theme colors with readable contrast. Charts reuse the
+  current view during a role switch so the control feedback can render before
+  the new charts; unchanged charts are memoized rather than redrawn for loading
+  indicators.
 
 Presentation labels do not alter report identities, retention, statistics, API
 field names or workflow execution behavior.
+
+### UI follow-up plan and completion (2026-11-22)
+
+- [x] Show a readable local timestamp and metric in both chart tooltips.
+- [x] Use the shared segmented control for periods and resource views, keeping
+      dimensions stable and showing a spinner only after 150 ms of loading.
+- [x] Keep resource choices in a canonical order and retain charts while a period
+      request or deferred role render is pending. Preserve cancellation, timeouts
+      and the existing 30-second polling interval without extra role-switch requests.
+- [x] Keep session counts, explanations and omission warnings beside the session
+      cards. Remove temporary loading paragraphs that shift controls and charts;
+      retain known errors while a retry is pending.
+- [x] Let wrapped settings tabs grow with symmetric padding, preserving desktop
+      rail scrolling and the shared narrow-layout scroller.
+- [x] Validate the final production web build and focused headless journeys locally.
+
+The period-loading regression reproduced a 42px shift before the fix. The updated
+`deployment-status.spec.ts` verifies stable positions during pending requests,
+cancellation and retries, canonical order despite reordered responses, readable
+tooltips, the 149/151-ms spinner boundary and desktop/narrow navigation. Its two
+tests and the adjacent trusted-client settings journey passed against the final
+build. Formatting, documentation links, import boundaries and Studio Server test
+style checks also passed. These UI-only changes leave the schema, backend, rollout
+configuration and production recompression unchanged.
 
 ## Automatic startup and ownership
 
