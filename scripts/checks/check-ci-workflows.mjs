@@ -7,8 +7,10 @@ import { browserCiEndpoint } from '../ci/verify-browser-environment.mjs';
 import { ACTIONS_QUALIFICATION_MAX_SECONDS } from '../../deploy/studio-server/scripts/lib/runtime-qualification-execution.mjs';
 import {
   assertFastReleasePolicy,
+  assertEarlyHaPolicy,
   assertParallelMigrationVerification,
   assertPinnedProviderHelm,
+  readWorkflowConfiguration,
 } from '../ci/release-workflow-policy.mjs';
 
 const rootDir = process.cwd();
@@ -18,12 +20,7 @@ function read(relativePath) {
 }
 
 function parseWorkflow(relativePath) {
-  const source = read(relativePath);
-  const document = parseDocument(source, { prettyErrors: true, strict: true });
-  if (document.errors.length > 0) {
-    throw new Error(`${relativePath} is not valid YAML:\n${document.errors.join('\n')}`);
-  }
-  return { source, workflow: document.toJS() };
+  return readWorkflowConfiguration(path.join(rootDir, relativePath));
 }
 
 function asArray(value) {
@@ -808,6 +805,9 @@ assert.match(
 );
 
 const images = parseWorkflow('.github/workflows/studio-server-images.yml');
+const haWorkflow = parseWorkflow('.github/workflows/studio-server-ha-scenario.yml');
+const haScenario = haWorkflow.workflow.jobs.scenario;
+assertEarlyHaPolicy(images.workflow, haWorkflow.workflow);
 const imageJobs = images.workflow.jobs;
 for (const pattern of [
   '!deploy/studio-server/scripts/**',
@@ -951,7 +951,7 @@ assert.match(
 );
 assert.match(
   promotionCondition,
-  /require_kind != 'true'.*managed-kubernetes-release-gate\.result == 'skipped'/,
+  /require_kind == 'false'.*managed-kubernetes-release-gate\.result == 'skipped'/,
   'A skipped Kind gate is acceptable only when the classifier explicitly permits it.',
 );
 assert.deepEqual(asArray(imageJobs['fast-container-smoke'].needs), ['build-and-push', 'release-manifest']);
@@ -963,7 +963,7 @@ for (const [id, before] of [
   ['fast-container-smoke', 'Exercise Candidate Image Set'],
   ['managed-kubernetes-release-gate', 'Create Disposable Kind Cluster'],
 ]) {
-  const job = imageJobs[id];
+  const job = id === 'managed-kubernetes-release-gate' ? haScenario : imageJobs[id];
   for (const key of [
     'RIVET_CI_BROWSER_IMAGE',
     'RIVET_CI_PLAYWRIGHT_VERSION',
@@ -1312,30 +1312,18 @@ assert.match(
 );
 assert.match(candidatePredecessor.run, /allow_release_lineage_bootstrap/i);
 assert.match(
-  findStep(
-    imageJobs['managed-kubernetes-release-gate'],
-    'Resolve manifest-bound predecessor API image',
-    'Managed Kubernetes release gate',
-  ).run,
+  findStep(haScenario, 'Resolve manifest-bound predecessor API image', 'Managed Kubernetes release gate').run,
   /\.lineage\.predecessor\.images\.api\.digest/,
   'The compatibility rehearsal must use the exact API digest bound into the candidate manifest.',
 );
 assert.doesNotMatch(
-  findStep(
-    imageJobs['managed-kubernetes-release-gate'],
-    'Resolve manifest-bound predecessor API image',
-    'Managed Kubernetes release gate',
-  ).run,
+  findStep(haScenario, 'Resolve manifest-bound predecessor API image', 'Managed Kubernetes release gate').run,
   /api:latest/,
   'A mutable API alias must not authorize predecessor compatibility.',
 );
-const haGate = findStep(
-  imageJobs['managed-kubernetes-release-gate'],
-  'Run HA Kubernetes Gate',
-  'Managed Kubernetes release gate',
-);
-assert.equal(haGate.env.RIVET_K8S_RELEASE_GATE_CONTEXT, '${{ matrix.context }}');
-assert.equal(haGate.env.RIVET_K8S_RELEASE_GATE_ALLOW_CONTEXT, '${{ matrix.context }}');
+const haGate = findStep(haScenario, 'Run HA Kubernetes Gate', 'Managed Kubernetes release gate');
+assert.equal(haGate.env.RIVET_K8S_RELEASE_GATE_CONTEXT, '${{ env.RIVET_HA_CONTEXT }}');
+assert.equal(haGate.env.RIVET_K8S_RELEASE_GATE_ALLOW_CONTEXT, '${{ env.RIVET_HA_CONTEXT }}');
 assert.match(haGate.run, /\.lineage\.predecessor\.manifestDigest/);
 assert.match(haGate.run, /kubernetes-ha-release-gate\.mjs scenario/);
 assert.match(
@@ -1373,53 +1361,48 @@ assert.match(lineageAdvance.run, /release-manifest-oci\.mjs retag/);
 assert.ok(images.workflow.on.push.paths.length > 0, 'Main image builds must be path-gated.');
 assert.ok(images.workflow.on.schedule, 'Weekly full image verification must remain configured.');
 assert.equal(
-  findStep(
-    imageJobs['managed-kubernetes-release-gate'],
-    'Upload Managed Kubernetes Gate Artifacts',
-    'Managed Kubernetes release gate',
-  ).with?.name,
-  'managed-kubernetes-release-gate-${{ matrix.scenario }}-${{ github.run_id }}-${{ github.run_attempt }}',
+  findStep(haScenario, 'Upload Managed Kubernetes Gate Artifacts', 'Managed Kubernetes release gate').with?.name,
+  'managed-kubernetes-release-gate-${{ inputs.scenario }}-${{ github.run_id }}-${{ github.run_attempt }}',
   'Managed Kubernetes release-gate diagnostics must remain distinct per workflow attempt.',
 );
-const proofMatrix = imageJobs['managed-kubernetes-release-gate'];
+const proofMatrix = haScenario;
 const prepareHaRunner = findStep(proofMatrix, 'Prepare disposable runner disk space', 'HA matrix');
 assert.equal(prepareHaRunner.run, 'node deploy/studio-server/scripts/prepare-ha-kind-runner.mjs');
 assert.equal(prepareHaRunner.env?.RIVET_HA_RUNNER_ENVIRONMENT, '${{ runner.environment }}');
 assert.equal(prepareHaRunner['timeout-minutes'], 5);
-assert.equal(prepareHaRunner.if, undefined, 'Every Kind lane needs the same disk preparation.');
+assert.equal(prepareHaRunner.if, "${{ env.RIVET_HA_DEFERRED != 'true' }}");
 assert.ok(
   proofMatrix.steps.indexOf(prepareHaRunner) <
     proofMatrix.steps.indexOf(findStep(proofMatrix, 'Create Disposable Kind Cluster', 'HA matrix')),
   'Prepare the disposable runner before creating the cluster.',
 );
-assert.deepEqual(proofMatrix.strategy.matrix.scenario, ['upgrade', 'lostAcknowledgement', 'leaseLoss']);
-assert.equal(
-  proofMatrix.strategy['fail-fast'],
-  false,
-  'A failed scenario must not cancel evidence/cleanup in its peers.',
-);
-assert.equal(proofMatrix.strategy['max-parallel'], 3);
-assert.deepEqual(
-  proofMatrix.strategy.matrix.include.map((x) => x.context),
-  ['kind-rivet-managed-release', 'kind-rivet-ha-lost-acknowledgement', 'kind-rivet-ha-lease-loss'],
-);
-for (const name of ['Verify hard-spread scheduling with tainted nodes', 'Prepare browser runtime']) {
-  assert.equal(findStep(proofMatrix, name, 'HA matrix').if, "matrix.scenario == 'upgrade'");
-}
+for (const context of ['kind-rivet-managed-release', 'kind-rivet-ha-lost-acknowledgement', 'kind-rivet-ha-lease-loss'])
+  assert.ok(proofMatrix.env.RIVET_HA_CONTEXT.includes(context));
+for (const name of ['Verify hard-spread scheduling with tainted nodes', 'Prepare browser runtime'])
+  assert.equal(
+    findStep(proofMatrix, name, 'HA scenario').if,
+    "${{ env.RIVET_HA_DEFERRED != 'true' && (inputs.scenario == 'upgrade') }}",
+  );
 assert.match(findStep(proofMatrix, 'Delete Disposable Kind Cluster', 'HA matrix').run, /ha-kind-cluster\.mjs cleanup/);
 assert.match(findStep(proofMatrix, 'Delete Disposable Kind Cluster', 'HA matrix').if, /always\(\)/);
 assert.equal(
   findStep(proofMatrix, 'Upload HA Scenario Observations', 'HA matrix').with.name,
-  'studio-server-ha-scenario-${{ matrix.scenario }}-${{ github.run_id }}-${{ github.run_attempt }}',
+  'studio-server-ha-scenario-${{ inputs.scenario }}-${{ github.run_id }}-${{ github.run_attempt }}',
 );
 const assembly = imageJobs['managed-kubernetes-ha-evidence'];
 assert.equal(assembly.name, 'managed-kubernetes-release-gate', 'Keep the stable required-check identity.');
 assert.match(assembly.if, /always\(\)/, 'The required aggregate check must fail, not skip, after a scenario failure.');
 assert.match(
   findStep(assembly, 'Require every HA scenario and its cleanup', 'HA assembler').run,
-  /needs\.managed-kubernetes-release-gate\.result.*!= 'success'/,
+  /ha-candidate-admission\.mjs check-results/,
 );
-assert.deepEqual(assembly.needs, ['changes', 'release-manifest', 'managed-kubernetes-release-gate']);
+assert.deepEqual(assembly.needs, [
+  'changes',
+  'release-manifest',
+  'managed-kubernetes-release-gate',
+  'managed-kubernetes-early-upgrade',
+  'managed-kubernetes-upgrade',
+]);
 const reportDownloads = assembly.steps.filter((step) =>
   String(step.with?.name).startsWith('studio-server-ha-scenario-'),
 );
@@ -1438,7 +1421,7 @@ assert.match(
   /yarn node .*kubernetes-ha-release-gate\.mjs assemble/,
 );
 assert.match(promotionCondition, /require_kind == 'true'[^)]*managed-kubernetes-ha-evidence\.result == 'success'/);
-assert.match(promotionCondition, /require_kind != 'true'[^)]*managed-kubernetes-ha-evidence\.result == 'skipped'/);
+assert.match(promotionCondition, /require_kind == 'false'[^)]*managed-kubernetes-ha-evidence\.result == 'skipped'/);
 assert.deepEqual(
   findStep(proofMatrix, 'Upload Managed Kubernetes Gate Artifacts', 'HA diagnostics').with.path.trim().split(/\s+/),
   [

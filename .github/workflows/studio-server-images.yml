@@ -9,6 +9,8 @@ on:
       - '.github/actions/setup-yarn/**'
       - '.github/actions/build-cache-runtime/**'
       - '.github/workflows/studio-server-images.yml'
+      - '.github/workflows/studio-server-ha-scenario.yml'
+      - 'scripts/ci/ha-*.mjs'
       - '.pnp.cjs'
       - '.pnp.loader.mjs'
       - '.yarn/**'
@@ -40,6 +42,11 @@ on:
     - cron: '17 3 * * 2'
   workflow_dispatch:
     inputs:
+      early_ha_preparation:
+        description: Prepare one disposable HA upgrade runner early (opt-in timing trial).
+        required: false
+        default: false
+        type: boolean
       installed_predecessor_digest:
         description: Optional exact installed manifest digest for main qualification. Publication freshness remains bound to the current registry head.
         required: false
@@ -109,6 +116,7 @@ jobs:
       # Docker and Kubernetes share the managed serving contract. Retain full
       # cluster qualification for every release; legacy fixtures are not that proof.
       require_kind: 'true'
+      early_ha: ${{ github.event_name == 'workflow_dispatch' && inputs.early_ha_preparation == true }}
     steps:
       - name: Check Out Repository
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -649,6 +657,21 @@ jobs:
             artifacts/local-upgrade/host-summary-*/cleanup-failure.json
             artifacts/playwright/
           if-no-files-found: ignore
+  managed-kubernetes-early-upgrade:
+    name: Prepare upgrade early
+    needs:
+      - changes
+      - source-contracts
+    if: needs.changes.outputs.require_kind == 'true' && needs.changes.outputs.early_ha == 'true'
+    uses: ./.github/workflows/studio-server-ha-scenario.yml
+    permissions:
+      actions: read
+      contents: read
+      packages: read
+    with:
+      scenario: upgrade
+      mode: early
+      run_managed_disruption: ${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.run_managed_kubernetes_disruption == true) }}
   managed-kubernetes-release-gate:
     if: needs.changes.outputs.require_kind == 'true'
     needs:
@@ -656,243 +679,46 @@ jobs:
       - build-and-push
       - release-manifest
       - scan-images
-    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
-      max-parallel: 3
+      max-parallel: 2
       matrix:
-        scenario: [upgrade, lostAcknowledgement, leaseLoss]
-        include:
-          - scenario: upgrade
-            context: kind-rivet-managed-release
-          - scenario: lostAcknowledgement
-            context: kind-rivet-ha-lost-acknowledgement
-          - scenario: leaseLoss
-            context: kind-rivet-ha-lease-loss
-    # Independent runners retain the full safety waits and rollout assertions.
-    timeout-minutes: 75
-    env:
-      SOURCE_TAG: candidate-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
-      CANDIDATE_RELEASE_MANIFEST: artifacts/studio-server-release-manifest/candidate-release-manifest.json
-      RIVET_HA_SCENARIO: ${{ matrix.scenario }}
-      RIVET_HA_CLUSTER_RECEIPT: artifacts/ha-cluster-receipt.json
-      KUBECONFIG: ${{ github.workspace }}/artifacts/ha-kind-kubeconfig
-      RIVET_CI_BROWSER_IMAGE: mcr.microsoft.com/playwright:v1.62.1-noble@sha256:dcc5531e97840b9b5e794f2814476b21571c5124a3fca2267d73041f56e7580e
-      RIVET_CI_PLAYWRIGHT_VERSION: '1.62.1'
-      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
-      PW_TEST_CONNECT_WS_ENDPOINT: ws://127.0.0.1:3100/
-      PW_TEST_CONNECT_EXPOSE_NETWORK: '<loopback>'
-    steps:
-      - name: Check Out Repository
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-
-      - name: Set Up Node
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with:
-          node-version: 24
-
-      - name: Prepare disposable runner disk space
-        timeout-minutes: 5
-        env:
-          RIVET_HA_RUNNER_ENVIRONMENT: ${{ runner.environment }}
-        run: node deploy/studio-server/scripts/prepare-ha-kind-runner.mjs
-
-      - name: Install Workspace Dependencies
-        run: |
-          corepack enable
-          yarn install --immutable
-
-      - name: Prepare browser runtime
-        if: matrix.scenario == 'upgrade'
-        id: browser-runtime
-        timeout-minutes: 4
-        shell: bash
-        run: |
-          node scripts/ci/pull-docker-image.mjs "$RIVET_CI_BROWSER_IMAGE"
-          container_id=$(docker create --pull=never --init --ipc=host --publish 127.0.0.1:3100:3100 \
-            --label "rivet.ci.browser=$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-ha-${{ matrix.scenario }}" \
-            --mount "type=bind,source=$GITHUB_WORKSPACE,target=/workspace,readonly" \
-            --workdir /workspace --env PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 \
-            "$RIVET_CI_BROWSER_IMAGE" node .yarn/releases/yarn-4.17.1.cjs \
-            workspace @valerypopoff/rivet-studio-server-web exec playwright run-server \
-            --host 0.0.0.0 --port 3100)
-          [[ "$container_id" =~ ^[a-f0-9]{64}$ ]]
-          echo "container_id=$container_id" >> "$GITHUB_OUTPUT"
-          docker start "$container_id"
-          ready=false
-          for attempt in {1..30}; do
-            if docker logs "$container_id" 2>&1 | grep -Fq 'Listening on ws://0.0.0.0:3100/'; then
-              ready=true
-              break
-            fi
-            test "$(docker inspect --format '{{.State.Running}}' "$container_id")" = true
-            sleep 1
-          done
-          docker logs "$container_id"
-          test "$ready" = true
-          yarn node scripts/ci/verify-browser-environment.mjs
-
-      - name: Set Up Kubernetes Tools
-        run: yarn studio-server:setup:k8s-tools
-
-      - name: Install Kind
-        shell: bash
-        run: |
-          set -euo pipefail
-          go install sigs.k8s.io/kind@v0.27.0
-          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
-
-      - name: Log In to GHCR
-        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Download candidate release manifest
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        with:
-          name: studio-server-candidate-release-manifest-${{ github.run_id }}-${{ github.run_attempt }}
-          path: artifacts/studio-server-release-manifest
-
-      - name: Resolve manifest-bound predecessor API image
-        shell: bash
-        run: |
-          set -euo pipefail
-          if jq -e '.lineage.predecessor != null' "$CANDIDATE_RELEASE_MANIFEST" >/dev/null; then
-            repository="$(jq -er '.lineage.predecessor.images.api.repository' "$CANDIDATE_RELEASE_MANIFEST")"
-            digest="$(jq -er '.lineage.predecessor.images.api.digest' "$CANDIDATE_RELEASE_MANIFEST")"
-            schema="$(jq -er '.lineage.predecessor.managedWorkflowSchemaVersion | select(type == "number" and . >= 1 and floor == .)' "$CANDIDATE_RELEASE_MANIFEST")"
-            if [[ ! "$digest" =~ ^sha256:[a-f0-9]{64}$ ]]; then
-              echo "::error::Candidate predecessor API digest is invalid: $digest"
-              exit 1
-            fi
-            {
-              echo "RIVET_K8S_RELEASE_GATE_PREVIOUS_API_IMAGE_REPOSITORY=$repository"
-              echo "RIVET_K8S_RELEASE_GATE_PREVIOUS_API_IMAGE_DIGEST=$digest"
-              echo "RIVET_K8S_RELEASE_GATE_PREVIOUS_API_SCHEMA_VERSION=$schema"
-            } >> "$GITHUB_ENV"
-            echo "Using exact predecessor API image $repository@$digest for schema compatibility."
-          else
-            echo "::notice::The bootstrap candidate has no verified predecessor to exercise."
-          fi
-
-      - name: Resolve Candidate Image Digests
-        shell: bash
-        run: |
-          set -euo pipefail
-          for service in proxy web api executor; do
-            image="${IMAGE_NAMESPACE}/${service}:${SOURCE_TAG}"
-            digest="$(docker buildx imagetools inspect "$image" --format '{{.Manifest.Digest}}')"
-            if [[ ! "$digest" =~ ^sha256:[a-f0-9]{64}$ ]]; then
-              echo "::error::Could not resolve immutable digest for $image: $digest"
-              exit 1
-            fi
-            upper_service="$(tr '[:lower:]' '[:upper:]' <<< "$service")"
-            echo "RIVET_K8S_RELEASE_GATE_${upper_service}_IMAGE_REPOSITORY=${IMAGE_NAMESPACE}/${service}" >> "$GITHUB_ENV"
-            echo "RIVET_K8S_RELEASE_GATE_${upper_service}_IMAGE_DIGEST=$digest" >> "$GITHUB_ENV"
-          done
-
-      - name: Create Disposable Kind Cluster
-        shell: bash
-        run: |
-          set -euo pipefail
-          yarn node deploy/studio-server/scripts/ha-kind-cluster.mjs create
-          kubectl --context '${{ matrix.context }}' cluster-info
-
-      - name: Verify hard-spread scheduling with tainted nodes
-        if: matrix.scenario == 'upgrade'
-        env:
-          RIVET_HA_SCHEDULING_CONTEXT: kind-rivet-managed-release
-          RIVET_HA_SCHEDULING_ARTIFACTS: artifacts/ha-scheduling
-        run: yarn node deploy/studio-server/scripts/verify-ha-scheduling.mjs
-
-      - name: Run Managed Kubernetes Gate
-        # Balance independent checks across existing clusters. Keeping this on
-        # upgrade added three minutes to the longest lane without sharing state.
-        if: matrix.scenario == 'lostAcknowledgement'
-        shell: bash
-        env:
-          RIVET_K8S_RELEASE_GATE_CONTEXT: ${{ matrix.context }}
-          RIVET_K8S_RELEASE_GATE_ALLOW_CONTEXT: ${{ matrix.context }}
-          RIVET_K8S_RELEASE_GATE_REGISTRY_SERVER: ghcr.io
-          RIVET_K8S_RELEASE_GATE_REGISTRY_USERNAME: ${{ github.actor }}
-          RIVET_K8S_RELEASE_GATE_REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          gate_script=studio-server:verify:kubernetes:managed-live
-          if [[ "$GITHUB_EVENT_NAME" == "schedule" || "${{ inputs.run_managed_kubernetes_disruption }}" == "true" ]]; then
-            gate_script=studio-server:verify:kubernetes:managed-disruption
-          fi
-          yarn "$gate_script"
-
-      - name: Run HA Kubernetes Gate
-        shell: bash
-        env:
-          RIVET_K8S_RELEASE_GATE_CONTEXT: ${{ matrix.context }}
-          RIVET_K8S_RELEASE_GATE_ALLOW_CONTEXT: ${{ matrix.context }}
-          RIVET_K8S_RELEASE_GATE_NAMESPACE: rivet-ha-release
-          RIVET_K8S_RELEASE_GATE_RELEASE: rivet-ha-release
-          RIVET_K8S_RELEASE_GATE_ARTIFACTS_DIR: artifacts/kubernetes-ha-release-gate
-          RIVET_K8S_RELEASE_GATE_REGISTRY_SERVER: ghcr.io
-          RIVET_K8S_RELEASE_GATE_REGISTRY_USERNAME: ${{ github.actor }}
-          RIVET_K8S_RELEASE_GATE_REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
-          RIVET_HA_CANDIDATE_MANIFEST: artifacts/studio-server-release-manifest/candidate-release-manifest.json
-        run: |
-          set -euo pipefail
-          if jq -e '.lineage.predecessor != null' "$CANDIDATE_RELEASE_MANIFEST" >/dev/null; then
-            digest="$(jq -er '.lineage.predecessor.manifestDigest' "$CANDIDATE_RELEASE_MANIFEST")"
-            export RIVET_HA_PREDECESSOR_MANIFEST=artifacts/studio-server-release-manifest/ha-predecessor.json
-            node deploy/studio-server/scripts/release-manifest-oci.mjs pull \
-              --reference "${IMAGE_NAMESPACE}/release-manifest:manifest-${digest#sha256:}" \
-              --output "$RIVET_HA_PREDECESSOR_MANIFEST"
-          fi
-          yarn node deploy/studio-server/scripts/kubernetes-ha-release-gate.mjs scenario "$RIVET_HA_SCENARIO"
-
-      - name: Upload HA Scenario Observations
-        uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808 # v4
-        with:
-          name: studio-server-ha-scenario-${{ matrix.scenario }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: artifacts/kubernetes-ha-release-gate/ha-scenario-report.json
-          if-no-files-found: error
-          retention-days: 14
-
-      - name: Stop owned browser runtime
-        if: ${{ always() && steps.browser-runtime.outputs.container_id != '' }}
-        env:
-          CONTAINER_ID: ${{ steps.browser-runtime.outputs.container_id }}
-          EXPECTED_OWNER: ${{ github.run_id }}-${{ github.run_attempt }}-ha-${{ matrix.scenario }}
-        shell: bash
-        run: |
-          [[ "$CONTAINER_ID" =~ ^[a-f0-9]{64}$ ]]
-          test "$(docker inspect --format '{{ index .Config.Labels "rivet.ci.browser" }}' "$CONTAINER_ID")" = "$EXPECTED_OWNER"
-          docker rm -f "$CONTAINER_ID"
-
-      - name: Delete Disposable Kind Cluster
-        if: ${{ always() }}
-        shell: bash
-        run: yarn node deploy/studio-server/scripts/ha-kind-cluster.mjs cleanup
-
-      - name: Upload Managed Kubernetes Gate Artifacts
-        if: ${{ always() }}
-        uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808 # v4
-        with:
-          # Keep diagnostics from every workflow attempt. Candidate image tags
-          # already include run_attempt for the same reason.
-          name: managed-kubernetes-release-gate-${{ matrix.scenario }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: |
-            artifacts/kubernetes-managed-release-gate
-            artifacts/kubernetes-ha-release-gate
-            artifacts/ha-scheduling
-            artifacts/ha-cluster-receipt.json
-          if-no-files-found: warn
-          retention-days: 14
+        scenario:
+          - lostAcknowledgement
+          - leaseLoss
+    uses: ./.github/workflows/studio-server-ha-scenario.yml
+    permissions:
+      actions: read
+      contents: read
+      packages: read
+    with:
+      scenario: ${{ matrix.scenario }}
+      mode: after-gates
+      run_managed_disruption: ${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.run_managed_kubernetes_disruption == true) }}
+  managed-kubernetes-upgrade:
+    name: Gated upgrade
+    needs:
+      - changes
+      - build-and-push
+      - release-manifest
+      - scan-images
+      - managed-kubernetes-early-upgrade
+    if: ${{ !cancelled() && needs.changes.result == 'success' && needs.build-and-push.result == 'success' && needs.release-manifest.result == 'success' && needs.scan-images.result == 'success' && needs.changes.outputs.require_kind == 'true' && ((needs.changes.outputs.early_ha == 'false' && needs.managed-kubernetes-early-upgrade.result == 'skipped') || (needs.changes.outputs.early_ha == 'true' && needs.managed-kubernetes-early-upgrade.result == 'success' && needs.managed-kubernetes-early-upgrade.outputs.outcome == 'deferred')) }}
+    uses: ./.github/workflows/studio-server-ha-scenario.yml
+    permissions:
+      actions: read
+      contents: read
+      packages: read
+    with:
+      scenario: upgrade
+      mode: after-gates
+      run_managed_disruption: ${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.run_managed_kubernetes_disruption == true) }}
 
   managed-kubernetes-ha-evidence:
     # Retain the original required-check identity after splitting its work.
     name: managed-kubernetes-release-gate
     if: ${{ always() && needs.changes.outputs.require_kind == 'true' }}
-    needs: [changes, release-manifest, managed-kubernetes-release-gate]
+    needs: [changes, release-manifest, managed-kubernetes-release-gate, managed-kubernetes-early-upgrade, managed-kubernetes-upgrade]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -905,13 +731,6 @@ jobs:
       RIVET_HA_SCENARIO_REPORTS: artifacts/ha-assembly/reports
       RIVET_HA_EVIDENCE_OUTPUT: artifacts/kubernetes-ha-release-gate/ha-evidence.json
     steps:
-      - name: Require every HA scenario and its cleanup
-        shell: bash
-        run: |
-          if [[ '${{ needs.managed-kubernetes-release-gate.result }}' != 'success' ]]; then
-            echo '::error::HA qualification or cleanup failed; no certificate can be assembled.'
-            exit 1
-          fi
       - name: Check Out Repository
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - name: Set Up Node
@@ -922,6 +741,15 @@ jobs:
         run: |
           corepack enable
           yarn install --immutable
+      - name: Require every HA scenario and its cleanup
+        env:
+          HA_EARLY_ENABLED: ${{ needs.changes.outputs.early_ha }}
+          HA_EARLY_RESULT: ${{ needs.managed-kubernetes-early-upgrade.result }}
+          HA_EARLY_OUTCOME: ${{ needs.managed-kubernetes-early-upgrade.outputs.outcome }}
+          HA_LATE_RESULT: ${{ needs.managed-kubernetes-upgrade.result }}
+          HA_LATE_OUTCOME: ${{ needs.managed-kubernetes-upgrade.outputs.outcome }}
+          HA_RECOVERY_RESULT: ${{ needs.managed-kubernetes-release-gate.result }}
+        run: node scripts/ci/ha-candidate-admission.mjs check-results
       - name: Download candidate release manifest
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
@@ -1317,7 +1145,7 @@ jobs:
       - managed-kubernetes-evaluation-gate
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    if: ${{ always() && needs.changes.result == 'success' && needs.verify-repository.result == 'success' && needs.build-and-push.result == 'success' && needs.release-manifest.result == 'success' && needs.scan-images.result == 'success' && needs.fast-container-smoke.result == 'success' && ((needs.changes.outputs.require_kind == 'true' && needs.managed-kubernetes-release-gate.result == 'success' && needs.managed-kubernetes-ha-evidence.result == 'success') || (needs.changes.outputs.require_kind != 'true' && needs.managed-kubernetes-release-gate.result == 'skipped' && needs.managed-kubernetes-ha-evidence.result == 'skipped')) && (needs.managed-kubernetes-provider-gate.result == 'success' || needs.managed-kubernetes-provider-gate.result == 'skipped') && (needs.managed-kubernetes-capacity-gate.result == 'success' || needs.managed-kubernetes-capacity-gate.result == 'skipped') && (needs.managed-kubernetes-evaluation-gate.result == 'success' || needs.managed-kubernetes-evaluation-gate.result == 'skipped') && (github.event_name != 'workflow_dispatch' || inputs.run_managed_kubernetes_capacity_observe != true) }}
+    if: ${{ always() && needs.changes.result == 'success' && needs.verify-repository.result == 'success' && needs.build-and-push.result == 'success' && needs.release-manifest.result == 'success' && needs.scan-images.result == 'success' && needs.fast-container-smoke.result == 'success' && ((needs.changes.outputs.require_kind == 'true' && needs.managed-kubernetes-release-gate.result == 'success' && needs.managed-kubernetes-ha-evidence.result == 'success') || (needs.changes.outputs.require_kind == 'false' && needs.managed-kubernetes-release-gate.result == 'skipped' && needs.managed-kubernetes-ha-evidence.result == 'skipped')) && (needs.managed-kubernetes-provider-gate.result == 'success' || needs.managed-kubernetes-provider-gate.result == 'skipped') && (needs.managed-kubernetes-capacity-gate.result == 'success' || needs.managed-kubernetes-capacity-gate.result == 'skipped') && (needs.managed-kubernetes-evaluation-gate.result == 'success' || needs.managed-kubernetes-evaluation-gate.result == 'skipped') && (github.event_name != 'workflow_dispatch' || inputs.run_managed_kubernetes_capacity_observe != true) }}
     env:
       SOURCE_TAG: candidate-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
       CANDIDATE_RELEASE_MANIFEST: artifacts/studio-server-release-manifest/candidate-release-manifest.json

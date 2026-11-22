@@ -1265,7 +1265,14 @@ An uncertain Resume is not sent again by cleanup.
 Bounded control/event traces retain owner names, timings, request IDs and replay
 readiness, never signed owner paths, capabilities or request/response bodies.
 
-CI runs `yarn node deploy/studio-server/scripts/kubernetes-ha-release-gate.mjs certify` with
+CI runs the three independent `scenario` commands in the shared
+`.github/workflows/studio-server-ha-scenario.yml`, then the required assembler
+checks all reports and cleanup outcomes before promotion. The normal path keeps
+native image/manifest/scan dependencies. The optional early-upgrade path may
+prepare an empty cluster sooner, but cannot use a candidate until exact-run
+artifact admission; see [early HA preparation](ha-ci-early-preparation-plan.md).
+Local full certification uses
+`yarn node deploy/studio-server/scripts/kubernetes-ha-release-gate.mjs certify` with
 `RIVET_HA_CANDIDATE_MANIFEST` and, when lineage exists,
 `RIVET_HA_PREDECESSOR_MANIFEST`. The Yarn Node wrapper is required for Plug'n'Play dependencies such as
 `yaml`; bare `node` fails before certification starts. CI policy checks enforce

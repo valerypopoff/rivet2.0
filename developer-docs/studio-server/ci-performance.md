@@ -120,6 +120,38 @@ and repeated setup if they remain dominant. Preserve actual drain, routing and
 recovery observation windows. Bundler replacement and additional browser
 parallelism are lower priorities until a current critical path justifies them.
 
+The next main optimization is implemented locally in
+[earlier HA CI preparation](ha-ci-early-preparation-plan.md). The shared
+`studio-server-ha-scenario.yml` keeps one upgrade proof and both recovery proofs.
+Only the upgrade runner can prepare early, with exact-run admission and clean
+fallback before admission; recovery runners keep their native prerequisites.
+`workflow_dispatch.early_ha_preparation` defaults to false, so normal runs retain
+the gated schedule. Enable the default only after measuring the complete path
+and sibling queues. No hosted speedup or full exact-image certificate is claimed.
+
+Admission has a ten-minute opportunity distinct from the five-minute setup-command
+cap. It verifies the current run and attempt again after pinned ZIP propagation;
+failed gates, authorization failures and post-admission errors block qualification.
+Server-directed backoff cannot extend the opportunity. Pre-admission deferral
+requires owned cleanup; skipped cluster creation needs no cluster cleanup, while
+attempted creation always does. No HA test or uncertain operation is replayed.
+
+Local validation on November 22 passed all 922 release-source tests and all 25
+final focused admission/policy tests in a disposable four-CPU Linux container.
+The independent HA evidence and retained-application checks passed 60 cases.
+Actionlint, workflow policy, formatting, root and Studio Server test-style gates,
+file-tree checks and documentation-link checks passed. The publication-identity
+fixture freezes its clock so manifest work cannot
+age its synthetic janitor heartbeat. No application runtime code changed.
+
+The admission and workflow-policy test cleanup removed 121 lines. Policy mutations
+use the actual YAML; producer expectations remain independent of the implementation.
+Transport stalls, authorization-body failures, ZIP propagation, rerun races,
+deadlines and real child cancellation retain coverage. Local mutation checks
+rejected omission of each of the five required producer jobs. These checks do not
+replace full image-backed Kind certification or queue-inclusive hosted timing
+trials; both remain required before default activation.
+
 ## Local pre-push recurrence checklist
 
 Keep repeatable CI findings in `developer-docs/studio-server/ci-pre-push.local.md`.

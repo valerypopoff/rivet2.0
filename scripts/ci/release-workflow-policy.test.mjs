@@ -4,7 +4,101 @@ import {
   assertFastReleasePolicy,
   assertParallelMigrationVerification,
   assertPinnedProviderHelm,
+  assertEarlyHaPolicy,
+  readWorkflowConfiguration,
 } from './release-workflow-policy.mjs';
+
+const workflows = Object.fromEntries(
+  Object.entries({
+    images: 'studio-server-images.yml',
+    reusable: 'studio-server-ha-scenario.yml',
+    verify: 'studio-server-verify.yml',
+    publisher: 'studio-server-publish-qualification-images.yml',
+    source: 'studio-server-source-contracts.yml',
+    build: 'build.yml',
+  }).map(([key, file]) => [
+    key,
+    readWorkflowConfiguration(new URL('../../.github/workflows/' + file, import.meta.url)).workflow,
+  ]),
+);
+const fixture = () => structuredClone(workflows);
+const step = (job, name) => {
+  const found = job.steps.find((s) => s.name === name);
+  assert.ok(found, 'Missing test target: ' + name);
+  return found;
+};
+const removeStep = (job, name) => job.steps.splice(job.steps.indexOf(step(job, name)), 1);
+const checkout = (job) => job.steps.find((s) => s.uses?.startsWith('actions/checkout@'));
+
+test('the actual early HA DAG retains native fallback, complete proof and explicit cleanup', () => {
+  const { images, reusable } = fixture();
+  assert.doesNotThrow(() => assertEarlyHaPolicy(images, reusable));
+  for (const mutate of [
+    (w, r) => {
+      w.jobs['managed-kubernetes-early-upgrade'].needs = ['changes'];
+    },
+    (w, r) => {
+      w.jobs['managed-kubernetes-upgrade'].if = 'always()';
+    },
+    (w, r) => {
+      w.jobs['managed-kubernetes-upgrade'].needs.pop();
+    },
+    (w, r) => {
+      w.jobs['managed-kubernetes-release-gate'].strategy.matrix.scenario.pop();
+    },
+    (w, r) => {
+      w.jobs['managed-kubernetes-early-upgrade'].with.run_managed_disruption = false;
+    },
+    (w, r) => {
+      w.jobs['managed-kubernetes-upgrade'].secrets = 'inherit';
+    },
+    (w, r) => {
+      r.jobs.scenario.env.IMAGE_NAMESPACE = 'other';
+    },
+    (w, r) => {
+      r.jobs.scenario.defaults.run.shell = 'bash';
+    },
+    (w, r) => {
+      r.jobs.scenario.steps.find((s) => s.name === 'Admit exact-run candidate').if = 'true';
+    },
+    (w, r) => {
+      r.jobs.scenario.steps.find((s) => s.name === 'Admit exact-run candidate').env.RIVET_HA_PHASE = 'prepare';
+    },
+    (w, r) => {
+      r.jobs.scenario.steps.find((s) => s.name === 'Delete Disposable Kind Cluster').if = 'success()';
+    },
+    (w, r) => {
+      r.jobs.scenario.steps.find((s) => s.name === 'Delete Disposable Kind Cluster').if = '${{ always() }}';
+    },
+    (w, r) => {
+      r.jobs.scenario.steps.find((s) => s.name === 'Run HA Kubernetes Gate').env.RIVET_HA_PHASE = 'prepare';
+    },
+    (w, r) => {
+      r.jobs.scenario.steps.find((s) => s.name === 'Validate candidate before use')['continue-on-error'] = true;
+    },
+    (w, r) => {
+      r.jobs.scenario.steps.find((s) => s.name === 'Download admitted candidate release manifest').with[
+        'artifact-ids'
+      ] = 'old';
+    },
+    (w, r) => {
+      r.jobs.scenario.steps.reverse();
+    },
+    (w, r) => {
+      r.concurrency = { group: 'build-images' };
+    },
+    (w, r) => {
+      w.jobs['managed-kubernetes-ha-evidence'].steps.find(
+        (s) => s.name === 'Require every HA scenario and its cleanup',
+      ).run = 'echo OK';
+    },
+  ]) {
+    const w = structuredClone(images),
+      r = structuredClone(reusable);
+    mutate(w, r);
+    assert.throws(() => assertEarlyHaPolicy(w, r), String(mutate));
+  }
+});
 
 test('each provider job must pin Helm before credentials and stop if selection fails', () => {
   const workflow = {
@@ -39,40 +133,7 @@ test('each provider job must pin Helm before credentials and stop if selection f
   }
 });
 
-function migrationFixture() {
-  return {
-    jobs: {
-      'deployment-contracts': {
-        needs: ['changes', 'build-studio-server'],
-        strategy: {
-          'max-parallel': 4,
-          'fail-fast': false,
-          matrix: { lane: ['managed', 'migration', 'deployment', 'gateway'] },
-        },
-        steps: [
-          { name: 'Verify restored compiled workspace dependencies', run: 'yarn check:compiled-workspace-exports' },
-          { name: 'Verify compiled migration runtime', if: "matrix.lane == 'migration'", run: 'test -s fixture' },
-          {
-            name: 'Verify VM-to-managed copy, retry, and exact readback',
-            if: "matrix.lane == 'migration'",
-            run: 'node .yarn/releases/yarn-4.17.1.cjs workspace @valerypopoff/rivet-studio-server-api exec tsx src/tests/workflow-storage-migration-managed.integration.ts',
-          },
-        ],
-      },
-      verify: {
-        if: 'always()',
-        needs: ['deployment-contracts'],
-        steps: [
-          {
-            name: 'Require every applicable Studio Server gate',
-            env: { DEPLOYMENT_RESULT: '${{ needs.deployment-contracts.result }}' },
-            run: 'for result in "$DEPLOYMENT_RESULT"; do\n  test "$result" = success\ndone',
-          },
-        ],
-      },
-    },
-  };
-}
+const migrationFixture = () => structuredClone(workflows.verify);
 
 test('the complete migration fixture remains parallel and required after verified compilation', () => {
   assert.doesNotThrow(() => assertParallelMigrationVerification(migrationFixture()));
@@ -96,19 +157,23 @@ test('migration coverage cannot be skipped, filtered, duplicated, serialized or 
       w.jobs['deployment-contracts']['continue-on-error'] = true;
     },
     (w) => {
-      w.jobs['deployment-contracts'].steps[1].if = 'false';
+      step(w.jobs['deployment-contracts'], 'Verify compiled migration runtime').if = 'false';
     },
     (w) => {
       w.jobs['deployment-contracts'].steps.reverse();
     },
     (w) => {
-      w.jobs['deployment-contracts'].steps[2].if = "matrix.lane == 'managed'";
+      step(w.jobs['deployment-contracts'], 'Verify VM-to-managed copy, retry, and exact readback').if =
+        "matrix.lane == 'managed'";
     },
     (w) => {
-      w.jobs['deployment-contracts'].steps[2]['continue-on-error'] = true;
+      step(w.jobs['deployment-contracts'], 'Verify VM-to-managed copy, retry, and exact readback')[
+        'continue-on-error'
+      ] = true;
     },
     (w) => {
-      w.jobs['deployment-contracts'].steps[2].run += ' --supervised-restore-only';
+      step(w.jobs['deployment-contracts'], 'Verify VM-to-managed copy, retry, and exact readback').run +=
+        ' --supervised-restore-only';
     },
     (w) => {
       w.jobs['deployment-contracts'].steps.push({ run: 'yarn workspace api run test:migration-managed' });
@@ -120,16 +185,19 @@ test('migration coverage cannot be skipped, filtered, duplicated, serialized or 
       w.jobs.verify.if = 'success()';
     },
     (w) => {
-      w.jobs.verify.steps[0]['continue-on-error'] = true;
+      step(w.jobs.verify, 'Require every applicable Studio Server gate')['continue-on-error'] = true;
     },
     (w) => {
-      delete w.jobs.verify.steps[0].env.DEPLOYMENT_RESULT;
+      delete step(w.jobs.verify, 'Require every applicable Studio Server gate').env.DEPLOYMENT_RESULT;
     },
     (w) => {
-      w.jobs.verify.steps[0].run = 'echo passed';
+      step(w.jobs.verify, 'Require every applicable Studio Server gate').run = 'echo passed';
     },
     (w) => {
-      w.jobs.verify.steps[0].run = w.jobs.verify.steps[0].run.replace('= success', '= success || true');
+      step(w.jobs.verify, 'Require every applicable Studio Server gate').run = step(
+        w.jobs.verify,
+        'Require every applicable Studio Server gate',
+      ).run.replace('= success', '= success || true');
     },
   ]) {
     const workflow = migrationFixture();
@@ -138,140 +206,6 @@ test('migration coverage cannot be skipped, filtered, duplicated, serialized or 
   }
 });
 
-function fixture() {
-  const shared = { uses: './.github/workflows/studio-server-source-contracts.yml' };
-  return {
-    build: { jobs: { 'source-contracts': { ...shared }, 'compiled-artifacts': { needs: 'source-contracts' } } },
-    images: {
-      jobs: {
-        'source-contracts': { ...shared },
-        'build-and-push': {
-          needs: 'source-contracts',
-          steps: [
-            { name: 'Scan every published architecture immediately', run: 'node scripts/ci/scan-container-images.mjs' },
-            {
-              name: 'Retain container vulnerability evidence',
-              if: '${{ always() }}',
-              with: {
-                name: 'container-security-${{ matrix.service }}-${{ github.run_id }}-${{ github.run_attempt }}',
-                'if-no-files-found': 'error',
-              },
-            },
-          ],
-        },
-        'scan-images': {
-          name: 'Scan runtime image (${{ matrix.service }})',
-          needs: ['release-manifest'],
-          steps: [
-            {
-              name: 'Verify every scanned digest and architecture',
-              run: 'node scripts/ci/verify-container-scan.mjs --manifest artifacts/studio-server-release-manifest/candidate-release-manifest.json --service ${{ matrix.service }} --input artifacts/container-security/${{ matrix.service }}',
-            },
-            {
-              name: 'Download component scan evidence',
-              with: {
-                name: 'container-security-${{ matrix.service }}-${{ github.run_id }}-${{ github.run_attempt }}',
-                path: 'artifacts/container-security/${{ matrix.service }}',
-              },
-            },
-          ],
-        },
-        'managed-kubernetes-release-gate': {
-          needs: ['scan-images'],
-          strategy: { 'max-parallel': 3, 'fail-fast': false },
-          steps: [
-            {
-              name: 'Run Managed Kubernetes Gate',
-              if: "matrix.scenario == 'lostAcknowledgement'",
-              env: {
-                RIVET_K8S_RELEASE_GATE_CONTEXT: '${{ matrix.context }}',
-                RIVET_K8S_RELEASE_GATE_ALLOW_CONTEXT: '${{ matrix.context }}',
-              },
-            },
-            { name: 'Delete Disposable Kind Cluster', if: '${{ always() }}' },
-          ],
-        },
-      },
-    },
-    verify: {
-      jobs: {
-        'source-contracts': { ...shared },
-        'build-studio-server': { needs: ['changes', 'source-contracts'] },
-        'repository-contracts': { needs: ['changes', 'source-contracts'] },
-        'host-compatibility': { needs: ['changes', 'source-contracts'] },
-        'deployment-command-tests': {
-          needs: ['changes', 'source-contracts'],
-          steps: [
-            {
-              name: 'Run deployment command journeys',
-              run: 'yarn node --test deploy/studio-server/scripts/deployment-command.test.mjs',
-            },
-          ],
-        },
-        verify: {
-          needs: ['source-contracts', 'deployment-command-tests'],
-          steps: [
-            {
-              env: {
-                SOURCE_RESULT: '${{ needs.source-contracts.result }}',
-                DEPLOYMENT_COMMAND_RESULT: '${{ needs.deployment-command-tests.result }}',
-              },
-              run: 'for result in "$SOURCE_RESULT" "$DEPLOYMENT_COMMAND_RESULT"; do test "$result" = success; done',
-            },
-          ],
-        },
-      },
-    },
-    publisher: {
-      jobs: {
-        'source-contracts': { ...shared },
-        publish: {
-          needs: 'source-contracts',
-          steps: [
-            {
-              name: 'Configure cache builder with classic-store output',
-              with: { driver: 'docker-container', name: 'fixture' },
-            },
-            { uses: './.github/actions/build-cache-runtime' },
-            {
-              name: 'Build exact source, verify archives, scan and publish immutable images',
-              env: { RIVET_QUALIFICATION_BUILDER: 'fixture' },
-            },
-          ],
-        },
-      },
-    },
-    source: {
-      on: { workflow_call: null },
-      permissions: { contents: 'read' },
-      jobs: {
-        source: {
-          'timeout-minutes': 8,
-          steps: [
-            {
-              uses: 'actions/checkout@fixture',
-              'timeout-minutes': 5,
-              env: { GIT_HTTP_LOW_SPEED_LIMIT: '1024', GIT_HTTP_LOW_SPEED_TIME: '30' },
-            },
-            { run: 'yarn install --immutable --immutable-cache --mode=skip-build' },
-            { run: 'yarn node scripts/ci/verify-rollout-source.mjs' },
-            {
-              name: 'Install native provider test tools',
-              'timeout-minutes': 2,
-              env: { KUBECTL_VERSION: 'v1.36.6', HELM_VERSION: 'v3.22.1' },
-              run: 'sha256sum -c -\necho "RIVET_K8S_HELM_BIN=$tools/helm" >> "$GITHUB_ENV"',
-            },
-            {
-              name: 'Verify packaged provider preparation and cleanup before expensive work',
-              'timeout-minutes': 2,
-              run: 'yarn node --test deploy/studio-server/scripts/provider-tool-contracts.test.mjs deploy/studio-server/scripts/reusable-staging.test.mjs',
-            },
-          ],
-        },
-      },
-    },
-  };
-}
 test('parallel build/recovery lanes retain cheap prerequisites and unconditional cleanup', () => {
   assert.doesNotThrow(() => assertFastReleasePolicy(fixture()));
 });
@@ -282,13 +216,13 @@ test('cold checkout allowance stays distinct from stalled transfers and the sour
       job['timeout-minutes'] = 5;
     },
     (job) => {
-      job.steps[0]['timeout-minutes'] = 2;
+      checkout(job)['timeout-minutes'] = 2;
     },
     (job) => {
-      delete job.steps[0].env.GIT_HTTP_LOW_SPEED_TIME;
+      delete checkout(job).env.GIT_HTTP_LOW_SPEED_TIME;
     },
     (job) => {
-      job.steps[0].env.GIT_HTTP_LOW_SPEED_LIMIT = '0';
+      checkout(job).env.GIT_HTTP_LOW_SPEED_LIMIT = '0';
     },
   ]) {
     const f = fixture();
@@ -310,26 +244,28 @@ test('failed, skipped or cancelled prerequisites cannot be bypassed by permissiv
 });
 
 test('native preparation checks cannot be removed, skipped or allowed to fail', () => {
+  const native = 'Verify packaged provider preparation and cleanup before expensive work';
+  const tools = 'Install native provider test tools';
   for (const mutate of [
-    (steps) => steps.pop(),
-    (steps) => {
-      steps.at(-1).if = 'false';
+    (job) => removeStep(job, native),
+    (job) => {
+      step(job, native).if = 'false';
     },
-    (steps) => {
-      steps.at(-1)['continue-on-error'] = true;
+    (job) => {
+      step(job, native)['continue-on-error'] = true;
     },
-    (steps) => {
-      steps.find((s) => s.name === 'Install native provider test tools').env.KUBECTL_VERSION = 'latest';
+    (job) => {
+      step(job, tools).env.KUBECTL_VERSION = 'latest';
     },
-    (steps) => {
-      steps.find((s) => s.name === 'Install native provider test tools').run = 'download without checksums';
+    (job) => {
+      step(job, tools).run = 'download without checksums';
     },
-    (steps) => {
-      steps.find((s) => s.name === 'Install native provider test tools').run = 'sha256sum -c -';
+    (job) => {
+      step(job, tools).run = 'sha256sum -c -';
     },
   ]) {
     const f = fixture();
-    mutate(f.source.jobs.source.steps);
+    mutate(f.source.jobs.source);
     assert.throws(() => assertFastReleasePolicy(f));
   }
 });
@@ -337,12 +273,10 @@ test('removing source/scan barriers, losing cleanup or reserializing expensive w
   for (const mutate of [
     (f) => (f.images.jobs['build-and-push'].needs = []),
     (f) => (f.publisher.jobs.publish.needs = []),
-    (f) => (f.publisher.jobs.publish.steps[0].with.driver = 'docker'),
+    (f) => (step(f.publisher.jobs.publish, 'Configure cache builder with classic-store output').with.driver = 'docker'),
     (f) => (f.images.jobs['managed-kubernetes-release-gate'].needs = []),
     (f) => f.images.jobs['build-and-push'].needs.push('verify-repository'),
-    (f) => (f.images.jobs['managed-kubernetes-release-gate'].steps[0].if = "matrix.scenario == 'upgrade'"),
-    (f) => (f.images.jobs['managed-kubernetes-release-gate'].steps[1].if = 'success()'),
-    (f) => delete f.verify.jobs.verify.steps[0].env.SOURCE_RESULT,
+    (f) => delete step(f.verify.jobs.verify, 'Require every applicable Studio Server gate').env.SOURCE_RESULT,
   ]) {
     const f = fixture();
     // Use an array for the mutation that adds a dependency.
@@ -357,12 +291,18 @@ test('deployment command coverage and failure results are mandatory after splitt
     (f) => (f.verify.jobs['deployment-command-tests'].needs = ['changes', 'build-studio-server']),
     (f) => (f.verify.jobs['deployment-command-tests'].if = 'false'),
     (f) => (f.verify.jobs['deployment-command-tests']['continue-on-error'] = true),
-    (f) => (f.verify.jobs['deployment-command-tests'].steps[0].if = 'false'),
-    (f) => (f.verify.jobs['deployment-command-tests'].steps[0]['continue-on-error'] = true),
-    (f) => (f.verify.jobs['deployment-command-tests'].steps[0].run += ' --test-name-pattern=smoke'),
+    (f) => (step(f.verify.jobs['deployment-command-tests'], 'Run deployment command journeys').if = 'false'),
+    (f) =>
+      (step(f.verify.jobs['deployment-command-tests'], 'Run deployment command journeys')['continue-on-error'] = true),
+    (f) =>
+      (step(f.verify.jobs['deployment-command-tests'], 'Run deployment command journeys').run +=
+        ' --test-name-pattern=smoke'),
     (f) => (f.verify.jobs.verify.needs = ['source-contracts']),
-    (f) => delete f.verify.jobs.verify.steps[0].env.DEPLOYMENT_COMMAND_RESULT,
-    (f) => (f.verify.jobs.verify.steps[0].run = 'test "$SOURCE_RESULT" = success'),
+    (f) =>
+      delete step(f.verify.jobs.verify, 'Require every applicable Studio Server gate').env.DEPLOYMENT_COMMAND_RESULT,
+    (f) =>
+      (step(f.verify.jobs.verify, 'Require every applicable Studio Server gate').run =
+        'test "$SOURCE_RESULT" = success'),
   ]) {
     const f = fixture();
     mutate(f);
@@ -372,26 +312,25 @@ test('deployment command coverage and failure results are mandatory after splitt
 
 test('early image scans remain mandatory and their evidence must match the final manifest', () => {
   for (const mutate of [
+    (f) => removeStep(f.images.jobs['build-and-push'], 'Scan every published architecture immediately'),
     (f) => {
-      f.images.jobs['build-and-push'].steps.shift();
+      step(f.images.jobs['build-and-push'], 'Scan every published architecture immediately').if = 'false';
     },
     (f) => {
-      f.images.jobs['build-and-push'].steps[0].if = 'false';
+      step(f.images.jobs['build-and-push'], 'Scan every published architecture immediately')['continue-on-error'] =
+        true;
     },
     (f) => {
-      f.images.jobs['build-and-push'].steps[0]['continue-on-error'] = true;
+      step(f.images.jobs['scan-images'], 'Verify every scanned digest and architecture').if = 'false';
     },
     (f) => {
-      f.images.jobs['scan-images'].steps[0].if = 'false';
+      step(f.images.jobs['scan-images'], 'Verify every scanned digest and architecture')['continue-on-error'] = true;
     },
     (f) => {
-      f.images.jobs['scan-images'].steps[0]['continue-on-error'] = true;
+      step(f.images.jobs['scan-images'], 'Verify every scanned digest and architecture').run = 'echo passed';
     },
     (f) => {
-      f.images.jobs['scan-images'].steps[0].run = 'echo passed';
-    },
-    (f) => {
-      f.images.jobs['scan-images'].steps[1].with.name = 'previous-run';
+      step(f.images.jobs['scan-images'], 'Download component scan evidence').with.name = 'previous-run';
     },
   ]) {
     const f = fixture();
