@@ -4,6 +4,53 @@ This document records intentional architecture and cleanup changes that future m
 
 It is not a changelog. Keep entries focused on why a refactor happened, which ownership boundary changed, and which verification paths should be kept alive.
 
+## 2026-11-24 - Run Recordings Read Ownership
+
+`useRecordingRunsQuery.ts` owns root browsing, progressive input search, filter
+state and query-specific deletion reconciliation. `useRecordingSubRuns.ts`
+owns child metadata pagination, validation, retry state and family reconciliation.
+`useRunRecordingsController.ts` keeps the public facade, independent catalog
+requests, session/selection policy, shared view generation and deletion sequence.
+The existing count-decrement calculation is shared in `recording-run-counts.ts`.
+
+Keep the owners mounted across retained dismissal. Stable lifecycle commands
+must not acquire dependencies on input drafts or query results; catalog arrival
+and progressive append cannot restart the root query. A confirmed deletion is
+reconciled locally before refresh, and the parent checks its view/mutation token
+after each awaited read before accepting results. The manual post-delete page
+read returns data without publishing its completion, preserving that check and
+the page effect's ownership of last-page correction.
+
+The normal modal suite retains its existing cases and adds seven characterization
+cases for same-root replacement, continuation validation/deduplication and
+post-delete catalog races. All 90 passed both against the original controller
+and against the final built application. The two extraction checkpoints also
+passed the required headless repo runner. See the [implementation record](run-recordings-controller-refactor-plan.md)
+for final verification results and the pre-existing focused typecheck diagnostics.
+
+A follow-up review reproduced a count-reconciliation defect in the preserved
+logic: deleting a child after a count-free continuation discarded root-only scope
+counts and fell back to recording totals. Child deletion now retains the matching
+cached scope. Cached and page counts share one inclusion condition. The stateless
+grouped-page request helper is a module function, with options derived from the
+existing API signature, rather than a React callback and a copied request type.
+That 91-case suite passed locally through both the required headless
+repo runner and the normal two-worker CI configuration after that correction.
+
+An adjacent audit found that the continuation guard rejected only immediate
+repeats: an injected A → B → A sequence could keep the client requesting older
+pages. Each input search now remembers followed opaque tokens and stops on any
+revisit, preserving partial results and the existing error message. No server
+cursor format or valid-search budget changed. Additional held-continuation and
+catalog-failure deletion probes confirmed the cached-count fix already covered
+those paths and required no further runtime change.
+The expanded 94-case suite passed locally under the normal CI configuration;
+all four focused adjacent probes also passed through the headless repo runner.
+The [comparative assessment](run-recordings-controller-refactor-plan.md#comparative-assessment-against-the-committed-version)
+records the larger combined source/interface cost and the remaining dashboard
+typecheck coverage gap. The extraction improves ownership without removing the
+need to review cross-owner reset and mutation coordination.
+
 ## 2026-11-23 - Shared OAuth Mechanics
 
 `oauth-browser-state.ts` owns the existing signed-envelope verification/signing

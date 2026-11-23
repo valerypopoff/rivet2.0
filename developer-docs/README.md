@@ -72,6 +72,7 @@ commands; the guides below describe implementation and verification.
 - [Editor Bridge](./studio-server/editor-bridge.md)
 - [Workflow Publication](./studio-server/workflow-publication.md)
 - [Recording Search Performance And Scope](./studio-server/recording-search-performance.md)
+- [Run Recordings Controller Refactor And Verification](./studio-server/run-recordings-controller-refactor-plan.md)
 - [Recording Memory Accounting And Serialization Assessment](./studio-server/recording-memory-and-serialization-plan.md)
 - [Current Recording Readiness And Latency Assessment](./studio-server/recording-latency-repair-plan.md)
 - [Recording Performance Investigation History](./studio-server/recording-performance-completion-plan.md)
