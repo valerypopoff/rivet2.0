@@ -14,6 +14,9 @@ const weightedSpecs = [
   ['hosted-modal-focus.spec.ts', 165],
   ['hosted-editor-search-shortcuts.spec.ts', 45],
   ['hosted-dashboard-contracts.spec.ts', 25],
+  // Initial local case-work allocation (1.8s, rounded up); the shared beforeAll
+  // startup uses setup headroom. Refresh with hosted evidence, not a speed claim.
+  ['oauth-mechanics.spec.ts', 5],
   // Preview recording, incomplete-history and receipt recovery.
   ['hosted-executor-origin.spec.ts', 110],
   // Includes admission races and error-recovery regressions.

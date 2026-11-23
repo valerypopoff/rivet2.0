@@ -387,6 +387,17 @@ Current download-route behavior:
 
 ## Server UI auth
 
+The two OAuth surfaces share only mechanics in `oauth-browser-state.ts`
+(signed envelopes and cookie parsing/serialization) and `oauth-provider-client.ts`
+(external token/profile requests, JSON validation and email claims).
+`server-ui-auth.ts` and `web-app-oauth.ts` retain their existing settings,
+fingerprints, secret selection, state checks, origins, allowlists and responses.
+The helpers receive operation inputs and never cache settings or register routes.
+Both production HTTP routers retain the app's request settings snapshot;
+long-lived authorization still leaves that snapshot to check current policy.
+The [extraction record](oauth-mechanics-refactor-plan.md) describes compatibility
+requirements, source/prebuilt checks and the owned browser/provider fixture.
+
 The browser/editor surface is protected by the proxy asking the API whether the current request is allowed. The bootstrap mode is intentionally deployment-owned and comes from `.env` or Kubernetes/Vault-provided env:
 
 - `RIVET_SERVER_UI_AUTH_MODE=none` leaves the dashboard/editor ungated.

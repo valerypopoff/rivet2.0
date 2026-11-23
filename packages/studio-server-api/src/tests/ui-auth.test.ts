@@ -1,13 +1,15 @@
 import assert from 'node:assert/strict';
+import { createHmac } from 'node:crypto';
 import fs from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import express from 'express';
+import express, { type Request } from 'express';
 
 import { getExpectedProxyAuthToken, getExpectedUiSessionToken } from '../auth.js';
-import { getServerUiAuthMode } from '../server-ui-auth.js';
+import { createServerUiOAuthAuthorizationRedirect, getServerUiAuthMode } from '../server-ui-auth.js';
+import { createWebAppOAuthAuthorizationRedirect } from '../web-app-oauth.js';
 import { requireOperatorAuth, requireVmMigrationOperatorAuth } from '../middleware/auth.js';
 import { uiAuthRouter } from '../routes/ui-auth.js';
 import { appSettingsRouter } from '../routes/app-settings.js';
@@ -347,6 +349,48 @@ test('server UI prompts keep the error message but retry against a clean return 
       });
     },
   );
+});
+
+test('OAuth signing-secret precedence preserves the UI-only key fallback', async () => {
+  const assertStateSignature = (redirect: { location: string }, secret: string) => {
+    const state = new URL(redirect.location).searchParams.get('state');
+    assert.ok(state);
+    const [payload, signature] = state.split('.');
+    assert.equal(signature, createHmac('sha256', secret).update(payload!).digest('base64url'));
+  };
+  for (const { settings, secret, visitorAllowed } of [
+    { settings: { sessionSecret: 'session-secret', clientSecret: 'client-secret' }, secret: 'session-secret', visitorAllowed: true },
+    { settings: { clientSecret: 'client-secret' }, secret: 'client-secret', visitorAllowed: true },
+    { settings: {}, secret: 'key-secret', visitorAllowed: false },
+  ]) {
+    await withServerUiAuthEnv({ RIVET_SERVER_UI_AUTH_MODE: 'oauth', RIVET_KEY: 'key-secret' }, async () => {
+      await writeWebAppAuthSettings({
+        mode: visitorAllowed ? 'oauth' : 'ui-gate',
+        provider: visitorAllowed ? 'external' : 'dummy',
+        authorizeUrl: 'https://oauth.example.test/authorize',
+        tokenUrl: 'https://oauth.example.test/token',
+        userUrl: 'https://oauth.example.test/profile',
+        clientId: 'signing-policy-test',
+        ...settings,
+      });
+      const headers = trustedProxyHeaders({ host: '127.0.0.1' });
+      const req = {
+        get: (name: string) => headers[name.toLowerCase()],
+        headers,
+        protocol: 'http',
+        socket: { remoteAddress: '127.0.0.1' },
+      } as unknown as Request;
+      assertStateSignature(createServerUiOAuthAuthorizationRedirect(req, '/projects'), secret);
+      if (visitorAllowed) {
+        assertStateSignature(createWebAppOAuthAuthorizationRedirect(req, '/apps/tool'), secret);
+      } else {
+        await assert.rejects(writeWebAppAuthSettings({ mode: 'oauth' }), {
+          status: 400,
+          message: 'Session signing secret is required when OAuth web-app auth is enabled',
+        });
+      }
+    });
+  }
 });
 
 test('server UI dummy OAuth creates an admin session and rejects non-admin email', async () => {

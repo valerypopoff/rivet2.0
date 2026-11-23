@@ -154,8 +154,11 @@ revocation is not a new global graph cancellation mechanism.
 
 Dummy login requires `RIVET_ENABLE_DEVELOPMENT_AUTH=true` **and** an explicitly
 configured `RIVET_DEVELOPMENT_AUTH_CLIENTS` list on the API. Defaults deny all.
-Compose forwards both variables from deployment configuration; Helm accepts them
-under `env`, and the Kubernetes launcher carries them into generated values.
+The legacy Compose templates forward both variables from deployment configuration;
+Helm accepts them under `env`, and the Kubernetes launcher carries them into
+generated values. The six commands in [Supported Server Stack](server-stack.md)
+deliberately omit development-auth variables from their generated Compose model.
+Selecting the dummy provider in browser settings does not opt a deployment in.
 Forwarding peer selection uses Nginx's
 [recursive real-IP rules](https://nginx.org/en/docs/http/ngx_http_realip_module.html)
 with explicit trusted peers, never an unrestricted forwarded-header trust setting.
@@ -163,6 +166,17 @@ Use a separate isolated development deployment, a loopback-only host binding, or
 a properly restricted VPN/tunnel. Container loopback and host loopback are not
 interchangeable; verify the observed address instead of assuming the Docker gateway
 is safe. These deployment variables must not be changed through browser settings.
+
+For an explicitly approved local test, a private Compose override can set both
+variables on the `backend` and `execution` services. Keep the proxy published only
+on loopback and allow only the observed verified client address. Check installation
+ownership and storage identity before recreating API services, retain their images,
+volumes and graceful-stop period, and leave the migration service unchanged.
+Verify the real sign-in form from the allowed path and denial from a different
+client, including spoofed forwarding headers. A Docker restart retains that
+container configuration; rerunning a standard six-command launcher regenerates
+the model and removes the private override. Reapply an approved local override
+explicitly when needed; never change the default deny policy to retain it.
 
 Both OAuth implementations check this capability during login/callback and session
 use. Their dummy state/session version includes the deployment policy, invalidating

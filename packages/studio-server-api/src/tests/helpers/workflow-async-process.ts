@@ -157,7 +157,18 @@ async function startOwnedProcess(
           reject(error);
         },
       });
-      child.send({ id, command: name });
+      const fail = (error: Error | null) => {
+        if (error) {
+          const request = pending.get(id);
+          pending.delete(id);
+          request?.reject(error);
+        }
+      };
+      try {
+        child.send({ id, command: name }, fail);
+      } catch (error) {
+        fail(error as Error);
+      }
     });
   };
   const stop = async () => {
@@ -184,9 +195,9 @@ async function startOwnedProcess(
         clearTimeout(timeout);
         reject(error);
       });
-      child.once('exit', () => {
+      child.once('exit', (exitCode, signalCode) => {
         clearTimeout(timeout);
-        reject(new Error(`API exited during startup\n${logs}`));
+        reject(Object.assign(new Error(`API exited during startup\n${logs}`), { exitCode, signalCode }));
       });
     });
     return {

@@ -58,6 +58,7 @@ commands; the guides below describe implementation and verification.
 - [Repository Structure](./studio-server/repo-structure.md)
 - [Development And Verification](./studio-server/development.md)
 - [Access And Routing](./studio-server/access-and-routing.md)
+- [Shared OAuth Mechanics Refactor And Verification](./studio-server/oauth-mechanics-refactor-plan.md)
 - [HTTP Body Admission: Implementation And Validation](./studio-server/http-body-admission-queue-plan.md)
 - [Published Endpoint Admission Before Project Preparation](./studio-server/published-endpoint-admission-plan.md)
 - [HTTP Call Response Cleanup: Implementation And Validation](./studio-server/http-call-response-cleanup-plan.md)

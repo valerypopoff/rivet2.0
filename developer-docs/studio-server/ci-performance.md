@@ -343,6 +343,40 @@ renders. Release selection tests verify that source, chart or checkout drift is
 rejected before publishing deployment artifacts. Helm rejection tests check the
 required controller without hard-coding the list of supported topologies.
 
+## Owned API fixture shutdown and IPC
+
+The OAuth and async-workflow fixture clients remove pending commands and clear
+their deadlines when IPC sending fails, including synchronous JSON serialization
+errors. Handle transport errors through the send callback; a closed channel must
+reject the command instead of emitting an unhandled error or waiting for its
+ordinary command timeout.
+
+The async-workflow child treats loss of its owning IPC channel as a request for
+the real API entrypoint's SIGTERM shutdown. This also covers an owner lost during
+startup, before the disconnect listener was installed. Its replies check channel
+ownership and use a send callback so an in-flight reply cannot crash the process
+while accepted work and recordings drain. Production shutdown grace and recording
+observation windows are unchanged.
+
+Keep the real-process regressions in `workflow-async-process.test.ts`: disconnect
+before readiness, a held recording-list reply released by disconnect, and
+repeated commands against the closed channel. Await `wait-recordings-reply`
+before disconnecting so the late reply is certain to be pending. That case also
+covers loss of the owner while the API has no active HTTP work; it replaces a
+separate idle-process case and five racing reads. Startup rejection must include
+exit code zero and no signal, so an unrelated startup crash cannot pass the test.
+The seven accepted-work, response-failure and recording-drain cases retain their
+fresh processes and original observation windows.
+
+The OAuth HTTP suite checks failed-send deadline cleanup and concurrent close
+behavior for both healthy and crashed children. It always verifies the synthetic
+baseline cookie values and positive readers without an optional local receipt.
+HTTP requests have bounded test-driver deadlines, and request-snapshot checks
+verify both the original signing secret and settings version. These are fixture
+reliability fixes, with no hosted speedup claim; the
+[OAuth extraction record](oauth-mechanics-refactor-plan.md) records the local
+verification boundary.
+
 ## Schema and browser fixture contracts
 
 The shared Docker launcher dotenv contract keeps a closed inventory of documented

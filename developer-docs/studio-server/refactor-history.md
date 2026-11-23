@@ -4,6 +4,43 @@ This document records intentional architecture and cleanup changes that future m
 
 It is not a changelog. Keep entries focused on why a refactor happened, which ownership boundary changed, and which verification paths should be kept alive.
 
+## 2026-11-23 - Shared OAuth Mechanics
+
+`oauth-browser-state.ts` owns the existing signed-envelope verification/signing
+and cookie mechanics. `oauth-provider-client.ts` owns external request formation,
+response validation and email-claim extraction. The original UI/visitor modules
+keep their exports, dummy branches, policy and HTTP registration. Secret lookup
+remains deferred inside the original signature-error boundary. Token and profile
+wrappers keep their response/JSON awaits and logging at the original points.
+
+Settings context is unchanged: both mounted HTTP callbacks use the request's
+captured revision, direct helper calls retain their existing repository reads,
+and watch/Socket reauthorization still escapes the opening snapshot. Preserve
+the distinct fingerprints, UI secret fallback, return-target comparison and
+cookie wire representation when extending either surface.
+
+The source/prebuilt HTTP tests use one owned local provider fixture, with held
+token/profile responses, independent settings changes and actual request capture.
+Two browser journeys share one fixture per worker while retaining isolated
+browser contexts; they cover real redirects, cookie admission, allowlist denial
+and independent logout. API discovery and the hosted browser manifest include
+the new tests. Fixture cleanup waits for process settlement before removing its
+owned root and rejects missing shutdown acknowledgements or abnormal exits;
+lifecycle regressions cover unexpected exit and startup failure. Mounted
+callbacks also cover dropped provider connections.
+The initial browser weight reflects local case work only;
+hosted timing remains a separate measurement. See the
+[implementation record](oauth-mechanics-refactor-plan.md) for validation results
+and their release boundaries.
+
+An adjacent fixture review also repaired failed-send deadline cleanup and
+async-workflow owner loss. The workflow child uses its real SIGTERM drain when
+IPC ownership ends, and guarded replies cannot abort that drain on a closed
+channel. Keep its startup and acknowledged held-reply owner-loss regressions with
+the existing recording lifecycle suite; production auth and shutdown policy are
+unchanged. Cookie compatibility is always checked against synthetic baseline
+values; request snapshots verify their original signing key and settings version.
+
 ## 2026-11-22 - Managed Recording Retention Ownership
 
 `managed/recording-retention.ts` owns the existing PostgreSQL retention task,

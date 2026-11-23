@@ -70,6 +70,12 @@ and exact predecessor lineage. Local storage is not an exemption from release
 safety. The API image already contains the editor executor; its separate
 manifest component is retained as release evidence, not another local runner.
 
+Dummy OAuth also requires a deployment-owned development capability. These six
+commands deliberately omit that capability, even when matching variables exist
+in the shared dotenv. A loopback-bound development installation can use an
+explicitly approved private override; see [Dummy OAuth](trusted-clients.md#dummy-oauth)
+for its client-address checks and recreation/reset behavior.
+
 The one-shot `migrate` service uses an exact schema window (minimum = maximum =
 the selected image's schema version). Only the verify-only `backend` and
 `execution` services inherit the release's rollback-compatible reader range.
