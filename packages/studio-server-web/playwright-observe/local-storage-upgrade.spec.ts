@@ -1,11 +1,14 @@
-import { expect, test, type Page } from '@playwright/test';
+import { expect, type Page } from '@playwright/test';
+import { test } from './helpers/localStorageUpgradeFixture';
 import type { LocalUpgradePreparation } from '../../studio-server-shared/local-upgrade-types';
-import { authenticateIfNeeded, waitForDashboardReady, mockHostedEditorBootstrap } from './helpers/hostedEditorObserve';
+import { authenticateIfNeeded, waitForDashboardReady } from './helpers/hostedEditorObserve';
+
+// Every case owns its context, API routes and state; no real upgrade is started.
+test.describe.configure({ mode: 'parallel' });
 
 test.beforeEach(async ({ page }) => {
-  // Panel scenarios begin after VM prerequisites. The separate prompt suite
-  // exercises missing setup; without this response the dashboard never asks
-  // for upgrade status and openLocalUpgrade would wait for the wrong request.
+  // Panel scenarios normally begin after VM prerequisites; missing-setup cases
+  // override this response. Prompt behavior has its own suite.
   await page.route('**/api/app-settings/local-upgrade/setup', (route) =>
     route.fulfill({
       json: {
@@ -22,20 +25,32 @@ test.beforeEach(async ({ page }) => {
 
 async function openSettings(page: Page) {
   const prompt = page.getByTestId('local-storage-upgrade-prompt');
-  const promptShown = await prompt.waitFor({ state: 'visible', timeout: 1000 }).then(
-    () => true,
-    () => false,
-  );
-  if (promptShown) await prompt.getByRole('button', { name: /^(Postpone|Dismiss until next reload)$/ }).click();
-  await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  await page.addLocatorHandler(prompt, async (overlay) => {
+    await overlay.getByRole('button', { name: /^(Postpone|Dismiss until next reload)$/ }).click();
+  });
+  try {
+    await page.getByRole('button', { name: 'Settings', exact: true }).click();
+    await expect(page.getByTestId('app-settings-modal')).toBeVisible();
+  } finally {
+    if (!page.isClosed()) await page.removeLocatorHandler(prompt);
+  }
 }
 
-async function openLocalUpgrade(page: Page) {
+async function openLocalUpgrade(page: Page, { pauseClock = false } = {}) {
   await page.goto('/', { waitUntil: 'domcontentloaded' });
   await authenticateIfNeeded(page);
   await waitForDashboardReady(page);
   await openSettings(page);
-  await page.getByTestId('app-settings-modal').getByRole('tab', { name: 'Local storage upgrade', exact: true }).click();
+  const tab = page.getByTestId('app-settings-modal').getByRole('tab', { name: 'Local storage upgrade', exact: true });
+  if (pauseClock) {
+    // Let modal transitions finish before freezing time, but never fast-forward
+    // an upgrade controller: it mounts only after this tab is selected.
+    await expect(tab).toHaveAttribute('aria-selected', 'false');
+    const time = Date.now();
+    await page.clock.install({ time });
+    await page.clock.pauseAt(time + 60_000);
+  }
+  await tab.click();
   return page.getByRole('tabpanel', { name: 'Local storage upgrade', exact: true });
 }
 
@@ -96,15 +111,6 @@ test('guided duplicate repair confirms owners, survives interruption and locks l
   page,
 }, testInfo) => {
   test.setTimeout(60_000);
-  await mockHostedEditorBootstrap(page);
-  await page.route('**/api/workflows/tree', (route) =>
-    route.fulfill({
-      json: { root: '/workflows', sync: { epoch: 'repair-fixture', revision: 0 }, folders: [], projects: [] },
-    }),
-  );
-  await page.route('**/?editor', (route) =>
-    route.fulfill({ contentType: 'text/html', body: '<html><body>Paused editor</body></html>' }),
-  );
   const oldId = '408e0df7-433e-4ef2-8772-2781d4e6735d';
   const provider = 'trash/provider.rivet-project',
     copy = 'trash/Copy.rivet-project';
@@ -267,15 +273,6 @@ test('guided duplicate repair confirms owners, survives interruption and locks l
 
 test('unreadable repair status blocks all storage mutations in the UI', async ({ page }) => {
   test.setTimeout(60_000);
-  await mockHostedEditorBootstrap(page);
-  await page.route('**/api/workflows/tree', (route) =>
-    route.fulfill({
-      json: { root: '/workflows', sync: { epoch: 'repair-fixture', revision: 0 }, folders: [], projects: [] },
-    }),
-  );
-  await page.route('**/?editor', (route) =>
-    route.fulfill({ contentType: 'text/html', body: '<html><body>Paused editor</body></html>' }),
-  );
   await page.route('**/api/app-settings/local-upgrade', (route) =>
     route.fulfill({
       json: {
@@ -471,6 +468,57 @@ test('a background fingerprint retry clears other operators old proofs and hides
   await expect(copy).toBeDisabled();
 });
 
+test('failed preparation reconciliation locks setup until a fresh read without replaying the request', async ({
+  page,
+}) => {
+  let setupUnavailable = false;
+  let preparations = 0;
+  await page.route('**/api/app-settings/local-upgrade/setup', (route) =>
+    setupUnavailable
+      ? route.fulfill({ status: 503, json: { error: 'Setup is temporarily unavailable.' } })
+      : route.fulfill({
+          json: {
+            eligible: true,
+            upgradeEnabled: true,
+            controlRootConfigured: false,
+            encryptionKeyReady: true,
+            sqliteSelected: false,
+            liveSqlite: false,
+            uiPreparationAvailable: true,
+            uiRestartAvailable: true,
+          },
+        }),
+  );
+  await page.route('**/api/app-settings/local-upgrade/prepare', (route) => {
+    expect(route.request().method()).toBe('POST');
+    expect(route.request().headers()['x-rivet-migration-intent']).toBe('1');
+    expect(route.request().postDataJSON()).toEqual({});
+    preparations++;
+    setupUnavailable = true;
+    return route.fulfill({ status: 503, json: { error: 'Preparation acknowledgement was lost.' } });
+  });
+  const panel = await openLocalUpgrade(page, { pauseClock: true });
+  const prepare = panel.getByRole('button', { name: 'Prepare server for migration', exact: true });
+  await expect(prepare).toBeEnabled();
+  await prepare.click();
+  const actionError = panel.getByRole('alert').filter({ hasText: 'Preparation acknowledgement was lost.' });
+  const statusError = panel.getByRole('alert').filter({ hasText: 'controls stay locked' });
+  await expect(actionError).toBeVisible();
+  await expect(statusError).toBeVisible();
+  await expect(prepare).toHaveAttribute('aria-busy', 'false');
+  await expect(prepare).toBeDisabled();
+  await prepare.evaluate((element) => (element as HTMLButtonElement).click());
+  await page.clock.runFor(4500);
+  await expect(prepare).toBeDisabled();
+  expect(preparations).toBe(1);
+  setupUnavailable = false;
+  await page.clock.runFor(2500);
+  await expect(prepare).toBeEnabled();
+  await expect(statusError).toHaveCount(0);
+  await expect(actionError).toBeVisible();
+  expect(preparations).toBe(1);
+});
+
 test('guided migration prepares from UI, consolidates backup and waits for both processes before automatic validation', async ({
   page,
   context,
@@ -639,15 +687,6 @@ for (const scenario of [
   { phase: 'failed', evidence: 'missing' },
 ]) {
   test(`copy button selects ${scenario.evidence} evidence for a ${scenario.phase} attempt`, async ({ page }) => {
-    await mockHostedEditorBootstrap(page);
-    await page.route('**/api/workflows/tree', (route) =>
-      route.fulfill({
-        json: { root: '/workflows', sync: { epoch: 'copy-evidence', revision: 0 }, folders: [], projects: [] },
-      }),
-    );
-    await page.route('**/?editor', (route) =>
-      route.fulfill({ contentType: 'text/html', body: '<html><body>Paused editor</body></html>' }),
-    );
     const fingerprint = 'a'.repeat(64);
     const archiveHash = 'b'.repeat(64);
     const id = '9921c08b-44df-493c-98bd-02b61a5406d5';
@@ -732,15 +771,6 @@ for (const scenario of [
 }
 
 test('copy admission conflict reconciles replacement backup and requires a fresh attestation', async ({ page }) => {
-  await mockHostedEditorBootstrap(page);
-  await page.route('**/api/workflows/tree', (route) =>
-    route.fulfill({
-      json: { root: '/workflows', sync: { epoch: 'copy-conflict', revision: 0 }, folders: [], projects: [] },
-    }),
-  );
-  await page.route('**/?editor', (route) =>
-    route.fulfill({ contentType: 'text/html', body: '<html><body>Paused editor</body></html>' }),
-  );
   const pausedAt = '2026-10-08T00:00:00Z';
   let backup = {
     id: '9921c08b-44df-493c-98bd-02b61a5406d5',
@@ -1042,7 +1072,7 @@ for (const scenario of loadingActions.filter((item) => item.kind !== 'report')) 
     ).toBeVisible();
     await expect(panel.getByRole('status').filter({ hasText: scenario.progress })).toBeVisible();
     await expect(panel.locator('button[aria-busy="true"]')).toHaveCount(1);
-    for (const other of await panel.getByRole('button').all()) await expect(other).toBeDisabled();
+    await expect(panel.getByRole('button', { disabled: false })).toHaveCount(0);
     operation = null;
     await expect(panel.locator('button[aria-busy="true"]')).toHaveCount(0);
   });
@@ -1072,41 +1102,45 @@ for (const navigation of ['tab', 'modal'] as const) {
   test(`reopening the upgrade ${navigation} cannot hide an inspection still running on the server`, async ({
     page,
   }) => {
-    let operation: string | null = null;
     let releaseInspection: (() => void) | undefined;
-    let inspections = 0;
-    await page.route(/\/api\/app-settings\/local-upgrade(?:$|\/(?!setup(?:$|\?)))/, async (route) => {
-      if (new URL(route.request().url()).pathname.endsWith('/inventory')) {
-        inspections++;
-        operation = 'inspect';
-        if (inspections === 1)
-          await new Promise<void>((resolve) => {
-            releaseInspection = resolve;
-          });
-        operation = null;
-        return route.fulfill({ json: inventoryFixture });
+    try {
+      let operation: string | null = null;
+      let inspections = 0;
+      await page.route(/\/api\/app-settings\/local-upgrade(?:$|\/(?!setup(?:$|\?)))/, async (route) => {
+        if (new URL(route.request().url()).pathname.endsWith('/inventory')) {
+          inspections++;
+          operation = 'inspect';
+          if (inspections === 1)
+            await new Promise<void>((resolve) => {
+              releaseInspection = resolve;
+            });
+          operation = null;
+          return route.fulfill({ json: inventoryFixture });
+        }
+        return route.fulfill({ json: upgradeStatusFixture({ operation }) });
+      });
+      const panel = await openLocalUpgrade(page);
+      const inspect = panel.getByRole('button', { name: 'Inspect source', exact: true });
+      await inspect.click();
+      await expect.poll(() => typeof releaseInspection).toBe('function');
+      const modal = page.getByTestId('app-settings-modal');
+      if (navigation === 'tab') await modal.getByRole('tab', { name: 'General', exact: true }).click();
+      else {
+        await modal.getByRole('button', { name: 'Close app settings', exact: true }).click();
+        await openSettings(page);
       }
-      return route.fulfill({ json: upgradeStatusFixture({ operation }) });
-    });
-    const panel = await openLocalUpgrade(page);
-    const inspect = panel.getByRole('button', { name: 'Inspect source', exact: true });
-    await inspect.click();
-    await expect.poll(() => typeof releaseInspection).toBe('function');
-    const modal = page.getByTestId('app-settings-modal');
-    if (navigation === 'tab') await modal.getByRole('tab', { name: 'General', exact: true }).click();
-    else {
-      await modal.getByRole('button', { name: 'Close app settings', exact: true }).click();
-      await openSettings(page);
+      await modal.getByRole('tab', { name: 'Local storage upgrade', exact: true }).click();
+      await expect(inspect).toHaveAttribute('aria-busy', 'true');
+      await expect(inspect).toBeDisabled();
+      expect(inspections).toBe(1);
+      releaseInspection!();
+      await expect(inspect).toBeEnabled();
+      await inspect.click();
+      await expect(panel.getByText(/2 projects, 1 folders/)).toBeVisible();
+      expect(inspections).toBe(2);
+    } finally {
+      releaseInspection?.();
     }
-    await modal.getByRole('tab', { name: 'Local storage upgrade', exact: true }).click();
-    await expect(inspect).toHaveAttribute('aria-busy', 'true');
-    await expect(inspect).toBeDisabled();
-    expect(inspections).toBe(1);
-    releaseInspection!();
-    await expect(inspect).toBeEnabled();
-    await inspect.click();
-    await expect(panel.getByText(/2 projects, 1 folders/)).toBeVisible();
-    expect(inspections).toBe(2);
   });
 }
 
@@ -1246,249 +1280,251 @@ for (const scenario of loadingActions) {
   test(`${scenario.label} shows only its own spinner and progress while the request is delayed`, async ({
     page,
   }, testInfo) => {
-    let phase: string = scenario.phase,
-      paused: boolean = scenario.paused,
-      drainReady = true,
-      restartRequired = false,
-      validated = scenario.kind === 'resume',
-      failNext = scenario.kind === 'inspect' || scenario.kind === 'report';
-    let job: { id: string; phase: string; message: string } | null = null;
     let release: (() => void) | undefined;
-    let targetRequests = 0;
-    const fingerprint = 'a'.repeat(64);
-    await page.route(/\/api\/app-settings\/local-upgrade(?:$|\/(?!setup(?:$|\?)))/, async (route) => {
-      const pathname = new URL(route.request().url()).pathname;
-      const basePath = '/api/app-settings/local-upgrade';
-      if (pathname === `${basePath}/setup`) return route.fallback();
-      if (pathname === basePath)
-        return route.fulfill({
-          json: {
-            available: true,
-            copyConfigurationReady: true,
-            runningBackend: phase.startsWith('sqlite') ? 'sqlite' : 'legacy',
-            maintenance: paused ? { enteredAt: '2026-09-28T00:00:00Z' } : null,
-            drain: paused ? { ready: drainReady, blockers: drainReady ? [] : ['active requests'] } : null,
-            restartRequired,
-            transition: {
-              revision: 1,
-              phase,
-              backend: phase.startsWith('sqlite') ? 'sqlite' : 'legacy',
-              generationId: phase === 'legacy' ? null : 'loading-fixture',
-              canReturnToLegacy: phase === 'sqlite-validation' || phase === 'verified',
-              validated,
+    try {
+      let phase: string = scenario.phase,
+        paused: boolean = scenario.paused,
+        drainReady = true,
+        restartRequired = false,
+        validated = scenario.kind === 'resume',
+        failNext = scenario.kind === 'inspect' || scenario.kind === 'report';
+      let job: { id: string; phase: string; message: string } | null = null;
+      let targetRequests = 0;
+      const fingerprint = 'a'.repeat(64);
+      await page.route(/\/api\/app-settings\/local-upgrade(?:$|\/(?!setup(?:$|\?)))/, async (route) => {
+        const pathname = new URL(route.request().url()).pathname;
+        const basePath = '/api/app-settings/local-upgrade';
+        if (pathname === `${basePath}/setup`) return route.fallback();
+        if (pathname === basePath)
+          return route.fulfill({
+            json: {
+              available: true,
+              copyConfigurationReady: true,
+              runningBackend: phase.startsWith('sqlite') ? 'sqlite' : 'legacy',
+              maintenance: paused ? { enteredAt: '2026-09-28T00:00:00Z' } : null,
+              drain: paused ? { ready: drainReady, blockers: drainReady ? [] : ['active requests'] } : null,
+              restartRequired,
+              transition: {
+                revision: 1,
+                phase,
+                backend: phase.startsWith('sqlite') ? 'sqlite' : 'legacy',
+                generationId: phase === 'legacy' ? null : 'loading-fixture',
+                canReturnToLegacy: phase === 'sqlite-validation' || phase === 'verified',
+                validated,
+              },
+              job,
             },
-            job,
-          },
-        });
-      if (pathname === `${basePath}${scenario.path}`) {
-        targetRequests++;
-        await new Promise<void>((resolve) => {
-          release = resolve;
-        });
-        if (failNext) {
-          failNext = false;
-          return route.fulfill({ status: 409, json: { error: 'Delayed action failed safely.' } });
+          });
+        if (pathname === `${basePath}${scenario.path}`) {
+          targetRequests++;
+          await new Promise<void>((resolve) => {
+            release = resolve;
+          });
+          if (failNext) {
+            failNext = false;
+            return route.fulfill({ status: 409, json: { error: 'Delayed action failed safely.' } });
+          }
         }
-      }
-      if (pathname.endsWith('/inventory'))
-        return route.fulfill({
-          json: {
-            source: {},
-            inventory: {
-              projects: 2,
-              folders: 1,
-              recordingBundles: 3,
-              publishedVersions: 2,
-              publishedWebApps: 1,
-              warnings: [],
+        if (pathname.endsWith('/inventory'))
+          return route.fulfill({
+            json: {
+              source: {},
+              inventory: {
+                projects: 2,
+                folders: 1,
+                recordingBundles: 3,
+                publishedVersions: 2,
+                publishedWebApps: 1,
+                warnings: [],
+              },
+              capacity: { payloadBytes: 1024, requiredBytes: 1024, fits: true },
+              backupRequired: 'Restore a separate backup.',
             },
-            capacity: { payloadBytes: 1024, requiredBytes: 1024, fits: true },
-            backupRequired: 'Restore a separate backup.',
-          },
-        });
-      if (pathname.endsWith('/fingerprint')) return route.fulfill({ json: { sourceFingerprint: fingerprint } });
-      if (pathname.endsWith('/pause')) {
-        paused = true;
-        drainReady = false;
-        return route.fulfill({ status: 204 });
-      }
-      if (pathname.endsWith('/copy')) {
-        job = { id: 'loading-fixture', phase: 'copying', message: 'Copy is running on the server.' };
-        return route.fulfill({ status: 202, json: { started: true } });
-      }
-      if (pathname.endsWith('/report')) return route.fulfill({ json: { generationId: 'loading-fixture', report: {} } });
-      if (pathname.endsWith('/action')) {
-        const body = route.request().postDataJSON();
-        expect(body.action).toBe(scenario.kind === 'finish-resume' ? 'resume' : scenario.kind);
-        if (body.action === 'validate') validated = true;
-        else {
-          restartRequired = true;
-          if (body.action === 'activate') phase = 'sqlite-validation';
-          if (body.action === 'return-to-legacy') phase = 'legacy-validation';
-          if (body.action === 'resume' || body.action === 'cancel') paused = false;
+          });
+        if (pathname.endsWith('/fingerprint')) return route.fulfill({ json: { sourceFingerprint: fingerprint } });
+        if (pathname.endsWith('/pause')) {
+          paused = true;
+          drainReady = false;
+          return route.fulfill({ status: 204 });
         }
-        return route.fulfill({ status: 204 });
+        if (pathname.endsWith('/copy')) {
+          job = { id: 'loading-fixture', phase: 'copying', message: 'Copy is running on the server.' };
+          return route.fulfill({ status: 202, json: { started: true } });
+        }
+        if (pathname.endsWith('/report'))
+          return route.fulfill({ json: { generationId: 'loading-fixture', report: {} } });
+        if (pathname.endsWith('/action')) {
+          const body = route.request().postDataJSON();
+          expect(body.action).toBe(scenario.kind === 'finish-resume' ? 'resume' : scenario.kind);
+          if (body.action === 'validate') validated = true;
+          else {
+            restartRequired = true;
+            if (body.action === 'activate') phase = 'sqlite-validation';
+            if (body.action === 'return-to-legacy') phase = 'legacy-validation';
+            if (body.action === 'resume' || body.action === 'cancel') paused = false;
+          }
+          return route.fulfill({ status: 204 });
+        }
+        throw new Error('Unexpected loading fixture request.');
+      });
+
+      await openLocalUpgrade(page);
+      const panel = page.getByRole('tabpanel', { name: 'Local storage upgrade', exact: true });
+      if (scenario.kind === 'pause') await panel.getByRole('button', { name: 'Inspect source', exact: true }).click();
+      if (scenario.kind === 'copy') {
+        await panel.getByRole('button', { name: 'Read frozen source fingerprint', exact: true }).click();
+        await panel.getByLabel('Backup reference', { exact: true }).fill('restored fixture');
+        await panel.getByLabel('Restored backup fingerprint', { exact: true }).fill(fingerprint);
+        await panel.getByLabel('I restored a separate backup of all four source roots.').check();
+        await panel.getByLabel('I backed up the local settings encryption key separately.').check();
       }
-      throw new Error('Unexpected loading fixture request.');
-    });
-    const open = async () => {
-      await page.goto('/', { waitUntil: 'domcontentloaded' });
-      await authenticateIfNeeded(page);
-      await waitForDashboardReady(page);
-      await openSettings(page);
-      await page
-        .getByTestId('app-settings-modal')
-        .getByRole('tab', { name: 'Local storage upgrade', exact: true })
-        .click();
-    };
-    await open();
-    const panel = page.getByRole('tabpanel', { name: 'Local storage upgrade', exact: true });
-    if (scenario.kind === 'pause') await panel.getByRole('button', { name: 'Inspect source', exact: true }).click();
-    if (scenario.kind === 'copy') {
-      await panel.getByRole('button', { name: 'Read frozen source fingerprint', exact: true }).click();
-      await panel.getByLabel('Backup reference', { exact: true }).fill('restored fixture');
-      await panel.getByLabel('Restored backup fingerprint', { exact: true }).fill(fingerprint);
-      await panel.getByLabel('I restored a separate backup of all four source roots.').check();
-      await panel.getByLabel('I backed up the local settings encryption key separately.').check();
-    }
-    if (scenario.kind === 'resume')
-      await panel.getByLabel('I reviewed the selected backend and its write-resumption recovery boundary.').check();
-    const button = panel.getByRole('button', { name: scenario.label, exact: true });
-    const progress = panel.getByRole('status').filter({ hasText: scenario.progress });
-    const expectPending = async () => {
-      await expect(button).toHaveAttribute('aria-busy', 'true');
-      await expect(button).toBeDisabled();
-      const spinner = button.locator('svg');
-      await expect(spinner).toBeVisible();
-      await expect(spinner).toHaveCSS('opacity', '1');
-      await expect(button.locator('svg circle')).toHaveCSS('stroke', 'rgb(255, 255, 255)');
-      await expect(progress).toBeVisible();
-      await expect(panel.locator('button[aria-busy="true"]')).toHaveCount(1);
-      for (const other of await panel.getByRole('button').all()) await expect(other).toBeDisabled();
-      await expect.poll(() => typeof release).toBe('function');
-    };
-    await button.click();
-    await expectPending();
-    // Disabled native buttons must not dispatch a second request even if clicked again.
-    await button.evaluate((element) => (element as HTMLButtonElement).click());
-    expect(targetRequests).toBe(1);
-    if (scenario.kind === 'inspect') {
-      await progress.scrollIntoViewIfNeeded();
-      const screenshot = testInfo.outputPath('inspect-source-loading.png');
-      await page.screenshot({ path: screenshot });
-      await testInfo.attach('Inspect source progress', { path: screenshot, contentType: 'image/png' });
-    }
-    release!();
-    if (scenario.kind === 'inspect' || scenario.kind === 'report') {
-      await expect(panel.getByRole('alert')).toContainText('Delayed action failed safely.');
-      await expect(button).toHaveAttribute('aria-busy', 'false');
-      await expect(progress).toHaveCount(0);
-      await expect(button).toBeEnabled();
-      release = undefined;
+      if (scenario.kind === 'resume')
+        await panel.getByLabel('I reviewed the selected backend and its write-resumption recovery boundary.').check();
+      const button = panel.getByRole('button', { name: scenario.label, exact: true });
+      const progress = panel.getByRole('status').filter({ hasText: scenario.progress });
+      const expectPending = async () => {
+        await expect(button).toHaveAttribute('aria-busy', 'true');
+        await expect(button).toBeDisabled();
+        const spinner = button.locator('svg');
+        await expect(spinner).toBeVisible();
+        await expect(spinner).toHaveCSS('opacity', '1');
+        await expect(button.locator('svg circle')).toHaveCSS('stroke', 'rgb(255, 255, 255)');
+        await expect(progress).toBeVisible();
+        await expect(panel.locator('button[aria-busy="true"]')).toHaveCount(1);
+        await expect(panel.getByRole('button', { disabled: false })).toHaveCount(0);
+        await expect.poll(() => typeof release).toBe('function');
+      };
       await button.click();
       await expectPending();
+      // Disabled native buttons must not dispatch a second request even if clicked again.
+      await button.evaluate((element) => (element as HTMLButtonElement).click());
+      expect(targetRequests).toBe(1);
+      if (scenario.kind === 'inspect') {
+        await progress.scrollIntoViewIfNeeded();
+        const screenshot = testInfo.outputPath('inspect-source-loading.png');
+        await page.screenshot({ path: screenshot });
+        await testInfo.attach('Inspect source progress', { path: screenshot, contentType: 'image/png' });
+      }
       release!();
+      if (scenario.kind === 'inspect' || scenario.kind === 'report') {
+        await expect(panel.getByRole('alert')).toContainText('Delayed action failed safely.');
+        await expect(button).toHaveAttribute('aria-busy', 'false');
+        await expect(progress).toHaveCount(0);
+        await expect(button).toBeEnabled();
+        release = undefined;
+        await button.click();
+        await expectPending();
+        release!();
+      }
+      if (scenario.kind === 'copy' || scenario.kind === 'pause') {
+        await expect(
+          panel.getByText(
+            scenario.kind === 'copy'
+              ? 'Copy status: copying. Copy is running on the server.'
+              : 'Waiting for: active requests.',
+          ),
+        ).toBeVisible();
+        await expect(progress).toBeVisible();
+        // The request has returned, but the server-side work is not complete.
+        await openLocalUpgrade(page);
+        await expect(button).toHaveAttribute('aria-busy', 'true');
+        await expect(progress).toBeVisible();
+        if (scenario.kind === 'copy') {
+          phase = 'verified';
+          job = { id: 'loading-fixture', phase: 'verified', message: 'Copy finished.' };
+        } else drainReady = true;
+      }
+      await expect(panel.locator('button[aria-busy="true"]')).toHaveCount(0);
+      await expect(progress).toHaveCount(0);
+      expect(targetRequests).toBe(scenario.kind === 'inspect' || scenario.kind === 'report' ? 2 : 1);
+    } finally {
+      release?.();
     }
-    if (scenario.kind === 'copy' || scenario.kind === 'pause') {
-      await expect(
-        panel.getByText(
-          scenario.kind === 'copy'
-            ? 'Copy status: copying. Copy is running on the server.'
-            : 'Waiting for: active requests.',
-        ),
-      ).toBeVisible();
-      await expect(progress).toBeVisible();
-      // The request has returned, but the server-side work is not complete.
-      await open();
-      await expect(button).toHaveAttribute('aria-busy', 'true');
-      await expect(progress).toBeVisible();
-      if (scenario.kind === 'copy') {
-        phase = 'verified';
-        job = { id: 'loading-fixture', phase: 'verified', message: 'Copy finished.' };
-      } else drainReady = true;
-    }
-    await expect(panel.locator('button[aria-busy="true"]')).toHaveCount(0);
-    await expect(progress).toHaveCount(0);
-    expect(targetRequests).toBe(scenario.kind === 'inspect' || scenario.kind === 'report' ? 2 : 1);
   });
 }
 
 test('action settlement keeps controls busy until its fresh status returns and suspends background polls', async ({
   page,
 }) => {
-  let settling = false;
-  let statusRequests = 0;
   let releaseStatus: (() => void) | undefined;
-  await page.route(/\/api\/app-settings\/local-upgrade(?:$|\/(?!setup(?:$|\?)))/, async (route) => {
-    if (new URL(route.request().url()).pathname.endsWith('/inventory')) {
-      settling = true;
-      return route.fulfill({ json: inventoryFixture });
-    }
-    statusRequests++;
-    if (settling)
-      await new Promise<void>((resolve) => {
-        releaseStatus = resolve;
+  try {
+    let settling = false;
+    let statusRequests = 0;
+    await page.route(/\/api\/app-settings\/local-upgrade(?:$|\/(?!setup(?:$|\?)))/, async (route) => {
+      if (new URL(route.request().url()).pathname.endsWith('/inventory')) {
+        settling = true;
+        return route.fulfill({ json: inventoryFixture });
+      }
+      statusRequests++;
+      if (settling)
+        await new Promise<void>((resolve) => {
+          releaseStatus = resolve;
+        });
+      return route.fulfill({
+        json: upgradeStatusFixture({ pausedAt: settling ? '2026-09-28T01:00:00Z' : null }),
       });
-    return route.fulfill({
-      json: upgradeStatusFixture({ pausedAt: settling ? '2026-09-28T01:00:00Z' : null }),
     });
-  });
-  const panel = await openLocalUpgrade(page);
-  const inspect = panel.getByRole('button', { name: 'Inspect source', exact: true });
-  await expect(inspect).toBeEnabled();
-  await page.clock.install();
-  const beforeAction = statusRequests;
-  await inspect.click();
-  await expect.poll(() => typeof releaseStatus).toBe('function');
-  await page.clock.runFor(4500);
-  expect(statusRequests).toBe(beforeAction + 1);
-  await expect(inspect).toHaveAttribute('aria-busy', 'true');
-  await expect(panel.getByRole('button', { name: 'Pause writes and drain', exact: true })).toBeDisabled();
-  releaseStatus!();
-  await expect(inspect).toHaveAttribute('aria-busy', 'false');
-  await expect(inspect).toBeDisabled();
-  await expect(panel.getByText('Source is quiet. Take and restore your backup before copying.')).toBeVisible();
+    const panel = await openLocalUpgrade(page, { pauseClock: true });
+    const inspect = panel.getByRole('button', { name: 'Inspect source', exact: true });
+    await expect(inspect).toBeEnabled();
+    const beforeAction = statusRequests;
+    await inspect.click();
+    await expect.poll(() => typeof releaseStatus).toBe('function');
+    await page.clock.runFor(4500);
+    expect(statusRequests).toBe(beforeAction + 1);
+    await expect(inspect).toHaveAttribute('aria-busy', 'true');
+    await expect(panel.getByRole('button', { name: 'Pause writes and drain', exact: true })).toBeDisabled();
+    releaseStatus!();
+    await expect(inspect).toHaveAttribute('aria-busy', 'false');
+    await expect(inspect).toBeDisabled();
+    await expect(panel.getByText('Source is quiet. Take and restore your backup before copying.')).toBeVisible();
+  } finally {
+    releaseStatus?.();
+  }
 });
 
 test('a lost pause response is reconciled before controls unlock and its diagnostic is preserved', async ({ page }) => {
-  let paused = false;
-  let statusRequests = 0;
-  let pauseRequests = 0;
   let releaseStatus: (() => void) | undefined;
-  await page.route(/\/api\/app-settings\/local-upgrade(?:$|\/(?!setup(?:$|\?)))/, async (route) => {
-    const pathname = new URL(route.request().url()).pathname;
-    if (pathname.endsWith('/inventory')) return route.fulfill({ json: inventoryFixture });
-    if (pathname.endsWith('/pause')) {
-      paused = true;
-      pauseRequests++;
-      return route.abort('failed');
-    }
-    statusRequests++;
-    if (paused)
-      await new Promise<void>((resolve) => {
-        releaseStatus = resolve;
-      });
-    return route.fulfill({ json: upgradeStatusFixture({ pausedAt: paused ? '2026-09-28T01:00:00Z' : null }) });
-  });
-  const panel = await openLocalUpgrade(page);
-  await panel.getByRole('button', { name: 'Inspect source', exact: true }).click();
-  const pause = panel.getByRole('button', { name: 'Pause writes and drain', exact: true });
-  await expect(pause).toBeEnabled();
-  await page.clock.install();
-  const beforeAction = statusRequests;
-  await pause.click();
-  await expect.poll(() => typeof releaseStatus).toBe('function');
-  await expect(panel.getByRole('alert')).toContainText('Failed to fetch');
-  await page.clock.runFor(4500);
-  expect(statusRequests).toBe(beforeAction + 1);
-  await expect(pause).toHaveAttribute('aria-busy', 'true');
-  await expect(panel.getByRole('button', { name: 'Inspect source', exact: true })).toBeDisabled();
-  releaseStatus!();
-  await expect(pause).toHaveAttribute('aria-busy', 'false');
-  await expect(panel.getByText('Source is quiet. Take and restore your backup before copying.')).toBeVisible();
-  await expect(panel.getByRole('button', { name: 'Resume unchanged legacy', exact: true })).toBeEnabled();
-  await expect(panel.getByRole('alert')).toContainText('Failed to fetch');
-  expect(pauseRequests).toBe(1);
+  try {
+    let paused = false;
+    let statusRequests = 0;
+    let pauseRequests = 0;
+    await page.route(/\/api\/app-settings\/local-upgrade(?:$|\/(?!setup(?:$|\?)))/, async (route) => {
+      const pathname = new URL(route.request().url()).pathname;
+      if (pathname.endsWith('/inventory')) return route.fulfill({ json: inventoryFixture });
+      if (pathname.endsWith('/pause')) {
+        paused = true;
+        pauseRequests++;
+        return route.abort('failed');
+      }
+      statusRequests++;
+      if (paused)
+        await new Promise<void>((resolve) => {
+          releaseStatus = resolve;
+        });
+      return route.fulfill({ json: upgradeStatusFixture({ pausedAt: paused ? '2026-09-28T01:00:00Z' : null }) });
+    });
+    const panel = await openLocalUpgrade(page, { pauseClock: true });
+    await panel.getByRole('button', { name: 'Inspect source', exact: true }).click();
+    const pause = panel.getByRole('button', { name: 'Pause writes and drain', exact: true });
+    await expect(pause).toBeEnabled();
+    const beforeAction = statusRequests;
+    await pause.click();
+    await expect.poll(() => typeof releaseStatus).toBe('function');
+    await expect(panel.getByRole('alert')).toContainText('Failed to fetch');
+    await page.clock.runFor(4500);
+    expect(statusRequests).toBe(beforeAction + 1);
+    await expect(pause).toHaveAttribute('aria-busy', 'true');
+    await expect(panel.getByRole('button', { name: 'Inspect source', exact: true })).toBeDisabled();
+    releaseStatus!();
+    await expect(pause).toHaveAttribute('aria-busy', 'false');
+    await expect(panel.getByText('Source is quiet. Take and restore your backup before copying.')).toBeVisible();
+    await expect(panel.getByRole('button', { name: 'Resume unchanged legacy', exact: true })).toBeEnabled();
+    await expect(panel.getByRole('alert')).toContainText('Failed to fetch');
+    expect(pauseRequests).toBe(1);
+  } finally {
+    releaseStatus?.();
+  }
 });
 
 test('frozen fingerprints belong to one maintenance session and failed reads invalidate earlier proofs', async ({
@@ -1892,17 +1928,8 @@ test('local storage upgrade requires backup certification and coordinated restar
       },
     });
   });
-  const open = async () => {
-    await page.goto('/', { waitUntil: 'domcontentloaded' });
-    await authenticateIfNeeded(page);
-    await waitForDashboardReady(page);
-    await openSettings(page);
-    await page
-      .getByTestId('app-settings-modal')
-      .getByRole('tab', { name: 'Local storage upgrade', exact: true })
-      .click();
-  };
-  await open();
+
+  await openLocalUpgrade(page);
   const panel = page.getByRole('tabpanel', { name: 'Local storage upgrade', exact: true });
   const copy = panel.getByRole('button', { name: 'Copy and verify', exact: true });
   await expect(copy).toBeDisabled();
@@ -1934,7 +1961,7 @@ test('local storage upgrade requires backup certification and coordinated restar
   await expect(panel.getByRole('button', { name: 'Return to legacy while paused' })).toBeEnabled();
   backend = 'sqlite';
   restartRequired = false;
-  await open();
+  await openLocalUpgrade(page);
   await panel.getByRole('button', { name: 'Validate selected runtime' }).click();
   await expect(panel.getByRole('status').filter({ hasText: 'SQLite runtime validation passed.' })).toBeVisible();
   await expect(panel.getByRole('button', { name: 'Resume writes', exact: true })).toBeDisabled();
@@ -1948,119 +1975,118 @@ for (const backend of ['sqlite', 'legacy'] as const) {
   test(`${backend} validation shows progress, failure and durable success without automatically resuming`, async ({
     page,
   }, testInfo) => {
-    let generationId = 'validation-fixture',
-      revision = 1,
-      validated = false,
-      authorized = true,
-      delayValidation = true,
-      validationSucceeds = false;
     let releaseValidation: (() => void) | undefined;
-    const actions: string[] = [];
-    await page.route(/\/api\/app-settings\/local-upgrade(?:$|\/(?!setup(?:$|\?)))/, async (route) => {
-      if (!authorized) return route.fulfill({ status: 403, json: { error: 'Forbidden' } });
-      if (new URL(route.request().url()).pathname.endsWith('/action')) {
-        const action = route.request().postDataJSON();
-        actions.push(action.action);
-        expect(action.action).toBe('validate');
-        expect(action.revision).toBe(revision);
-        if (delayValidation) {
-          await new Promise<void>((resolve) => {
-            releaseValidation = resolve;
-          });
-          delayValidation = false;
+    try {
+      let generationId = 'validation-fixture',
+        revision = 1,
+        validated = false,
+        authorized = true,
+        delayValidation = true,
+        validationSucceeds = false;
+      const actions: string[] = [];
+      await page.route(/\/api\/app-settings\/local-upgrade(?:$|\/(?!setup(?:$|\?)))/, async (route) => {
+        if (!authorized) return route.fulfill({ status: 403, json: { error: 'Forbidden' } });
+        if (new URL(route.request().url()).pathname.endsWith('/action')) {
+          const action = route.request().postDataJSON();
+          actions.push(action.action);
+          expect(action.action).toBe('validate');
+          expect(action.revision).toBe(revision);
+          if (delayValidation) {
+            await new Promise<void>((resolve) => {
+              releaseValidation = resolve;
+            });
+            delayValidation = false;
+          }
+          if (!validationSucceeds)
+            return route.fulfill({ status: 409, json: { error: 'Selected runtime could not be validated.' } });
+          validated = true;
+          revision++;
+          return route.fulfill({ status: 204 });
         }
-        if (!validationSucceeds)
-          return route.fulfill({ status: 409, json: { error: 'Selected runtime could not be validated.' } });
-        validated = true;
-        revision++;
-        return route.fulfill({ status: 204 });
-      }
-      return route.fulfill({
-        json: {
-          available: true,
-          copyConfigurationReady: true,
-          runningBackend: backend,
-          maintenance: { enteredAt: '2026-09-28T00:00:00Z' },
-          drain: { ready: true, blockers: [] },
-          restartRequired: false,
-          transition: {
-            revision,
-            phase: `${backend}-validation`,
-            backend,
-            generationId,
-            canReturnToLegacy: backend === 'sqlite',
-            validated,
+        return route.fulfill({
+          json: {
+            available: true,
+            copyConfigurationReady: true,
+            runningBackend: backend,
+            maintenance: { enteredAt: '2026-09-28T00:00:00Z' },
+            drain: { ready: true, blockers: [] },
+            restartRequired: false,
+            transition: {
+              revision,
+              phase: `${backend}-validation`,
+              backend,
+              generationId,
+              canReturnToLegacy: backend === 'sqlite',
+              validated,
+            },
+            job: null,
           },
-          job: null,
-        },
+        });
       });
-    });
-    const open = async () => {
-      await page.goto('/', { waitUntil: 'domcontentloaded' });
-      await authenticateIfNeeded(page);
-      await waitForDashboardReady(page);
-      await openSettings(page);
-      await page
-        .getByTestId('app-settings-modal')
-        .getByRole('tab', { name: 'Local storage upgrade', exact: true })
-        .click();
-    };
-    await open();
-    const panel = page.getByRole('tabpanel', { name: 'Local storage upgrade', exact: true });
-    const validate = panel.getByRole('button', { name: 'Validate selected runtime', exact: true });
-    const resume = panel.getByRole('button', { name: 'Resume writes', exact: true });
-    const acknowledgement = panel.getByLabel(
-      'I reviewed the selected backend and its write-resumption recovery boundary.',
-    );
-    const success = panel.getByRole('status').filter({ hasText: 'runtime validation passed.' });
-    const failure = panel.getByRole('alert').filter({ hasText: 'Runtime validation failed:' });
-    await expect(panel.getByRole('status').filter({ hasText: 'Runtime validation has not passed yet.' })).toBeVisible();
-    await validate.click();
-    await expect(panel.getByRole('status').filter({ hasText: 'Validating the selected runtime.' })).toBeVisible();
-    await expect(validate).toBeDisabled();
-    await expect(resume).toBeDisabled();
-    await expect.poll(() => typeof releaseValidation).toBe('function');
-    releaseValidation!();
-    await expect(failure).toContainText('Selected runtime could not be validated.');
-    await expect(success).toHaveCount(0);
-    await expect(resume).toBeDisabled();
-    validationSucceeds = true;
-    await validate.click();
-    await expect(failure).toHaveCount(0);
-    await expect(success).toContainText(
-      `${backend === 'sqlite' ? 'SQLite' : 'Legacy'} runtime validation passed. Writes remain paused.`,
-    );
-    await expect(acknowledgement).not.toBeChecked();
-    await expect(resume).toBeDisabled();
-    const screenshot = testInfo.outputPath(`${backend}-validation-passed.png`);
-    await success.scrollIntoViewIfNeeded();
-    await page.screenshot({ path: screenshot });
-    await testInfo.attach('Visible validation result', { path: screenshot, contentType: 'image/png' });
-    await open();
-    await expect(success).toBeVisible();
-    await expect(acknowledgement).not.toBeChecked();
-    await acknowledgement.check();
-    await expect(resume).toBeEnabled();
-    // A failed revalidation must not display the earlier durable success or
-    // preserve a checked acknowledgement that could immediately resume writes.
-    validationSucceeds = false;
-    await validate.click();
-    await expect(failure).toBeVisible();
-    await expect(success).toHaveCount(0);
-    await expect(acknowledgement).not.toBeChecked();
-    await expect(acknowledgement).toBeDisabled();
-    await expect(resume).toBeDisabled();
-    generationId = 'different-generation';
-    revision++;
-    validated = false;
-    await expect(failure).toHaveCount(0);
-    await expect(success).toHaveCount(0);
-    await expect(panel.getByRole('status').filter({ hasText: 'Runtime validation has not passed yet.' })).toBeVisible();
-    authorized = false;
-    await expect(panel.getByRole('alert').filter({ hasText: 'controls stay locked' })).toBeVisible();
-    await expect(success).toHaveCount(0);
-    await expect(validate).toBeDisabled();
-    expect(actions).toEqual(['validate', 'validate', 'validate']);
+
+      await openLocalUpgrade(page);
+      const panel = page.getByRole('tabpanel', { name: 'Local storage upgrade', exact: true });
+      const validate = panel.getByRole('button', { name: 'Validate selected runtime', exact: true });
+      const resume = panel.getByRole('button', { name: 'Resume writes', exact: true });
+      const acknowledgement = panel.getByLabel(
+        'I reviewed the selected backend and its write-resumption recovery boundary.',
+      );
+      const success = panel.getByRole('status').filter({ hasText: 'runtime validation passed.' });
+      const failure = panel.getByRole('alert').filter({ hasText: 'Runtime validation failed:' });
+      await expect(
+        panel.getByRole('status').filter({ hasText: 'Runtime validation has not passed yet.' }),
+      ).toBeVisible();
+      await validate.click();
+      await expect(panel.getByRole('status').filter({ hasText: 'Validating the selected runtime.' })).toBeVisible();
+      await expect(validate).toBeDisabled();
+      await expect(resume).toBeDisabled();
+      await expect.poll(() => typeof releaseValidation).toBe('function');
+      releaseValidation!();
+      await expect(failure).toContainText('Selected runtime could not be validated.');
+      await expect(success).toHaveCount(0);
+      await expect(resume).toBeDisabled();
+      validationSucceeds = true;
+      await validate.click();
+      await expect(failure).toHaveCount(0);
+      await expect(success).toContainText(
+        `${backend === 'sqlite' ? 'SQLite' : 'Legacy'} runtime validation passed. Writes remain paused.`,
+      );
+      await expect(acknowledgement).not.toBeChecked();
+      await expect(resume).toBeDisabled();
+      const screenshot = testInfo.outputPath(`${backend}-validation-passed.png`);
+      await success.scrollIntoViewIfNeeded();
+      await page.screenshot({ path: screenshot });
+      await testInfo.attach('Visible validation result', { path: screenshot, contentType: 'image/png' });
+      await openLocalUpgrade(page);
+      await expect(success).toBeVisible();
+      await expect(acknowledgement).not.toBeChecked();
+      await acknowledgement.check();
+      await expect(resume).toBeEnabled();
+      // A failed revalidation must not display the earlier durable success or
+      // preserve a checked acknowledgement that could immediately resume writes.
+      validationSucceeds = false;
+      await validate.click();
+      await expect(failure).toBeVisible();
+      await expect(success).toHaveCount(0);
+      await expect(acknowledgement).not.toBeChecked();
+      await expect(acknowledgement).toBeDisabled();
+      await expect(resume).toBeDisabled();
+      generationId = 'different-generation';
+      revision++;
+      validated = false;
+      await expect(failure).toHaveCount(0);
+      await expect(success).toHaveCount(0);
+      await expect(
+        panel.getByRole('status').filter({ hasText: 'Runtime validation has not passed yet.' }),
+      ).toBeVisible();
+      authorized = false;
+      await expect(panel.getByRole('alert').filter({ hasText: 'controls stay locked' })).toBeVisible();
+      await expect(success).toHaveCount(0);
+      await expect(validate).toBeDisabled();
+      expect(actions).toEqual(['validate', 'validate', 'validate']);
+    } finally {
+      releaseValidation?.();
+    }
   });
 }
 
@@ -2272,7 +2298,6 @@ test('background copy preparation stays busy after acceptance and shows a specif
 test('preparation diagnostics identify the current conflict without relabeling an older failed copy', async ({
   page,
 }) => {
-  await mockHostedEditorBootstrap(page);
   const preparationReference = '0123456789abcdef',
     copyReference = 'fedcba9876543210';
   const lookups: string[] = [];
@@ -2332,9 +2357,7 @@ test('preparation diagnostics identify the current conflict without relabeling a
 });
 
 test('Settings recovery controls remain reachable when the editor never becomes ready', async ({ page }) => {
-  await page.route('**/?editor', (route) =>
-    route.fulfill({ contentType: 'text/html', body: '<html><body>Paused editor fixture</body></html>' }),
-  );
+  // The shared fixture deliberately serves an editor that never becomes ready.
   await page.route('**/api/app-settings/local-upgrade', (route) =>
     route.fulfill({
       json: { available: false, runningBackend: 'legacy', maintenance: null, transition: null, job: null, drain: null },
@@ -2516,4 +2539,292 @@ test('resumption acknowledgement belongs to the currently validated generation a
   validated = false;
   revision++;
   await expect(acknowledgement).toBeDisabled();
+});
+
+test('an incomplete ready fingerprint cannot crash the panel or revive backup proofs', async ({ page }) => {
+  const fingerprint = 'a'.repeat(64);
+  const pausedAt = '2026-11-24T00:00:00Z';
+  let maintenance: string | null = pausedAt;
+  let preparation: LocalUpgradePreparation = {
+    id: 'dd6ab2ac-faae-4848-83a8-a40d8a5b49d1',
+    kind: 'fingerprint',
+    revision: 1,
+    phase: 'ready',
+    stage: 'fingerprint',
+    fingerprint: { pausedAt, sourceFingerprint: fingerprint },
+  };
+  const pageErrors: string[] = [];
+  page.on('pageerror', (error) => pageErrors.push(error.message));
+  await page.route('**/api/app-settings/local-upgrade', (route) =>
+    route.fulfill({
+      json: { ...upgradeStatusFixture({ pausedAt: maintenance }), preparation, settingsEncryptionRequired: false },
+    }),
+  );
+  const panel = await openLocalUpgrade(page);
+  await expect(panel.locator('.local-upgrade-fingerprint')).toContainText(fingerprint);
+  await panel.getByLabel('Backup reference', { exact: true }).fill('independently-restored');
+  await panel.getByLabel('Restored backup fingerprint', { exact: true }).fill(fingerprint);
+  const restored = panel.getByLabel('I restored a separate backup of all four source roots.');
+  await restored.check();
+  await expect(panel.getByRole('button', { name: 'Copy and verify', exact: true })).toBeEnabled();
+  await page.clock.install();
+  maintenance = null;
+  preparation = { ...preparation, id: 'b0a22e40-cb3d-4907-a8fe-7370240ffad6', fingerprint: undefined };
+  const incompleteRead = page.waitForResponse((response) => response.url().endsWith('/api/app-settings/local-upgrade'));
+  await page.clock.runFor(2500);
+  await (await incompleteRead).finished();
+  await expect(restored).toHaveCount(0);
+  await expect(panel).toBeVisible();
+  expect(pageErrors).toEqual([]);
+  maintenance = pausedAt;
+  await page.clock.runFor(2500);
+  await expect(restored).toBeVisible();
+  await expect(restored).not.toBeChecked();
+  await expect(restored).toBeDisabled();
+  await expect(panel.locator('.local-upgrade-fingerprint')).toHaveCount(0);
+  await expect(panel.getByRole('button', { name: 'Copy and verify', exact: true })).toBeDisabled();
+  await expect(panel.getByRole('button', { name: 'Resume writes', exact: true })).toBeDisabled();
+});
+
+for (const outcome of ['success', 'failure'] as const) {
+  test(`a late ${outcome} poll cannot overwrite action settlement and rapid activation is single-flight`, async ({
+    page,
+  }) => {
+    const pollGate = Promise.withResolvers<void>();
+    const pollStarted = Promise.withResolvers<void>();
+    let holdPoll = false,
+      activated = false,
+      activations = 0,
+      settlementReads = 0;
+    let oldRequest: import('@playwright/test').Request | undefined;
+    await page.route('**/api/app-settings/local-upgrade', async (route) => {
+      const snapshot = upgradeStatusFixture({
+        phase: activated ? 'sqlite-validation' : 'verified',
+        backend: activated ? 'sqlite' : 'legacy',
+        runningBackend: 'legacy',
+        pausedAt: '2026-11-24T00:00:00Z',
+        revision: activated ? 2 : 1,
+        restartRequired: activated,
+      });
+      if (activated) settlementReads++;
+      if (holdPoll && !activated) {
+        oldRequest = route.request();
+        pollStarted.resolve();
+        await pollGate.promise;
+        if (outcome === 'failure') return route.fulfill({ status: 503, json: { error: 'Old poll unavailable.' } });
+      }
+      return route.fulfill({ json: snapshot });
+    });
+    await page.route('**/api/app-settings/local-upgrade/action', (route) => {
+      expect(route.request().method()).toBe('POST');
+      expect(route.request().headers()['x-rivet-migration-intent']).toBe('1');
+      expect(route.request().postDataJSON()).toEqual({ action: 'activate', revision: 1 });
+      activations++;
+      activated = true;
+      return route.fulfill({ status: 204 });
+    });
+    try {
+      const panel = await openLocalUpgrade(page, { pauseClock: true });
+      const activate = panel.getByRole('button', { name: 'Activate SQLite while paused', exact: true });
+      await expect(activate).toBeEnabled();
+      holdPoll = true;
+      await page.clock.runFor(2000);
+      await pollStarted.promise;
+      await activate.evaluate((element) => {
+        (element as HTMLButtonElement).click();
+        (element as HTMLButtonElement).click();
+      });
+      await expect(panel.getByText('Running backend: legacy. Selected phase: sqlite-validation.')).toBeVisible();
+      expect(activations).toBe(1);
+      expect(settlementReads).toBe(1);
+      const oldResponse = page.waitForResponse((response) => response.request() === oldRequest);
+      pollGate.resolve();
+      await (await oldResponse).finished();
+      await page.clock.runFor(100);
+      await expect(panel.getByText('Running backend: legacy. Selected phase: sqlite-validation.')).toBeVisible();
+      await expect(activate).toBeDisabled();
+      await expect(panel.getByRole('alert')).toHaveCount(0);
+      expect(settlementReads).toBe(1);
+    } finally {
+      pollGate.resolve();
+    }
+  });
+}
+
+test('only this preparation acknowledgement clears its lost-response diagnostic', async ({ page }) => {
+  let preparation: LocalUpgradePreparation | null = null;
+  let submittedId = '',
+    submissions = 0;
+  await page.route('**/api/app-settings/local-upgrade', (route) =>
+    route.fulfill({
+      json: { ...upgradeStatusFixture(), preparationJobsAvailable: true, preparation },
+    }),
+  );
+  await page.route('**/api/app-settings/local-upgrade/preparation', (route) => {
+    const body = route.request().postDataJSON();
+    expect(body.kind).toBe('inspect');
+    expect(body.revision).toBe(1);
+    submittedId = body.id;
+    submissions++;
+    preparation = { ...body, id: '496d450c-ee44-4ab6-98fb-eb2fb018ebbf', stage: 'inspect', phase: 'ready' };
+    return route.fulfill({ status: 503, json: { error: 'Preparation acknowledgement was lost.' } });
+  });
+  const panel = await openLocalUpgrade(page, { pauseClock: true });
+  await panel.getByRole('button', { name: 'Inspect source', exact: true }).click();
+  const diagnostic = panel.getByRole('alert').filter({ hasText: 'Preparation acknowledgement was lost.' });
+  await expect(diagnostic).toBeVisible();
+  await page.clock.runFor(4500);
+  await expect(diagnostic).toBeVisible();
+  expect(submissions).toBe(1);
+  preparation = { ...preparation!, id: submittedId };
+  await page.clock.runFor(2000);
+  await expect(diagnostic).toHaveCount(0);
+  expect(submissions).toBe(1);
+});
+
+test('automatic validation attempts once per token while explicit retry remains available', async ({ page }) => {
+  let revision = 1;
+  const actions: string[] = [];
+  await page.route('**/api/app-settings/local-upgrade', (route) =>
+    route.fulfill({
+      json: {
+        ...upgradeStatusFixture({
+          phase: 'sqlite-validation',
+          backend: 'sqlite',
+          pausedAt: '2026-11-24T00:00:00Z',
+          revision,
+        }),
+        uiRestartAvailable: true,
+        runtimeReady: true,
+      },
+    }),
+  );
+  await page.route('**/api/app-settings/local-upgrade/action', (route) => {
+    const body = route.request().postDataJSON();
+    expect(body.revision).toBe(revision);
+    actions.push(body.action);
+    return route.fulfill({ status: 204 });
+  });
+  const panel = await openLocalUpgrade(page, { pauseClock: true });
+  await expect.poll(() => actions.length).toBe(1);
+  const validate = panel.getByRole('button', { name: 'Validate selected runtime', exact: true });
+  await expect(validate).toBeEnabled();
+  await page.clock.runFor(6500);
+  expect(actions).toEqual(['validate']);
+  revision++;
+  await page.clock.runFor(2000);
+  await expect.poll(() => actions.length).toBe(2);
+  await expect(validate).toBeEnabled();
+  await validate.click();
+  await expect.poll(() => actions.length).toBe(3);
+  expect(actions).toEqual(['validate', 'validate', 'validate']);
+  await expect(panel.getByRole('button', { name: 'Resume writes', exact: true })).toBeDisabled();
+});
+
+test('guided validation reconciles a lost acknowledgement through the new journal revision without replay', async ({
+  page,
+}) => {
+  let validated = false;
+  let revision = 1;
+  const actions: string[] = [];
+  await page.route('**/api/app-settings/local-upgrade', (route) =>
+    route.fulfill({
+      json: {
+        ...upgradeStatusFixture({
+          phase: 'sqlite-validation',
+          backend: 'sqlite',
+          pausedAt: '2026-11-24T00:00:00Z',
+          validated,
+          revision,
+        }),
+        uiRestartAvailable: true,
+        runtimeReady: true,
+      },
+    }),
+  );
+  await page.route('**/api/app-settings/local-upgrade/action', (route) => {
+    const body = route.request().postDataJSON();
+    expect(body).toEqual({ action: 'validate', revision });
+    actions.push(body.action);
+    // recordRuntimeValidation commits evidence and advances the journal revision.
+    revision++;
+    validated = true;
+    return route.fulfill({ status: 503, json: { error: 'Validation acknowledgement was lost.' } });
+  });
+  const panel = await openLocalUpgrade(page);
+  const failure = panel.getByRole('alert').filter({ hasText: 'Runtime validation failed:' });
+  const acknowledgement = panel.getByLabel(
+    'I reviewed the selected backend and its write-resumption recovery boundary.',
+  );
+  const resume = panel.getByRole('button', { name: 'Resume writes', exact: true });
+  const validate = panel.getByRole('button', { name: 'Validate selected runtime', exact: true });
+  await expect(panel.getByRole('alert')).toHaveText('Validation acknowledgement was lost.');
+  await expect(failure).toHaveCount(0);
+  await expect(panel.getByRole('status').filter({ hasText: 'SQLite runtime validation passed.' })).toBeVisible();
+  await expect(acknowledgement).toBeEnabled();
+  await expect(acknowledgement).not.toBeChecked();
+  await expect(resume).toBeDisabled();
+  await expect(validate).toHaveCount(0);
+  await page.clock.install();
+  await page.clock.runFor(4500);
+  expect(actions).toEqual(['validate']);
+  await acknowledgement.check();
+  await expect(resume).toBeEnabled();
+  expect(actions).toEqual(['validate']);
+});
+
+test('a late diagnostic lookup cannot enter a replacement preparation', async ({ page }) => {
+  const oldLookup = Promise.withResolvers<void>();
+  const oldLookupStarted = Promise.withResolvers<void>();
+  const oldLookupSettled = Promise.withResolvers<void>();
+  let reference = 'a'.repeat(16);
+  await page.route('**/api/app-settings/local-upgrade', (route) =>
+    route.fulfill({
+      json: {
+        ...upgradeStatusFixture(),
+        preparation: {
+          id:
+            reference === 'a'.repeat(16)
+              ? '43581e14-6c8a-44a2-a603-632d48b5890f'
+              : '25bb03ca-aeb9-4f37-8251-a41a72b03840',
+          kind: 'inspect',
+          revision: 1,
+          phase: 'failed',
+          stage: 'inspect',
+          error: 'Source inspection failed.',
+          failure: { code: 'invalid-source', sourceReference: reference },
+        },
+      },
+    }),
+  );
+  await page.route('**/api/app-settings/local-upgrade/project-reference?reference=*', async (route) => {
+    const requested = new URL(route.request().url()).searchParams.get('reference');
+    if (requested === 'a'.repeat(16)) {
+      oldLookupStarted.resolve();
+      await oldLookup.promise;
+      try {
+        await route.fulfill({ json: { reference: requested, paths: ['old/project.rivet-project'] } });
+      } catch {
+        // Replacement status intentionally aborts this optional lookup.
+      } finally {
+        oldLookupSettled.resolve();
+      }
+    } else await route.fulfill({ json: { reference: requested, paths: ['current/project.rivet-project'] } });
+  });
+  try {
+    const panel = await openLocalUpgrade(page);
+    await oldLookupStarted.promise;
+    await page.clock.install();
+    reference = 'b'.repeat(16);
+    await page.clock.runFor(2500);
+    const diagnostic = panel.getByRole('alert').filter({ hasText: 'Source inspection failed.' });
+    await expect(diagnostic).toContainText('current/project.rivet-project');
+    oldLookup.resolve();
+    await oldLookupSettled.promise;
+    await page.clock.runFor(100);
+    await expect(diagnostic).toContainText('current/project.rivet-project');
+    await expect(panel).not.toContainText('old/project.rivet-project');
+  } finally {
+    oldLookup.resolve();
+  }
 });

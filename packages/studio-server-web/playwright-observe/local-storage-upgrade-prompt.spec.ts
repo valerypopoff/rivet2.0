@@ -1,4 +1,5 @@
-import { expect, test, type Page } from '@playwright/test';
+import { expect, type Page } from '@playwright/test';
+import { test } from './helpers/localStorageUpgradeFixture';
 import { authenticateIfNeeded, waitForDashboardReady } from './helpers/hostedEditorObserve';
 
 const legacyStatus = {
@@ -67,7 +68,9 @@ test('managed or unsupported deployments do not receive the local setup modal', 
   await expect(
     page.getByTestId('app-settings-modal').getByRole('tab', { name: 'Local storage upgrade', exact: true }),
   ).toHaveCount(0);
-  await expect(page.getByTestId('app-settings-modal').getByRole('tab', { name: 'Migration', exact: true })).toHaveCount(0);
+  await expect(page.getByTestId('app-settings-modal').getByRole('tab', { name: 'Migration', exact: true })).toHaveCount(
+    0,
+  );
 });
 
 test('completed SQLite stays quiet if the operator later disables upgrade controls', async ({ page }) => {
@@ -84,7 +87,9 @@ test('completed SQLite stays quiet if the operator later disables upgrade contro
   ).toHaveCount(0);
   // Authenticated legacy-source eligibility, not the files-to-SQLite upgrade state,
   // controls the retained native transfer UI.
-  await expect(page.getByTestId('app-settings-modal').getByRole('tab', { name: 'Migration', exact: true })).toBeVisible();
+  await expect(
+    page.getByTestId('app-settings-modal').getByRole('tab', { name: 'Migration', exact: true }),
+  ).toBeVisible();
   await page.reload({ waitUntil: 'domcontentloaded' });
   await waitForDashboardReady(page);
   await expect(page.getByTestId('local-storage-upgrade-prompt')).toHaveCount(0);

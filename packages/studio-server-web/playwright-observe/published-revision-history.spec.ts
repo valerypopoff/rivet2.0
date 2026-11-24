@@ -123,12 +123,14 @@ test.describe('Published revision history', () => {
         json: {
           complete: true,
           bundles: [],
-          endpoints: [{
-            projectId: project.projectMetadataId,
-            coverage: project.settings.publicationVersion === '0' ? 'project-only' : 'complete',
-            dependencies: [],
-            canCaptureRelease: project.settings.publicationVersion === '0',
-          }],
+          endpoints: [
+            {
+              projectId: project.projectMetadataId,
+              coverage: project.settings.publicationVersion === '0' ? 'project-only' : 'complete',
+              dependencies: [],
+              canCaptureRelease: project.settings.publicationVersion === '0',
+            },
+          ],
         },
       }),
     );
@@ -144,10 +146,7 @@ test.describe('Published revision history', () => {
     expect(trackers.endpointPublishRequests).toHaveLength(0);
 
     page.once('dialog', (dialog) => dialog.accept());
-    await Promise.all([
-      page.waitForResponse('**/api/workflows/tree', { timeout: 10_000 }),
-      update.click(),
-    ]);
+    await Promise.all([page.waitForResponse('**/api/workflows/tree', { timeout: 10_000 }), update.click()]);
     await expect(modal.getByText('The publication outcome could not be confirmed.', { exact: false })).toBeVisible();
     await expect(update).toBeDisabled();
     expect(trackers.endpointPublishRequests).toHaveLength(1);
@@ -356,15 +355,17 @@ test.describe('Published revision history', () => {
     root.settings.status = 'published';
     root.settings.endpointName = 'owner';
     root.stats!.webAppCount = 1;
-    root.webApps = [{
-      uiGraphId: 'owner-web-app',
-      name: 'Owner web app',
-      publishedSlug: null,
-      publishedAt: null,
-      status: 'unpublished',
-      isMissingFromProject: false,
-      allowedEmails: [],
-    }];
+    root.webApps = [
+      {
+        uiGraphId: 'owner-web-app',
+        name: 'Owner web app',
+        publishedSlug: null,
+        publishedAt: null,
+        status: 'unpublished',
+        isMissingFromProject: false,
+        allowedEmails: [],
+      },
+    ];
     const isOwnerWebAppRead = (url: string) => {
       const { pathname, searchParams } = new URL(url);
       return pathname === '/api/workflows/projects/web-apps' && searchParams.get('relativePath') === root.relativePath;
@@ -680,7 +681,9 @@ test.describe('Published revision history', () => {
     const childGraph = child.graphs[childGraphId]!;
     const publishedChild: Project = {
       ...child,
-      graphs: { [childGraphId]: { ...childGraph, metadata: { ...childGraph.metadata!, name: 'Published child graph' } } },
+      graphs: {
+        [childGraphId]: { ...childGraph, metadata: { ...childGraph.metadata!, name: 'Published child graph' } },
+      },
     };
     const member: Project = {
       ...child,
@@ -724,11 +727,13 @@ test.describe('Published revision history', () => {
           savedAt,
         },
       ],
-      references: ([
-        [subgraph, 'child-artifact', 'latest'],
-        [bundleMemberCall, 'member-artifact', 'latest'],
-        [publishedCall, 'published-child-artifact', 'published'],
-      ] as const).map(([call, targetArtifactId, selector]) => ({
+      references: (
+        [
+          [subgraph, 'child-artifact', 'latest'],
+          [bundleMemberCall, 'member-artifact', 'latest'],
+          [publishedCall, 'published-child-artifact', 'published'],
+        ] as const
+      ).map(([call, targetArtifactId, selector]) => ({
         sourceArtifactId: 'root-artifact',
         sourceGraphId: 'frozen-root',
         nodeId: call.id,
@@ -793,7 +798,9 @@ test.describe('Published revision history', () => {
     const rootRow = preview.getByRole('button', { name: 'History root Endpoint', exact: true });
     await rootRow.click();
     await expect(caller.getByText('Frozen child graph')).toBeVisible();
-    await expect(frame.locator('.node[data-nodeid="historical-published-call"]').getByText('Published child graph')).toBeVisible();
+    await expect(
+      frame.locator('.node[data-nodeid="historical-published-call"]').getByText('Published child graph'),
+    ).toBeVisible();
     await expect(activeTabTitle).toHaveText(`${root.name} (history preview)`);
     await expect(caller.locator('.subgraph-target-path-separator')).toBeVisible();
     await expect(frame.getByText('Read-only graph', { exact: true })).toHaveCount(0);
@@ -1036,7 +1043,10 @@ test.describe('Published revision history', () => {
 
     const previewPanel = page.getByRole('region', { name: 'History preview' });
     await expect(previewPanel).toBeVisible();
-    await expect(previewPanel.locator('.project-row', { hasText: project.name })).toHaveAttribute('aria-current', 'true');
+    await expect(previewPanel.locator('.project-row', { hasText: project.name })).toHaveAttribute(
+      'aria-current',
+      'true',
+    );
     await expect(projectRow).toHaveCount(1);
     await previewPanel.getByRole('button', { name: 'Exit history preview' }).click();
     await expect(previewPanel).toHaveCount(0);
@@ -1063,6 +1073,14 @@ test.describe('Published revision history', () => {
       relativePath: project.relativePath,
       versionId: 'published-version-1',
     });
+    // The old current row also matches the text below. Wait for the restored
+    // identity and completed mutation before navigating away from history.
+    await expect(
+      historyModal.getByRole('button', {
+        name: 'Add comment for published version restored-published-version-1',
+        exact: true,
+      }),
+    ).toBeEnabled();
     await expect(historyModal.getByRole('listitem').first()).toContainText(endpointName);
     await expect(historyModal.getByRole('listitem').first()).toContainText('Current');
     await expect(historyModal.getByText('Page 1 of 2')).toBeVisible();

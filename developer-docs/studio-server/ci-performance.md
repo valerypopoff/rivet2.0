@@ -68,10 +68,10 @@ Hosted validation on `d10faabc9` passed both workflows on their first attempts:
 log confirms the complete copy/retry/verification fixture and both supervised
 restore variants; CI did not use the reduced feedback mode.
 
-| Workflow | Previous full run | After the split | Observed reduction |
-| --- | --- | --- | --- |
-| Studio Server verification | [18m46s](https://github.com/valerypopoff/rivet2.0/actions/runs/45048439797) | [16m10s](https://github.com/valerypopoff/rivet2.0/actions/runs/45052324511) | 2m36s (13.9%) |
-| Build | [10m17s](https://github.com/valerypopoff/rivet2.0/actions/runs/45048208040) | [9m33s](https://github.com/valerypopoff/rivet2.0/actions/runs/45052324608) | 44s (7.1%) |
+| Workflow                   | Previous full run                                                           | After the split                                                             | Observed reduction |
+| -------------------------- | --------------------------------------------------------------------------- | --------------------------------------------------------------------------- | ------------------ |
+| Studio Server verification | [18m46s](https://github.com/valerypopoff/rivet2.0/actions/runs/45048439797) | [16m10s](https://github.com/valerypopoff/rivet2.0/actions/runs/45052324511) | 2m36s (13.9%)      |
+| Build                      | [10m17s](https://github.com/valerypopoff/rivet2.0/actions/runs/45048208040) | [9m33s](https://github.com/valerypopoff/rivet2.0/actions/runs/45052324608)  | 44s (7.1%)         |
 
 These timings run from workflow creation through the last job's completion,
 including setup, artifact transfers and runner queueing. The Studio baseline
@@ -607,7 +607,8 @@ of parallel execution. They remain scheduling hints, not wall-clock acceptance
 thresholds.
 
 Keep every case, assertion and the existing 12-minute step limit. Validate the
-complete affected shard with `RIVET_EDITOR_TEST_SHARD=1/4 yarn studio-server:ui:ci`
+complete affected shard with `yarn studio-server:ui:ci`, using the current
+`RIVET_EDITOR_TEST_SHARD` selection described below,
 and confirm the recordings results use both workers with overlapping intervals.
 Use the JSON reporter for worker/start/duration evidence when checking locally.
 Do not infer a hosted runtime guarantee from a faster local browser.
@@ -1034,8 +1035,8 @@ promotion. It does not replace Yarn/Cargo audits or introduce a cloud rehearsal.
   required by the Build aggregator. Set `RIVET_CORE_TEST_SHARD=1/2` or `2/2`, then
   run `yarn workspace @valerypopoff/rivet2-core run test:shard` to reproduce one.
   Local `yarn test:core` still runs the full suite.
-- Browser CI uses four required matrix shards, each with two browser workers.
-  `scripts/ci/editor-test-shards.mjs` assigns all 40
+- Browser CI uses five required matrix shards, each with two browser workers.
+  `scripts/ci/editor-test-shards.mjs` assigns all 45
   selected specs exactly once using measured file weights (plus explicit estimates
   for new specs). The cost-statistics specs are included explicitly: the fast modal
   contract and the real mixed-model bundle/HTTP/WebSocket/cancellation fixture.
@@ -1043,18 +1044,52 @@ promotion. It does not replace Yarn/Cargo audits or introduce a cloud rehearsal.
   opening, independent catalog/results, retained sessions, deletion and replay.
   Bundle comparison, the expanded export suite, Bus ordering and Passthrough
   port labels are included explicitly.
+  Both local-storage upgrade suites are included: the panel's request/action and
+  attestation lifetimes, plus the surrounding prompt/Settings recovery journey.
+  Their shared fixture refuses ambient API access, validates upgrade methods and
+  requires explicit scenario responses. Live upgrade/origin rehearsals keep their
+  separate prerequisites and are not selected as mocked editor cases.
+  The 70 isolated panel cases now opt into parallel scheduling on the same two
+  workers; the 23 prompt cases remain serial. Scoped prompt dismissal, shared
+  navigation and collection assertions remove repeated waits/setup. Exact-count
+  cases pause time before mounting the upgrade controller; native stalled-read
+  deadline cases retain real time. No scenario or assertion policy was dropped.
+  The 2026-11-24 local characterization measured 450.7 seconds of panel case work
+  and 137.5 seconds of prompt work; their initial hints are 455 and 140 seconds.
+  Four previous shards already used all 4,320 seconds of their combined allowance.
+  Five now allocate 985/985/985/980/980 seconds, preserving the 1,080-second
+  per-shard allowance, two workers, 12-minute test step and 20-minute job limit.
+  The initial post-extraction local receiving shard passed all 134 cases in 545.3 seconds, including
+  automatic preview cleanup; panel/prompt case work was 472.1/126.9 seconds.
+  These observations show local variability, not a reliable before/after change.
+  Reassessment and preparation-read recovery add two cases. Current collection
+  is 502 cases in 45 files, with all 93 upgrade cases in shard 2/5 (136 cases).
+  Before the test cleanup, the complete local receiving shard passed in 544.0 seconds with
+  automatic preview cleanup; it had no skips or retries.
+  After the test review, all 136 cases passed in 403.6 seconds locally, without
+  skips or retries and with automatic preview cleanup plus an independently
+  closed port. Both workers ran panel cases. Panel/prompt case work was
+  498.1/122.8 seconds, compared with 481.3/125.9 seconds in the preceding run.
+  This local elapsed-time comparison does not establish lower CPU cost or a
+  hosted speedup. A neighboring restore journey initially raced unchanged row
+  text against mutation settlement; it now waits for the newly restored version's
+  enabled control before navigation and passed four focused repetitions before
+  the complete successful shard. The scheduling hints and budgets are unchanged.
+  This adds runner capacity for coverage. Hosted queue, setup, case work and total
+  elapsed time still need exact-commit measurement; local timings establish no
+  hosted speedup.
   Refresh materially stale work estimates from complete hosted timings, retaining
   slower observations rather than replacing them with a single faster run. Adding a selected spec
   also updates the inventory count and membership assertions in
   `ci-performance.test.mjs`; run its `balanced editor shards` and `editor shard work`
   cases before pushing.
   Their inclusion is asserted by the shard regression. These weights balance work,
-  not predict hosted wall time. Independently isolated recordings cases can use
-  both workers; other files preserve serial scenarios. Test-owned contexts,
+  not predict hosted wall time. Independently isolated recordings and local-upgrade
+  panel cases can use both workers; other files preserve serial scenarios. Test-owned contexts,
   mocks, temporary paths, assertions and retry policy are unchanged. Each shard
   has separate reports and failure artifacts. Executor-retirement verification
-  runs exactly once, on shard 1.
-  Set `RIVET_EDITOR_TEST_SHARD=1/4`, `2/4`, `3/4` or `4/4` before
+  runs exactly once in the web-tests job.
+  Set `RIVET_EDITOR_TEST_SHARD=1/5`, `2/5`, `3/5`, `4/5` or `5/5` before
   `yarn studio-server:ui:ci` to reproduce a lane. Omit it to run the complete
   selection; unknown shard values fail instead of silently dropping coverage.
   Locally, finish build-mutating checks (including `yarn test:style`) before

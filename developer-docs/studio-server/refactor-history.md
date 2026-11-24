@@ -4,6 +4,59 @@ This document records intentional architecture and cleanup changes that future m
 
 It is not a changelog. Keep entries focused on why a refactor happened, which ownership boundary changed, and which verification paths should be kept alive.
 
+## 2026-11-24 - Local Storage Upgrade Screen Ownership
+
+The upgrade screen previously mixed rendering with polling, mutation settlement,
+revision-bound attestations and recovery. A pure `localStorageUpgradeModel.ts`
+now owns derived policy; `useLocalStorageUpgradeController.ts` keeps one mounted
+request/action lifetime. The existing screen renders their state and named
+commands. Its 16 state hooks, eight refs and six effects retain their order;
+there is no additional poller, reducer or global store. Setup caching, read/action
+timeout differences, fresh reconciliation and server authority remain intact.
+
+A separate baseline correction prevents an absent ready fingerprint payload from
+crashing proof adoption when maintenance is also absent. The browser regression
+failed before the presence guard and passed on the corrected baseline. Backup
+and resume bindings retain their distinct formats; preparation and interrupted
+repair retain their separate disabled rules.
+
+The web-test lane now typechecks the actual screen/model/controller and their
+focused policy tests. Existing panel/prompt browser cases use a closed fixture
+and run in the normal editor selection, with explicit races for stale reads,
+acknowledgement identity, automatic validation and diagnostic replacement. A fifth
+editor shard supplies coverage capacity while preserving the existing worker,
+timeout and work-budget rules. New modules use shared-package paths and remove
+the screen's two obsolete deep-import allowances. The
+[implementation record](local-storage-upgrade-screen-refactor-plan.md) separates
+local checks from hosted CI and actual upgrade/recovery qualification.
+
+Reassessment retained the production implementation and removed nine redundant
+empty-tree and paused-editor route overrides in favor of the shared fixture.
+A new lost-validation-acknowledgement case models the real journal's revision
+advance: fresh durable evidence reconciles success without replay or an inherited
+resumption acknowledgement. The old diagnostic remains visible. An unchanged-
+revision validation-success mock would invent a recovery failure that the real
+journal cannot produce; it is not a reason to change production controls.
+
+Adjacent review on 2026-11-25 reproduced a real preparation exception to the
+connection lock: after a failed preparation response and failed reconciliation,
+the spinner stopped but the initial Prepare button became enabled. The pure model
+now receives the existing `statusError` and includes it in that button's gate.
+A fresh successful setup read restores explicit preparation without replay or
+clearing the action diagnostic. Fresh setup still permits initial preparation
+when ordinary upgrade status is unavailable. No state hook, effect, request,
+timer or backend guard was added or changed.
+
+The test review removed duplicate panel navigation, replaced the optional prompt
+timeout probe with a scoped locator handler, and made button-lock checks one
+auto-waiting collection assertion. Request-count cases explicitly pause the clock
+before mounting the upgrade controller, after the modal transition has settled;
+`clock.install()` alone does not pause time. Real stalled-read cases retain their
+native deadlines. The 70 independently isolated panel cases can share the existing
+two workers; the 23 prompt cases keep their serial scheduling. No scenario was
+removed or production source changed in this test cleanup. The implementation
+record above owns the measured local results and their hosted-evidence limits.
+
 ## 2026-11-24 - Hosted Recording Transition Ownership
 
 `withRecordingStorageTransition` owns settings reads, real database coordination,

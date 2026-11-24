@@ -70,7 +70,12 @@ export default [
         {
           patterns: [
             {
-              group: ['**/core/src', '**/core/src/**', '@valerypopoff/rivet2-core/src', '@valerypopoff/rivet2-core/src/**'],
+              group: [
+                '**/core/src',
+                '**/core/src/**',
+                '@valerypopoff/rivet2-core/src',
+                '@valerypopoff/rivet2-core/src/**',
+              ],
               message:
                 'Import core through @valerypopoff/rivet2-core. If a package needs a shared core contract, export it intentionally from core first.',
             },
@@ -127,6 +132,19 @@ export default [
       '@typescript-eslint/no-throw-literal': 'off',
       '@typescript-eslint/no-non-null-asserted-optional-chain': 'off',
       '@typescript-eslint/triple-slash-reference': 'off',
+    },
+  },
+
+  // The hosted upgrade screen is outside the desktop app's TypeScript project.
+  {
+    files: [
+      'packages/studio-server-web/dashboard/app-settings/tabs/LocalStorageUpgradeSettingsTab.tsx',
+      'packages/studio-server-web/dashboard/app-settings/tabs/localStorageUpgradeModel.ts',
+      'packages/studio-server-web/dashboard/app-settings/tabs/useLocalStorageUpgradeController.ts',
+      'packages/studio-server-web/tests/local-storage-upgrade-model.test.ts',
+    ],
+    languageOptions: {
+      parserOptions: { project: ['./packages/studio-server-web/tsconfig.local-storage-upgrade.json'] },
     },
   },
 

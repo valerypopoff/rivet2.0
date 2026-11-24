@@ -82,6 +82,7 @@ commands; the guides below describe implementation and verification.
 - [Rejected Recording Encoder Worker Assessment](./studio-server/recording-encoder-worker-plan.md)
 - [Runtime Libraries](./studio-server/runtime-libraries.md)
 - [Local Metadata SQLite Upgrade And Recovery](./studio-server/local-metadata-upgrade.md)
+- [Local Storage Upgrade Screen Refactor Plan](./studio-server/local-storage-upgrade-screen-refactor-plan.md)
 - [Restored-Backup Rehearsal](./studio-server/local-metadata-backup-rehearsal.md)
 - [VM To Managed PostgreSQL/S3 Migration](./studio-server/vm-to-managed-migration.md)
 - [Published Web-App Browser Storage](./studio-server/web-app-browser-storage.md)

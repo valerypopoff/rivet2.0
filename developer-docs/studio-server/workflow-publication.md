@@ -893,6 +893,13 @@ History pairs the confirmed restore address with the reviewed publication
 version. When a mutation response is lost or incomplete, the browser refreshes
 the project tree and requires a fresh review before accepting another write.
 
+In `published-revision-history.spec.ts`, restore completion must be observed
+through the newly created version's enabled control before navigating away.
+Counting the request or checking the endpoint/Current text is insufficient: both
+texts can already match the old row while restoration and fresh review still
+own the navigation lock. Keep the enabled-control wait tied to the restored
+version ID rather than adding a sleep or increasing the timeout.
+
 ### Frozen endpoint releases
 
 Managed schema 22 stores releases and pins their project and dataset

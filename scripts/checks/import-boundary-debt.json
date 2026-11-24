@@ -383,8 +383,6 @@
     "packages/studio-server-web/dashboard/app-settings/tabs/DeploymentStatusSettingsTab.tsx\t../../../../studio-server-shared/deployment-status-types",
     "packages/studio-server-web/dashboard/app-settings/tabs/DuplicateProjectRepairPanel.tsx\t../../../../studio-server-shared/local-upgrade-types",
     "packages/studio-server-web/dashboard/app-settings/tabs/LegacyRestorePanel.tsx\t../../../../studio-server-shared/hosted-env",
-    "packages/studio-server-web/dashboard/app-settings/tabs/LocalStorageUpgradeSettingsTab.tsx\t../../../../studio-server-shared/hosted-env",
-    "packages/studio-server-web/dashboard/app-settings/tabs/LocalStorageUpgradeSettingsTab.tsx\t../../../../studio-server-shared/local-upgrade-types",
     "packages/studio-server-web/dashboard/app-settings/tabs/ServerUiAccessSettingsTab.tsx\t../../../../studio-server-shared/app-settings-types",
     "packages/studio-server-web/dashboard/app-settings/useEnvironmentVariablesForm.ts\t../../../studio-server-shared/environment-variable-events",
     "packages/studio-server-web/dashboard/app-settings/useRuntimeLimitsForm.ts\t../../../studio-server-shared/app-settings-types",

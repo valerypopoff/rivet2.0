@@ -580,13 +580,14 @@ assert.deepEqual(asArray(studioJobs['api-tests'].needs), ['changes', 'build-stud
 assert.deepEqual(asArray(studioJobs['web-tests'].needs), ['changes', 'build-studio-server']);
 assert.deepEqual(asArray(studioJobs['editor-regression'].needs), ['changes', 'build-studio-server']);
 assert.deepEqual(studioJobs['editor-regression'].strategy.matrix.include, [
-  { shard: '1/4', label: 1 },
-  { shard: '2/4', label: 2 },
-  { shard: '3/4', label: 3 },
-  { shard: '4/4', label: 4 },
+  { shard: '1/5', label: 1 },
+  { shard: '2/5', label: 2 },
+  { shard: '3/5', label: 3 },
+  { shard: '4/5', label: 4 },
+  { shard: '5/5', label: 5 },
 ]);
 assert.equal(studioJobs['editor-regression'].strategy['fail-fast'], false);
-assert.equal(studioJobs['editor-regression'].strategy['max-parallel'], 4);
+assert.equal(studioJobs['editor-regression'].strategy['max-parallel'], 5);
 const editorJob = studioJobs['editor-regression'];
 assert.equal(editorJob.container, undefined, 'Real Docker-backed test fixtures must retain their host loopback.');
 assert.match(
