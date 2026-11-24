@@ -56,7 +56,7 @@ import { seedDeploymentStorageSettings } from './helpers/seed-deployment-storage
 const projectA = "project-a" as ProjectId;
 const projectB = "project-b" as ProjectId;
 
-test("history cursors use verified SQL identities and preserve legacy normalization", () => {
+void test("history cursors use verified SQL identities and preserve legacy normalization", () => {
   for (const dialect of ["sqlite", "postgres"] as const) {
     const legacy = legacyRun(projectA, "legacy-page");
     const row = {
@@ -82,7 +82,7 @@ test("history cursors use verified SQL identities and preserve legacy normalizat
   }
 });
 
-test("history cursors preserve the exact database timestamp, not its JSON spelling or Date precision", () => {
+void test("history cursors preserve the exact database timestamp, not its JSON spelling or Date precision", () => {
   for (const dialect of ["sqlite", "postgres"] as const) {
     const value = run(projectA, "cursor-precision");
     const storedTimestamp =
@@ -108,7 +108,7 @@ test("history cursors preserve the exact database timestamp, not its JSON spelli
   }
 });
 
-test("SQLite history pagination does not omit equivalent differently formatted timestamps", () => {
+void test("SQLite history pagination does not omit equivalent differently formatted timestamps", () => {
   const database = new DatabaseSync(":memory:");
   try {
     database.exec(
@@ -140,7 +140,7 @@ test("SQLite history pagination does not omit equivalent differently formatted t
   }
 });
 
-test("evaluation history pages are compact, stable across equal timestamps and scoped", async () => {
+void test("evaluation history pages are compact, stable across equal timestamps and scoped", async () => {
   const root = await fs.mkdtemp(
     path.join(os.tmpdir(), "rivet-evaluation-pages-"),
   );
@@ -356,6 +356,45 @@ function library(
   };
 }
 
+void test('library mutations keep prototype-named resource IDs distinct from missing resources', () => {
+  for (const id of ['constructor', 'toString', '__proto__']) {
+    const initial = normalizeEvaluationLibrary(library(id, id));
+    const empty = normalizeEvaluationLibrary({
+      ...initial,
+      data: { version: 1, suites: [], baselines: [] },
+      datasets: [],
+    });
+    const created = applyCheckedEvaluationLibraryMutation(empty, {
+      changes: [
+        { kind: 'put-dataset', id, expectedVersion: null, dataset: initial.datasets[0]! },
+        { kind: 'put-suite', id, expectedVersion: null, suite: initial.data.suites[0]!, baselines: [] },
+      ],
+    });
+    assert.equal(created.changed, true);
+    assert.equal(created.library.datasets[0]?.id, id);
+    assert.equal(created.library.data.suites[0]?.id, id);
+    const versions = getEvaluationLibraryResourceVersions(created.library);
+    assert.equal(Object.hasOwn(versions.datasets, id), true);
+    assert.equal(Object.hasOwn(versions.suites, id), true);
+    assert.throws(
+      () =>
+        applyCheckedEvaluationLibraryMutation(created.library, {
+          changes: [
+            {
+              kind: 'put-dataset',
+              id,
+              expectedVersion: null,
+              dataset: { ...initial.datasets[0]!, name: 'Stale edit' },
+            },
+          ],
+        }),
+      (error: unknown) =>
+        error instanceof EvaluationLibraryResourceConflictError &&
+        typeof error.conflicts[0]?.currentVersion === 'string',
+    );
+  }
+});
+
 async function assertCompleteEvaluationStoreContract(
   store: RivetStudioEvaluationStore,
 ): Promise<void> {
@@ -530,7 +569,7 @@ async function assertCompleteEvaluationStoreContract(
   assert.equal(completed?.name, "Checkpoint baseline");
   assert.equal(completed?.trials.length, 1);
 }
-test("evaluation run API accepts v2 writes and rejects legacy write envelopes", () => {
+void test("evaluation run API accepts v2 writes and rejects legacy write envelopes", () => {
   const current = run(projectA, "run-v2");
   assert.equal(evaluationRunSchema.safeParse(current).success, true);
 
@@ -571,7 +610,7 @@ test("evaluation run API accepts v2 writes and rejects legacy write envelopes", 
   );
 });
 
-test("hosted Evaluation submission preserves the immutable normal-dataset sidecar", () => {
+void test("hosted Evaluation submission preserves the immutable normal-dataset sidecar", () => {
   const submission = {
     projectContents: "---\nmetadata: {}\n",
     projectPath: "tests/evaluation.rivet-project",
@@ -589,7 +628,7 @@ test("hosted Evaluation submission preserves the immutable normal-dataset sideca
   );
 });
 
-test("evaluation recording API enforces UTF-8 byte limits and coherent temporary expiry", () => {
+void test("evaluation recording API enforces UTF-8 byte limits and coherent temporary expiry", () => {
   const artifact = recording(
     projectA,
     "recording-schema",
@@ -629,7 +668,7 @@ test("evaluation recording API enforces UTF-8 byte limits and coherent temporary
   );
 });
 
-test("hosted HTTP evaluation store normalizes legacy run responses", async () => {
+void test("hosted HTTP evaluation store normalizes legacy run responses", async () => {
   const originalFetch = globalThis.fetch;
   const originalWindow = globalThis.window;
   const legacy = legacyRun(projectA, "legacy-http-run");
@@ -675,7 +714,7 @@ test("hosted HTTP evaluation store normalizes legacy run responses", async () =>
   }
 });
 
-test("hosted HTTP evaluation store sends project-scoped run name updates", async () => {
+void test("hosted HTTP evaluation store sends project-scoped run name updates", async () => {
   const originalFetch = globalThis.fetch;
   const originalWindow = globalThis.window;
   const saved = { ...run(projectA, "renamed-http-run"), name: "Baseline" };
@@ -718,7 +757,7 @@ test("hosted HTTP evaluation store sends project-scoped run name updates", async
   }
 });
 
-test('hosted HTTP evaluation store returns confirmed recording-retention outcomes', async () => {
+void test('hosted HTTP evaluation store returns confirmed recording-retention outcomes', async () => {
   const originalFetch = globalThis.fetch;
   const originalWindow = globalThis.window;
   let request: { url: string; init: RequestInit | undefined } | undefined;
@@ -755,7 +794,7 @@ test('hosted HTTP evaluation store returns confirmed recording-retention outcome
   }
 });
 
-test("hosted HTTP evaluation store migrates legacy libraries and serializes writes", { timeout: 5000 }, async () => {
+void test("hosted HTTP evaluation store migrates legacy libraries and serializes writes", { timeout: 5000 }, async () => {
   const originalFetch = globalThis.fetch;
   let revision = 0;
   let currentLibrary = normalizeEvaluationLibrary(undefined);
@@ -850,7 +889,7 @@ test("hosted HTTP evaluation store migrates legacy libraries and serializes writ
   }
 });
 
-test("hosted HTTP evaluation stores merge different-resource browser edits and reject only overlaps", async () => {
+void test("hosted HTTP evaluation stores merge different-resource browser edits and reject only overlaps", async () => {
   const originalFetch = globalThis.fetch;
   let revision = 0;
   let currentLibrary = normalizeEvaluationLibrary(library());
@@ -1039,7 +1078,7 @@ test("hosted HTTP evaluation stores merge different-resource browser edits and r
   }
 });
 
-test('hosted HTTP evaluation stores preserve each queued conflict until it is resolved', async () => {
+void test('hosted HTTP evaluation stores preserve each queued conflict until it is resolved', async () => {
   const originalFetch = globalThis.fetch;
   let revision = 0;
   let currentLibrary = normalizeEvaluationLibrary(library());
@@ -1156,7 +1195,7 @@ test('hosted HTTP evaluation stores preserve each queued conflict until it is re
   }
 });
 
-test('hosted HTTP evaluation store copies only the newest queued edit for one conflicting resource', async () => {
+void test('hosted HTTP evaluation store copies only the newest queued edit for one conflicting resource', async () => {
   const originalFetch = globalThis.fetch;
   let revision = 0;
   let currentLibrary = normalizeEvaluationLibrary(library());
@@ -1269,7 +1308,7 @@ test('hosted HTTP evaluation store copies only the newest queued edit for one co
   }
 });
 
-test('hosted HTTP evaluation store retains retryable local edits without presenting them as conflicts', async () => {
+void test('hosted HTTP evaluation store retains retryable local edits without presenting them as conflicts', async () => {
   const originalFetch = globalThis.fetch;
   let revision = 0;
   let attempts = 0;
@@ -1329,7 +1368,62 @@ test('hosted HTTP evaluation store retains retryable local edits without present
   }
 });
 
-test('hosted HTTP evaluation store recovers from a bare conflict response without an unresolvable dialog', async () => {
+void test('hosted library retry reports a deleted prototype-named resource as missing', async () => {
+  const originalFetch = globalThis.fetch;
+  let currentLibrary = normalizeEvaluationLibrary(library('suite', 'constructor'));
+  let revision = 0;
+  let writes = 0;
+  globalThis.fetch = async (input, init) => {
+    const pathname = new URL(String(input), 'https://rivet.example').pathname;
+    if (pathname.endsWith('/library') && (init?.method ?? 'GET') === 'GET') {
+      return Response.json({
+        revision,
+        library: currentLibrary,
+        resourceVersions: getEvaluationLibraryResourceVersions(currentLibrary),
+      });
+    }
+    if (pathname.endsWith('/library/mutations') && init?.method === 'POST') {
+      writes++;
+      return Response.json({ error: 'Temporary storage outage' }, { status: 503 });
+    }
+    throw new Error(`Unexpected evaluation HTTP request: ${pathname}`);
+  };
+  try {
+    const store = createHttpEvaluationStore({
+      baseUrl: '/api/workflows/evaluation-runs',
+      normalizeRun: normalizeEvaluationRun,
+      normalizeLibrary: normalizeEvaluationLibrary,
+    });
+    let issue: EvaluationLibrarySyncIssue | undefined;
+    store.subscribeLibrarySyncIssue?.((next) => {
+      issue = next;
+    });
+    const before = await store.getLibrary();
+    await assert.rejects(
+      store.putLibrary({
+        ...before,
+        datasets: before.datasets.map((dataset) => ({ ...dataset, name: 'Retained local edit' })),
+      }),
+      /Temporary storage outage/,
+    );
+    currentLibrary = normalizeEvaluationLibrary({
+      ...currentLibrary,
+      data: { version: 1, suites: [], baselines: [] },
+      datasets: [],
+    });
+    revision++;
+    await store.retryLibrarySync!();
+    assert.equal(issue?.kind, 'conflict');
+    const conflict = issue?.kind === 'conflict' ? issue.conflicts[0] : undefined;
+    assert.equal(conflict?.currentVersion, null);
+    assert.equal(conflict?.server.value, undefined);
+    assert.equal(writes, 1, 'The deleted server resource must not be recreated by a stale retry');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+void test('hosted HTTP evaluation store recovers from a bare conflict response without an unresolvable dialog', async () => {
   const originalFetch = globalThis.fetch;
   let revision = 0;
   let mutationAttempts = 0;
@@ -1387,7 +1481,7 @@ test('hosted HTTP evaluation store recovers from a bare conflict response withou
   }
 });
 
-test('hosted HTTP evaluation store never lets a delayed refresh roll back a newer mutation', async () => {
+void test('hosted HTTP evaluation store never lets a delayed refresh roll back a newer mutation', async () => {
   const originalFetch = globalThis.fetch;
   let revision = 0;
   let currentLibrary = normalizeEvaluationLibrary(library());
@@ -1453,7 +1547,7 @@ test('hosted HTTP evaluation store never lets a delayed refresh roll back a newe
   }
 });
 
-test('hosted HTTP evaluation invalidations are external, revisioned, and never recurse through refreshes', async () => {
+void test('hosted HTTP evaluation invalidations are external, revisioned, and never recurse through refreshes', async () => {
   const originalFetch = globalThis.fetch;
   const eventSourceDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'EventSource');
   let revision = 0;
@@ -1559,7 +1653,7 @@ test('hosted HTTP evaluation invalidations are external, revisioned, and never r
   }
 });
 
-test('hosted HTTP evaluation store uses the guarded replacement route for incomplete resource versions', async () => {
+void test('hosted HTTP evaluation store uses the guarded replacement route for incomplete resource versions', async () => {
   const originalFetch = globalThis.fetch;
   let revision = 7;
   let currentLibrary = normalizeEvaluationLibrary(library());
@@ -1612,7 +1706,7 @@ test('hosted HTTP evaluation store uses the guarded replacement route for incomp
   }
 });
 
-test("hosted HTTP evaluation store does not hide failed legacy imports", async () => {
+void test("hosted HTTP evaluation store does not hide failed legacy imports", async () => {
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async (input, init) => {
     const requestUrl = new URL(String(input), "https://rivet.example");
@@ -1644,7 +1738,7 @@ test("hosted HTTP evaluation store does not hide failed legacy imports", async (
     globalThis.fetch = originalFetch;
   }
 });
-test("filesystem evaluation store preserves user-assigned names across snapshots", async () => {
+void test("filesystem evaluation store preserves user-assigned names across snapshots", async () => {
   const root = await fs.mkdtemp(
     path.join(os.tmpdir(), "rivet-evaluations-names-"),
   );
@@ -1680,7 +1774,7 @@ test("filesystem evaluation store preserves user-assigned names across snapshots
     await fs.rm(root, { recursive: true, force: true });
   }
 });
-test("filesystem evaluation store normalizes legacy run history at its read boundary", async () => {
+void test("filesystem evaluation store normalizes legacy run history at its read boundary", async () => {
   const root = await fs.mkdtemp(
     path.join(os.tmpdir(), "rivet-evaluations-legacy-"),
   );
@@ -1781,7 +1875,7 @@ function datasetSnapshot(projectId: ProjectId): EvaluationDatasetSnapshot {
   };
 }
 
-test("filesystem evaluation store isolates projects, expires temporary artifacts during history reads, and pins baseline artifacts", async () => {
+void test("filesystem evaluation store isolates projects, expires temporary artifacts during history reads, and pins baseline artifacts", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "rivet-evaluations-"));
   const store = new FilesystemRivetEvaluationStore(
     path.join(root, "evaluations.sqlite"),
@@ -1915,7 +2009,7 @@ test("filesystem evaluation store isolates projects, expires temporary artifacts
   }
 });
 
-test("filesystem project cleanup rolls back every row and its write fence when deletion fails", async () => {
+void test("filesystem project cleanup rolls back every row and its write fence when deletion fails", async () => {
   const root = await fs.mkdtemp(
     path.join(os.tmpdir(), "rivet-evaluations-rollback-"),
   );
@@ -1969,7 +2063,7 @@ test("filesystem project cleanup rolls back every row and its write fence when d
   }
 });
 
-test("filesystem project cleanup fences delayed run, snapshot, and recording writes", async () => {
+void test("filesystem project cleanup fences delayed run, snapshot, and recording writes", async () => {
   const root = await fs.mkdtemp(
     path.join(os.tmpdir(), "rivet-evaluations-delete-fence-"),
   );
@@ -2027,7 +2121,7 @@ test("filesystem project cleanup fences delayed run, snapshot, and recording wri
   }
 });
 
-test("filesystem evaluation store persists the complete upstream contract", async () => {
+void test("filesystem evaluation store persists the complete upstream contract", async () => {
   const root = await fs.mkdtemp(
     path.join(os.tmpdir(), "rivet-evaluations-complete-filesystem-"),
   );
@@ -2055,7 +2149,7 @@ test("filesystem evaluation store persists the complete upstream contract", asyn
     await fs.rm(root, { recursive: true, force: true });
   }
 });
-test("disposed filesystem evaluation stores cannot silently reopen their database", async () => {
+void test("disposed filesystem evaluation stores cannot silently reopen their database", async () => {
   const root = await fs.mkdtemp(
     path.join(os.tmpdir(), "rivet-evaluations-dispose-"),
   );
@@ -2292,7 +2386,7 @@ class FakeManagedEvaluationPool {
   }
 }
 
-test('managed library invalidation is issued after mutation but before the transaction commits', async () => {
+void test('managed library invalidation is issued after mutation but before the transaction commits', async () => {
   const pool = new FakeManagedEvaluationPool();
   const store = new PostgresRivetEvaluationStore(pool as unknown as Pool);
   await store.putLibrary(library());
@@ -2303,7 +2397,7 @@ test('managed library invalidation is issued after mutation but before the trans
   assert.ok(write >= 0 && write < notify && notify < commit);
 });
 
-test('generic managed Evaluation deletion protects scheduler-owned jobs and preserves neighboring runs', async () => {
+void test('generic managed Evaluation deletion protects scheduler-owned jobs and preserves neighboring runs', async () => {
   const pool = new FakeManagedEvaluationPool();
   const store = new PostgresRivetEvaluationStore(pool as unknown as Pool);
   const initial = run(projectA, 'guarded-delete');
@@ -2335,7 +2429,7 @@ test('generic managed Evaluation deletion protects scheduler-owned jobs and pres
   assert.equal((await store.get({ projectId: projectA, runId: neighbor.id }))?.id, neighbor.id);
 });
 
-test('generic Evaluation snapshots cannot forge or expose the hosted projection marker', async () => {
+void test('generic Evaluation snapshots cannot forge or expose the hosted projection marker', async () => {
   const pool = new FakeManagedEvaluationPool();
   const store = new PostgresRivetEvaluationStore(pool as unknown as Pool);
   const initial = run(projectA, 'untrusted-projection-marker');
@@ -2350,7 +2444,7 @@ test('generic Evaluation snapshots cannot forge or expose the hosted projection 
   assert.ok(!('_hostedTrialsFromJobs' in pool.runs.get(`${projectA}:${initial.id}`)!));
 });
 
-test("managed evaluation store persists the complete upstream contract", async () => {
+void test("managed evaluation store persists the complete upstream contract", async () => {
   const pool = new FakeManagedEvaluationPool();
   const store = new PostgresRivetEvaluationStore(pool as unknown as Pool);
   await assertCompleteEvaluationStoreContract(store);
@@ -2358,7 +2452,7 @@ test("managed evaluation store persists the complete upstream contract", async (
   assert.equal(pool.library?.revision, 5);
   assert.equal(pool.libraryImports.size, 2);
 });
-test('managed Evaluation terminal retention can join the caller transaction', async () => {
+void test('managed Evaluation terminal retention can join the caller transaction', async () => {
   const pool = new FakeManagedEvaluationPool();
   const store = new PostgresRivetEvaluationStore(pool as unknown as Pool);
   const artifact = recording(projectA, 'terminal-retention', 'temporary', '2020-01-01T00:00:00.000Z');
@@ -2382,7 +2476,7 @@ test('managed Evaluation terminal retention can join the caller transaction', as
   assert.equal(pool.recordings.get(`${projectA}:terminal-retention`)?.artifact.reference.retention, 'retained');
   await client.query('COMMIT');
 });
-test("managed evaluation store hides expired artifacts without mutating shared retention state", async () => {
+void test("managed evaluation store hides expired artifacts without mutating shared retention state", async () => {
   const pool = new FakeManagedEvaluationPool();
   const store = new PostgresRivetEvaluationStore(pool as unknown as Pool);
   const expiredA = recording(
@@ -2461,7 +2555,7 @@ test("managed evaluation store hides expired artifacts without mutating shared r
   );
 });
 
-test("managed evaluation recording upserts preserve durable retention and reject ID reassignment", async () => {
+void test("managed evaluation recording upserts preserve durable retention and reject ID reassignment", async () => {
   const pool = new FakeManagedEvaluationPool();
   const store = new PostgresRivetEvaluationStore(pool as unknown as Pool);
   const provisional = recording(
@@ -2487,7 +2581,7 @@ test("managed evaluation recording upserts preserve durable retention and reject
   );
 });
 
-test("managed evaluation store preserves user-assigned names across snapshots", async () => {
+void test("managed evaluation store preserves user-assigned names across snapshots", async () => {
   const pool = new FakeManagedEvaluationPool();
   const store = new PostgresRivetEvaluationStore(pool as unknown as Pool);
   const initial = run(projectA, "named-managed-run");
@@ -2516,7 +2610,7 @@ test("managed evaluation store preserves user-assigned names across snapshots", 
     undefined,
   );
 });
-test("managed evaluation store normalizes legacy run history at its read boundary", async () => {
+void test("managed evaluation store normalizes legacy run history at its read boundary", async () => {
   const pool = new FakeManagedEvaluationPool();
   const store = new PostgresRivetEvaluationStore(pool as unknown as Pool);
   pool.runs.set(
@@ -2537,7 +2631,7 @@ test("managed evaluation store normalizes legacy run history at its read boundar
   assert.deepEqual(normalized?.thresholdResults, []);
 });
 
-test('hosted HTTP controls preserve admission, results, error envelopes and deletion ownership', async (t) => {
+void test('hosted HTTP controls preserve admission, results, error envelopes and deletion ownership', async (t) => {
   await disposeWorkflowStorage();
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-evaluation-http-'));
   const originalEnv = { ...process.env };
@@ -2546,6 +2640,7 @@ test('hosted HTTP controls preserve admission, results, error envelopes and dele
     try {
       await server?.close();
     } finally {
+      server = undefined;
       try {
         await disposeWorkflowStorage();
       } finally {

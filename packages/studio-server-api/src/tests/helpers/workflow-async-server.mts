@@ -66,7 +66,7 @@ if (process.env.RIVET_ASYNC_TEST_HOLD_RECORDING_WORK === 'true') {
   };
 }
 const { writeWorkflowEndpointAuthSettings } = await import('../../workflow-endpoint-auth-settings.js');
-await writeWorkflowEndpointAuthSettings({ requireBearerAuth: false });
+await writeWorkflowEndpointAuthSettings({ requireBearerAuth: process.env.RIVET_ASYNC_TEST_ENDPOINT_BEARER === '1' });
 const resume = process.env.RIVET_ASYNC_TEST_RESUME === '1';
 const fixtureFile = path.join(root, 'async-fixture.json');
 const created = resume
@@ -640,6 +640,7 @@ process.on('disconnect', () => process.emit('SIGTERM'));
 if (!process.connected) process.emit('SIGTERM');
 reply({
   ready: {
+    pid: process.pid,
     baseUrl,
     projectId: project.metadata.id,
     projectPath: created.absolutePath,

@@ -749,6 +749,20 @@ under the row lock before claiming routes, appending history and updating pointe
 draft never silently substitutes another artifact. Invalidations remain
 commit-owned. No object-storage wait or project parse holds a workflow row lock.
 
+`HostedEvaluationJobStore` owns Hosted Evaluation SQL and complete transactions:
+submission, state reads, cancellation/retry/deletion, claims, acceptance,
+heartbeats, terminal writes and expired-lease recovery. It borrows the existing
+managed pool and transactional recording-retention capability. It does not start
+workers or close storage. `HostedEvaluationCoordinator` keeps validation and
+snapshot preparation, active tasks, graph dispatch, timers, wakeups and retirement.
+Cancellation and retry still notify after commit but before releasing the client;
+failed terminal ownership acknowledgement still prevents a successful retirement
+proof. See the [refactor implementation record](hosted-evaluation-persistence-refactor-plan.md).
+The coordinator keeps one map keyed by task promise for both cancellation metadata
+and draining. Encoded job IDs can overlap between runs, so they are not process-local
+ownership keys. Recovery caches run metadata by an unambiguous project/run tuple;
+opaque identifiers may contain colons. Persisted job IDs and SQL predicates are unchanged.
+
 Hosted Evaluation job rows remain the authoritative fenced trial ledger. While
 work is outstanding, the run projection stores a compact header and an internal
 marker, not copies of every settled trial. Index-backed pending-work checks avoid

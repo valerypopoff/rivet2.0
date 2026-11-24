@@ -68,6 +68,7 @@ commands; the guides below describe implementation and verification.
 - [Publication HTTP Separation Plan](./studio-server/publication-http-separation-plan.md)
 - [App Settings HTTP Separation Plan](./studio-server/app-settings-http-separation-plan.md)
 - [Evaluation HTTP Separation Plan](./studio-server/evaluation-http-separation-plan.md)
+- [Hosted Evaluation Persistence Refactor](./studio-server/hosted-evaluation-persistence-refactor-plan.md)
 - [Bundle Actions Separation Plan](./studio-server/bundle-actions-separation-plan.md)
 - [Editor Bridge](./studio-server/editor-bridge.md)
 - [Workflow Publication](./studio-server/workflow-publication.md)

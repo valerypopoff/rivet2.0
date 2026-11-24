@@ -7,6 +7,10 @@ import net from 'node:net';
 import { pathToFileURL } from 'node:url';
 
 type AsyncWorkflowOptions = {
+  apiProfile?: 'combined' | 'control' | 'execution';
+  hostedEvaluations?: boolean;
+  endpointBearerAuth?: boolean;
+  benchmarkHelper?: string;
   liveExecutionPolicy?: boolean;
   resourceMonitoring?: boolean;
   maxActiveRuns?: number;
@@ -25,10 +29,15 @@ type AsyncWorkflowOptions = {
 };
 type AsyncWorkflowProcess = {
   baseUrl: string;
+  pid: number;
   projectId: string;
   projectPath: string;
   root: string;
-  command<T = unknown>(name: string): Promise<T>;
+  command<T = unknown>(
+    name: string,
+    input?: { batches?: { round: number; count: number }[] },
+    timeoutMs?: number,
+  ): Promise<T>;
   exited: Promise<number | null>;
   logs: string;
   restart(): Promise<AsyncWorkflowProcess>;
@@ -77,7 +86,12 @@ async function startOwnedProcess(
     RIVET_REQUIRE_UI_GATE_KEY: options.requireUiAuth ? 'true' : 'false',
     RIVET_SERVER_UI_AUTH_MODE: options.requireUiAuth ? 'key' : 'none',
     RIVET_ENABLE_DEVELOPMENT_AUTH: 'false',
-    RIVET_API_PROFILE: 'combined',
+    RIVET_API_PROFILE: options.apiProfile ?? 'combined',
+    ...(options.hostedEvaluations ? { RIVET_HOSTED_EVALUATIONS_ENABLED: 'true' } : {}),
+    ...(options.endpointBearerAuth ? { RIVET_ASYNC_TEST_ENDPOINT_BEARER: '1' } : {}),
+    ...(options.benchmarkHelper
+      ? { RIVET_ASYNC_TEST_BENCHMARK: 'true', RIVET_ASYNC_TEST_BENCHMARK_HELPER: options.benchmarkHelper }
+      : {}),
     RIVET_RECORDINGS_ENABLED: 'true',
     RIVET_RECORDING_DURABILITY_ENABLED: options.recordingDurability ? 'true' : 'false',
     ...(options.workflowMaintenance === false ? { RIVET_MANAGED_MAINTENANCE_ENABLED: 'false' } : {}),
@@ -114,11 +128,16 @@ async function startOwnedProcess(
       ? { RIVET_ASYNC_TEST_PROJECT_BYTES: String(options.projectPayloadBytes) }
       : {}),
   });
-  const child = fork(new URL('./workflow-async-server.mts', import.meta.url), [], {
-    env,
-    execArgv: ['--import', pathToFileURL(createRequire(import.meta.url).resolve('tsx')).href],
-    silent: true,
-  });
+  const compiled = import.meta.url.endsWith('.js');
+  const child = fork(
+    new URL(compiled ? './workflow-async-server.mjs' : './workflow-async-server.mts', import.meta.url),
+    [],
+    {
+      env,
+      execArgv: compiled ? [] : ['--import', pathToFileURL(createRequire(import.meta.url).resolve('tsx')).href],
+      silent: true,
+    },
+  );
   let logs = '';
   child.stdout!.on('data', (chunk) => {
     logs += chunk;
@@ -140,13 +159,19 @@ async function startOwnedProcess(
     for (const request of pending.values()) request.reject(new Error(`API exited\n${logs}`));
     pending.clear();
   });
-  const command = async <T = unknown>(name: string): Promise<T> => {
+  const command = async <T = unknown>(
+    name: string,
+    input?: { batches?: { round: number; count: number }[] },
+    timeoutMs = 10_000,
+  ): Promise<T> => {
+    if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 300_000)
+      throw new Error('Invalid fixture command deadline');
     const id = nextId++;
     return await new Promise<T>((resolve, reject) => {
       const timeout = setTimeout(() => {
         pending.delete(id);
         reject(new Error(`Timed out: ${name}\n${logs}`));
-      }, 10_000);
+      }, timeoutMs);
       pending.set(id, {
         resolve(value) {
           clearTimeout(timeout);
@@ -165,7 +190,7 @@ async function startOwnedProcess(
         }
       };
       try {
-        child.send({ id, command: name }, fail);
+        child.send({ id, command: name, ...input }, fail);
       } catch (error) {
         fail(error as Error);
       }
@@ -183,23 +208,28 @@ async function startOwnedProcess(
     }
   };
   try {
-    const info = await new Promise<{ baseUrl: string; projectId: string; projectPath: string }>((resolve, reject) => {
-      const timeout = setTimeout(() => reject(new Error(`API startup timeout\n${logs}`)), 45_000);
-      child.on('message', (message: { ready?: { baseUrl: string; projectId: string; projectPath: string } }) => {
-        if (message.ready) {
+    const info = await new Promise<{ baseUrl: string; projectId: string; projectPath: string; pid: number }>(
+      (resolve, reject) => {
+        const timeout = setTimeout(() => reject(new Error(`API startup timeout\n${logs}`)), 45_000);
+        child.on(
+          'message',
+          (message: { ready?: { baseUrl: string; projectId: string; projectPath: string; pid: number } }) => {
+            if (message.ready) {
+              clearTimeout(timeout);
+              resolve(message.ready);
+            }
+          },
+        );
+        child.once('error', (error) => {
           clearTimeout(timeout);
-          resolve(message.ready);
-        }
-      });
-      child.once('error', (error) => {
-        clearTimeout(timeout);
-        reject(error);
-      });
-      child.once('exit', (exitCode, signalCode) => {
-        clearTimeout(timeout);
-        reject(Object.assign(new Error(`API exited during startup\n${logs}`), { exitCode, signalCode }));
-      });
-    });
+          reject(error);
+        });
+        child.once('exit', (exitCode, signalCode) => {
+          clearTimeout(timeout);
+          reject(Object.assign(new Error(`API exited during startup\n${logs}`), { exitCode, signalCode }));
+        });
+      },
+    );
     return {
       ...info,
       root,

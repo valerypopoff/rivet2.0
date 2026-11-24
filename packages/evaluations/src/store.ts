@@ -9,6 +9,10 @@ import type {
   EvaluationStore,
 } from './types.js';
 
+function resourceKey(projectId: string, id: string): string {
+  return JSON.stringify([projectId, id]);
+}
+
 export class InMemoryEvaluationRunStore implements EvaluationStore {
   readonly #runs = new Map<string, EvaluationRun>();
   readonly #datasetSnapshots = new Map<string, EvaluationDatasetSnapshot>();
@@ -25,7 +29,7 @@ export class InMemoryEvaluationRunStore implements EvaluationStore {
 
   async put(run: EvaluationRun): Promise<void> {
     const normalized = normalizeEvaluationRun(run);
-    const key = `${normalized.projectId}/${normalized.id}`;
+    const key = resourceKey(normalized.projectId, normalized.id);
     const existing = this.#runs.get(key);
     const next = reconcileEvaluationRunSnapshots(existing, normalized);
     if (next === existing) return;
@@ -33,7 +37,7 @@ export class InMemoryEvaluationRunStore implements EvaluationStore {
   }
 
   async updateRunName(input: { projectId: string; runId: string; name?: string }): Promise<EvaluationRun | undefined> {
-    const key = `${input.projectId}/${input.runId}`;
+    const key = resourceKey(input.projectId, input.runId);
     const existing = this.#runs.get(key);
     if (!existing) return undefined;
     const renamed = normalizeEvaluationRun({ ...existing, name: input.name });
@@ -42,7 +46,7 @@ export class InMemoryEvaluationRunStore implements EvaluationStore {
   }
 
   async get(input: { projectId: string; runId: string }): Promise<EvaluationRun | undefined> {
-    const run = this.#runs.get(`${input.projectId}/${input.runId}`);
+    const run = this.#runs.get(resourceKey(input.projectId, input.runId));
     return run ? normalizeEvaluationRun(run) : undefined;
   }
 
@@ -56,7 +60,7 @@ export class InMemoryEvaluationRunStore implements EvaluationStore {
   }
 
   async delete(input: { projectId: string; runId: string }): Promise<void> {
-    this.#runs.delete(`${input.projectId}/${input.runId}`);
+    this.#runs.delete(resourceKey(input.projectId, input.runId));
     for (const [key, artifact] of this.#recordings) {
       if (artifact.projectId === input.projectId && artifact.runId === input.runId) this.#recordings.delete(key);
     }
@@ -64,7 +68,7 @@ export class InMemoryEvaluationRunStore implements EvaluationStore {
 
   async putDatasetSnapshot(snapshot: EvaluationDatasetSnapshot): Promise<void> {
     assertEvaluationDatasetSnapshot(snapshot);
-    const key = `${snapshot.projectId}/${snapshot.fingerprint}`;
+    const key = resourceKey(snapshot.projectId, snapshot.fingerprint);
     // A content-addressed historical snapshot must never be rewritten by a
     // later edit of the live evaluation dataset.
     if (this.#datasetSnapshots.has(key)) return;
@@ -75,13 +79,13 @@ export class InMemoryEvaluationRunStore implements EvaluationStore {
     projectId: string;
     fingerprint: string;
   }): Promise<EvaluationDatasetSnapshot | undefined> {
-    const snapshot = this.#datasetSnapshots.get(`${input.projectId}/${input.fingerprint}`);
+    const snapshot = this.#datasetSnapshots.get(resourceKey(input.projectId, input.fingerprint));
     return snapshot ? structuredClone(snapshot) : undefined;
   }
 
   async putRecording(artifact: EvaluationRecordingArtifact): Promise<void> {
     assertEvaluationRecordingArtifact(artifact);
-    const key = `${artifact.projectId}/${artifact.reference.id}`;
+    const key = resourceKey(artifact.projectId, artifact.reference.id);
     const existing = this.#recordings.get(key);
     if (existing && (existing.runId !== artifact.runId || existing.trialId !== artifact.trialId)) {
       throw new Error('An evaluation recording ID cannot be reassigned to another run or trial.');
@@ -97,14 +101,15 @@ export class InMemoryEvaluationRunStore implements EvaluationStore {
     projectId: string;
     recordingId: string;
   }): Promise<EvaluationRecordingArtifact | undefined> {
-    const artifact = this.#recordings.get(`${input.projectId}/${input.recordingId}`);
+    const key = resourceKey(input.projectId, input.recordingId);
+    const artifact = this.#recordings.get(key);
     if (!artifact) return undefined;
     if (
       artifact.reference.retention === 'temporary' &&
       artifact.reference.expiresAt &&
       Date.parse(artifact.reference.expiresAt) <= Date.now()
     ) {
-      this.#recordings.delete(`${input.projectId}/${input.recordingId}`);
+      this.#recordings.delete(key);
       return undefined;
     }
     return structuredClone(artifact);
@@ -116,7 +121,7 @@ export class InMemoryEvaluationRunStore implements EvaluationStore {
     retention: EvaluationRecordingArtifact['reference']['retention'];
     expiresAt?: string;
   }): Promise<boolean> {
-    const key = `${input.projectId}/${input.recordingId}`;
+    const key = resourceKey(input.projectId, input.recordingId);
     const artifact = this.#recordings.get(key);
     if (!artifact) return false;
     artifact.reference = {

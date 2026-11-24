@@ -19,6 +19,17 @@ and predecessor-rollback details.
 
 ## Ownership boundaries
 
+Project, run and recording IDs are opaque strings. The in-memory store keys
+each project/resource pair as a JSON tuple, so embedded separators cannot mix
+run evidence, names or recording retention across projects. These keys are
+private implementation details, not persisted IDs or a wire-format change.
+
+Library collaboration versions must be own properties of their token maps.
+Names such as `constructor`, `toString` and `__proto__` are valid resource IDs;
+inherited object members are never versions. Keep this rule at both the server
+mutation check and client diff/retry boundaries. A remotely deleted resource
+has a null current version and remains a conflict until explicitly resolved.
+
 The Studio Server HTTP entry point is
 `packages/studio-server-api/src/routes/workflows/evaluation-runs.ts`. It retains
 the router, general and recording body parsers, existing schema exports and
@@ -103,6 +114,16 @@ to an originating project. Keep commands accepted by storage alive after
 navigation and suppress only obsolete presentation updates.
 Views do not acquire run stores or perform history mutations. The interrupted
 trial control retains its narrow hosted-coordinator dependency.
+
+Hosted execution keeps database transitions in `HostedEvaluationJobStore` and
+process-local scheduling in `HostedEvaluationCoordinator`. The store borrows the
+managed pool, owns each complete transaction, and shares the existing projection
+and run-deletion helpers. The coordinator retains submission validation,
+immutable snapshot preparation, graph execution, cancellation signals and
+retirement. Public coordinator methods and error identities remain the HTTP
+boundary. A rejected terminal ownership write is an unconfirmed retirement, not
+a successful empty result. See the [persistence refactor record](./studio-server/hosted-evaluation-persistence-refactor-plan.md)
+for the concurrency and performance checks that protect this boundary.
 
 ### History capability and cache lifetime
 

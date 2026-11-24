@@ -4,6 +4,70 @@ This document records intentional architecture and cleanup changes that future m
 
 It is not a changelog. Keep entries focused on why a refactor happened, which ownership boundary changed, and which verification paths should be kept alive.
 
+## 2026-11-24 - Hosted Evaluation Persistence Ownership
+
+`HostedEvaluationJobStore` owns durable job transitions and their complete
+transactions. `HostedEvaluationCoordinator` owns process-local scheduling and
+the public facade. They borrow the same managed pool and run store; the
+extraction adds no pool, schema, background service or endpoint middleware.
+Existing projection and deletion helpers remain authoritative.
+
+Preserve commit-before-notification and notification-before-release for
+cancellation/retry, release-before-notification for submission, and the
+coordinator's unconfirmed-retirement flag when terminal ownership is lost.
+Acceptance/heartbeat require an unexpired lease; terminal writes retain the
+existing worker/fence check without an additional expiry predicate.
+
+The [implementation record](hosted-evaluation-persistence-refactor-plan.md)
+tracks baseline/candidate PostgreSQL concurrency, source and compiled workers,
+mounted HTTP coverage and the bounded endpoint performance comparison. The
+new concurrency helper runs inside the existing managed integration job.
+
+The original and extracted code passed the same 26 PostgreSQL scenarios. Initial
+verification passed 134 focused API tests, the full managed and published-execution
+suites, and three headless browser cases. All 84 SQL calls and bindings stayed
+identical. Four local performance conditions and a bounded reversed-order
+diagnostic repeat found no reproducible latency or evaluation-throughput
+regression at the recorded resolution; the implementation record retains the
+CPU variation and confidence limits rather than claiming a speedup.
+
+A subsequent review reproduced two identifier-collision defects: active jobs from
+different runs could share an encoded job ID and overwrite cancellation ownership,
+and colon-containing project/run pairs could share a recovery-cache key, leaving
+one recovered run marked running. One promise-keyed map now owns active metadata
+and draining, and recovery uses a JSON tuple key. Persisted identifiers and all
+SQL remain unchanged. The post-commit callback type rejects asynchronous callbacks.
+The native worker fixture also distinguishes unexpected exit from explicit fault
+injection and coalesces concurrent cleanup; its release callbacks use a set.
+All 29 PostgreSQL cases, 103 focused API tests and the three selected browser
+cases passed after these fixes. A six-pair loaded-combined comparison passed
+12,000 measured endpoint requests and all expected recording audits without a
+reproducible latency increase; the implementation record retains its uncertainty
+and local-workload limits.
+
+The completion audit additionally compared executed SQL/bindings and transaction
+paths across 23 shared PostgreSQL scenarios using the frozen original runtime.
+Source and compiled worker acknowledgements now include the resolved coordinator
+module URL. Fast boundary checks retain rejection of disabled retry and invalid
+context before database access. These close verification gaps without changing
+production behavior.
+
+An adjacent review reproduced the same identity-risk pattern in the shared
+evaluation adapters. Slash-containing project/resource pairs could overwrite
+in-memory run or recording entries. Their private map keys now use JSON tuples.
+Library mutations also mistook inherited object properties for collaboration
+versions, rejecting valid IDs such as `constructor`; a deleted resource could
+expose an inherited function as its conflict version. Server checks and client
+diff/retry lookups now require own properties. Persisted IDs, PostgreSQL queries,
+access checks and the collaboration protocol are unchanged.
+The dataset-toggle browser fixture now owns its bootstrap and library responses
+and verifies saved toggle values, avoiding an unrelated ambient-API dependency.
+The subsequent test audit removed six redundant coordinator unit cases, moved
+their remaining assertions into existing PostgreSQL scenarios, and reused the
+shared fixture in the projection contract. Rollback failure remains covered in
+the consolidated unit case. Real lease/recovery and source/compiled checks retain
+their observation windows. Browser fixtures use current string version tokens.
+
 ## 2026-11-24 - Run Recordings Read Ownership
 
 `useRecordingRunsQuery.ts` owns root browsing, progressive input search, filter
