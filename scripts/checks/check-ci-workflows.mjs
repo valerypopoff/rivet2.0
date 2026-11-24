@@ -241,6 +241,22 @@ const materializeQualified = productionSteps.findIndex((s) =>
   s.run?.endsWith('prepare-qualified-deployment.mjs materialize'),
 );
 const productionDeploy = productionSteps.findIndex((s) => s.run?.includes('execute-runtime-qualification.mjs deploy'));
+const operatorBuild = productionSteps.findIndex(
+  (s) => s.name === 'Build the qualified recording-operator dependencies',
+);
+assert.ok(qualifiedCheckout < operatorBuild && operatorBuild < productionAuth);
+assert.equal(productionSteps[operatorBuild].if, undefined);
+assert.equal(productionSteps[operatorBuild]['working-directory'], undefined);
+assert.deepEqual(productionSteps[operatorBuild].run.trim().split('\n'), [
+  'corepack yarn workspace @valerypopoff/rivet2-core run build',
+  'corepack yarn workspace @valerypopoff/rivet2-node run build',
+  'corepack yarn workspace @valerypopoff/rivet2-evaluations run build',
+]);
+assert.ok(
+  productionSteps
+    .slice(qualifiedCheckout + 1, operatorBuild)
+    .some((s) => s.run === 'corepack yarn install --immutable'),
+);
 assert.ok(resolveQualified >= 0 && resolveQualified < qualifiedCheckout && qualifiedCheckout < productionAuth);
 assert.ok(productionAuth < materializeQualified && materializeQualified < productionDeploy);
 assert.equal(productionSteps[qualifiedCheckout].with.ref, '${{ steps.reuse.outputs.source_sha }}');

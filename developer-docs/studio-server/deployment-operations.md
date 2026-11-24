@@ -10,6 +10,162 @@ The **Release Rivet** Actions workflow supplies those fixed inputs from an
 existing Build Images run and successful reusable-staging qualification. Its
 protected production action runs this command once; `deploy_production=false`
 stops at publication. See [automated qualification](automated-runtime-qualification.md).
+
+## Hosted recording-storage coordination
+
+The qualified-release library invokes `recording-transition-command.mjs`, which
+loads `withRecordingStorageTransition` from that exact qualified API workspace.
+The standalone `studio-server:recordings:guard-transition` command shares this
+lifetime. It owns the read-only settings lookup, recording advisory lock,
+restore-serving lease, encoding inventory and ephemeral checked loopback guard.
+The deployment CLI remains authoritative for installed/candidate/checkpoint
+compatibility and checks the live guard before consequential operations.
+
+The existing protected, immutable installation JSON can carry this optional
+`recordingTransition` object. This example contains synthetic references only:
+
+```json
+{
+  "recordingTransition": {
+    "protocol": 1,
+    "identity": {
+      "context": "reviewed-production-context",
+      "namespace": "rivet",
+      "release": "rivet",
+      "namespaceUid": "reviewed-production-namespace-uid"
+    },
+    "storageIdentity": "0000000000000000000000000000000000000000000000000000000000000000",
+    "settings": {
+      "databaseUrl": { "kubernetesSecret": { "name": "operator-settings", "key": "database-url" } },
+      "encryptionKey": { "kubernetesSecret": { "name": "operator-settings", "key": "encryption-key" } },
+      "sslMode": "require"
+    },
+    "proxy": {
+      "source": "gs://reviewed-tools/cloud-sql-proxy-linux-amd64#123",
+      "sha256": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+      "instance": "reviewed-project:reviewed-region:reviewed-database",
+      "port": 15432,
+      "databaseHost": "canonical-database.example.test",
+      "databasePort": 5432,
+      "sslMode": "disable"
+    }
+  }
+}
+```
+
+Identity must match the protected context, namespace, release and namespace UID.
+That binding is validated before any credential request; subsequent guard
+identity uses the validated configuration snapshot.
+`storageIdentity` is the existing `recordingStorageIdentity` SHA-256 of canonical
+database/object-storage location; calculate it from reviewed installed settings.
+It does not certify a database server independently of the reviewed transport
+and queried restore-installation identity. The all-zero example is no approval.
+
+Each credential is exactly one of `{ "value": "..." }`,
+`{ "environment": "NAMED_VARIABLE" }`, or the Kubernetes Secret reference above.
+Environment references must already be available to the protected runner;
+setup does not invent their values. Kubernetes references use a fixed read in
+the bound namespace/context and require fresh runner access. Optional
+`previousEncryptionKey` uses the same reference shape. Reads decrypt with the
+current/previous keys without initializing, rotating or timestamping settings.
+Copied Windows environments retain native case-insensitive lookup, including
+transition configuration/hash and kubectl bindings. Duplicate case aliases use
+Node's first sorted key; filtering removes every matching guard, configuration
+path or bootstrap-key alias before invoking the CLI. Linux lookup and filtering
+remain case-sensitive. Neither path mutates the caller's environment.
+Both SSL modes accept only `disable`, `require` or `verify-full`.
+Credential values from literal, environment and Kubernetes references share one
+bounded validation/normalization path. It trims outer whitespace like the
+existing settings reader, including LF/CRLF left by secret files, while
+preserving internal key text. Credential values remain private; this does not
+relax newline restrictions on exported paths or installation metadata.
+
+Put the database host and optional port in the PostgreSQL URL authority and name
+the database in its path. An omitted port means 5432; configured connections use
+that explicit port rather than inheriting `PGPORT` or `PGDATABASE` from the runner.
+Configured bootstrap and decrypted managed-storage URLs reject `host`/`port`
+query overrides and an absent hostname: the driver can otherwise select a
+different target from the reviewed canonical location or bypass a proxy rewrite.
+Unrelated parameters such as `application_name` remain supported. This check
+does not change recording-storage identity hashes or persisted receipt formats.
+
+Operator connections enforce the existing 15-second statement timeout even when
+the URL supplies `statement_timeout` or startup `options`. The settings reader
+also enforces read-only startup; converter connections retain write access.
+Other startup options, including a configured search path and the driver's
+last-value precedence for repeated `options`, remain supported. These bounds
+belong to maintenance connections, outside application request handling.
+
+Omit `proxy` for direct connectivity. Otherwise use a reviewed Cloud SQL Auth
+Proxy instance and binary appropriate to the runner. Hosted setup downloads
+`source` at its exact object generation, verifies SHA-256, and gives the binary
+a private executable path. Local operators can instead provide an absolute
+`executable` with the same checksum. The operator checks the binary again,
+starts it without a shell and waits for its own readiness message. It redirects
+only connections whose canonical host/port match the reviewed mapping. Settings
+and coordination share that transport; storage identity retains canonical
+locations. A proxy does not grant network or database access by itself.
+
+Setup writes a bounded private `recording-transition.json` below
+`$RUNNER_TEMP/rivet-production`, outside the recursively archived deployment
+packet. It exports `RIVET_RECORDING_TRANSITION_CONFIGURATION` and its SHA-256;
+the file also binds the immutable installation reference. POSIX mode is 0600;
+Windows setup removes inherited configuration-file ACLs and grants the current
+SID, SYSTEM and administrators. Standalone configuration files must receive
+equivalent private protection. No command text, module hook or arbitrary
+environment map is accepted in this data.
+
+The guard capability is passed only to the exact qualified CLI. Neither its URL
+nor resolved credentials are saved in `recording-transition.json` deployment
+evidence. That receipt records installation/configuration binding, required
+encodings, command invocation and completion; existing private CLI journals
+retain detailed recovery facts. Missing required configuration or failed
+coordination cannot fall back to raw deployment. Legacy installations without
+configuration retain the raw path, whose fresh installed-contract check still
+refuses any release requiring coordination.
+
+Before invoking the CLI, the configured qualified-release bridge writes and
+flushes an immutable
+`recording-transition-intent.json` beside the final receipt. It contains the
+reviewed binding, installation reference and live encoding inventory, with
+`guardPrepared=true`, `commandInvoked=false` and `completed=false`. The existing
+CLI archive captures this intent before workload mutation, so controller loss
+cannot leave only an empty transition outcome file. An intent is evidence that
+the command may have started; it never proves completion or permits replay.
+Failure to persist it prevents CLI invocation. It contains no credentials or
+guard capability. The separate final receipt retains its existing outcome fields.
+
+Production-only preflight uses this same connection and lease preparation, then
+the original `--preflight-only` route. It releases temporary session locks and
+transport afterwards. It does not consume the production apply fence, update
+settings/data, capture a backup, apply Helm or run application fixtures. Apply
+must acquire coordination and repeat fresh checks independently.
+
+Cancellation and lease/proxy loss reach the existing managed command runner.
+Linux owns the CLI process group and begins strict descendant settlement at
+the CLI's exit, then still awaits output closure. A descendant retaining its
+parent's output pipe must not hold the completed command open indefinitely.
+Strict Windows commands use a kernel Job Object assigned during process creation
+with an explicit inherited-handle list.
+Cancellation rejects even a cooperative zero exit. Shutdown uncertainty remains
+a failure, and interruption during final proxy cleanup also prevents a successful
+wrapper result. An already-completed remote operation is observed through its
+original journal; a late cancellation does not authorize replay.
+An ordinary nonzero journaled CLI failure can intentionally retain its
+original acceptance observer for `--acceptance-only` recovery; do not kill that
+observer, replace its receipt or replay apply. Existing detached/remote observer
+settlement proofs remain separate from local command-tree shutdown.
+
+Local implementation and tests do not activate this path in production. Publish
+a new immutable private installation version if connection/tool configuration
+changes, qualify repaired source through the maintained build/staging gates,
+then run a fresh protected production-only preflight. Review its concrete result
+before an independently authorized apply. Old qualified sources are not patched
+in place. After an uncertain outcome, observe/recover the original journal and
+preserve local/cloud replay fences before considering another operation.
+
+## Activation and recovery
+
 For operator-controlled, single-attempt staging activations, keep the repository
 and `rivet-managed-staging` copies of `RIVET_AUTOMATED_QUALIFICATION_ENABLED`
 closed between attempts. One operator command runs read-only preflight, checks

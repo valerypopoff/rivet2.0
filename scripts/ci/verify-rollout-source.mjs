@@ -6,6 +6,7 @@ const suites = [
   'deploy/studio-server/scripts/release-tooling.test.mjs',
   'deploy/studio-server/scripts/qualified-deployment-inputs.test.mjs',
   'deploy/studio-server/scripts/qualified-deployment-command.test.mjs',
+  'deploy/studio-server/scripts/recording-transition-command.test.mjs',
   'deploy/studio-server/scripts/installed-upgrade-plan.test.mjs',
   'deploy/studio-server/scripts/ha-background-probe.test.mjs',
   'deploy/studio-server/scripts/ha-runner-space.test.mjs',

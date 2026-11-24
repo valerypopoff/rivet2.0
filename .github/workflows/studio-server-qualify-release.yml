@@ -282,6 +282,11 @@ jobs:
       - name: Install the qualified source dependencies
         if: ${{ inputs.qualified_publication_run_id != '' }}
         run: corepack yarn install --immutable
+      - name: Build the qualified recording-operator dependencies
+        run: |
+          corepack yarn workspace @valerypopoff/rivet2-core run build
+          corepack yarn workspace @valerypopoff/rivet2-node run build
+          corepack yarn workspace @valerypopoff/rivet2-evaluations run build
       - name: Select pinned release Helm
         timeout-minutes: 2
         run: corepack yarn studio-server:setup:k8s-tools --github-env

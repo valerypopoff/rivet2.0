@@ -23,6 +23,7 @@ import { deploymentFailureDetails } from './lib/deployment-diagnostics.mjs';
 import { sizingInput } from './lib/resource-sizing.mjs';
 import { executionPoolCapacityProfile } from './lib/runtime-qualification-installation.mjs';
 import { executionProfile, assertExecutionProfile } from './lib/execution-profile.mjs';
+import { validateRecordingTransitionConfiguration } from './lib/recording-transition-command.mjs';
 import { autoscalerPolicy } from './lib/execution-autoscaler.mjs';
 import { assertToolingRun, toolingPublicationIdentity, applicationInputDigest } from './lib/release-tooling.mjs';
 
@@ -364,11 +365,50 @@ async function prepareHostedReleaseWork(
   } else {
     phase.name = 'production-installation';
     assert.match(configuration.installationUri, /^gs:\/\/[a-z0-9.-]+\/[a-zA-Z0-9/_-]+\.json#[1-9][0-9]*$/);
+    phase.cloud = cloudEvidence({ bucket: configuration.evidenceBucket, prefix: 'production' });
+    phase.operationId = `${environment.GITHUB_RUN_ID}-${environment.GITHUB_RUN_ATTEMPT}`;
+    // Google authentication precedes preparation; a Kubernetes access failure
+    // must retain private diagnostics after this runner is discarded too.
+    phase.authenticated = true;
     credentials(p);
     const file = path.join(directory, 'installation.json');
     run('gcloud', ['storage', 'cp', configuration.installationUri, file]);
     await fs.chmod(file, 0o600);
     const installation = JSON.parse(await fs.readFile(file, 'utf8'));
+    if (installation.recordingTransition !== undefined) {
+      const transition = validateRecordingTransitionConfiguration(
+        { ...installation.recordingTransition, installationReference: configuration.installationUri },
+        { context: p.context, namespace: p.namespace, release: p.release, namespaceUid: p.namespaceUid },
+      );
+      if (transition.proxy?.source) {
+        const executable = path.join(
+          directory,
+          process.platform === 'win32' ? 'cloud-sql-proxy.exe' : 'cloud-sql-proxy',
+        );
+        run('gcloud', ['storage', 'cp', transition.proxy.source, executable]);
+        const stat = await fs.lstat(executable);
+        assert.ok(stat.isFile() && stat.size <= 256 * 1024 * 1024, 'Recording proxy artifact is invalid');
+        assert.equal(
+          `sha256:${createHash('sha256')
+            .update(await fs.readFile(executable))
+            .digest('hex')}`,
+          transition.proxy.sha256,
+          'Recording proxy artifact checksum differs',
+        );
+        await fs.chmod(executable, 0o700);
+        transition.proxy.executable = executable;
+      }
+      const transitionFile = path.join(directory, 'recording-transition.json');
+      const bytes = JSON.stringify(transition);
+      await fs.writeFile(transitionFile, bytes, { flag: 'wx', mode: 0o600 });
+      if (process.platform === 'win32') {
+        const sid = run('whoami', ['/user', '/fo', 'csv', '/nh']).match(/S-1-5-[0-9-]+/)?.[0];
+        if (!sid) throw Error('Cannot establish the private recording configuration owner.');
+        run('icacls', [transitionFile, '/inheritance:r', '/grant:r', `*${sid}:F`, '*S-1-5-18:F', '*S-1-5-32-544:F']);
+      }
+      variables.RIVET_RECORDING_TRANSITION_CONFIGURATION = transitionFile;
+      variables.RIVET_RECORDING_TRANSITION_CONFIGURATION_SHA256 = `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
+    }
     const values = path.join(directory, 'values.json'),
       policy = path.join(directory, 'policy.json');
     const valuesBytes = Buffer.from(installation.valuesBase64, 'base64');

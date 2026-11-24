@@ -46,6 +46,8 @@ export async function deployQualifiedProduction({
       policyFile: environment.RIVET_QUALIFICATION_PRODUCTION_POLICY_FILE,
       privateStore: environment.RIVET_PRODUCTION_PRIVATE_STORE,
       evidenceBucket: environment.RIVET_PRODUCTION_EVIDENCE_BUCKET,
+      configurationFile: environment.RIVET_RECORDING_TRANSITION_CONFIGURATION,
+      environment,
       identity: {
         context: environment.RIVET_QUALIFICATION_PRODUCTION_CONTEXT,
         namespace: environment.RIVET_QUALIFICATION_PRODUCTION_NAMESPACE,

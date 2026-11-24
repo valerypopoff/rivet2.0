@@ -15,7 +15,7 @@ normalized release manifest records these capabilities; online upgrade and
 forward-rollback checks reject incompatible reader/writer combinations.
 
 Historical recompression is source-only and is excluded from runtime images.
-The three operator imports of existing release/reader validators are reviewed
+The operator imports of existing release/reader and command owners are reviewed
 exact edges in `scripts/checks/import-boundary-debt.json`. They prevent a second
 manifest validator or deployment policy from drifting inside the API package;
 runtime packaging tests verify that these operator entry points are excluded.
@@ -52,6 +52,14 @@ short-lived localhost guard is consumed by deployment tooling and expires with
 the owning process. `RIVET_RECORDING_TRANSITION_GUARD` is private coordination
 between these processes, not a feature activation setting. Never configure it
 persistently in a container or deployment.
+The hosted qualified-release and production-only preflight paths now share the
+callable transition lifetime with this standalone wrapper. The latter optionally
+accepts `--configuration <private file>` before `--`; existing environment-based
+local invocation remains supported. Protected bootstrap, pinned proxy transport,
+native cancellation, retained observers and activation requirements are documented
+in [deployment operations](deployment-operations.md#hosted-recording-storage-coordination).
+This shared automation is implemented locally; fresh hosted production preflight
+and an authorized automated rollout remain separate verification gates.
 The wrapper accepts that entry point only. Its backup stages have durable release
 journals; an arbitrary standalone command does not. Interruption is not proof that
 detached helpers or remote changes stopped. Recompression refuses an unfinished

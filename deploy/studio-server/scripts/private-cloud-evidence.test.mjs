@@ -37,8 +37,12 @@ async function fixture(t) {
         };
       objects.set(name, object);
       if (loseNext) {
+        const lost = loseNext;
         loseNext = false;
-        res.destroy();
+        if (lost === 'body') {
+          res.writeHead(200, { 'content-type': 'application/json' });
+          res.end('{"generation":');
+        } else res.destroy();
         return;
       }
       return json(200, object);
@@ -68,8 +72,8 @@ async function fixture(t) {
     cloud,
     objects,
     requests,
-    lose: () => {
-      loseNext = true;
+    lose: (stage = 'headers') => {
+      loseNext = stage;
     },
   };
 }
@@ -80,10 +84,16 @@ test('private uploads reconcile duplicate and lost acknowledgements without over
   const generation = await f.cloud.put('operation.json', bytes);
   assert.equal(await f.cloud.put('operation.json', bytes), generation);
   assert.equal(f.objects.size, 1);
-  f.lose();
-  const acknowledged = await f.cloud.put('next.json', bytes);
-  assert.ok(acknowledged);
-  assert.equal(f.objects.size, 2);
+  for (const stage of ['headers', 'body']) {
+    f.lose(stage);
+    const before = f.requests.length;
+    assert.ok(await f.cloud.put(`${stage}.json`, bytes));
+    assert.deepEqual(
+      f.requests.slice(before).map((r) => r.method),
+      ['POST', 'GET'],
+    );
+  }
+  assert.equal(f.objects.size, 3);
   const existing = [...f.objects.values()][0];
   existing.md5Hash = 'corrupt';
   await assert.rejects(f.cloud.put('operation.json', bytes), /different bytes/);
@@ -103,10 +113,19 @@ test('admission locks are exclusive, owner-bound and deleted only by their exact
   await f.cloud.release(generation);
   await f.cloud.assertReleased();
   assert.equal(f.objects.size, 0);
-  f.lose();
-  await assert.rejects(f.cloud.acquire(owner), /acknowledgement is uncertain/);
-  assert.equal(f.objects.size, 1);
-  assert.equal(f.requests.at(-1).method, 'POST', 'An uncertain lock is not silently adopted');
+  for (const stage of ['headers', 'body']) {
+    f.lose(stage);
+    const before = f.requests.length;
+    await assert.rejects(f.cloud.acquire(owner), /acknowledgement is uncertain/);
+    assert.equal(f.objects.size, 1);
+    assert.deepEqual(
+      f.requests.slice(before).map((r) => r.method),
+      ['POST'],
+      'An uncertain lock is not silently adopted',
+    );
+    // Explicit fixture cleanup by its known generation, never an automatic reacquisition.
+    await f.cloud.release([...f.objects.values()][0].generation);
+  }
 });
 
 test('hosted-runner journal survives local file changes and never follows a link outside its directory', async (t) => {

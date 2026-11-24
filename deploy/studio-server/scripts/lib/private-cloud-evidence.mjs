@@ -60,7 +60,7 @@ export function privateCloudEvidence({
   const saved = new Set();
   async function upload(name, body, { md5, size, exclusive = false, stream = false } = {}) {
     const url = `${origin}/upload/storage/v1/b/${encodeURIComponent(bucket)}/o?uploadType=media&ifGenerationMatch=0&name=${encodeURIComponent(name)}`;
-    let response;
+    let response, result;
     try {
       response = await request(url, {
         method: 'POST',
@@ -68,12 +68,15 @@ export function privateCloudEvidence({
         ...(stream ? { duplex: 'half' } : {}),
         headers: { 'content-type': 'application/octet-stream', 'content-length': String(size) },
       });
+      // Headers alone do not acknowledge a write: the response body can still
+      // fail in transit. Reconcile evidence, but never adopt an uncertain lock.
+      if (response.ok) result = await response.json();
     } catch {
       if (exclusive)
         throw Error('Cloud admission acknowledgement is uncertain; inspect the exact lock before any retry');
+      response = undefined;
     }
     if (response?.ok) {
-      const result = await response.json();
       assert.equal(result.md5Hash, md5, 'Private evidence checksum differs');
       assert.equal(Number(result.size), size, 'Private evidence size differs');
       assert.match(result.generation, /^[1-9][0-9]*$/);

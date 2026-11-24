@@ -4,6 +4,75 @@ This document records intentional architecture and cleanup changes that future m
 
 It is not a changelog. Keep entries focused on why a refactor happened, which ownership boundary changed, and which verification paths should be kept alive.
 
+## 2026-11-24 - Hosted Recording Transition Ownership
+
+`withRecordingStorageTransition` owns settings reads, real database coordination,
+storage/restore identity, required encodings, the loopback guard and optional
+pinned proxy transport. The standalone operator and shared qualified-release
+library use this one lifetime. A source-only ESM bridge lazily imports the helper
+from the exact qualified workspace and supervises the existing CLI directly.
+Production-only preflight shares preparation without gaining apply side effects.
+
+Protected setup accepts closed installation data and materializes private inputs
+outside deployment archives. Existing CLI compatibility checks, admission fences,
+recovery journals, backup/acceptance adapters and observation windows retain their
+ownership. The managed command runner shares the existing owned-tree shutdown
+primitive; its strict Windows path needs a creation-time kernel Job Object and
+explicit inherited handles. Ordinary failed CLI attempts preserve their original
+receipt-managed observer for acceptance-only recovery. Cancellation remains a
+failure and does not authorize replay.
+
+Real PostgreSQL contracts reuse the recording-durability lane and the extracted
+deployment-command fixture. They exercise actual locks, settings, guard, qualified
+preflight/apply and ownership loss; native lifecycle checks remain in the source
+gate. The clean Linux check identified and removed an unnecessary desktop native
+packaging dependency from production operator preparation. Ordinary application
+request paths, schema and recording formats are unchanged. The
+[implementation record](hosted-recording-transition-repair-plan.md) separates local
+verification from pending hosted preflight and production activation.
+
+Reassessment reproduced a Linux completion hang caused by inherited output pipes,
+PostgreSQL host/port query overrides escaping canonical proxy routing, credential
+reads preceding standalone identity validation, and rejected secret-file line
+endings. Strict settlement now starts at process exit, identity uses the existing
+validator before credential access, and URL/credential handling have shared
+owners. Cancellation during proxy cleanup cannot report success. The managed
+lane tests the real qualified TypeScript loader from an isolated controller,
+covering cancellation and successful acquisition with PostgreSQL locks and the
+live guard; the overlapping loader-only unit test was removed. Existing guarded
+preflight/apply cases execute the actual CLI. Managed fixture cleanup attempts
+every disposer and preserves earlier failures.
+
+An adjacent PostgreSQL characterization found URL startup options could replace
+the settings reader's read-only mode and query bound. A private operator
+connection helper now enforces the original 15-second timeout and read-only
+lookup, preserving other startup options and converter write access. The
+managed lane checks actual session settings, including repeated-option
+precedence, without adding another fixture service or a timeout-length wait.
+
+Holistic review found that the transition outcome stayed empty during execution,
+and production setup diagnostics did not survive runner disposal. An immutable,
+flushed intent now precedes the guarded CLI and enters its existing archive before
+mutation; the final outcome remains separate. Production preparation also reuses
+the private failure writer under the current hosted run/attempt, without acquiring
+a deployment fence. Regression checks cover evidence visibility before invocation,
+refusal when intent persistence fails, and private archival after access denial.
+
+The private evidence writer treats response-body loss like other lost upload
+acknowledgements: exact metadata readback can confirm ordinary evidence, while
+exclusive admission stays uncertain without replay or adoption. Transition
+configuration also shares one Windows environment-key matcher for credential
+reads and private-input filtering; differently cased aliases cannot survive
+stripping or bypass the protected configuration digest. Existing HTTP and native
+contract suites cover both boundaries; Linux retains case-sensitive semantics.
+
+The extracted deployment fixture also owns its environment boundary. It removes
+inherited production archival and recording-transition bindings before using
+local stand-ins, passes the same environment through qualified preparation, and
+honors the bridge's filtered child environment. The managed guard contract uses
+an environment-backed settings key to verify the fixture cannot put that key
+back into the CLI environment. Original native journey assertions are retained.
+
 ## 2026-11-24 - Hosted Evaluation Persistence Ownership
 
 `HostedEvaluationJobStore` owns durable job transitions and their complete
