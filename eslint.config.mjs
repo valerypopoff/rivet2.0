@@ -148,6 +148,24 @@ export default [
     },
   },
 
+  // Publication review owners have a focused hosted-web TypeScript project.
+  {
+    files: [
+      'packages/studio-server-web/dashboard/useProjectSettingsActions.ts',
+      'packages/studio-server-web/dashboard/useProjectPublicationReview.ts',
+      'packages/studio-server-web/dashboard/projectSettingsForm.ts',
+      'packages/studio-server-web/dashboard/publicationVersion.ts',
+      'packages/studio-server-web/dashboard/WorkflowPublishedVersionHistoryModal.tsx',
+      'packages/studio-server-web/dashboard/projectPublicationReview.ts',
+      'packages/studio-server-web/playwright-observe/helpers/projectSettingsObserve.ts',
+      'packages/studio-server-web/tests/project-publication-review.test.ts',
+      'packages/studio-server-web/tests/publication-version.test.ts',
+    ],
+    languageOptions: {
+      parserOptions: { project: ['./packages/studio-server-web/tsconfig.project-publication.json'] },
+    },
+  },
+
   // Configuration for ESLint config files
   {
     files: ['.eslint.config.mjs'],

@@ -4,6 +4,7 @@ import TextField from '@atlaskit/textfield';
 import { type FC, Fragment, useEffect, useMemo, type ReactNode, useState } from 'react';
 
 import {
+  parseWebAppAllowedEmailDraft,
   formatLastPublishedAtLabel,
   getWorkflowProjectStatusLabel,
   isWorkflowProjectFullyUnpublished,
@@ -101,22 +102,6 @@ function getWebAppStatusLabel(status: WorkflowProjectStatus): string {
   }
 
   return getWorkflowProjectStatusLabel(status);
-}
-
-function normalizeAllowedEmailDraft(value: string): string[] {
-  const seen = new Set<string>();
-  const emails: string[] = [];
-  for (const rawEmail of value.split(/[\n,;]/)) {
-    const email = rawEmail.trim().toLowerCase();
-    if (!email || seen.has(email)) {
-      continue;
-    }
-
-    seen.add(email);
-    emails.push(email);
-  }
-
-  return emails;
 }
 
 type ProjectSettingsTab = 'workflow' | 'web-apps' | 'llm-health' | 'classifier-health' | 'history' | 'danger';
@@ -415,7 +400,7 @@ export const ProjectSettingsModal: FC<ProjectSettingsModalProps> = ({
             const accessValidationError = webAppAccessValidationErrors[webApp.uiGraphId] ?? null;
             const isPublished = webApp.publishedSlug != null;
             const hasWebAppSlugDraftChange = isPublished && slugDraft.trim() !== webApp.publishedSlug;
-            const parsedAllowedEmails = normalizeAllowedEmailDraft(allowedEmailDraft);
+            const parsedAllowedEmails = parseWebAppAllowedEmailDraft(allowedEmailDraft);
             const hasWebAppAccessDraftChange =
               isPublished && parsedAllowedEmails.join('\n') !== allowedEmails.join('\n');
             const hasWebAppChangesToPublish = webApp.status === 'unpublished_changes' && !webApp.isMissingFromProject;
@@ -575,7 +560,9 @@ export const ProjectSettingsModal: FC<ProjectSettingsModalProps> = ({
               <div className="project-settings-modal-content project-settings-sections-layout">
                 <aside>{renderTabs()}</aside>
                 <div className="project-settings-section-content">
-                  {!loadingWebApps && !reviewedPublication && !(activeTab === 'history' && publicationConflict === 'unconfirmed') ? (
+                  {!loadingWebApps &&
+                  !reviewedPublication &&
+                  !(activeTab === 'history' && publicationConflict === 'unconfirmed') ? (
                     <div className="project-settings-publication-conflict" role="alert">
                       <span>
                         {publicationConflict === 'unconfirmed'

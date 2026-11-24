@@ -98,6 +98,19 @@ export function createProjectSettingsFixture(name: string): ProjectSettingsFixtu
   };
 }
 
+// Preserve missing or malformed tokens so negative cases reach the client unchanged.
+export function createProjectWebAppsResponse(project: ProjectSettingsFixtureProject) {
+  return {
+    project,
+    projectId: project.projectMetadataId,
+    draftRevisionId: project.revisionId,
+    publicationVersion: project.settings.publicationVersion,
+    hasMainGraph: project.hasMainGraph ?? true,
+    savedLatestSubgraphProjectIds: project.savedLatestSubgraphProjectIds ?? [],
+    webApps: project.webApps ?? [],
+  };
+}
+
 function createPublishedVersionPreviewProject(project: WorkflowProjectItem, versionId: string): string {
   const graphId = `${versionId}-graph`;
 
@@ -136,6 +149,11 @@ export async function installProjectSettingsRoutes(
   const projects = Array.isArray(projectOrProjects) ? projectOrProjects : [projectOrProjects];
   for (const candidate of projects) candidate.settings.publicationVersion ??= '0';
   const project = projects[0]!;
+  const requireProject = (relativePath: string | null | undefined) => {
+    const target = projects.find((candidate) => candidate.relativePath === relativePath);
+    expect(target, `No fixture project owns relative path ${JSON.stringify(relativePath)}`).toBeDefined();
+    return target!;
+  };
   await page.route('**/api/workflows/projects/references?**', async (route) => {
     await route.fulfill({
       json: {
@@ -164,7 +182,8 @@ export async function installProjectSettingsRoutes(
     comment: '',
   }));
   const getPublishedVersions = () => {
-    const endpointName = project.settings.publishedEndpointName || project.settings.endpointName || 'codex-project-settings-endpoint';
+    const endpointName =
+      project.settings.publishedEndpointName || project.settings.endpointName || 'codex-project-settings-endpoint';
     return publishedVersions.map((version, index) => ({
       ...version,
       endpointName: index === 0 ? endpointName : `${endpointName}-${index + 1}`,
@@ -181,7 +200,8 @@ export async function installProjectSettingsRoutes(
       | undefined,
     publishesDraft: boolean,
   ) =>
-    preconditions?.expectedProjectId === target.projectMetadataId &&
+    preconditions != null &&
+    preconditions.expectedProjectId === target.projectMetadataId &&
     preconditions.expectedPublicationVersion === target.settings.publicationVersion &&
     (!publishesDraft || preconditions.expectedDraftRevisionId === target.revisionId);
   const rejectStale = async (route: {
@@ -246,7 +266,7 @@ export async function installProjectSettingsRoutes(
       };
     };
     trackers.endpointPublishRequests.push(requestBody);
-    const targetProject = projects.find((candidate) => candidate.relativePath === requestBody.relativePath) ?? project;
+    const targetProject = requireProject(requestBody.relativePath);
     if (!preconditionsMatch(targetProject, requestBody.preconditions, true)) {
       await rejectStale(route);
       return;
@@ -279,7 +299,7 @@ export async function installProjectSettingsRoutes(
     const requestBody = route.request().postDataJSON() as {
       relativePath?: string;
     };
-    const targetProject = projects.find((candidate) => candidate.relativePath === requestBody.relativePath) ?? project;
+    const targetProject = requireProject(requestBody.relativePath);
     if (
       !preconditionsMatch(
         targetProject,
@@ -318,7 +338,7 @@ export async function installProjectSettingsRoutes(
       preconditions?: any;
     };
     trackers.endpointAccessRequests.push(requestBody);
-    const targetProject = projects.find((candidate) => candidate.relativePath === requestBody.relativePath) ?? project;
+    const targetProject = requireProject(requestBody.relativePath);
     if (!preconditionsMatch(targetProject, requestBody.preconditions, false)) {
       await rejectStale(route);
       return;
@@ -334,20 +354,11 @@ export async function installProjectSettingsRoutes(
       return;
     }
 
-    const relativePath = new URL(route.request().url()).searchParams.get('relativePath') ?? '';
-    const targetProject = projects.find((candidate) => candidate.relativePath === relativePath) ?? project;
+    const targetProject = requireProject(new URL(route.request().url()).searchParams.get('relativePath'));
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify({
-        project: targetProject,
-        projectId: targetProject.projectMetadataId,
-        draftRevisionId: targetProject.revisionId,
-        publicationVersion: targetProject.settings.publicationVersion,
-        hasMainGraph: targetProject.hasMainGraph ?? true,
-        savedLatestSubgraphProjectIds: targetProject.savedLatestSubgraphProjectIds ?? [],
-        webApps: targetProject.webApps ?? [],
-      }),
+      body: JSON.stringify(createProjectWebAppsResponse(targetProject)),
     });
   });
 
@@ -359,7 +370,7 @@ export async function installProjectSettingsRoutes(
 
     const requestBody = route.request().postDataJSON() as {
       relativePath: string;
-      publications: Array<{ uiGraphId: string; slug: string }>;
+      publications: Array<{ uiGraphId: string; slug: string; allowedEmails?: string[] }>;
       preconditions?: {
         expectedProjectId?: string;
         expectedDraftRevisionId?: string;
@@ -367,7 +378,7 @@ export async function installProjectSettingsRoutes(
       };
     };
     trackers.webAppPublishRequests.push(requestBody);
-    const targetProject = projects.find((candidate) => candidate.relativePath === requestBody.relativePath) ?? project;
+    const targetProject = requireProject(requestBody.relativePath);
     if (!preconditionsMatch(targetProject, requestBody.preconditions, true)) {
       await rejectStale(route);
       return;
@@ -396,6 +407,7 @@ export async function installProjectSettingsRoutes(
           uiGraphName: webApp.name,
           slug: webApp.publishedSlug!,
           publishedAt: webApp.publishedAt ?? publishedAt,
+          allowedEmails: webApp.allowedEmails ?? [],
         })),
     };
     advancePublicationVersion(targetProject);
@@ -419,13 +431,13 @@ export async function installProjectSettingsRoutes(
       preconditions?: { expectedProjectId?: string; expectedPublicationVersion?: string };
     };
     trackers.webAppUnpublishRequests.push(requestBody);
-    const targetProject = projects.find((candidate) => candidate.relativePath === requestBody.relativePath) ?? project;
+    const targetProject = requireProject(requestBody.relativePath);
     if (!preconditionsMatch(targetProject, requestBody.preconditions, false)) {
       await rejectStale(route);
       return;
     }
     targetProject.webApps = (targetProject.webApps ?? [])
-      .map((webApp) =>
+      .map<WorkflowProjectWebAppSummary>((webApp) =>
         webApp.uiGraphId === requestBody.uiGraphId
           ? { ...webApp, publishedSlug: null, publishedAt: null, status: 'unpublished' }
           : webApp,
@@ -456,12 +468,15 @@ export async function installProjectSettingsRoutes(
       path: string;
     };
     trackers.projectLoadRequests.push(requestBody);
-    const loaded = projects.find((candidate) => candidate.absolutePath === requestBody.path) ?? project;
+    const loaded = projects.find(
+      (candidate) => candidate.absolutePath === requestBody.path || candidate.relativePath === requestBody.path,
+    );
+    expect(loaded, `No fixture project owns path ${JSON.stringify(requestBody.path)}`).toBeDefined();
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
       body: JSON.stringify({
-        contents: createPublishedVersionPreviewProject(loaded, `live-${trackers.projectLoadRequests.length}`),
+        contents: createPublishedVersionPreviewProject(loaded!, `live-${trackers.projectLoadRequests.length}`),
         datasetsContents: null,
         revisionId: `revision-${trackers.projectLoadRequests.length}`,
       }),
@@ -475,6 +490,7 @@ export async function installProjectSettingsRoutes(
       await route.fallback();
       return;
     }
+    expect(new URL(request.url()).searchParams.get('relativePath')).toBe(project.relativePath);
 
     await route.fulfill({
       status: 200,
@@ -496,6 +512,7 @@ export async function installProjectSettingsRoutes(
       versionId: string;
       isStarred: boolean;
     };
+    expect(requestBody.relativePath).toBe(project.relativePath);
     trackers.publishedVersionStarRequests.push(requestBody);
     const version = publishedVersions.find((candidate) => candidate.id === requestBody.versionId);
     if (!version) {
@@ -528,6 +545,7 @@ export async function installProjectSettingsRoutes(
       versionId: string;
       comment: string;
     };
+    expect(requestBody.relativePath).toBe(project.relativePath);
     trackers.publishedVersionCommentRequests.push(requestBody);
     const version = publishedVersions.find((candidate) => candidate.id === requestBody.versionId);
     if (!version) {
@@ -556,15 +574,28 @@ export async function installProjectSettingsRoutes(
     route.fulfill({ contentType: 'application/json', body: 'null' }),
   );
   await page.route('**/api/workflows/projects/published-versions/preview-tree', async (route) => {
-    const { versionId } = route.request().postDataJSON();
+    const { relativePath, versionId } = route.request().postDataJSON();
+    expect(relativePath).toBe(project.relativePath);
     const version = getPublishedVersions().find((entry) => entry.id === versionId);
     if (!version) return route.fulfill({ status: 404, json: { error: 'Published revision not found' } });
-    await route.fulfill({ json: {
-      coverage: 'project-only', rootArtifactId: versionId, endpointName: version.endpointName, publishedAt: version.publishedAt,
-      projects: [{ artifactId: versionId, projectId: version.projectId, relativePath: project.relativePath,
-        name: project.name, savedAt: version.publishedAt }],
-      references: [],
-    } });
+    await route.fulfill({
+      json: {
+        coverage: 'project-only',
+        rootArtifactId: versionId,
+        endpointName: version.endpointName,
+        publishedAt: version.publishedAt,
+        projects: [
+          {
+            artifactId: versionId,
+            projectId: version.projectId,
+            relativePath: project.relativePath,
+            name: project.name,
+            savedAt: version.publishedAt,
+          },
+        ],
+        references: [],
+      },
+    });
   });
 
   await page.route('**/api/workflows/projects/published-versions/preview', async (route) => {
@@ -577,6 +608,7 @@ export async function installProjectSettingsRoutes(
       relativePath: string;
       versionId: string;
     };
+    expect(requestBody.relativePath).toBe(project.relativePath);
     trackers.publishedVersionPreviewRequests.push(requestBody);
     await route.fulfill({
       status: 200,
@@ -603,6 +635,7 @@ export async function installProjectSettingsRoutes(
         expectedPublicationVersion?: string;
       };
     };
+    expect(requestBody.relativePath).toBe(project.relativePath);
     trackers.publishedVersionRestoreRequests.push(requestBody);
     if (!preconditionsMatch(project, requestBody.preconditions, false)) {
       await rejectStale(route);
@@ -652,17 +685,27 @@ export async function installProjectSettingsRoutes(
   });
 }
 
-export async function openProjectSettingsModal(page: Page, project: WorkflowProjectItem) {
+type ProjectSettingsOpenOptions = { activateProject?: boolean };
+
+export async function openProjectSettingsModal(
+  page: Page,
+  project: WorkflowProjectItem,
+  options: ProjectSettingsOpenOptions = {},
+) {
   await page.goto('/', { waitUntil: 'domcontentloaded' });
   await authenticateIfNeeded(page);
   await waitForDashboardReady(page);
-  return showProjectSettingsModal(page, project);
+  return showProjectSettingsModal(page, project, options);
 }
 
-export async function showProjectSettingsModal(page: Page, project: WorkflowProjectItem) {
+export async function showProjectSettingsModal(
+  page: Page,
+  project: WorkflowProjectItem,
+  { activateProject = true }: ProjectSettingsOpenOptions = {},
+) {
   const projectRow = page.locator('.project-row', { hasText: project.name });
   await expect(projectRow).toBeVisible({ timeout: 30_000 });
-  await projectRow.click();
+  if (activateProject) await projectRow.click();
   await projectRow.click({ button: 'right' });
   await page.locator('.active-project-more-button').click();
 

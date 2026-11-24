@@ -4,6 +4,51 @@ This document records intentional architecture and cleanup changes that future m
 
 It is not a changelog. Keep entries focused on why a refactor happened, which ownership boundary changed, and which verification paths should be kept alive.
 
+## 2026-11-25 - Project Settings Publication Review Ownership
+
+Project Settings previously combined reviewed snapshots and editable draft
+reconciliation with every publication mutation. `useProjectPublicationReview.ts`
+now owns that single review session; `useProjectSettingsActions.ts` retains its
+public interface, validation, mutation locks, release review and deletion.
+The combined owners still have 13 state hooks and two effects. Three refs retain
+draft baselines; a fourth identifies the current read within its modal/project owner.
+The extraction adds no request, timer, cache or state-synchronization callback.
+
+`projectPublicationReview.ts` shares only the common field-agreement and returned
+settings-publication rules. History keeps its own review and restore receipt
+policy. The identical email parsers and the existing dirty-field merge now live
+in `projectSettingsForm.ts`; `publicationVersion.ts` remains authoritative for
+version encoding and advancement. An own-key-guarded non-null assertion fixes
+the existing indexed-access type diagnostic without changing emitted JavaScript.
+
+Reassessment reproduced overlaps between History Restore and both the opening
+read and an explicit review. A late response could replace the restored review
+with older tokens or re-enable an uncertain review. The existing server
+preconditions still rejected stale writes. Opening, explicit review and mutation
+follow-up reads now share one read identity; newer reads and mutation outcomes
+retire their predecessor. The same identity check protects result, error and
+loading completion, and closing or replacing the owner retires every pending
+read. This uses one ref without adding requests or changing mutation/restore
+receipt rules. Uncertain mutations still reconcile the project tree. The endpoint
+draft handler also accepts only its actual string field, removing an unnecessary
+generic cast over transport-only boolean fields.
+
+The focused no-emit project and typed lint cover the moved owners, action facade,
+history and pure tests. Project Settings joins the ordinary editor CI selection.
+Its browser checks cover late reads after reopen or Restore, unusable review tokens,
+draft preservation and request counts, alongside the existing mutation/recovery
+and history scenarios. See the [implementation record](project-publication-review-refactor-plan.md)
+for baseline and final validation evidence and hosted-measurement limits.
+
+The test review removed a publish-conflict case that duplicated the stronger
+retry scenario and never exercised its claimed refresh failure. Shared snapshot
+construction and strict fixture project lookup replace repeated response bodies
+and permissive fallback to the first project. The existing compiler/lint project
+now includes that fixture. Recovery assertions prove that review controls become
+usable; fault injection showed that checking only the displayed status could
+miss a missing review token. The four distinct opening/manual and
+confirmed/unconfirmed Restore races remain covered.
+
 ## 2026-11-24 - Local Storage Upgrade Screen Ownership
 
 The upgrade screen previously mixed rendering with polling, mutation settlement,

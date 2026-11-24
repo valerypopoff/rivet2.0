@@ -1,11 +1,14 @@
-import { expect, test } from '@playwright/test';
+import { expect, type Request } from '@playwright/test';
+import { test } from './helpers/projectPublicationFixture';
 import { authenticateIfNeeded, openProjectContextMenu, waitForDashboardReady } from './helpers/hostedEditorObserve';
 import {
   createProjectSettingsFixture,
   createProjectSettingsRouteTrackers,
+  createProjectWebAppsResponse,
   installProjectSettingsRoutes,
   isRouteRequest,
   openProjectSettingsModal,
+  showProjectSettingsModal,
 } from './helpers/projectSettingsObserve';
 
 test.describe('Project settings modal', () => {
@@ -216,9 +219,7 @@ test.describe('Project settings modal', () => {
     await expect(modal.getByRole('alert')).toHaveCount(0);
   });
 
-  test('Danger zone lazily shows incoming connections, incomplete scans and refresh recovery', async ({
-    page,
-  }, testInfo) => {
+  test('Danger zone lazily shows incoming connections, incomplete scans and refresh recovery', async ({ page }) => {
     const project = createProjectSettingsFixture('reference-target');
     await installProjectSettingsRoutes(page, project, createProjectSettingsRouteTrackers());
     let requests = 0;
@@ -262,7 +263,6 @@ test.describe('Project settings modal', () => {
     await expect(references).toContainText('Published web app: story-ui → Published');
     await expect(references.getByRole('alert')).toContainText('This check is incomplete');
     await expect(references.getByRole('alert')).toContainText('Broken.rivet-project');
-    await modal.screenshot({ path: testInfo.outputPath('incoming-references.png') });
     await expect(modal.getByRole('button', { name: 'Delete project', exact: true })).toBeEnabled();
     await references.getByRole('button', { name: 'Retry reference check' }).click();
     await expect(references).toHaveCount(0);
@@ -287,6 +287,16 @@ test.describe('Project settings modal', () => {
       endpointAccess: 'public',
     };
     await installProjectSettingsRoutes(page, project, createProjectSettingsRouteTrackers());
+    let treeReads = 0;
+    let publicationReads = 0;
+    await page.route('**/api/workflows/tree', async (route) => {
+      treeReads++;
+      await route.fallback();
+    });
+    await page.route('**/api/workflows/projects/web-apps?**', async (route) => {
+      publicationReads++;
+      await route.fallback();
+    });
     await page.route(
       '**/api/workflows/projects/endpoint-access',
       async (route) => {
@@ -298,12 +308,97 @@ test.describe('Project settings modal', () => {
     );
 
     const { modal } = await openProjectSettingsModal(page, project);
+    await expect(modal.getByRole('button', { name: 'Internal network only', exact: true })).toBeEnabled();
+    const readsBeforeMutation = { tree: treeReads, publication: publicationReads };
     await modal.getByRole('button', { name: 'Internal network only', exact: true }).click();
     await expect(
       page.getByText('The change succeeded, but publication state could not be verified.', { exact: false }),
     ).toBeVisible();
     await expect(modal.getByRole('button', { name: 'Update', exact: true })).toBeDisabled();
     await expect(modal.getByRole('button', { name: 'Review latest' })).toBeVisible();
+    await expect(modal.getByRole('tab', { name: 'Web apps', exact: true })).toBeEnabled();
+    // The library/editor also reconcile the tree independently; receipt rejection must still refresh it.
+    expect(treeReads).toBeGreaterThan(readsBeforeMutation.tree);
+    expect(publicationReads).toBe(readsBeforeMutation.publication);
+  });
+
+  for (const invalidToken of ['missing draft revision', 'noncanonical publication version'] as const) {
+    test(`coherent display data with ${invalidToken} cannot authorize publication`, async ({ page }) => {
+      const project = createProjectSettingsFixture(`review-${invalidToken}`);
+      project.settings.endpointName = 'review-endpoint';
+      const trackers = createProjectSettingsRouteTrackers();
+      await installProjectSettingsRoutes(page, project, trackers);
+      if (invalidToken === 'missing draft revision') project.revisionId = '';
+      else project.settings.publicationVersion = '01';
+      await page.route('**/api/workflows/projects/web-apps?**', (route) =>
+        route.fulfill({
+          json: createProjectWebAppsResponse(project),
+        }),
+      );
+      const { modal } = await openProjectSettingsModal(page, project);
+      await expect(
+        page.getByText(
+          invalidToken === 'missing draft revision'
+            ? 'Publication state is unavailable. Refresh the project before publishing.'
+            : 'Publication state is inconsistent. Review the latest project before publishing.',
+          { exact: true },
+        ),
+      ).toBeVisible();
+      await expect(modal.locator('#workflow-project-endpoint-name')).toHaveValue('review-endpoint');
+      await expect(modal.getByRole('button', { name: 'Publish', exact: true })).toBeDisabled();
+      expect(trackers.endpointPublishRequests).toHaveLength(0);
+    });
+  }
+
+  test('an initial read finishing after close and reopen cannot replace the new review or drafts', async ({ page }) => {
+    const project = createProjectSettingsFixture('reopened-review');
+    project.settings.endpointName = 'review-endpoint';
+    const trackers = createProjectSettingsRouteTrackers();
+    await installProjectSettingsRoutes(page, project, trackers);
+    const started = Promise.withResolvers<Request>();
+    const release = Promise.withResolvers<void>();
+    let reads = 0;
+    await page.route('**/api/workflows/projects/web-apps?**', async (route) => {
+      if (++reads !== 1) return route.fallback();
+      const originalProject = structuredClone(project);
+      started.resolve(route.request());
+      await release.promise;
+      await route.fulfill({
+        json: createProjectWebAppsResponse(originalProject),
+      });
+    });
+    try {
+      const { modal } = await openProjectSettingsModal(page, project);
+      const originalRequest = await started.promise;
+      await modal.getByRole('button', { name: 'Close project settings' }).click();
+      await expect(modal).toHaveCount(0);
+      project.revisionId = 'fresh-review';
+      project.settings.publicationVersion = '9';
+      await showProjectSettingsModal(page, project);
+      const publish = modal.getByRole('button', { name: 'Publish', exact: true });
+      await expect(publish).toBeEnabled();
+      const endpoint = modal.locator('#workflow-project-endpoint-name');
+      await endpoint.fill('user-draft-endpoint');
+      const lateResponse = page.waitForResponse((response) => response.request() === originalRequest);
+      release.resolve();
+      expect(await (await lateResponse).finished()).toBeNull();
+      await expect(endpoint).toHaveValue('user-draft-endpoint');
+      await expect(publish).toBeEnabled();
+      expect(reads).toBe(2);
+      await publish.click();
+      await expect(modal.locator('.project-status-badge.published')).toBeVisible();
+      await expect(modal.getByRole('tab', { name: 'Web apps', exact: true })).toBeEnabled();
+      expect(reads).toBe(2);
+      expect(trackers.endpointPublishRequests).toHaveLength(1);
+      expect(trackers.endpointPublishRequests[0]?.preconditions).toEqual({
+        expectedProjectId: project.projectMetadataId,
+        expectedDraftRevisionId: 'fresh-review',
+        expectedPublicationVersion: '9',
+      });
+      expect(trackers.endpointPublishRequests[0]?.settings?.endpointName).toBe('user-draft-endpoint');
+    } finally {
+      release.resolve();
+    }
   });
 
   test('a same-path replacement cannot arm publication in the original project settings', async ({ page }) => {
@@ -319,27 +414,24 @@ test.describe('Project settings modal', () => {
     await installProjectSettingsRoutes(page, original, trackers);
     await page.route('**/api/workflows/projects/web-apps?**', (route) =>
       route.fulfill({
-        json: {
-          project: replacement,
-          projectId: replacement.projectMetadataId,
-          draftRevisionId: replacement.revisionId,
-          publicationVersion: replacement.settings.publicationVersion,
-          hasMainGraph: true,
-          webApps: [],
-        },
+        json: createProjectWebAppsResponse(replacement),
       }),
     );
     const { modal } = await openProjectSettingsModal(page, original);
     const publish = modal.getByRole('button', { name: 'Publish', exact: true });
     await expect(modal.getByRole('button', { name: 'Review latest', exact: true })).toBeVisible();
     await expect(publish).toBeDisabled();
-    await modal.getByRole('button', { name: 'Review latest', exact: true }).click();
+    const [response] = await Promise.all([
+      page.waitForResponse('**/api/workflows/projects/web-apps?**'),
+      modal.getByRole('button', { name: 'Review latest', exact: true }).click(),
+    ]);
+    expect(await response.finished()).toBeNull();
     await expect(modal.getByRole('button', { name: 'Review latest', exact: true })).toBeVisible();
     await expect(publish).toBeDisabled();
     expect(trackers.endpointPublishRequests).toHaveLength(0);
   });
 
-  test('unrelated tree refresh does not silently advance the publication revision', async ({ page }) => {
+  test('endpoint access changes cannot approve a newer draft or overwrite an edited endpoint', async ({ page }) => {
     const project = createProjectSettingsFixture('codex-pinned-publication');
     project.settings = {
       ...project.settings,
@@ -356,8 +448,8 @@ test.describe('Project settings modal', () => {
     project.revisionId = 'revision-2';
     project.settings.status = 'unpublished_changes';
     project.settings.endpointName = 'colleague-endpoint';
-    // A competing saved draft must reject the access command without adopting
-    // the refreshed tree as a new publication baseline.
+    // Access may change independently of the saved draft. Its response must not
+    // approve that newer draft or replace the locally edited endpoint name.
     await modal.getByRole('button', { name: 'Internal network only', exact: true }).click();
     await expect(modal.getByRole('button', { name: 'Internal network only', exact: true })).toHaveAttribute(
       'aria-pressed',
@@ -382,47 +474,39 @@ test.describe('Project settings modal', () => {
     await expect(endpointInput).toHaveValue('later-server-endpoint');
   });
 
-  for (const conflict of [false, true]) {
-    test(`reports refresh failure separately after ${conflict ? 'conflicting' : 'successful'} publishing`, async ({
-      page,
-    }) => {
-      const project = createProjectSettingsFixture(`codex-publish-refresh-${conflict}`);
-      project.settings.endpointName = 'refresh-endpoint';
-      const trackers = createProjectSettingsRouteTrackers();
-      await installProjectSettingsRoutes(page, project, trackers);
-      const { modal } = await openProjectSettingsModal(page, project);
-      let failRefresh = false;
-      await page.route('**/api/workflows/tree', async (route) => {
-        if (!failRefresh) return route.fallback();
-        await route.fulfill({ status: 503, json: { error: 'Temporary tree failure' } });
-      });
-      await page.route(
-        '**/api/workflows/projects/publish',
-        async (route) => {
-          failRefresh = true;
-          if (conflict) project.revisionId = 'revision-2';
-          await route.fallback();
-        },
-        { times: 1 },
-      );
-      await modal.getByRole('button', { name: 'Publish', exact: true }).click();
-      await expect(
-        page.getByText(
-          conflict
-            ? 'The project or its publication changed during your attempt. Review the latest state before trying again; your edits remain here.'
-            : 'The change succeeded, but the project list could not refresh. Refresh to see the latest state.',
-          { exact: true },
-        ),
-      ).toBeVisible();
-      await expect(modal).toBeVisible();
-      await expect(page.locator('.workflow-library-panel')).toContainText(project.name);
-      expect(trackers.endpointPublishRequests).toHaveLength(1);
-      expect(project.settings.status).toBe(conflict ? 'unpublished' : 'published');
-      if (!conflict) {
-        await expect(page.getByText('Publishing failed because the project changed.', { exact: false })).toHaveCount(0);
-      }
+  test('reports a tree refresh failure after successful publishing without losing the committed result', async ({
+    page,
+  }) => {
+    const project = createProjectSettingsFixture('codex-publish-refresh');
+    project.settings.endpointName = 'refresh-endpoint';
+    const trackers = createProjectSettingsRouteTrackers();
+    await installProjectSettingsRoutes(page, project, trackers);
+    const { modal } = await openProjectSettingsModal(page, project);
+    let failRefresh = false;
+    await page.route('**/api/workflows/tree', async (route) => {
+      if (!failRefresh) return route.fallback();
+      await route.fulfill({ status: 503, json: { error: 'Temporary tree failure' } });
     });
-  }
+    await page.route(
+      '**/api/workflows/projects/publish',
+      async (route) => {
+        failRefresh = true;
+        await route.fallback();
+      },
+      { times: 1 },
+    );
+    await modal.getByRole('button', { name: 'Publish', exact: true }).click();
+    await expect(
+      page.getByText('The change succeeded, but the project list could not refresh. Refresh to see the latest state.', {
+        exact: true,
+      }),
+    ).toBeVisible();
+    await expect(modal).toBeVisible();
+    await expect(page.locator('.workflow-library-panel')).toContainText(project.name);
+    expect(trackers.endpointPublishRequests).toHaveLength(1);
+    expect(project.settings.status).toBe('published');
+    await expect(page.getByText('Publishing failed because the project changed.', { exact: false })).toHaveCount(0);
+  });
 
   test('stale publishing requires explicit review before retry', async ({ page }) => {
     const project = createProjectSettingsFixture('codex-publish-conflict');
@@ -510,12 +594,8 @@ test.describe('Project settings modal', () => {
       }
       await route.fulfill({
         json: {
+          ...createProjectWebAppsResponse(project),
           project: { ...project, settings: { ...project.settings, publicationVersion: 'malformed' } },
-          projectId: project.projectMetadataId,
-          draftRevisionId: project.revisionId,
-          publicationVersion: project.settings.publicationVersion,
-          hasMainGraph: true,
-          webApps: [],
         },
       });
     });
@@ -562,12 +642,19 @@ test.describe('Project settings modal', () => {
     await installProjectSettingsRoutes(page, project, createProjectSettingsRouteTrackers(), {
       routeConfig: { webAppsAuthMode: 'oauth' },
     });
+    let publicationReads = 0;
+    await page.route('**/api/workflows/projects/web-apps?**', async (route) => {
+      publicationReads++;
+      await route.fallback();
+    });
     const { modal } = await openProjectSettingsModal(page, project);
     await modal.getByRole('tab', { name: 'Web apps' }).click();
     const edited = modal.locator('.project-settings-web-app-row', { hasText: 'Edited App' });
     const clean = modal.locator('.project-settings-web-app-row', { hasText: 'Clean App' });
+    const initialReads = publicationReads;
     await edited.locator('input').fill('my-edited-app');
     await edited.locator('textarea').fill('mine@example.com');
+    expect(publicationReads).toBe(initialReads);
 
     project.webApps![1] = {
       ...project.webApps![1]!,
@@ -584,6 +671,7 @@ test.describe('Project settings modal', () => {
     await expect(edited.locator('textarea')).toHaveValue('mine@example.com');
     await expect(clean.locator('input')).toHaveValue('colleague-app');
     await expect(clean.locator('textarea')).toHaveValue('colleague@example.com');
+    expect(publicationReads).toBe(initialReads + 1);
   });
 
   test('a failed post-publish web-app refresh preserves local drafts', async ({ page }) => {
@@ -904,7 +992,7 @@ test.describe('Project settings modal', () => {
     expect(previousProject.settings.endpointName).toBe(endpointName);
     await previousModal.getByRole('button', { name: 'Close project settings' }).click();
 
-    const { modal: nextModal } = await openProjectSettingsModal(page, nextProject);
+    const { modal: nextModal } = await showProjectSettingsModal(page, nextProject);
     const endpointInput = nextModal.locator('#workflow-project-endpoint-name');
     await endpointInput.fill(endpointName);
     await expect(nextModal.locator('.project-settings-error')).toHaveCount(0);

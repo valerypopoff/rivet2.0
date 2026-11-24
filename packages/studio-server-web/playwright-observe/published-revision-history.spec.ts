@@ -1,4 +1,5 @@
-import { expect, test, type Page, type Route } from '@playwright/test';
+import { expect, type Page, type Request, type Route } from '@playwright/test';
+import { test } from './helpers/projectPublicationFixture';
 import {
   createBuiltInRegistry,
   getGraphBoundary,
@@ -11,6 +12,7 @@ import { authenticateIfNeeded, openProjectContextMenu, waitForDashboardReady } f
 import {
   createProjectSettingsFixture,
   createProjectSettingsRouteTrackers,
+  createProjectWebAppsResponse,
   installProjectSettingsRoutes,
   openProjectSettingsModal,
   showProjectSettingsModal,
@@ -47,6 +49,98 @@ async function expectHistoryReadCancelled(
 }
 
 test.describe('Published revision history', () => {
+  for (const [readSource, outcome] of [
+    ['opening', 'confirmed'],
+    ['opening', 'unconfirmed'],
+    ['manual', 'confirmed'],
+    ['manual', 'unconfirmed'],
+  ] as const) {
+    test(`a late ${readSource} read cannot replace ${outcome} restore review`, async ({ page }) => {
+      const project = createProjectSettingsFixture(`late-${readSource}-${outcome}`);
+      project.settings.status = 'published';
+      project.settings.endpointName = project.settings.publishedEndpointName = 'late-opening';
+      const trackers = createProjectSettingsRouteTrackers();
+      await installProjectSettingsRoutes(
+        page,
+        project,
+        trackers,
+        outcome === 'unconfirmed' ? { loseAcknowledgement: 'restore' } : {},
+      );
+      const heldRead = Promise.withResolvers<Request>();
+      const releaseRead = Promise.withResolvers<void>();
+      const heldReadNumber = readSource === 'opening' ? 1 : 2;
+      let reads = 0;
+      await page.route('**/api/workflows/projects/web-apps?**', async (route) => {
+        reads++;
+        if (readSource === 'manual' && reads === 1)
+          return route.fulfill({ status: 503, json: { error: 'Initial read unavailable' } });
+        if (reads !== heldReadNumber) return route.fallback();
+        const originalProject = structuredClone(project);
+        heldRead.resolve(route.request());
+        await releaseRead.promise;
+        await route.fulfill({
+          json: createProjectWebAppsResponse(originalProject),
+        });
+      });
+      try {
+        // This races settings reads against Restore, independently of editor startup refreshes.
+        const { modal } = await openProjectSettingsModal(page, project, { activateProject: false });
+        if (readSource === 'manual') await modal.getByRole('button', { name: 'Review latest', exact: true }).click();
+        const request = await heldRead.promise;
+        project.revisionId = 'reviewed-before-restore';
+        await modal.getByRole('tab', { name: 'Published revision history' }).click();
+        const history = modal.getByRole('tabpanel', { name: 'Published revision history' });
+        page.once('dialog', (dialog) => dialog.accept());
+        await history.getByRole('button', { name: 'Restore', exact: true }).first().click();
+        if (outcome === 'confirmed') {
+          await expect(
+            history.getByRole('button', { name: 'Add comment for published version restored-published-version-1' }),
+          ).toBeEnabled();
+        } else {
+          await expect(history.getByText('The restore outcome could not be confirmed.')).toBeVisible();
+          await expect(modal.getByRole('tab', { name: 'Endpoint', exact: true })).toBeEnabled();
+        }
+        expect(trackers.publishedVersionRestoreRequests).toHaveLength(1);
+        expect(project.settings.publicationVersion).toBe('1');
+        await modal.getByRole('tab', { name: 'Endpoint', exact: true }).click();
+        let reviewReads = 0;
+        if (outcome === 'confirmed') {
+          // A concurrent tree refresh may supersede the automatic review. Establish
+          // the new review before releasing the old response in either valid outcome.
+          const review = modal.getByRole('button', { name: 'Review latest', exact: true });
+          if (await review.isVisible()) {
+            await review.click();
+            reviewReads++;
+          }
+          await expect(modal.getByRole('button', { name: 'Unpublish', exact: true })).toBeEnabled();
+        }
+        const lateResponse = page.waitForResponse((response) => response.request() === request);
+        releaseRead.resolve();
+        expect(await (await lateResponse).finished()).toBeNull();
+        await modal.locator('#workflow-project-endpoint-name').fill('after-restored-review');
+        const update = modal.getByRole('button', { name: 'Update', exact: true });
+        if (outcome === 'unconfirmed') {
+          await expect(update).toBeDisabled();
+          await modal.getByRole('button', { name: 'Review latest', exact: true }).click();
+        }
+        await expect(update).toBeEnabled();
+        await update.click();
+        await expect(modal.getByRole('tab', { name: 'Web apps', exact: true })).toBeEnabled();
+        expect(trackers.endpointPublishRequests).toHaveLength(1);
+        expect(trackers.endpointPublishRequests[0]?.preconditions).toEqual({
+          expectedProjectId: project.projectMetadataId,
+          expectedDraftRevisionId: 'reviewed-before-restore',
+          expectedPublicationVersion: '1',
+        });
+        expect(project.settings.publicationVersion).toBe('2');
+        expect(reads).toBe(heldReadNumber + 2 + reviewReads);
+        expect(trackers.projectLoadRequests).toEqual([]);
+      } finally {
+        releaseRead.resolve();
+      }
+    });
+  }
+
   test('history mutations lock navigation and a failed restore refresh requires fresh review', async ({ page }) => {
     const project = createProjectSettingsFixture('history-restore-refresh');
     project.settings.status = 'published';
@@ -90,8 +184,10 @@ test.describe('Published revision history', () => {
     );
     page.once('dialog', (dialog) => dialog.accept());
     await history.getByRole('button', { name: 'Restore' }).first().click();
-    await expect.poll(() => trackers.publishedVersionRestoreRequests.length).toBe(1);
-    await expect(modal.getByRole('tab', { name: 'Endpoint', exact: true })).toBeEnabled();
+    await expect(
+      history.getByRole('button', { name: 'Add comment for published version restored-published-version-1' }),
+    ).toBeEnabled();
+    expect(trackers.publishedVersionRestoreRequests).toHaveLength(1);
     await modal.getByRole('tab', { name: 'Endpoint', exact: true }).click();
     await modal.locator('#workflow-project-endpoint-name').fill('reviewed-restored-name');
     await expect(modal.getByRole('button', { name: 'Update', exact: true })).toBeDisabled();
@@ -172,6 +268,8 @@ test.describe('Published revision history', () => {
     await expect(modal.getByRole('button', { name: 'Publish', exact: true })).toBeDisabled();
     expect(trackers.endpointPublishRequests).toHaveLength(1);
     await modal.getByRole('button', { name: 'Review latest', exact: true }).click();
+    await expect(modal.getByRole('button', { name: 'Unpublish', exact: true })).toBeEnabled();
+    await expect(modal.getByText('The publication outcome could not be confirmed.', { exact: false })).toHaveCount(0);
     await expect(modal.locator('.project-status-badge.published')).toBeVisible();
     expect(trackers.endpointPublishRequests).toHaveLength(1);
   });

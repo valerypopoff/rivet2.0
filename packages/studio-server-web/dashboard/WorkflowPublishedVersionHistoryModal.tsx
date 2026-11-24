@@ -1,6 +1,7 @@
 import Button, { LoadingButton } from '@atlaskit/button';
 import { type FC, type KeyboardEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'react-toastify';
+import { publicationSnapshotFieldsAgree } from './projectPublicationReview';
 import {
   WORKFLOW_PUBLISHED_VERSION_COMMENT_MAX_LENGTH,
   type WorkflowPublicationPreconditions,
@@ -128,9 +129,7 @@ export const WorkflowPublishedVersionHistoryPanel: FC<WorkflowPublishedVersionHi
             !snapshot.draftRevisionId ||
             !isPublicationVersion(snapshot.publicationVersion) ||
             snapshot.project?.relativePath !== projectRelativePath ||
-            snapshot.project?.projectMetadataId !== snapshot.projectId ||
-            snapshot.project.revisionId !== snapshot.draftRevisionId ||
-            snapshot.project.settings.publicationVersion !== snapshot.publicationVersion
+            !publicationSnapshotFieldsAgree(snapshot)
           ) {
             throw new Error('Publication state is unavailable. Refresh before restoring.');
           }
@@ -322,7 +321,9 @@ export const WorkflowPublishedVersionHistoryPanel: FC<WorkflowPublishedVersionHi
     }
 
     const { endpointName, preconditions } = review;
-    const confirmed = window.confirm(`Serve this revision at the ${endpointName} endpoint? Drafts stay in the project tree.`);
+    const confirmed = window.confirm(
+      `Serve this revision at the ${endpointName} endpoint? Drafts stay in the project tree.`,
+    );
     if (!confirmed) {
       return;
     }
@@ -410,9 +411,7 @@ export const WorkflowPublishedVersionHistoryPanel: FC<WorkflowPublishedVersionHi
         </div>
       ) : (
         <>
-          {review && !review.endpointName && (
-            <div role="status">Restore requires a configured endpoint name.</div>
-          )}
+          {review && !review.endpointName && <div role="status">Restore requires a configured endpoint name.</div>}
           <div className="published-version-history-list" role="list">
             {visibleVersions.map((version) => (
               <div className="published-version-history-row" role="listitem" key={version.id}>
@@ -424,7 +423,9 @@ export const WorkflowPublishedVersionHistoryPanel: FC<WorkflowPublishedVersionHi
                     {version.isCurrent ? (
                       <span className="published-version-history-current-badge">Current</span>
                     ) : null}
-                    {version.coverage === 'project-only' && <span title="Earlier dependency revisions may be unavailable">Project only</span>}
+                    {version.coverage === 'project-only' && (
+                      <span title="Earlier dependency revisions may be unavailable">Project only</span>
+                    )}
                   </div>
                   <div className="published-version-history-endpoint" title={version.endpointName}>
                     {version.endpointName}

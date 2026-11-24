@@ -66,6 +66,7 @@ commands; the guides below describe implementation and verification.
 - [Web-app HTTP Separation Plan](./studio-server/web-app-http-separation-plan.md)
 - [Recording HTTP Separation Plan](./studio-server/recording-http-separation-plan.md)
 - [Publication HTTP Separation Plan](./studio-server/publication-http-separation-plan.md)
+- [Project Publication Review Refactor](./studio-server/project-publication-review-refactor-plan.md)
 - [App Settings HTTP Separation Plan](./studio-server/app-settings-http-separation-plan.md)
 - [Evaluation HTTP Separation Plan](./studio-server/evaluation-http-separation-plan.md)
 - [Hosted Evaluation Persistence Refactor](./studio-server/hosted-evaluation-persistence-refactor-plan.md)

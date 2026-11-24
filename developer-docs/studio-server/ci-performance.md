@@ -1036,7 +1036,7 @@ promotion. It does not replace Yarn/Cargo audits or introduce a cloud rehearsal.
   run `yarn workspace @valerypopoff/rivet2-core run test:shard` to reproduce one.
   Local `yarn test:core` still runs the full suite.
 - Browser CI uses five required matrix shards, each with two browser workers.
-  `scripts/ci/editor-test-shards.mjs` assigns all 45
+  `scripts/ci/editor-test-shards.mjs` assigns all 46
   selected specs exactly once using measured file weights (plus explicit estimates
   for new specs). The cost-statistics specs are included explicitly: the fast modal
   contract and the real mixed-model bundle/HTTP/WebSocket/cancellation fixture.
@@ -1057,13 +1057,13 @@ promotion. It does not replace Yarn/Cargo audits or introduce a cloud rehearsal.
   The 2026-11-24 local characterization measured 450.7 seconds of panel case work
   and 137.5 seconds of prompt work; their initial hints are 455 and 140 seconds.
   Four previous shards already used all 4,320 seconds of their combined allowance.
-  Five now allocate 985/985/985/980/980 seconds, preserving the 1,080-second
+  At that stage, five allocated 985/985/985/980/980 seconds, preserving the 1,080-second
   per-shard allowance, two workers, 12-minute test step and 20-minute job limit.
   The initial post-extraction local receiving shard passed all 134 cases in 545.3 seconds, including
   automatic preview cleanup; panel/prompt case work was 472.1/126.9 seconds.
   These observations show local variability, not a reliable before/after change.
-  Reassessment and preparation-read recovery add two cases. Current collection
-  is 502 cases in 45 files, with all 93 upgrade cases in shard 2/5 (136 cases).
+  Reassessment and preparation-read recovery added two cases. That checkpoint
+  collected 502 cases in 45 files, with all 93 upgrade cases in shard 2/5 (136 cases).
   Before the test cleanup, the complete local receiving shard passed in 544.0 seconds with
   automatic preview cleanup; it had no skips or retries.
   After the test review, all 136 cases passed in 403.6 seconds locally, without
@@ -1074,10 +1074,38 @@ promotion. It does not replace Yarn/Cargo audits or introduce a cloud rehearsal.
   hosted speedup. A neighboring restore journey initially raced unchanged row
   text against mutation settlement; it now waits for the newly restored version's
   enabled control before navigation and passed four focused repetitions before
-  the complete successful shard. The scheduling hints and budgets are unchanged.
-  This adds runner capacity for coverage. Hosted queue, setup, case work and total
-  elapsed time still need exact-commit measurement; local timings establish no
-  hosted speedup.
+  the complete successful shard. The scheduling hints and budgets were unchanged.
+  The fifth job added runner capacity for coverage, without establishing a hosted
+  speedup.
+  The 2026-11-25 publication-review refactor adds the previously omitted Project
+  Settings suite (initially 31 cases, including three new characterization cases;
+  30 after the duplicate-case cleanup). Current
+  collection was **533 cases in 46 files**. Two opening-read history race cases
+  brought it to 535; two adjacent manual-review cases bring the current selection
+  to 537 cases in the same 46 files. Removing a duplicate publish-conflict case
+  brings the current selection to **536 cases in those 46 files**. Settings measured 94.4 seconds of local
+  total case work with the actual CI configuration and failure-only artifacts,
+  versus 102.9 seconds with observe artifacts. Its conservative initial hint is
+  105 seconds. Five shards now allocate **1005/1005/1000/1010/1000 seconds**; the
+  five jobs, two workers, 12-minute test step, 20-minute job limit, 5% balance and
+  1,080-second work allowance remain intact. All five memberships change, so the
+  final gate runs all five, with independently owned fresh previews and cleanup.
+  All 533 cases passed in the initial extraction's local runs without skips or
+  Playwright retries. The follow-up history race fix passed the two affected
+  shards again (124 and 120 cases), plus the complete publication/history and
+  layout selection. The adjacent manual-review correction passed those shards
+  with 126 and 120 cases and the expanded 47-case publication/history/layout
+  selection, again without skips or retries. History measured 54.1 seconds of CI
+  case work and Settings 93.7 seconds, within their existing 90/105-second hints.
+  The subsequent test cleanup passed the two affected suites together under the
+  normal CI configuration (44 cases), plus the 46-case settings/history/layout
+  observe selection. It removed redundant coverage and setup, kept the same
+  file membership and retained the existing work estimates.
+  The unchanged shards retain their initial extraction receipts.
+  The [publication-review record](project-publication-review-refactor-plan.md)
+  carries the final local receipts and the initial concurrent Windows run's
+  Chromium resource failure. Hosted queue/setup/elapsed time remains a
+  separate exact-commit measurement after an authorized push.
   Refresh materially stale work estimates from complete hosted timings, retaining
   slower observations rather than replacing them with a single faster run. Adding a selected spec
   also updates the inventory count and membership assertions in

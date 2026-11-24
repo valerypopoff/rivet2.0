@@ -44,6 +44,9 @@ const weightedSpecs = [
   ['recording-playback-history.spec.ts', 90],
   ['graph-deletion-references.spec.ts', 90],
   ['published-revision-history.spec.ts', 90],
+  // Local 2026-11-25 case work: 94.4s in CI, 102.9s with observe artifacts.
+  // Keep the higher rounded hint; refresh with hosted evidence, not a speed claim.
+  ['project-settings-modal.spec.ts', 105],
   ['node-editor-ownership.spec.ts', 90],
   ['node-editor-lifecycle.spec.ts', 220],
   ['llm-temperature.spec.ts', 60],
