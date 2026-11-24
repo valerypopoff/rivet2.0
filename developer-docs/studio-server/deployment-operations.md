@@ -147,6 +147,18 @@ the CLI's exit, then still awaits output closure. A descendant retaining its
 parent's output pipe must not hold the completed command open indefinitely.
 Strict Windows commands use a kernel Job Object assigned during process creation
 with an explicit inherited-handle list.
+
+The Windows database proxy uses the same supervisor. Closing its owner-only
+stdin write end requests shutdown; the supervisor terminates the job and checks
+that it has zero active processes before returning success. Proxy exit without
+that request, failed confirmation or a hung supervisor remains a failure. The
+owner retains the five-second shutdown deadline and kills an overdue supervisor;
+`KILL_ON_JOB_CLOSE` also fences its descendants. This avoids spawning `taskkill`
+and enumerating the global process tree during proxy cleanup. Existing adapter
+shutdown owners and journaled CLI observer-retention rules remain separate.
+Shutdown errors distinguish an expired supervisor deadline from its exit status,
+without including credentials, arguments or proxy output.
+
 Cancellation rejects even a cooperative zero exit. Shutdown uncertainty remains
 a failure, and interruption during final proxy cleanup also prevents a successful
 wrapper result. An already-completed remote operation is observed through its

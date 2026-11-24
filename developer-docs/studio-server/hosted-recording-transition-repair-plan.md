@@ -1,8 +1,10 @@
 # Hosted recording-storage deployment repair plan
 
-Status: implemented with passing local checks. One earlier Windows proxy
-shutdown-confirmation failure remains unexplained; the traced concurrent repeat
-passed without changing shutdown deadlines or safeguards. Baseline
+Status: implemented locally. A Windows proxy shutdown failure was reproduced
+under contention and its `taskkill` dependency was replaced by the existing
+creation-time Job Object supervisor. Post-fix verification is recorded below.
+The original uninstrumented failure has no helper detail, so its exact trigger
+cannot be established retrospectively from that log. Baseline
 source: `6c923679e8817764fe5c9e5f00539404feb8c775`, 2026-11-24.
 Hosted production preflight and production activation remain unverified.
 No deployment, protected credentials, installation bundle or release pointer
@@ -58,18 +60,18 @@ without rotation, empty/mixed/historical/unknown encoding inventories and pinned
 proxy startup failure. Source-only tests retain their existing platform skips;
 the new lifecycle cases ran with no skips on both Windows and Linux.
 
-| Verification owner                                                                                     | Result                                                                                                                                                                                                  |
-| ------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Root `test:style`, then final changed-file format/style, documentation, repository and workflow checks | Passed; `actionlint` and exact import-boundary checks passed.                                                                                                                                           |
-| Source-only rollout gate                                                                               | Passed: 911 main-suite checks, 10 observation checks and 3 shutdown checks; 6 existing platform skips. The seven native transition cases are included in that main count.                               |
-| API build, focused transition/recompression tests and typed lint                                       | Passed; 8 focused tests, no skips. The real-loader contract is consolidated into the managed lane.                                                                                                      |
-| Real PostgreSQL/object-storage recording-durability lane                                               | Full suite passed in the traced concurrent repeat and final uninstrumented run. One earlier Windows shutdown-confirmation failure remains unexplained; see the assessment and commit preparation below. |
-| Native deployment CLI                                                                                  | All 33 checks passed in the latest assessment, including the fixture-isolation check and all existing native journeys.                                                                                  |
-| Native provider contracts                                                                              | Passed in the exact qualification toolchain: 205 checks, one existing optional Postman simulation skip. No network access was needed.                                                                   |
-| Production cutover/runtime packaging                                                                   | Passed, including source-only maintenance exclusion; existing platform skips retained.                                                                                                                  |
-| Kubernetes contracts                                                                                   | 141 API checks passed, followed by the complete local render/Linux-housekeeping/native-command verification. No live cluster was used.                                                                  |
-| Clean Linux startup and native lifecycle                                                               | Passed on Node 24.22.3; final native rerun passed all 7 cases with no skips.                                                                                                                            |
-| Owned fixture cleanup                                                                                  | Completed; both cold-test volumes removed after label/in-use checks, with no owned transition child or database fixture remaining. The developer stack was left healthy.                                |
+| Verification owner                                                                                     | Result                                                                                                                                                                                                   |
+| ------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Root `test:style`, then final changed-file format/style, documentation, repository and workflow checks | Passed; `actionlint` and exact import-boundary checks passed.                                                                                                                                            |
+| Source-only rollout gate                                                                               | Passed after the Windows proxy repair: 912 main-suite checks, 10 observation checks and 3 shutdown checks; 6 existing platform skips. The eight native transition cases are included in that main count. |
+| API build, focused transition/recompression tests and typed lint                                       | Passed; 8 focused tests, no skips. The real-loader contract is consolidated into the managed lane.                                                                                                       |
+| Real PostgreSQL/object-storage recording-durability lane                                               | Full suite passed with the Windows job supervisor, including failed and hung acknowledgements. The original uninstrumented incident has no helper result; see the shutdown investigation below.          |
+| Native deployment CLI                                                                                  | All 33 checks passed in the latest assessment, including the fixture-isolation check and all existing native journeys.                                                                                   |
+| Native provider contracts                                                                              | Passed in the exact qualification toolchain: 205 checks, one existing optional Postman simulation skip. No network access was needed.                                                                    |
+| Production cutover/runtime packaging                                                                   | Passed, including source-only maintenance exclusion; existing platform skips retained.                                                                                                                   |
+| Kubernetes contracts                                                                                   | 141 API checks passed, followed by the complete local render/Linux-housekeeping/native-command verification. No live cluster was used.                                                                   |
+| Clean Linux startup and native lifecycle                                                               | Initial clean startup passed on Node 24.22.3. Post-repair Debian native check passed 7 cases; the added Windows-only control case was skipped.                                                           |
+| Owned fixture cleanup                                                                                  | Completed; both cold-test volumes removed after label/in-use checks, with no owned transition child or database fixture remaining. The developer stack was left healthy.                                 |
 
 The initial sandboxed adapter/Docker checks lacked native shutdown/Docker access;
 the affected maintained commands passed with that local access enabled. A
@@ -312,6 +314,70 @@ observation window changed. Retain that finding separately from the successful
 repeat and from the still-required hosted production preflight/activation.
 Commit-preparation logs live under the Git-ignored
 `artifacts/recording-transition-commit-20261124/`.
+
+### Windows proxy shutdown investigation
+
+Comparison baseline: `62cbec1cf984b1d309b4fb8f30467fb3a71376dc`.
+
+The investigation kept the five-second deadline and original helper semantics.
+All 104 initial owned shutdown probes passed, including batches of two, eight and
+sixteen. A capped batch of 32 reproduced the failure: 18 `taskkill` helpers missed
+the deadline and were terminated by their existing owner. The actual PostgreSQL
+transition/recompression test also passed with event-only tracing while the
+native deployment suite ran. These results establish a contention failure in the
+old shutdown mechanism; they do not identify the uninstrumented original's
+specific helper result. A second capped batch left the original ignored helper
+output handles intact and used event-only tracing: all 32 hit that same deadline.
+This rules out diagnostic output pipes as the cause of the reproduced failure.
+
+The proxy had put a helper intended for already-failed adapter cleanup onto its
+ordinary success path. A helper timeout therefore turned successful guarded work
+into unconfirmed shutdown. The adapter's separate failed-path supervisor remains
+unchanged; it must continue to reject uncertain cleanup.
+
+Windows proxy startup now reuses the existing kernel Job Object supervisor. The
+process is assigned at creation, and only the owner holds the stdin write end.
+EOF requests termination; the supervisor checks that the job has zero active
+processes before returning success. A spontaneous proxy exit, including zero,
+cannot impersonate that acknowledgement. The owner retains its five-second
+deadline and kills an overdue supervisor, preserving kill-on-close fencing and
+the failed result. The CLI's ordinary-failure observer retention is unchanged,
+and the proxy mode never retains descendants. POSIX proxy shutdown retains its
+existing process-group inspection.
+
+The existing native suite owns real EOF, unexpected-exit and owner-death cases
+with a detached descendant. The real PostgreSQL lane additionally injects failed
+and hung supervisor acknowledgements; neither may become successful cleanup.
+It also makes the legacy `taskkill` helper unavailable: normal guarded proxy use
+and shutdown must still succeed without that external dependency.
+Guard, key isolation, proxy loss, database lease loss and late interruption remain
+covered by that lane. Final verification and comparison evidence is retained in
+the Git-ignored `artifacts/recording-transition-shutdown-20261124/`.
+
+Post-fix verification passed: all 32 simultaneous job shutdowns, with zero active
+owned processes and a slowest confirmation of approximately 105 ms locally;
+the full uninstrumented recording-durability suite; all 33 native deployment
+journeys; the source gate (912 main checks plus 10 observation and 3 shutdown,
+with 6 existing skips); API build and 8 focused tests; typed lint; root style;
+and the Debian/Linux native suite (7 passed, one Windows-only skip). These local
+timings demonstrate the removal of this helper bottleneck, not hosted workflow
+speedup or production activation. Deadlines and observation windows are intact.
+The final focused PostgreSQL rerun also passed with `taskkill` unavailable and
+with distinct, non-secret supervisor exit/deadline diagnostics. The negative
+checks require those reasons, so a generic unexplained failure cannot satisfy
+them.
+
+The first Linux attempt used the cached Alpine qualification-toolchain image,
+whose BusyBox `ps` cannot run the unchanged `-axo pgid=,stat=` inspector. It
+correctly failed closed. The maintained native contracts passed in the previously
+verified Debian image with GNU `ps`; no inspector assertion was weakened.
+
+Commit preparation confirmed that the runtime and test files still matched the
+recorded verification hashes. The separate native provider contracts also passed
+in the pinned qualification toolchain (Node 24.22.1, kubectl 1.36.6 and Helm
+3.22.1): 205 passed, with one existing optional Postman simulation skip. The
+documentation was cleaned up and its formatting and links checked. Hosted
+production preflight and activation remain separate, outstanding gates.
 
 ## Intended result
 

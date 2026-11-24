@@ -47,7 +47,7 @@ public static class RivetOwnedCommand {
     }
     return b.Append('\\',slashes*2).Append('"').ToString();
   }
-  public static int Run(string program,string[] args,string directory,bool retainOnFailure) {
+  public static int Run(string program,string[] args,string directory,bool retainOnFailure,bool stopOnInputClose) {
     IntPtr job=IntPtr.Zero,list=IntPtr.Zero,jobPointer=IntPtr.Zero,handlePointer=IntPtr.Zero; ProcessInfo child=new ProcessInfo();
     try {
       job=CreateJobObject(IntPtr.Zero,null); Check(job!=IntPtr.Zero);
@@ -71,12 +71,33 @@ public static class RivetOwnedCommand {
       var command=new StringBuilder(Quote(program)); foreach(string arg in args) command.Append(' ').Append(Quote(arg));
       Check(CreateProcess(program,command,IntPtr.Zero,IntPtr.Zero,true,0x80000|0x8000000,IntPtr.Zero,directory,ref startup,out child));
       CloseHandle(child.thread); child.thread=IntPtr.Zero;
-      Check(WaitForSingleObject(child.process,0xffffffff)==0);
-      uint code; Check(GetExitCodeProcess(child.process,out code));
+      bool stopping=false; uint code=0;
+      if(stopOnInputClose) {
+        // Only the owner holds the write end. EOF requests job settlement;
+        // no command text is accepted or forwarded by this control channel.
+        var stop=new ManualResetEvent(false);
+        Exception inputError=null;
+        var reader=new Thread(()=>{
+          try { while(Console.In.Read()!=-1) {} }
+          catch(Exception error) { inputError=error; }
+          finally { stop.Set(); }
+        });
+        reader.IsBackground=true; reader.Start();
+        for(;;) {
+          uint result=WaitForSingleObject(child.process,10);
+          if(result==0) { Check(GetExitCodeProcess(child.process,out code)); break; }
+          Check(result==258); // WAIT_TIMEOUT; every other status is a failure.
+          if(stop.WaitOne(0)) { stopping=true; break; }
+        }
+        if(inputError!=null) throw new Exception("Owned process control failed.",inputError);
+      } else {
+        Check(WaitForSingleObject(child.process,0xffffffff)==0);
+        Check(GetExitCodeProcess(child.process,out code));
+      }
       // Journaled release failures can intentionally retain the original
       // acceptance observer. Cancellation kills this owner before this branch,
       // retaining KILL_ON_JOB_CLOSE; it never grants a successful result.
-      if(code!=0 && retainOnFailure) {
+      if(!stopOnInputClose && code!=0 && retainOnFailure) {
         limits.basic.flags=0;
         Check(SetInformationJobObject(job,9,ref limits,Marshal.SizeOf(limits)));
         return unchecked((int)code);
@@ -89,7 +110,9 @@ public static class RivetOwnedCommand {
         if(DateTime.UtcNow>=deadline) throw new Exception("Owned process settlement is unconfirmed.");
         Thread.Sleep(10);
       }
-      return unchecked((int)code);
+      // A proxy exiting by itself is a loss even when its own code is zero.
+      // Only an owner-requested EOF plus confirmed job settlement returns zero.
+      return stopOnInputClose && !stopping ? 1 : unchecked((int)code);
     } finally {
       if(child.thread!=IntPtr.Zero) CloseHandle(child.thread);
       if(child.process!=IntPtr.Zero) CloseHandle(child.process);
@@ -101,7 +124,7 @@ public static class RivetOwnedCommand {
   }
 }
 '@
-  exit [RivetOwnedCommand]::Run($ownedPlan.program, [string[]]$ownedPlan.args, $ownedPlan.cwd, [bool]$ownedPlan.retainOnFailure)
+  exit [RivetOwnedCommand]::Run($ownedPlan.program, [string[]]$ownedPlan.args, $ownedPlan.cwd, [bool]$ownedPlan.retainOnFailure, [bool]$ownedPlan.stopOnInputClose)
 } catch {
   [Console]::Error.WriteLine('Owned release process failed or its local shutdown is unconfirmed.')
   exit 1

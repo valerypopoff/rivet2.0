@@ -8,7 +8,11 @@ import { parseArgs } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { serveRecordingTransitionGuard } from '../../../deploy/studio-server/scripts/lib/recording-transition-guard.mjs';
 import { runManagedGateCommand } from '../../../deploy/studio-server/scripts/lib/managed-gate-command.mjs';
-import { settleOwnedCommandTree } from '../../../deploy/studio-server/scripts/lib/owned-command-tree.mjs';
+import {
+  settleOwnedCommandTree,
+  spawnOwnedWindowsCommand,
+  tryKill,
+} from '../../../deploy/studio-server/scripts/lib/owned-command-tree.mjs';
 import {
   readRecordingTransitionConfiguration,
   parseRecordingTransitionDatabaseUrl,
@@ -65,15 +69,17 @@ async function startProxy(proxy: RecordingProxy, signal: AbortSignal, environmen
   )
     throw new Error('Recording database proxy executable does not match its reviewed checksum.');
   signal.throwIfAborted();
-  const child = spawn(
+  const windowsJob = process.platform === 'win32';
+  const child = (windowsJob ? spawnOwnedWindowsCommand : spawn)(
     proxy.executable,
     ['--address=127.0.0.1', `--port=${proxy.port}`, '--structured-logs', proxy.instance],
     {
       shell: false,
       windowsHide: true,
-      detached: process.platform !== 'win32',
+      detached: !windowsJob,
       env: environment,
-      stdio: ['ignore', 'pipe', 'pipe'],
+      stdio: [windowsJob ? 'pipe' : 'ignore', 'pipe', 'pipe'],
+      ...(windowsJob ? { stopOnInputClose: true } : {}),
     },
   );
   let ready = false,
@@ -96,15 +102,39 @@ async function startProxy(proxy: RecordingProxy, signal: AbortSignal, environmen
   };
   child.stdout!.on('data', observe);
   child.stderr!.on('data', observe);
+  child.stdin?.on('error', () => {}); // Closure/exit status, not EPIPE, proves settlement.
   let closing: Promise<void> | undefined;
   const close = () =>
     (closing ??= (async () => {
       if (ended || !child.pid) {
         await closed;
+        if (ready) throw new Error('Recording database proxy stopped before shutdown.');
         return;
       }
-      const confirmed = await settleOwnedCommandTree(child);
-      if (!confirmed) throw new Error('Recording database proxy shutdown is unconfirmed.');
+      if (windowsJob) {
+        // The supervisor owns the kernel job. EOF terminates it and confirms
+        // zero active processes; parent closure alone cannot prove shutdown.
+        let timeout: ReturnType<typeof setTimeout> | undefined;
+        try {
+          child.stdin!.end();
+          await Promise.race([
+            closed,
+            new Promise<never>((_resolve, reject) => {
+              timeout = setTimeout(() => {
+                tryKill(child); // KILL_ON_JOB_CLOSE also fences descendants.
+                reject(new Error('Recording database proxy shutdown is unconfirmed (supervisor deadline exceeded).'));
+              }, 5000);
+            }),
+          ]);
+          if (child.exitCode !== 0)
+            throw new Error(
+              `Recording database proxy shutdown is unconfirmed (supervisor exit ${child.exitCode ?? child.signalCode ?? 'unknown'}).`,
+            );
+        } finally {
+          clearTimeout(timeout);
+        }
+      } else if (!(await settleOwnedCommandTree(child)))
+        throw new Error('Recording database proxy shutdown is unconfirmed.');
       await closed;
     })());
   try {

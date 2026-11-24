@@ -410,7 +410,9 @@ export async function verifyRecordingStorageTransition(pool: Pool, storage: Mana
       `import net from 'node:net';import fs from 'node:fs';
 const port=Number(process.argv.find(x=>x.startsWith('--port=')).slice(7));
 const server=net.createServer(socket=>{const remote=net.connect(${Number(target.port || 5432)},${JSON.stringify(target.hostname)});socket.pipe(remote).pipe(socket);socket.on('error',()=>remote.destroy());remote.on('error',()=>socket.destroy());});
-server.listen(port,'127.0.0.1',()=>{fs.writeFileSync(${JSON.stringify(path.join(directory, 'proxy.pid'))},String(process.pid));console.log('The proxy has started successfully and is ready for new connections!');});`,
+server.listen(port,'127.0.0.1',()=>{fs.writeFileSync(${JSON.stringify(path.join(directory, 'proxy.pid'))},String(process.pid));console.log('The proxy has started successfully and is ready for new connections!');});
+if(process.argv.includes('--stop-error')) {process.stdin.resume();process.stdin.on('end',()=>process.exit(23));}
+if(process.argv.includes('--ignore-stop')) process.stdin.resume();`,
     );
     const server = net.createServer();
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -446,13 +448,30 @@ server.listen(port,'127.0.0.1',()=>{fs.writeFileSync(${JSON.stringify(path.join(
         (/proxy did not become ready/.test(error.message) || (error as NodeJS.ErrnoException).code === 'EFTYPE'),
     );
     let interruptOnProxyExit = false;
+    let shutdownFault: 'stop-error' | 'ignore-stop' | undefined;
     childProcess.spawn = ((program, args, options) => {
-      if (program !== proxyFile) return nativeSpawn(program, args as string[], options as childProcess.SpawnOptions);
-      const child = nativeSpawn(
-        process.execPath,
-        [proxyFile, ...(args as string[])],
-        options as childProcess.SpawnOptions,
-      );
+      if (process.platform === 'win32' && program === 'taskkill.exe')
+        throw new Error('Legacy process-tree helper is unavailable in this transition contract.');
+      const plan = options?.env?.RIVET_OWNED_COMMAND_PLAN;
+      const owned = plan && JSON.parse(Buffer.from(plan, 'base64').toString());
+      if (program !== proxyFile && owned?.program !== proxyFile)
+        return nativeSpawn(program, args as string[], options as childProcess.SpawnOptions);
+      const child =
+        owned && !shutdownFault
+          ? nativeSpawn(program, args as string[], {
+              ...options,
+              env: {
+                ...options.env,
+                RIVET_OWNED_COMMAND_PLAN: Buffer.from(
+                  JSON.stringify({ ...owned, program: process.execPath, args: [proxyFile, ...owned.args] }),
+                ).toString('base64'),
+              },
+            })
+          : nativeSpawn(
+              process.execPath,
+              [proxyFile, ...(owned?.args ?? (args as string[])), ...(shutdownFault ? [`--${shutdownFault}`] : [])],
+              options as childProcess.SpawnOptions,
+            );
       child.once('exit', () => {
         if (interruptOnProxyExit) input.interrupts.emit('SIGTERM');
       });
@@ -474,6 +493,19 @@ server.listen(port,'127.0.0.1',()=>{fs.writeFileSync(${JSON.stringify(path.join(
         );
       } finally {
         interruptOnProxyExit = false;
+      }
+      if (process.platform === 'win32') {
+        for (const fault of ['stop-error', 'ignore-stop'] as const) {
+          shutdownFault = fault;
+          try {
+            await assert.rejects(
+              withRecordingStorageTransition({ ...input, configuration: { ...configuration, proxy } }, async () => {}),
+              fault === 'stop-error' ? /supervisor exit 23/ : /supervisor deadline exceeded/,
+            );
+          } finally {
+            shutdownFault = undefined;
+          }
+        }
       }
       for (const fault of ['database-owner', 'proxy'] as const) {
         const marker = path.join(directory, `command-${fault}`);

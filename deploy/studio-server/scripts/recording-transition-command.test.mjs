@@ -12,6 +12,7 @@ import {
   runRecordingTransitionCommand,
 } from './lib/recording-transition-command.mjs';
 import { runManagedGateCommand } from './lib/managed-gate-command.mjs';
+import { spawnOwnedWindowsCommand, tryKill } from './lib/owned-command-tree.mjs';
 
 const identity = { context: 'production', namespace: 'rivet', release: 'rivet', namespaceUid: 'owned-namespace' };
 const envSpelling = (name) => (process.platform === 'win32' ? name.toLowerCase() : name);
@@ -46,18 +47,26 @@ async function fixture(t) {
 }
 
 async function assertStopped(pid) {
-  let alive = true;
-  try {
-    process.kill(pid, 0);
-  } catch (error) {
-    if (error.code === 'ESRCH') alive = false;
-    else throw error;
+  const deadline = Date.now() + 5000;
+  for (;;) {
+    let alive = true;
+    try {
+      process.kill(pid, 0);
+    } catch (error) {
+      if (error.code === 'ESRCH') alive = false;
+      else throw error;
+    }
+    if (alive && process.platform === 'linux') {
+      const state = await fs.readFile(`/proc/${pid}/stat`, 'utf8').catch((error) => {
+        if (error.code === 'ENOENT') return '';
+        throw error;
+      });
+      alive = state !== '' && !/\) [ZX] /.test(state);
+    }
+    if (!alive) return;
+    assert.ok(Date.now() < deadline, 'Strict release owner must settle its descendants');
+    await new Promise((resolve) => setTimeout(resolve, 20));
   }
-  if (alive && process.platform === 'linux') {
-    const state = await fs.readFile(`/proc/${pid}/stat`, 'utf8').catch(() => '');
-    alive = state !== '' && !/\) [ZX] /.test(state);
-  }
-  assert.equal(alive, false, 'Strict release owner must settle its descendants');
 }
 
 test('transition configuration rejects unknown executable/environment hooks and mismatched installation without exposing values', () => {
@@ -366,6 +375,64 @@ for (const cooperative of [true, false])
       await assertStopped(Number(await fs.readFile(marker, 'utf8')));
     },
   );
+
+test(
+  'Windows proxy shutdown confirms its job and rejects spontaneous zero exit or owner death',
+  { skip: process.platform !== 'win32', timeout: 30000 },
+  async (t) => {
+    const f = await fixture(t);
+    for (const mode of ['shutdown', 'spontaneous-exit', 'owner-death']) {
+      const marker = path.join(f.root, `proxy-${mode}`);
+      const exit = path.join(f.root, `exit-${mode}`);
+      const descendant = `const fs=require('node:fs');fs.writeFileSync(${JSON.stringify(marker + '.tmp')},JSON.stringify({parent:process.ppid,child:process.pid}));fs.renameSync(${JSON.stringify(marker + '.tmp')},${JSON.stringify(marker)});setInterval(()=>{},1000)`;
+      const parent = `const fs=require('node:fs');require('node:child_process').spawn(process.execPath,['-e',${JSON.stringify(descendant)}],{stdio:'inherit',detached:true,windowsHide:true}).unref();setInterval(()=>{if(fs.existsSync(${JSON.stringify(exit)}))process.exit(0)},10)`;
+      const owner = spawnOwnedWindowsCommand(process.execPath, ['-e', parent], {
+        cwd: f.root,
+        env: process.env,
+        stdio: ['pipe', 'pipe', 'pipe'],
+        stopOnInputClose: true,
+      });
+      let error,
+        stderr = '';
+      owner.on('error', (value) => {
+        error = value;
+      });
+      owner.stdin.on('error', () => {});
+      owner.stdout.resume();
+      owner.stderr.on('data', (bytes) => {
+        stderr += bytes;
+      });
+      const closed = new Promise((resolve) => owner.once('close', resolve));
+      try {
+        const deadline = Date.now() + 10000;
+        while (
+          !(await fs.access(marker).then(
+            () => true,
+            () => false,
+          ))
+        ) {
+          if (error) throw error;
+          if (owner.exitCode !== null) throw Error(`Owned proxy failed to start: ${stderr}`);
+          if (Date.now() >= deadline) throw Error('Owned proxy did not become ready');
+          t.signal.throwIfAborted();
+          await new Promise((resolve) => setTimeout(resolve, 20));
+        }
+        const pids = JSON.parse(await fs.readFile(marker, 'utf8'));
+        if (mode === 'shutdown') owner.stdin.end();
+        else if (mode === 'spontaneous-exit') await fs.writeFile(exit, 'exit');
+        else tryKill(owner);
+        const code = await closed;
+        if (mode === 'shutdown') assert.equal(code, 0, stderr);
+        else assert.notEqual(code, 0, 'Only a requested, confirmed shutdown may succeed');
+        await assertStopped(pids.parent);
+        await assertStopped(pids.child);
+      } finally {
+        tryKill(owner);
+        await closed;
+      }
+    }
+  },
+);
 
 test(
   'ordinary journaled failure retains its original receipt-managed observer for acceptance-only recovery',

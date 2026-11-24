@@ -1,4 +1,28 @@
 import { spawn } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+
+/** Assign the process tree to its kernel job during creation, before it runs. */
+export function spawnOwnedWindowsCommand(
+  program,
+  args,
+  { retainOnFailure = false, stopOnInputClose = false, ...options },
+) {
+  return spawn(
+    'powershell.exe',
+    ['-NoProfile', '-NonInteractive', '-File', fileURLToPath(new URL('./owned-command-windows.ps1', import.meta.url))],
+    {
+      ...options,
+      shell: false,
+      windowsHide: true,
+      env: {
+        ...(options.env ?? process.env),
+        RIVET_OWNED_COMMAND_PLAN: Buffer.from(
+          JSON.stringify({ program, args, cwd: options.cwd ?? process.cwd(), retainOnFailure, stopOnInputClose }),
+        ).toString('base64'),
+      },
+    },
+  );
+}
 
 /** Bound inspector/helper settlement; false is uncertainty, never success. */
 export async function settleOwnedCommandTree(child, timeoutMs = 5000) {

@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { fileURLToPath } from 'node:url';
-import { settleOwnedCommandTree } from './owned-command-tree.mjs';
+import { settleOwnedCommandTree, spawnOwnedWindowsCommand } from './owned-command-tree.mjs';
 import { findExecutableOnPath } from './k8s-tools.mjs';
 
 const rootDir = fileURLToPath(new URL('../../../../', import.meta.url));
@@ -46,32 +46,17 @@ export async function runManagedGateCommand(program, args, options = {}) {
       if (!program || !program.toLowerCase().endsWith('.exe'))
         throw Error('Owned release executable is unavailable on this runner.');
     }
-    const child = spawn(
-      windowsJob ? 'powershell.exe' : program,
-      windowsJob
-        ? [
-            '-NoProfile',
-            '-NonInteractive',
-            '-File',
-            fileURLToPath(new URL('./owned-command-windows.ps1', import.meta.url)),
-          ]
-        : args,
-      {
-        cwd,
-        shell: false,
-        windowsHide: true,
-        detached: processGroup,
-        env: windowsJob
-          ? {
-              ...env,
-              RIVET_OWNED_COMMAND_PLAN: Buffer.from(JSON.stringify({ program, args, cwd, retainOnFailure })).toString(
-                'base64',
-              ),
-            }
-          : env,
-        stdio: capture ? ['pipe', 'pipe', 'pipe'] : input == null ? 'inherit' : ['pipe', 'inherit', 'inherit'],
-      },
-    );
+    const spawnOptions = {
+      cwd,
+      shell: false,
+      windowsHide: true,
+      detached: processGroup,
+      env,
+      stdio: capture ? ['pipe', 'pipe', 'pipe'] : input == null ? 'inherit' : ['pipe', 'inherit', 'inherit'],
+    };
+    const child = windowsJob
+      ? spawnOwnedWindowsCommand(program, args, { ...spawnOptions, retainOnFailure })
+      : spawn(program, args, spawnOptions);
     let stdout = '',
       stderr = '',
       childError,

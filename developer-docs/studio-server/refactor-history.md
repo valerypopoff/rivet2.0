@@ -73,6 +73,17 @@ honors the bridge's filtered child environment. The managed guard contract uses
 an environment-backed settings key to verify the fixture cannot put that key
 back into the CLI environment. Original native journey assertions are retained.
 
+Windows proxy shutdown now reuses the creation-time Job Object supervisor rather
+than launching `taskkill` at cleanup. A bounded local contention reproduction
+with the original helper output handles made all 32 helpers miss the original
+five-second deadline. All 32 job-owned shutdowns passed. The new proxy mode
+uses owner EOF to request termination and requires zero active job processes;
+spontaneous zero exit, failed confirmation and deadline expiry cannot succeed.
+The five-second bound, real coordination and journaled observer retention remain.
+Native tree tests and the existing real PostgreSQL lane own these checks. The
+original uninstrumented failure has no helper result, so its exact trigger cannot
+be established retrospectively from that log.
+
 ## 2026-11-24 - Hosted Evaluation Persistence Ownership
 
 `HostedEvaluationJobStore` owns durable job transitions and their complete
