@@ -223,10 +223,23 @@ returning its ID. In run `45039671659`, GitHub listed a newly uploaded artifact
 but its download returned 404 less than a second later. The listing alone is
 insufficient evidence of immediate download availability. Poll only that 404,
 for up to one minute within the existing overall deadline, and keep validating
-the same Build SHA, run, attempt and artifact ID. Permission/server errors and
-changed identities still fail; redirects are inspected without being followed.
+the same Build SHA, run, attempt and artifact ID. Permission errors and changed
+identities still fail; redirects are inspected without being followed.
 The local GitHub contract covers delayed availability, permanent absence and
 identity changes. Actual transfer still requires a successful hosted run.
+
+On November 26, stable desktop run `45706651168` failed during this wait because
+GitHub returned HTTP 500 for Build metadata. The frontend producer was still
+running, but the failure was the API response, not an expired artifact deadline.
+The read-only helper now retries 429/500/502/503/504 for at most three consecutive
+failed evidence passes, with bounded backoff and `Retry-After` constrained by the
+remaining original window. Each recovered ZIP pass rechecks the pinned run,
+attempt and artifact. Neither the twenty-minute overall wait, ten-second request
+bound nor one-minute ZIP window is extended. Permission errors, malformed
+responses, transport errors and changed identities remain failures.
+The maintained HTTP regression and repository-owned Postman simulation cover
+transient recovery at each read, persistent failure, excessive backoff and
+identity changes during recovery. Hosted recovery remains a separate gate.
 
 Browser fixtures must follow the current UI ownership. After moving project
 details into the context-menu header, the bundle-deletion survivor check opens
