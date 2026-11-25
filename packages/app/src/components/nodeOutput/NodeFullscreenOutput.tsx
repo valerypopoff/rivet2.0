@@ -142,6 +142,12 @@ const fullscreenOutputCss = css`
     display: flex;
     align-items: center;
     justify-content: space-between;
+    /* Transparent space must not block output controls scrolled beneath it. */
+    pointer-events: none;
+
+    > * {
+      pointer-events: auto;
+    }
   }
 
   .picker {

@@ -851,6 +851,12 @@ their width, min/max width or left/right bounds with the 960px policy; doing so
 allows the pointer handlers to update saved state while leaving the visible shell
 stationary. The exemption follows the component's resize opt-in, not a node type
 or a hard-coded test ID, and does not affect ordinary dialogs or desktop styling.
+The fullscreen output header keeps its full-width sticky layout, but its empty
+space must pass pointer input to the output beneath it. Only the pager and toolbar
+groups claim pointer input. `fullscreen-output-search-paging.spec.ts` scrolls
+Copy Full Value and a chunk pager under the header's empty area, checks actual
+hit targets and uses ordinary clicks to verify copying and page navigation;
+search and the toolbar remain interactive.
 Hosted Settings and Project Settings navigation stacks above the content at
 editor viewport widths of 700px or less. This lives in `hosted-editor.css`,
 without changing standalone desktop styles or the shared outer dimensions.

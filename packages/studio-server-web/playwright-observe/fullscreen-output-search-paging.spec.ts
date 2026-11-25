@@ -293,9 +293,7 @@ test('boolean outputs use inline code styling while true/false strings stay plai
             color: actual.color,
             padding: Number.parseFloat(actual.paddingInlineStart),
             font: actual.fontFamily,
-            expectedFont: getComputedStyle(document.documentElement)
-              .getPropertyValue('--font-family-monospace')
-              .trim(),
+            expectedFont: getComputedStyle(document.documentElement).getPropertyValue('--font-family-monospace').trim(),
           };
         });
         expect(style.background).toBe(referenceColors.background);
@@ -409,6 +407,51 @@ test('fullscreen search keeps the match highlighted after opening a paged JSON c
 
   await modal.locator('.search-input').fill('');
   await expect(activeMatch).toHaveCount(0);
+  await modal.getByRole('button', { name: 'Load Full Value', exact: true }).click();
+  await expect(chunkPagers).toHaveCount(2);
+  await firstPager.getByRole('button', { name: '>', exact: true }).click({ modifiers: ['Control'] });
+  await expect(firstPager).toContainText(`${pageCount} / ${pageCount}`);
+
+  // Reproduce the transparent sticky header covering output actions at the left.
+  // Position each real control under that empty area, then use ordinary clicks.
+  const alignUnderHeader = async (control: Locator) => {
+    await control.evaluate((element) => {
+      const header = element.closest('[role="dialog"]')!.querySelector('.fullscreen-header')!;
+      const scrollable = element.closest('[data-testid="fullscreen-output-modal--scrollable"]')!;
+      const button = element.getBoundingClientRect();
+      const sticky = header.getBoundingClientRect();
+      scrollable.scrollTop += button.top + button.height / 2 - (sticky.top + sticky.height / 2);
+    });
+    await expect
+      .poll(() =>
+        control.evaluate((element) => {
+          const button = element.getBoundingClientRect();
+          const header = element
+            .closest('[role="dialog"]')!
+            .querySelector('.fullscreen-header')!
+            .getBoundingClientRect();
+          const x = button.left + button.width / 2;
+          const y = button.top + button.height / 2;
+          return y >= header.top && y < header.bottom && element.contains(document.elementFromPoint(x, y));
+        }),
+      )
+      .toBe(true);
+  };
+  await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
+  const copy = modal.getByRole('button', { name: 'Copy Full Value', exact: true });
+  await alignUnderHeader(copy);
+  await copy.click();
+  await expect
+    .poll(async () => {
+      const copied = await page.evaluate(() => navigator.clipboard.readText());
+      return copied.replaceAll('\r\n', '\n') === JSON.stringify({ requestId: largeValue }, null, 2);
+    })
+    .toBe(true);
+  const previousChunk = firstPager.getByRole('button', { name: '<', exact: true });
+  await alignUnderHeader(previousChunk);
+  await previousChunk.click({ modifiers: ['Control'] });
+  await expect(firstPager).toContainText(`1 / ${pageCount}`);
+  await modal.screenshot({ path: test.info().outputPath('fullscreen-header-output-actions.png') });
 });
 
 async function getEditorRoot(page: Page): Promise<EditorRoot> {

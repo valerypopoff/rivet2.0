@@ -12,6 +12,36 @@ function request(url: string, options: RequestInit = {}) {
   const deadline = AbortSignal.timeout(20_000);
   return fetch(url, { ...options, signal: options.signal ? AbortSignal.any([options.signal, deadline]) : deadline });
 }
+const jobPhases: Record<ProjectBundleJobStatus['phase'], true> = {
+  collecting: true,
+  packaging: true,
+  ready: true,
+  failed: true,
+  cancelled: true,
+  interrupted: true,
+};
+const isNonNegativeInteger = (value: unknown) => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
+async function readJobStatus(response: Response, expectedId: string): Promise<ProjectBundleJobStatus> {
+  const status = await parseJsonResponse<Partial<ProjectBundleJobStatus> | null>(response);
+  if (
+    !status ||
+    typeof status !== 'object' ||
+    Array.isArray(status) ||
+    status.id !== expectedId ||
+    typeof status.phase !== 'string' ||
+    !Object.hasOwn(jobPhases, status.phase) ||
+    !isNonNegativeInteger(status.projects) ||
+    !isNonNegativeInteger(status.bytes) ||
+    typeof status.expiresAt !== 'string' ||
+    !Number.isFinite(Date.parse(status.expiresAt)) ||
+    (status.versionPolicy !== undefined && status.versionPolicy !== 'latest' && status.versionPolicy !== 'published') ||
+    (status.error !== undefined && typeof status.error !== 'string') ||
+    (status.archiveBytes !== undefined && !isNonNegativeInteger(status.archiveBytes)) ||
+    (status.archiveHash !== undefined && typeof status.archiveHash !== 'string')
+  )
+    throw new Error('The server returned invalid export status. The export may still be running.');
+  return status as ProjectBundleJobStatus;
+}
 const active = (job: ProjectBundleJobStatus | null) => job?.phase === 'collecting' || job?.phase === 'packaging';
 // Start requests can outlive a modal instance when the user switches bundles.
 // Entries exist only until their original request settles (including timeout).
@@ -90,8 +120,9 @@ export const WorkflowProjectBundleModal: FC<{ bundle: WorkflowFolderItem; isOpen
       const previousStatus = latestJob.current;
       const awaitingAdmission = pendingStarts.has(jobId) && !previousStatus;
       try {
-        const status = await parseJsonResponse<ProjectBundleJobStatus>(
+        const status = await readJobStatus(
           await request(`${endpoint}/${jobId}`, { cache: 'no-store', signal: abort.signal }),
+          jobId,
         );
         if (abort.signal.aborted || currentJobId.current !== jobId) return;
         acceptStatus(status);
@@ -140,7 +171,7 @@ export const WorkflowProjectBundleModal: FC<{ bundle: WorkflowFolderItem; isOpen
     setStartPending(id, true);
     remember(id); // Known before POST, so a lost acknowledgement is recoverable by GET.
     try {
-      const status = await parseJsonResponse<ProjectBundleJobStatus>(
+      const status = await readJobStatus(
         await request(`${endpoint}/container`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'X-Rivet-Bundle-Intent': '1' },
@@ -150,6 +181,7 @@ export const WorkflowProjectBundleModal: FC<{ bundle: WorkflowFolderItem; isOpen
             requestId: id,
           }),
         }),
+        id,
       );
       if (mounted.current) {
         acceptStatus(status);
@@ -174,7 +206,10 @@ export const WorkflowProjectBundleModal: FC<{ bundle: WorkflowFolderItem; isOpen
         method: 'DELETE',
         headers: { 'X-Rivet-Bundle-Intent': '1' },
       });
-      if (!response.ok && response.status !== 404) await parseJsonResponse(response);
+      if (response.status !== 204 && response.status !== 404) {
+        await parseJsonResponse(response);
+        throw new Error('The server did not confirm export cleanup.');
+      }
       if (mounted.current) {
         remember(null);
         acceptStatus(null);
@@ -285,13 +320,24 @@ export const WorkflowProjectBundleModal: FC<{ bundle: WorkflowFolderItem; isOpen
                   Prepare bundle
                 </Button>
               ) : job?.phase === 'ready' ? (
-                <Button
-                  appearance="primary"
-                  className="workflow-project-bundle-action workflow-project-bundle-primary button-size-l"
-                  href={`${endpoint}/${jobId}/download`}
-                >
-                  Download bundle
-                </Button>
+                <>
+                  <Button
+                    appearance="subtle"
+                    className="workflow-project-bundle-action button-size-l"
+                    isDisabled={busy || startPending}
+                    onClick={() => void dispose()}
+                  >
+                    Prepare another bundle
+                  </Button>
+                  <Button
+                    appearance="primary"
+                    className="workflow-project-bundle-action workflow-project-bundle-primary button-size-l"
+                    isDisabled={busy}
+                    href={`${endpoint}/${jobId}/download`}
+                  >
+                    Download bundle
+                  </Button>
+                </>
               ) : (
                 <Button
                   appearance="subtle"
