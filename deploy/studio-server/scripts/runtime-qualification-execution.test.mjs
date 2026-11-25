@@ -2080,6 +2080,7 @@ test('production action invokes the normal command once with bound inputs and pu
         }),
       );
     },
+    runGuardedRelease: ({ program, args: commandArgs, options, run }) => run(program, commandArgs, options),
   };
   for (const change of [
     (x) => {
@@ -2168,16 +2169,36 @@ test('production action invokes the normal command once with bound inputs and pu
   assert.equal(calls, 1);
   const failedPacket = await fs.mkdtemp(path.join(directory, 'failed-'));
   let failedCalls = 0;
+  let evidenceWrites = 0;
   const failed = {
     ...args,
     packet: failedPacket,
     operation: { ...operation, operationId: 'rivet-q-999-1' },
+    evidenceBucket: 'fixture-evidence',
+    cloudEvidence: () => ({
+      acquire: async () => {},
+      saveDirectory: async () => {
+        if (++evidenceWrites === 2) throw Error('private evidence upload failed');
+      },
+    }),
     run: async () => {
       failedCalls++;
       throw Error('private stderr: uncertain write');
     },
   };
-  await assert.rejects(deployQualifiedRelease(failed), /uncertain write/);
+  await assert.rejects(deployQualifiedRelease(failed), (error) => {
+    assert.ok(error instanceof AggregateError);
+    assert.deepEqual(
+      error.errors.map((item) => item.message),
+      ['private stderr: uncertain write', 'private evidence upload failed'],
+    );
+    return true;
+  });
+  assert.equal(evidenceWrites, 2, 'Both private archival destinations are attempted without replaying the command');
+  assert.match(
+    await fs.readFile(path.join(privateStore, 'rivet-q-999-1/receipts/command-failure.log'), 'utf8'),
+    /uncertain write/,
+  );
   assert.match(
     await fs.readFile(path.join(failedPacket, 'private-deployment/command-failure.log'), 'utf8'),
     /private stderr/,

@@ -851,6 +851,12 @@ their width, min/max width or left/right bounds with the 960px policy; doing so
 allows the pointer handlers to update saved state while leaving the visible shell
 stationary. The exemption follows the component's resize opt-in, not a node type
 or a hard-coded test ID, and does not affect ordinary dialogs or desktop styling.
+The fullscreen output header keeps its full-width sticky layout, but its empty
+space must pass pointer input to the output beneath it. Only the pager and toolbar
+groups claim pointer input. `fullscreen-output-search-paging.spec.ts` scrolls
+Copy Full Value and a chunk pager under the header's empty area, checks actual
+hit targets and uses ordinary clicks to verify copying and page navigation;
+search and the toolbar remain interactive.
 Hosted Settings and Project Settings navigation stacks above the content at
 editor viewport widths of 700px or less. This lives in `hosted-editor.css`,
 without changing standalone desktop styles or the shared outer dimensions.
@@ -1964,11 +1970,12 @@ committing or pushing the source never applies that recovery to a live cluster.
 
 The five private `@valerypopoff/rivet-studio-server-*` workspaces form one
 Studio Server product and use one lockstep package version. Their current
-version is `1.44.0`. `yarn studio-server:verify:repo-structure` rejects version
+version is `1.45.0`. `yarn studio-server:verify:repo-structure` rejects version
 drift between the API, web, executor, shared, and bootstrap manifests.
-This minor release adds bounded HTTP upload waiting and recording memory
-accounting, with earlier execution admission and bounded settings-check sharing.
-API implements these changes; the other four packages follow product lockstep.
+This minor release includes Brotli recording storage and guarded recompression,
+bounded public endpoint admission, maintenance-lease and deployment repairs,
+and controller/OAuth reliability work. API, bootstrap, shared and web contain
+package-local changes; executor follows product lockstep.
 The [recording latency assessment](recording-latency-repair-plan.md) retains the
 open performance gates; a version bump is not qualification evidence.
 Backend overlap was covered by `1.31.0`; compact HA/autoscaling by `1.30.0`.
@@ -1977,7 +1984,7 @@ GKE qualification; see the [performance implementation status](rolling-update-pe
 Bump all five manifests together even when only one workspace has runtime
 changes; run the repository-structure check before
 building a release candidate. See the prepared release matrix in
-[Build and CI](../BUILD-AND-CI.md#prepared-release-versions-2026-11-21) for the
+[Build and CI](../BUILD-AND-CI.md#prepared-release-versions-2026-11-26) for the
 separate desktop, sidecar, documentation and public runtime version decisions.
 
 These private package versions are release metadata, not npm publication or

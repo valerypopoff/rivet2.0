@@ -16,10 +16,7 @@ export function isWorkflowProjectFullyUnpublished(project: WorkflowProjectItem):
   return project.settings.status === 'unpublished' && (project.settings.publishedWebApps?.length ?? 0) === 0;
 }
 
-export function validateEndpointName(
-  endpointName: string,
-  duplicateProjectFileName: string | null,
-): string | null {
+export function validateEndpointName(endpointName: string, duplicateProjectFileName: string | null): string | null {
   const trimmedEndpointName = endpointName.trim();
   if (!trimmedEndpointName) {
     return 'Endpoint name is required to publish.';
@@ -53,4 +50,36 @@ export function formatLastPublishedAtLabel(
     dateStyle: 'medium',
     timeStyle: 'short',
   }).format(publishedAtDate)}`;
+}
+
+export function parseWebAppAllowedEmailDraft(value: string): string[] {
+  const seen = new Set<string>();
+  const emails: string[] = [];
+  for (const rawEmail of value.split(/[\n,;]/)) {
+    const email = rawEmail.trim().toLowerCase();
+    if (!email || seen.has(email)) {
+      continue;
+    }
+
+    seen.add(email);
+    emails.push(email);
+  }
+
+  return emails;
+}
+
+export function carryEditedWebAppDrafts(
+  drafts: Record<string, string>,
+  previousServerValues: Record<string, string>,
+  nextServerValues: Record<string, string>,
+): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(nextServerValues).map(([id, value]) => [
+      id,
+      // Own keys in these string records contain a string, even with unchecked indexed access enabled.
+      Object.hasOwn(previousServerValues, id) && Object.hasOwn(drafts, id) && drafts[id] !== previousServerValues[id]
+        ? drafts[id]!
+        : value,
+    ]),
+  );
 }

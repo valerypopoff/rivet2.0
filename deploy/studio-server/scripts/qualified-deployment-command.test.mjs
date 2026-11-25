@@ -103,6 +103,7 @@ test('the hosted production controller delegates once to the qualified implement
               assert.equal(input.packet, packet);
               assert.equal(input.digest, digest);
               assert.equal(input.sourceSha, legacyAssertionSource);
+              assert.equal(input.environment, environment);
               assert.deepEqual(input.identity, { context: 'production', namespace: 'rivet', release: 'rivet' });
               await input.run(
                 process.execPath,

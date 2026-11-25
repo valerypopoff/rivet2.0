@@ -682,7 +682,19 @@ test('janitor health polling has a deadline and never retries denied reads', asy
   );
 });
 
-for (const profile of ['legacy', 'one-proxy', 'wrong-hash', 'mixed-policy', 'execution', 'execution-mismatch'])
+for (const profile of [
+  'legacy',
+  'one-proxy',
+  'wrong-hash',
+  'mixed-policy',
+  'execution',
+  'execution-mismatch',
+  'recording',
+  'recording-mismatch',
+  'recording-proxy',
+  'recording-proxy-mismatch',
+  'recording-access-denied',
+])
   test(`production preparation preserves its pinned installation and rejects target drift: ${profile}`, async (t) => {
     const f = await fixture(t),
       directory = path.dirname(f.jobEnv);
@@ -711,6 +723,35 @@ for (const profile of ['legacy', 'one-proxy', 'wrong-hash', 'mixed-policy', 'exe
       policy: { backup: {}, acceptance: {} },
     };
     const valuesText = Buffer.from(installation.valuesBase64, 'base64').toString();
+    if (profile.startsWith('recording'))
+      installation.recordingTransition = {
+        protocol: 1,
+        storageIdentity: 'a'.repeat(64),
+        identity: {
+          ...Object.fromEntries(
+            ['context', 'namespace', 'release', 'namespaceUid'].map((key) => [key, f.configuration.production[key]]),
+          ),
+          ...(profile === 'recording-mismatch' ? { namespaceUid: 'foreign' } : {}),
+        },
+        settings: {
+          databaseUrl: { value: 'postgres://fixture/db' },
+          encryptionKey: { value: 'private-recording-key-sentinel' },
+          sslMode: 'require',
+        },
+      };
+    const proxyBytes = 'owned-pinned-proxy-fixture';
+    if (profile.startsWith('recording-proxy'))
+      installation.recordingTransition.proxy = {
+        source: 'gs://fixture-tools/cloud-sql-proxy#12',
+        sha256: `sha256:${createHash('sha256')
+          .update(profile.endsWith('mismatch') ? 'wrong' : proxyBytes)
+          .digest('hex')}`,
+        instance: 'fixture:region:database',
+        port: 15432,
+        databaseHost: 'database.example.test',
+        databasePort: 5432,
+        sslMode: 'disable',
+      };
     if (profile.startsWith('execution'))
       f.configuration.production.executionProfile = {
         minReplicas: 2,
@@ -732,33 +773,69 @@ for (const profile of ['legacy', 'one-proxy', 'wrong-hash', 'mixed-policy', 'exe
       GITHUB_ENV: f.jobEnv,
       RIVET_DEPLOYMENT_CONFIGURATION: JSON.stringify(f.configuration),
     };
-    const commands = [];
+    const commands = [],
+      diagnostics = [];
     const preparation = prepareHostedRelease('production', {
       environment,
-      cloudEvidence: () => {
-        throw new Error('Production preparation must not claim a staging lock');
+      cloudEvidence: ({ bucket, prefix }) => {
+        assert.equal(bucket, f.configuration.evidenceBucket);
+        assert.equal(prefix, 'production');
+        return {
+          acquire: () => assert.fail('Production preparation must not acquire a deployment or staging lock'),
+          put: async (name, bytes) => diagnostics.push({ name, value: JSON.parse(bytes) }),
+        };
       },
       run: (bin, args, commandEnvironment) => {
+        if (bin === 'whoami') return 'fixture,S-1-5-21-123-456-789-1001';
+        if (bin === 'icacls') {
+          assert.ok(args.includes('/inheritance:r'));
+          return '';
+        }
         assert.equal(bin, 'gcloud');
         commands.push(args);
-        if (args.includes('get-credentials'))
+        if (args.includes('get-credentials')) {
           assert.equal(commandEnvironment.RIVET_DEPLOYMENT_CONFIGURATION, undefined);
-        else {
-          assert.deepEqual(args.slice(0, 3), ['storage', 'cp', f.configuration.installationUri]);
-          writeFileSync(args[3], JSON.stringify(installation));
+          if (profile === 'recording-access-denied') throw Error('fixture private production permission denied');
+        } else {
+          assert.deepEqual(args.slice(0, 2), ['storage', 'cp']);
+          if (args[2] === f.configuration.installationUri) writeFileSync(args[3], JSON.stringify(installation));
+          else {
+            assert.equal(args[2], installation.recordingTransition.proxy.source);
+            writeFileSync(args[3], proxyBytes);
+          }
         }
         return '';
       },
     });
-    if (['wrong-hash', 'mixed-policy', 'execution-mismatch'].includes(profile)) {
-      await assert.rejects(preparation);
+    if (
+      [
+        'wrong-hash',
+        'mixed-policy',
+        'execution-mismatch',
+        'recording-mismatch',
+        'recording-proxy-mismatch',
+        'recording-access-denied',
+      ].includes(profile)
+    ) {
+      await assert.rejects(preparation, (error) => {
+        assert.ok(!error.message.includes('fixture private production permission denied'));
+        return true;
+      });
+      assert.equal(diagnostics.length, 1, 'Production setup failures must outlive the ephemeral runner');
+      assert.equal(diagnostics[0].name, 'setup/123-1/preparation-failure.json');
+      assert.equal(diagnostics[0].value.phase, 'production-installation');
+      if (profile === 'recording-access-denied') {
+        assert.equal(diagnostics[0].value.code, 'permission_denied');
+        assert.match(JSON.stringify(diagnostics[0].value), /fixture private production permission denied/);
+      }
       await assert.rejects(fs.stat(path.join(directory, 'rivet-production/values.json')), { code: 'ENOENT' });
       return;
     }
     await preparation;
+    assert.deepEqual(diagnostics, [], 'Successful preparation must not upload failure evidence');
     if (profile === 'one-proxy')
       assert.match(await fs.readFile(f.jobEnv, 'utf8'), /^RIVET_QUALIFICATION_PRODUCTION_PROXY_MINIMUM=1$/m);
-    assert.equal(commands.length, 2);
+    assert.equal(commands.length, profile === 'recording-proxy' ? 3 : 2);
     const job = path.join(directory, 'rivet-production');
     assert.equal(await fs.readFile(path.join(job, 'values.json'), 'utf8'), valuesText);
     assert.equal(await fs.readFile(path.join(job, 'backup.mjs'), 'utf8'), 'export const fixture = "backup";');
@@ -766,6 +843,18 @@ for (const profile of ['legacy', 'one-proxy', 'wrong-hash', 'mixed-policy', 'exe
     assert.equal(policy.backup.script, 'backup.mjs');
     assert.equal(policy.acceptance.script, 'acceptance.mjs');
     assert.equal(environment.RIVET_DEPLOYMENT_CONFIGURATION, undefined);
+    if (profile.startsWith('recording')) {
+      const exported = await fs.readFile(f.jobEnv, 'utf8');
+      assert.ok(!exported.includes('private-recording-key-sentinel'));
+      assert.match(exported, /RIVET_RECORDING_TRANSITION_CONFIGURATION=.*recording-transition.json/);
+      const config = JSON.parse(await fs.readFile(path.join(job, 'recording-transition.json'), 'utf8'));
+      assert.equal(config.installationReference, f.configuration.installationUri);
+      assert.equal(config.settings.encryptionKey.value, 'private-recording-key-sentinel');
+      if (config.proxy) {
+        assert.equal(path.dirname(config.proxy.executable), job);
+        assert.equal(await fs.readFile(config.proxy.executable, 'utf8'), proxyBytes);
+      }
+    }
   });
 
 test('hosted staging carries the reviewed proxy minimum without changing its production identity', async (t) => {

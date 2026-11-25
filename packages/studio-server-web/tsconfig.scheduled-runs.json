@@ -1,0 +1,28 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "composite": false,
+    "declaration": false,
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "noEmit": true,
+    "jsx": "react-jsx",
+    "jsxImportSource": "@emotion/react",
+    "types": ["vite/client", "node"],
+    "rootDir": ".."
+  },
+  "files": [
+    "svgr.d.ts",
+    "dashboard/ScheduledRunsModal.tsx",
+    "dashboard/useScheduledRunsController.ts",
+    "dashboard/scheduledRunForm.ts",
+    "dashboard/scheduledRunApi.ts",
+    "dashboard/ScheduledProjectSelect.tsx",
+    "dashboard/scheduledProjectOptions.ts",
+    "dashboard/SegmentedControl.tsx",
+    "playwright-observe/helpers/scheduledRunsFixture.ts",
+    "tests/scheduled-run-form.test.ts",
+    "tests/scheduled-run-api.test.ts",
+    "tests/scheduled-project-options.test.ts"
+  ]
+}

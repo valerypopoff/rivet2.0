@@ -70,7 +70,12 @@ export default [
         {
           patterns: [
             {
-              group: ['**/core/src', '**/core/src/**', '@valerypopoff/rivet2-core/src', '@valerypopoff/rivet2-core/src/**'],
+              group: [
+                '**/core/src',
+                '**/core/src/**',
+                '@valerypopoff/rivet2-core/src',
+                '@valerypopoff/rivet2-core/src/**',
+              ],
               message:
                 'Import core through @valerypopoff/rivet2-core. If a package needs a shared core contract, export it intentionally from core first.',
             },
@@ -127,6 +132,70 @@ export default [
       '@typescript-eslint/no-throw-literal': 'off',
       '@typescript-eslint/no-non-null-asserted-optional-chain': 'off',
       '@typescript-eslint/triple-slash-reference': 'off',
+    },
+  },
+
+  // The hosted upgrade screen is outside the desktop app's TypeScript project.
+  {
+    files: [
+      'packages/studio-server-web/dashboard/app-settings/tabs/LocalStorageUpgradeSettingsTab.tsx',
+      'packages/studio-server-web/dashboard/app-settings/tabs/localStorageUpgradeModel.ts',
+      'packages/studio-server-web/dashboard/app-settings/tabs/useLocalStorageUpgradeController.ts',
+      'packages/studio-server-web/tests/local-storage-upgrade-model.test.ts',
+    ],
+    languageOptions: {
+      parserOptions: { project: ['./packages/studio-server-web/tsconfig.local-storage-upgrade.json'] },
+    },
+  },
+
+  // Publication review owners have a focused hosted-web TypeScript project.
+  {
+    files: [
+      'packages/studio-server-web/dashboard/useProjectSettingsActions.ts',
+      'packages/studio-server-web/dashboard/useProjectPublicationReview.ts',
+      'packages/studio-server-web/dashboard/projectSettingsForm.ts',
+      'packages/studio-server-web/dashboard/publicationVersion.ts',
+      'packages/studio-server-web/dashboard/WorkflowPublishedVersionHistoryModal.tsx',
+      'packages/studio-server-web/dashboard/projectPublicationReview.ts',
+      'packages/studio-server-web/playwright-observe/helpers/projectSettingsObserve.ts',
+      'packages/studio-server-web/tests/project-publication-review.test.ts',
+      'packages/studio-server-web/tests/publication-version.test.ts',
+    ],
+    languageOptions: {
+      parserOptions: { project: ['./packages/studio-server-web/tsconfig.project-publication.json'] },
+    },
+  },
+
+  // Scheduled Runs keeps request and form ownership in a focused hosted-web project.
+  {
+    files: [
+      'packages/studio-server-web/dashboard/ScheduledRunsModal.tsx',
+      'packages/studio-server-web/dashboard/useScheduledRunsController.ts',
+      'packages/studio-server-web/dashboard/scheduledRunForm.ts',
+      'packages/studio-server-web/dashboard/scheduledRunApi.ts',
+      'packages/studio-server-web/playwright-observe/helpers/scheduledRunsFixture.ts',
+      'packages/studio-server-web/tests/scheduled-run-api.test.ts',
+      'packages/studio-server-web/tests/scheduled-run-form.test.ts',
+    ],
+    languageOptions: {
+      parserOptions: { project: ['./packages/studio-server-web/tsconfig.scheduled-runs.json'] },
+    },
+  },
+
+  // Bundle review and adjacent deletion admission share a focused hosted-web check.
+  {
+    files: [
+      'packages/studio-server-web/dashboard/WorkflowBundleMergeModal.tsx',
+      'packages/studio-server-web/dashboard/WorkflowBundleDeleteModal.tsx',
+      'packages/studio-server-web/dashboard/useWorkflowBundleMergeController.ts',
+      'packages/studio-server-web/dashboard/bundleMerge.ts',
+      'packages/studio-server-web/playwright-observe/helpers/bundleApiFixture.ts',
+      'packages/studio-server-web/playwright-observe/helpers/bundleMergeFixture.ts',
+      'packages/studio-server-web/playwright-observe/bundle-merge.spec.ts',
+      'packages/studio-server-web/tests/bundle-merge.test.ts',
+    ],
+    languageOptions: {
+      parserOptions: { project: ['./packages/studio-server-web/tsconfig.bundle-merge.json'] },
     },
   },
 

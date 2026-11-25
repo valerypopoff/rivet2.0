@@ -28,12 +28,16 @@ export function WorkflowBundleDeleteModal({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const pending = useRef(false);
+  const dismissed = useRef(false);
   const captureAction = useWorkflowLibraryActionLifetime(folder.namespaceId ?? folder.id);
   const close = () => {
-    if (!pending.current) onClose();
+    if (pending.current || dismissed.current) return;
+    // Revoke admission before React unmounts the dialog.
+    dismissed.current = true;
+    onClose();
   };
   const submit = async () => {
-    if (pending.current || confirmation !== folder.name || !folder.bundleId) return;
+    if (dismissed.current || pending.current || confirmation !== folder.name || !folder.bundleId) return;
     const isCurrent = captureAction();
     pending.current = true;
     setBusy(true);

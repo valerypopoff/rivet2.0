@@ -66,7 +66,7 @@ if (process.env.RIVET_ASYNC_TEST_HOLD_RECORDING_WORK === 'true') {
   };
 }
 const { writeWorkflowEndpointAuthSettings } = await import('../../workflow-endpoint-auth-settings.js');
-await writeWorkflowEndpointAuthSettings({ requireBearerAuth: false });
+await writeWorkflowEndpointAuthSettings({ requireBearerAuth: process.env.RIVET_ASYNC_TEST_ENDPOINT_BEARER === '1' });
 const resume = process.env.RIVET_ASYNC_TEST_RESUME === '1';
 const fixtureFile = path.join(root, 'async-fixture.json');
 const created = resume
@@ -240,44 +240,59 @@ async function readBenchmarkPlatform() {
     return { unavailable: 'Container counters unavailable' };
   }
 }
+// Replies can finish after the owner disconnects. The callback also handles a
+// send/close race, so reporting cannot interrupt accepted-work/recording drain.
+function reply(message: object): void {
+  if (process.connected) process.send?.(message, () => undefined);
+}
+
 type FixtureCommand = { id: number; command: string; batches?: { round: number; count: number }[] };
+let recordingReplyReady!: () => void;
+const recordingReplyHeld = new Promise<void>((resolve) => {
+  recordingReplyReady = resolve;
+});
 async function handleCommand(message: FixtureCommand): Promise<void> {
   try {
+    if (message.command === 'wait-recordings-reply') {
+      await recordingReplyHeld;
+      reply({ id: message.id, result: true });
+      return;
+    }
     if (message.command === 'monitoring-on' || message.command === 'monitoring-off') {
       const monitoring = await import('../../resource-monitoring/runtime.js');
       if (message.command === 'monitoring-on') await monitoring.startResourceMonitoring('combined');
       else monitoring.stopResourceMonitoring();
-      process.send?.({ id: message.id, result: true });
+      reply({ id: message.id, result: true });
       return;
     }
     if (message.command === 'process-usage') {
-      process.send?.({ id: message.id, result: { cpu: process.cpuUsage(), rss: process.memoryUsage.rss() } });
+      reply({ id: message.id, result: { cpu: process.cpuUsage(), rss: process.memoryUsage.rss() } });
       return;
     }
     if (message.command === 'execution-admission') {
       const { getPublishedExecutionAdmission } = await import('../../published-execution-admission.js');
-      process.send?.({ id: message.id, result: getPublishedExecutionAdmission().getSnapshot() });
+      reply({ id: message.id, result: getPublishedExecutionAdmission().getSnapshot() });
       return;
     }
     if (message.command === 'release-recording-work') {
       releaseRecordingWork?.();
-      process.send?.({ id: message.id, result: true });
+      reply({ id: message.id, result: true });
       return;
     }
     if (message.command === 'recording-work-state') {
-      process.send?.({ id: message.id, result: recordingWork });
+      reply({ id: message.id, result: recordingWork });
       return;
     }
     if (message.command === 'durability-off' || message.command === 'durability-on') {
       process.env.RIVET_RECORDING_DURABILITY_ENABLED = message.command === 'durability-on' ? 'true' : 'false';
-      process.send?.({ id: message.id, result: true });
+      reply({ id: message.id, result: true });
       return;
     }
     if (message.command === 'snapshot-sharing-off' || message.command === 'snapshot-sharing-on') {
       ManagedRecordingEvidence.prototype.canShareReplayProject = message.command.endsWith('-on')
         ? canShareReplayProject
         : () => false;
-      process.send?.({ id: message.id, result: true });
+      reply({ id: message.id, result: true });
       return;
     }
     if (message.command === 'begin-snapshot-timing') {
@@ -368,13 +383,13 @@ async function handleCommand(message: FixtureCommand): Promise<void> {
         readSnapshotTiming = undefined;
         return result;
       };
-      process.send?.({ id: message.id, result: true });
+      reply({ id: message.id, result: true });
       return;
     }
     if (message.command === 'snapshot-timing-window') {
       assert.ok(readSnapshotTiming, 'No resource timing window is active');
       const result = readSnapshotTiming();
-      process.send?.({ id: message.id, result: { ...result, platform: await readBenchmarkPlatform() } });
+      reply({ id: message.id, result: { ...result, platform: await readBenchmarkPlatform() } });
       return;
     }
     if (message.command === 'benchmark-drain') {
@@ -399,7 +414,7 @@ async function handleCommand(message: FixtureCommand): Promise<void> {
         },
         175_000,
       );
-      process.send?.({ id: message.id, result: { memory: recordingMemory?.snapshot() ?? null } });
+      reply({ id: message.id, result: { memory: recordingMemory?.snapshot() ?? null } });
       return;
     }
     if (message.command === 'benchmark-audit') {
@@ -445,14 +460,14 @@ async function handleCommand(message: FixtureCommand): Promise<void> {
       }
       if (ids.size !== total) throw new Error('Recording audit did not read every artifact');
       benchmarkHelpers.assertBenchmarkRequests(requests, message.batches);
-      process.send?.({ id: message.id, result: { count: total, audited: ids.size } });
+      reply({ id: message.id, result: { count: total, audited: ids.size } });
       return;
     }
     if (message.command === 'finish-snapshot-timing') {
       if (!finishSnapshotTiming) throw new Error('No snapshot timing sample is active.');
       const result = { ...finishSnapshotTiming(), platform: await readBenchmarkPlatform() };
       finishSnapshotTiming = undefined;
-      process.send?.({ id: message.id, result });
+      reply({ id: message.id, result });
       return;
     }
     if (message.command === 'measure-scheduled-permit') {
@@ -518,7 +533,7 @@ async function handleCommand(message: FixtureCommand): Promise<void> {
             `Scheduled permit fixture did not persist a successful run (${permitMs} ms, ${JSON.stringify(finished)})`,
             { cause: runError },
           );
-        process.send?.({ id: message.id, result: permitMs });
+        reply({ id: message.id, result: permitMs });
       } finally {
         await live.store.delete(schedule.id, schedule.revision);
       }
@@ -526,23 +541,27 @@ async function handleCommand(message: FixtureCommand): Promise<void> {
     }
     if (message.command === 'recording-off' || message.command === 'recording-on') {
       process.env.RIVET_RECORDINGS_ENABLED = message.command === 'recording-on' ? 'true' : 'false';
-      process.send?.({ id: message.id, result: true });
+      reply({ id: message.id, result: true });
+      return;
+    }
+    if (message.command === 'disconnect-parent') {
+      process.disconnect();
       return;
     }
     if (message.command === 'shutdown') {
       // Windows does not deliver POSIX signals through child.kill(). Exercise
       // the real entrypoint's installed SIGTERM handler on every platform.
       process.emit('SIGTERM');
-      process.send?.({ id: message.id, result: true });
+      reply({ id: message.id, result: true });
       return;
     }
     if (message.command === 'seed-cost' || message.command === 'seed-cost-priced') {
       const { seedRunCostFixture } = await import('./run-cost-fixture.js');
-      process.send?.({ id: message.id, result: await seedRunCostFixture(message.command === 'seed-cost-priced') });
+      reply({ id: message.id, result: await seedRunCostFixture(message.command === 'seed-cost-priced') });
     } else if (message.command === 'seed-hosted-subgraph') {
       const { seedHostedSubgraphFixture } = await import('./hosted-subgraph-fixture.js');
       hostedSubgraphFixture = await seedHostedSubgraphFixture();
-      process.send?.({ id: message.id, result: hostedSubgraphFixture });
+      reply({ id: message.id, result: hostedSubgraphFixture });
     } else if (message.command === 'move-hosted-subgraph') {
       if (!hostedSubgraphFixture) throw new Error('Seed the hosted fixture first');
       await storage.moveWorkflowItemWithBackend(
@@ -550,30 +569,33 @@ async function handleCommand(message: FixtureCommand): Promise<void> {
         hostedSubgraphFixture.target.relativePath,
         hostedSubgraphFixture.foreignPath,
       );
-      process.send?.({ id: message.id, result: true });
+      reply({ id: message.id, result: true });
     } else if (message.command === 'scheduled-recordings') {
       const { flushWorkflowExecutionRecordingPersistence } = await import('../../routes/workflows/recordings.js');
       await flushWorkflowExecutionRecordingPersistence();
-      process.send?.({
+      reply({
         id: message.id,
         result: await storage.listWorkflowRecordingRunsPageWithBackend({ workflowId: '', page: 1, pageSize: 20 }),
       });
     } else if (message.command === 'snapshot') {
       const { getActiveHttpExecutionCount } = await import('../../active-http-executions.js');
       const { getHttpBodyAdmissionSnapshot } = await import('../../middleware/body-admission.js');
-      process.send?.({
+      reply({
         id: message.id,
         result: { active: getActiveHttpExecutionCount(), body: getHttpBodyAdmissionSnapshot() },
       });
-    } else if (message.command === 'recordings') {
-      process.send?.({
-        id: message.id,
-        result: await storage.listWorkflowRecordingRunsPageWithBackend({
-          workflowId: project.metadata.id,
-          page: 1,
-          pageSize: 20,
-        }),
+    } else if (message.command === 'recordings' || message.command === 'hold-recordings-reply') {
+      const result = await storage.listWorkflowRecordingRunsPageWithBackend({
+        workflowId: project.metadata.id,
+        page: 1,
+        pageSize: 20,
       });
+      if (message.command === 'hold-recordings-reply') {
+        const ownerDisconnected = new Promise<void>((resolve) => process.once('disconnect', resolve));
+        recordingReplyReady();
+        await ownerDisconnected;
+      }
+      reply({ id: message.id, result });
     } else if (message.command === 'replay') {
       const page = await storage.listWorkflowRecordingRunsPageWithBackend({
         workflowId: project.metadata.id,
@@ -603,17 +625,22 @@ async function handleCommand(message: FixtureCommand): Promise<void> {
           replay.dispose();
         }
       }
-      process.send?.({ id: message.id, result: results });
+      reply({ id: message.id, result: results });
     }
   } catch (error) {
-    process.send?.({ id: message.id, error: String(error) });
+    reply({ id: message.id, error: String(error) });
   }
 }
 process.on('message', (message: FixtureCommand) => {
   void handleCommand(message);
 });
-process.send({
+// An interrupted test worker must not leave its API process running. Reuse the
+// real entrypoint's graceful shutdown, including accepted-work/recording drain.
+process.on('disconnect', () => process.emit('SIGTERM'));
+if (!process.connected) process.emit('SIGTERM');
+reply({
   ready: {
+    pid: process.pid,
     baseUrl,
     projectId: project.metadata.id,
     projectPath: created.absolutePath,

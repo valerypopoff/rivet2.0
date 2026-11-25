@@ -42,7 +42,9 @@ export function getEvaluationLibraryResource(
 }
 
 function resourceIds(library: EvaluationLibrary, kind: 'suite' | 'dataset'): Set<string> {
-  return new Set(kind === 'suite' ? library.data.suites.map((suite) => suite.id) : library.datasets.map((dataset) => dataset.id));
+  return new Set(
+    kind === 'suite' ? library.data.suites.map((suite) => suite.id) : library.datasets.map((dataset) => dataset.id),
+  );
 }
 
 /**
@@ -63,7 +65,7 @@ export function diffEvaluationLibraryMutation(
         const before = getEvaluationSuiteBundle(previous, id);
         const after = getEvaluationSuiteBundle(next, id);
         if (evaluationLibraryValueEquals(before, after)) continue;
-        const currentVersion = versions.suites[id];
+        const currentVersion = Object.hasOwn(versions.suites, id) ? versions.suites[id] : undefined;
         if (before !== undefined && currentVersion === undefined) {
           throw new Error(`The suite "${id}" has no synchronization version.`);
         }
@@ -83,7 +85,7 @@ export function diffEvaluationLibraryMutation(
         const before = previous.datasets.find((dataset) => dataset.id === id);
         const after = next.datasets.find((dataset) => dataset.id === id);
         if (evaluationLibraryValueEquals(before, after)) continue;
-        const currentVersion = versions.datasets[id];
+        const currentVersion = Object.hasOwn(versions.datasets, id) ? versions.datasets[id] : undefined;
         if (before !== undefined && currentVersion === undefined) {
           throw new Error(`The dataset "${id}" has no synchronization version.`);
         }

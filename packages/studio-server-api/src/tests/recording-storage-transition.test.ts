@@ -1,13 +1,23 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { EventEmitter } from 'node:events';
-import { setImmediate } from 'node:timers/promises';
-import type { ChildProcess } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import {
   resolveGuardedReleaseCommand,
-  waitForGuardedStorageCommand,
+  withRecordingStorageTransition,
 } from '../../maintenance/recording-storage-transition.js';
+
+const fixtureIdentity = { context: 'fixture', namespace: 'fixture', release: 'rivet', namespaceUid: 'fixture-uid' };
+const credentialConfiguration = {
+  protocol: 1 as const,
+  identity: fixtureIdentity,
+  storageIdentity: 'a'.repeat(64),
+  settings: {
+    databaseUrl: { kubernetesSecret: { name: 'fixture', key: 'url' } },
+    encryptionKey: { value: 'fixture' },
+    sslMode: 'disable' as const,
+  },
+};
 
 void test('recording transition permits only the journaled checkout release entrypoint', () => {
   const entry = fileURLToPath(
@@ -26,54 +36,65 @@ void test('recording transition permits only the journaled checkout release entr
     assert.throws(() => resolveGuardedReleaseCommand(program, [...args]), /only supports Node/);
 });
 
-void test('guarded normal and failed commands wait for close and clean listeners', async () => {
-  for (const failure of [undefined, new Error('cannot signal child')]) {
-    const child = new EventEmitter() as ChildProcess;
-    const interrupts = new EventEmitter();
-    const done = waitForGuardedStorageCommand(child, new AbortController().signal, async () => {}, interrupts);
-    let settled = false;
-    const expected = (failure ? assert.rejects(done, (error) => error === failure) : done).then(() => {
-      settled = true;
-    });
-    if (failure) {
-      child.emit('error', failure);
-      child.emit('error', failure);
-    }
-    await setImmediate();
-    assert.equal(settled, false);
-    child.emit('close', 0);
-    await expected;
-    assert.equal(interrupts.listenerCount('SIGINT'), 0);
-    assert.equal(interrupts.listenerCount('SIGTERM'), 0);
-    assert.equal(child.listenerCount('error'), 0);
-  }
+void test('an already cancelled guard never reads configuration or starts an action', async () => {
+  const signal = AbortSignal.abort(new Error('cancelled before acquisition'));
+  const interrupts = new EventEmitter();
+  await assert.rejects(
+    withRecordingStorageTransition(
+      { identity: { context: 'fixture', namespace: 'fixture', release: 'rivet' }, signal, interrupts },
+      async () => assert.fail('Cancelled action must not start'),
+    ),
+    /cancelled before acquisition/,
+  );
+  assert.equal(interrupts.eventNames().length, 0);
 });
 
-void test('guarded command never reports interrupted zero exit as success or releases before close', async () => {
-  for (const event of ['SIGINT', 'SIGTERM', 'lease-lost', 'already-aborted'] as const) {
-    const child = new EventEmitter() as ChildProcess;
-    let kills = 0;
-    child.kill = () => {
-      kills++;
-      return true;
-    };
-    const controller = new AbortController();
-    if (event === 'already-aborted') controller.abort();
-    const interrupts = new EventEmitter();
-    let settled = false;
-    const done = waitForGuardedStorageCommand(child, controller.signal, async () => {}, interrupts);
-    const rejected = assert.rejects(done, /Helper and remote work may remain unconfirmed/).then(() => {
-      settled = true;
-    });
-    if (event === 'lease-lost') controller.abort();
-    else if (event !== 'already-aborted') interrupts.emit(event);
-    await setImmediate();
-    assert.equal(kills, 1);
-    assert.equal(settled, false, 'Coordination must outlive an unconfirmed termination request.');
-    interrupts.emit('SIGINT');
-    assert.equal(kills, 2, 'Repeated interruption must remain supervised until close.');
-    child.emit('close', 0);
-    await rejected;
-    assert.equal(interrupts.eventNames().length, 0);
-  }
+void test('interruption during credential preparation owns its cancellation and restores listeners/environment', async () => {
+  const interrupts = new EventEmitter();
+  const environment = JSON.stringify(process.env);
+  let entered!: () => void;
+  const ready = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  const done = withRecordingStorageTransition(
+    {
+      identity: fixtureIdentity,
+      interrupts,
+      configuration: credentialConfiguration,
+      run: async (_program, _args, options) =>
+        new Promise((_resolve, reject) => {
+          entered();
+          options!.signal!.addEventListener('abort', () => reject(options!.signal!.reason), { once: true });
+        }),
+    },
+    async () => assert.fail('Interrupted preparation must not start deployment'),
+  );
+  const rejected = assert.rejects(done, /interrupted/);
+  await ready;
+  interrupts.emit('SIGTERM');
+  await rejected;
+  assert.equal(interrupts.eventNames().length, 0);
+  assert.equal(JSON.stringify(process.env), environment);
+});
+
+void test('a foreign installation is refused before any credential request', async () => {
+  let reads = 0;
+  const interrupts = new EventEmitter();
+  await assert.rejects(
+    withRecordingStorageTransition(
+      {
+        identity: { ...fixtureIdentity, namespace: 'foreign' },
+        configuration: credentialConfiguration,
+        interrupts,
+        run: async () => {
+          reads++;
+          throw new Error('Unexpected credential access');
+        },
+      },
+      async () => assert.fail('Foreign deployment must not start'),
+    ),
+    /configuration is invalid/,
+  );
+  assert.equal(reads, 0);
+  assert.equal(interrupts.eventNames().length, 0);
 });

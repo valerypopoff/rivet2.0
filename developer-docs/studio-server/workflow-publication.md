@@ -19,6 +19,39 @@ Workflows can be published as HTTP endpoints, and project-contained Rivet web ap
 
 [Published revision history and frozen dependencies](published-revision-history-plan.md) describes the endpoint release and history behavior and its acceptance checks.
 
+Project Settings keeps its reviewed snapshot, editable drafts and server draft
+baselines together in `dashboard/useProjectPublicationReview.ts`. The public
+`useProjectSettingsActions.ts` facade retains validation, mutation busy flags,
+confirmation, release review and deletion. Background tree refreshes must not
+approve new draft content. Initial reads depend on the captured project identity
+and path, not the parent's changing `onRefresh` callback or the form's values.
+Opening, explicit review and mutation follow-up reads share one current read
+identity within the modal's project/path owner. Starting a newer read or accepting
+a mutation result retires the previous read; an uncertain result retires it and
+requires fresh review. A retired read cannot replace newer tokens, clear
+uncertainty, report an obsolete error, or settle a newer read's loading state.
+Closing the modal or changing its project retires the whole read owner. HTTP
+requests themselves are not aborted. Uncertain mutations still refresh the
+project tree even if their settings owner has retired.
+
+`projectPublicationReview.ts` shares field-agreement and returned-publication
+checks; `projectSettingsForm.ts` owns email-draft parsing and dirty-field merging.
+Field agreement alone does not authorize publishing or restoring: callers retain
+their path, owner, token-presence and canonical-version checks. History has its
+own review lifetime and restore receipt validation. Keep its busy state through
+the restored project's refresh and the settings review callback.
+
+The [publication-review implementation record](project-publication-review-refactor-plan.md)
+documents the preserved ordering, failure behavior and validation. The web test
+command includes `check:project-publication`, which also type-checks the shared
+publication fixture, and the pure policy tests. Both
+`project-settings-modal.spec.ts` and `published-revision-history.spec.ts` belong
+to the ordinary editor CI selection; their API fixtures reject unhandled
+mutations and cannot use an ambient server. Their shared snapshot builder preserves
+missing/invalid tokens for negative cases; fixture requests must identify the
+project they actually own. Recovery checks wait for usable controls, not only a
+status label that may already have been displayed.
+
 Publication and saved-version HTTP routes live in
 `routes/workflows/publication-http.ts`, registered directly on the parent workflow
 router with its existing parser and middleware order. The
@@ -892,6 +925,13 @@ Publication settings verify the saved project ID as well as its path.
 History pairs the confirmed restore address with the reviewed publication
 version. When a mutation response is lost or incomplete, the browser refreshes
 the project tree and requires a fresh review before accepting another write.
+
+In `published-revision-history.spec.ts`, restore completion must be observed
+through the newly created version's enabled control before navigating away.
+Counting the request or checking the endpoint/Current text is insufficient: both
+texts can already match the old row while restoration and fresh review still
+own the navigation lock. Keep the enabled-control wait tied to the restored
+version ID rather than adding a sleep or increasing the timeout.
 
 ### Frozen endpoint releases
 

@@ -199,17 +199,19 @@ jobs:
     timeout-minutes: 20
     strategy:
       fail-fast: false
-      max-parallel: 4
+      max-parallel: 5
       matrix:
         include:
-          - shard: 1/4
+          - shard: 1/5
             label: 1
-          - shard: 2/4
+          - shard: 2/5
             label: 2
-          - shard: 3/4
+          - shard: 3/5
             label: 3
-          - shard: 4/4
+          - shard: 4/5
             label: 4
+          - shard: 5/5
+            label: 5
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - uses: ./.github/actions/setup-yarn

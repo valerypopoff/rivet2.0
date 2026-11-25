@@ -284,6 +284,16 @@ their imported definitions retain their own graph IDs. Empty source bundles need
 no content comparison, and empty destinations can suggest additions from metadata
 before normal validation reads the selected projects.
 
+`useWorkflowBundleMergeController.ts` owns the modal session's choices, preview
+debounce/cancellation, retained catalogs, suggestion cache, warning acknowledgements
+and mutation settlement. Add behavioral changes through its named commands;
+`WorkflowBundleMergeModal.tsx` owns option presentation, rendering, select events
+and DOM focus/scrolling. The parent still owns modal identity, opener focus and
+tree reconciliation. Ordinary previews omit suggestions and retain the last
+comparison; an explicit empty suggestions array replaces that cache. Retained
+catalogs and suggestions never authorize a write. The existing transport still
+owns receipt recovery and never automatically replays a merge.
+
 Replacements keep destination project IDs, names, filenames and locations. New
 projects receive fresh IDs and may use ordinary nested folders. Project contents,
 attached data and dataset snapshots are replaced together, including dataset
@@ -348,6 +358,11 @@ fresh tree. A failed or superseded tree read retains the refresh-needed warning
 without claiming that the displayed list is current. While the commit is pending,
 the controls and dismissal are disabled; an unconfirmed outcome offers Close and
 requires a tree refresh before another merge.
+Command admission also covers events queued before those disabled controls render.
+Refresh and close synchronously abort the reviewed request, and submission rejects
+that retired request. Once a merge starts, queued refresh/destination commands
+return before resetting catalogs, drafts or comparison state. A definite rejection
+preserves the edited form and still requires an explicit fresh review.
 An artifact-storage read failure stops the preview with a sanitized 503 error,
 including for inactive calls, rather than claiming a graph-compatibility warning.
 Merge remains disabled until a fresh review succeeds. Manual Refresh review clears
@@ -371,11 +386,20 @@ change is required. Filesystem/SQLite and extracted Desktop bundles retain their
 existing capability boundary and do not expose this action.
 
 Implementation and validation details are tracked in the
-[bundle merge plan](bundle-merge-plan.md). Regression owners are
+[bundle merge plan](bundle-merge-plan.md). UI ownership, baseline characterization
+and validation are recorded in the
+[Bundle Merge controller refactor](bundle-merge-controller-refactor-plan.md).
+Regression owners are
 bundle-merge-plan.test.ts, bundle-merge-suggestions.test.ts, managed-bundle-merge.test.ts, the real local
 PostgreSQL/MinIO bundle-merge contract, web bundle-merge.test.ts, existing hosted
 revision/recovery tests and headless bundle-merge.spec.ts. The API/web/browser
 tests are enrolled in their existing CI lanes.
+`yarn studio-server:verify:web-pure` includes `check:bundle-merge`, which checks
+the controller, Merge/Delete views, pure helpers and focused merge fixtures.
+Merge and explicit-bundle browser scenarios share a fallback API guard that
+blocks ambient requests and rejects unclaimed mutations. Keep debounce and no-op
+request counts in the clock-controlled merge case, rather than adding sleeps or
+duplicating full browser journeys.
 
 **Delete bundle** is available for empty and non-empty bundles. The shared modal
 requires an exact, case-sensitive name match (no trimming) before enabling its
@@ -386,7 +410,9 @@ the dialog in the shared dashboard theme selectors, including the black
 translucent/blurred blanket and zero-padding Atlaskit body, rather than falling
 back to Atlaskit's tinted blanket and extra inner padding. Browser checks cover
 computed theme, input size, desktop compactness and narrow-view controls.
-Cancellation does not issue a write. Pending deletion disables dismissal and resubmission;
+Cancellation immediately retires deletion admission, including a Delete event
+queued before React removes the dialog. Reopening requires fresh name confirmation.
+Pending deletion disables dismissal and resubmission;
 errors retain the confirmation and explain lost-response recovery without an
 automatic retry. Open member tabs, including unsaved edits, are closed only after
 confirmed deletion. A failed follow-up tree read does not turn a committed delete
@@ -1396,8 +1422,18 @@ buttons; `workflow-project-version-modal.spec.ts` exercises that flow through
 the **Download project** menu item, separately from the bundle chooser.
 
 Failed, cancelled and interrupted jobs offer **Retry export** directly: disposal
-must succeed before creating a fresh job with the selected bundle-wide version. Ready
-jobs offer **Download bundle** without a separate restart action. Job status
+must succeed before creating a fresh job with the selected bundle-wide version.
+Ready jobs offer **Download bundle** and **Prepare another bundle**. The latter
+disposes the old export before returning to the version chooser, where the user
+can retain the current policy or switch between Published and Saved latest, then
+explicitly prepare a fresh snapshot of the saved content. Closing and reopening
+retains the current archive until that action is chosen. Failed disposal keeps
+the existing job identity and download link; it cannot unlock preparation or start
+another export. Cleanup is confirmed only by HTTP 204, or HTTP 404 when the job
+is already absent. Other responses, including HTTP 200 HTML and HTTP 202 JSON,
+retain the identity instead of treating a generic success status as completed
+cleanup. The action is disabled while the original start acknowledgement is still
+pending, and the download link is disabled during disposal. Job status
 includes the optional durable `versionPolicy`; reopening or retrying a new-format
 job restores its actual choice. New bundle downloads default to Saved latest.
 The session-storage key is the explicit bundle ID, not a project's metadata ID.
@@ -1411,6 +1447,16 @@ polls may reconcile a lost start acknowledgement but never erase an independent
 cancellation failure. The
 dialog uses the shared API response parser, retaining HTTP status and gateway
 guidance without showing HTML bodies or malformed structured error values.
+
+Start acknowledgements and progress reads share a job-status validator. A reply
+must match the requested job ID and contain a known phase, non-negative integer
+counts, a valid expiry and correctly typed optional policy/error/archive fields.
+The phase map covers the shared phase union at compile time. Unknown extra fields
+remain available, and older replies may omit `versionPolicy`.
+Malformed status never replaces the last validated job or its reserved identity.
+The dialog reports the error and keeps the existing five-second read-retry path;
+it never starts a replacement export automatically. This also prevents an object
+error from reaching React or an unknown phase from silently stopping polling.
 
 The client reserves the export ID before sending its start request. A status
 poll issued while that start is still unacknowledged can legitimately return
@@ -1429,6 +1475,19 @@ the dialog subscribes to these changes so **Retry export** becomes available
 even if it has already observed a terminal failure and stopped polling.
 Recovery does not depend on unrelated page refreshes. This is page-local
 request tracking, not persisted job state.
+
+The real-export browser journey checks changed saved content by downloading and
+executing the original and rebuilt ZIPs. It also switches to Published, executes
+that distinct snapshot, reloads and reselects Saved latest. It uses the visible
+rebuild action rather than clearing session storage to escape a completed job.
+Unconfirmed cleanup must retain the old job identity and admit no new POST. The
+same journey checks HTML success pages, accepted-but-unsettled JSON replies and
+the rebuild control's visibility on a narrow viewport.
+The controlled invalid-response case alternates malformed replies with visible
+valid progress, advancing the normal and error polling cadences explicitly. It
+checks a genuine JSON-null body, mismatched IDs, unknown phases, malformed fields
+and a malformed start acknowledgement, retaining the job and admitting another
+POST only after an explicit rebuild action.
 
 The bundle dialog uses the shared responsive modal dimensions, black backdrop,
 dark surface and header/close styling. Project details and export progress use
@@ -2119,6 +2178,12 @@ Do not describe the feature as available in npm until this release gate passes.
 
 ## Regression checks
 
+The 2026-11-25 export-dialog and output-header fixes passed the 325-test web suite
+and all 12 headless cases in the two selected specs below. Coverage includes
+rebuilt saved content, Published/Saved latest switching, malformed-response
+recovery, and ordinary copy/paging clicks beneath the sticky header. App, CLI
+and web builds also passed. These are local regression results.
+
 ```powershell
 yarn workspace @valerypopoff/rivet2-node exec tsx --test test/projectBundle.test.ts
 yarn workspace @valerypopoff/rivet-app test:files src/io/DesktopProjectBundle.test.ts src/io/TauriIOProvider.test.ts src/hooks/useLoadProject.test.tsx
@@ -2131,8 +2196,9 @@ node --test scripts/ci/api-test-shards.test.mjs
 $env:PLAYWRIGHT_HEADLESS='1'
 $env:PLAYWRIGHT_SLOW_MO='0'
 $env:PLAYWRIGHT_BASE_URL='http://127.0.0.1:5174'
-yarn studio-server:ui:observe project-bundle.spec.ts
-yarn studio-server:ui:observe desktop-project-bundle.spec.ts
+yarn studio-server:ui:observe '[\\/]project-bundle\.spec\.ts$' '[\\/]fullscreen-output-search-paging\.spec\.ts$'
+# The desktop fixture imports source modules and requires a Vite development server.
+yarn studio-server:ui:observe '[\\/]desktop-project-bundle\.spec\.ts$'
 ```
 
 The browser fixture uses owned API responses and a real exporter, browser download,

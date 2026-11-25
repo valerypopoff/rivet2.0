@@ -1,4 +1,5 @@
-import { test, expect, type Locator, type Page } from '@playwright/test';
+import { expect, type Locator, type Page } from '@playwright/test';
+import { consumedMergePreviews, holdMergePreview, mergeRouteGate, test } from './helpers/bundleMergeFixture';
 import type {
   BundleMergeChoices,
   BundleMergePreview,
@@ -43,6 +44,14 @@ const destination = {
   name: 'Original',
   relativePath: 'Original',
   projects: targetProjects,
+};
+const alternative = {
+  ...destination,
+  bundleId: '55d63782-fb8e-4d98-9e09-2b6319169161',
+  namespaceId: '55d63782-fb8e-4d98-9e09-2b6319169162',
+  name: 'Alternative',
+  relativePath: 'Alternative',
+  projects: targetProjects.map((project) => ({ ...project, projectId: 'other-' + project.projectId })),
 };
 
 function preview(choices: BundleMergeChoices): BundleMergePreview {
@@ -111,13 +120,13 @@ const folder = (catalog: typeof source): WorkflowFolderItem => ({
   })),
 });
 
-async function openLibrary(page: Page, mergeEnabled = true) {
+async function openLibrary(page: Page, mergeEnabled = true, catalogs = [source, destination]) {
   await page.route('**/api/workflows/tree', (route) =>
     route.fulfill({
       json: {
         root: '/managed/workflows',
         capabilities: { explicitBundles: true, namespaceMutations: true, bundleMerge: mergeEnabled },
-        folders: [folder(source), folder(destination)],
+        folders: catalogs.map(folder),
         projects: [],
       },
     }),
@@ -129,10 +138,14 @@ async function openLibrary(page: Page, mergeEnabled = true) {
 }
 async function openMerge(page: Page) {
   await openLibrary(page);
+  const modal = await openMergeDialog(page);
+  await select(page, 'Destination bundle', 'Original — Original');
+  return modal;
+}
+async function openMergeDialog(page: Page) {
   await page.getByRole('button', { name: 'Expand Working bundle', exact: true }).click({ button: 'right' });
   await openBundleActions(page);
   await page.getByRole('menuitem', { name: 'Merge into another bundle…', exact: true }).click();
-  await select(page, 'Destination bundle', 'Original — Original');
   return page.getByRole('dialog', { name: 'Merge bundle', exact: true });
 }
 async function select(page: Page, label: string | RegExp, option: string, section?: string) {
@@ -351,7 +364,7 @@ for (const outcome of ['success', 'recovered with failed refresh'] as const) {
     await page.getByRole('menuitem', { name: 'Merge into another bundle…', exact: true }).click();
     const modal = page.getByRole('dialog', { name: 'Merge bundle', exact: true });
     await expect(modal.getByRole('button', { name: 'Merge projects', exact: true })).toBeDisabled();
-    await expectModalInsets(modal);
+    if (outcome === 'success') await expectModalInsets(modal);
     await select(page, 'Destination bundle', 'Original — Original');
     await select(page, /^A1/, 'Replace A');
     await expect(modal.getByRole('heading', { name: 'Match referenced projects' })).toBeVisible();
@@ -359,34 +372,29 @@ for (const outcome of ['success', 'recovered with failed refresh'] as const) {
     await select(page, /^B1/, 'Replace B');
     await select(page, /^C1/, 'Add as a new project');
     await expect(modal.getByRole('button', { name: 'Merge projects', exact: true })).toBeEnabled();
-    await expect(modal.getByRole('button', { name: 'Review changes', exact: true })).toHaveCount(0);
     await expect(modal.getByText(/1 kept counterpart/)).toBeVisible();
     await modal.getByText('Referenced in 1 place', { exact: true }).click();
     await expect(modal.getByText('Working/A / Main / (call-x)', { exact: true })).toBeVisible();
+    const submit = modal.getByRole('button', { name: 'Merge projects', exact: true });
     if (outcome === 'success') {
       await page.setViewportSize({ width: 1280, height: 900 });
       await modal.getByRole('heading', { name: 'Choose project changes', exact: true }).scrollIntoViewIfNeeded();
       await page.screenshot({ path: testInfo.outputPath('bundle-merge-projects-desktop.png') });
-    }
-    await expect(page.getByTestId('workflow-bundle-merge-modal--blanket')).toHaveCSS(
-      'background-color',
-      'rgba(0, 0, 0, 0.56)',
-    );
-    await expect(modal).toHaveCSS('background-color', 'rgb(31, 31, 34)');
-    await page.setViewportSize({ width: 620, height: 560 });
-    await expectModalInsets(modal);
-    await select(page, /^B1/, 'Replace B');
-    const submit = modal.getByRole('button', { name: 'Merge projects', exact: true });
-    await expect(submit).toBeEnabled();
-    const bounds = await submit.boundingBox();
-    expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(560);
-    if (outcome === 'success') {
+      await expect(page.getByTestId('workflow-bundle-merge-modal--blanket')).toHaveCSS(
+        'background-color',
+        'rgba(0, 0, 0, 0.56)',
+      );
+      await expect(modal).toHaveCSS('background-color', 'rgb(31, 31, 34)');
+      await page.setViewportSize({ width: 620, height: 560 });
+      await expectModalInsets(modal);
+      const bounds = await submit.boundingBox();
+      expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(560);
       await modal.getByRole('heading', { name: 'Review changes', exact: true }).scrollIntoViewIfNeeded();
       await expect(modal.getByText('Merge bundle', { exact: true })).toBeInViewport();
       expect((await submit.boundingBox())!.y).toBeCloseTo(bounds!.y, 0);
       await page.screenshot({ path: testInfo.outputPath('bundle-merge-review.png') });
     }
-    await submit.dblclick();
+    await submit.click();
     await expect(modal).toHaveCount(0);
     expect(submissions).toBe(1);
     expect(receiptReads).toBe(outcome === 'success' ? 0 : 1);
@@ -395,59 +403,188 @@ for (const outcome of ['success', 'recovered with failed refresh'] as const) {
   });
 }
 
-test('an obsolete preview cannot enable merging after project selection changes', async ({ page }) => {
-  let release!: () => void;
-  const held = new Promise<void>((resolve) => {
-    release = resolve;
+for (const outcome of ['success', 'error'] as const) {
+  test(`an obsolete preview ${outcome} cannot replace the current review`, async ({ page }) => {
+    const writes = await captureTreeWrites(page);
+    await page.route(`**/api/workflows/bundles/${sourceId}/merge/preview*`, (route) => {
+      const choices: BundleMergeChoices = route.request().postDataJSON();
+      const path = choices.actions.find((action) => action.kind === 'add');
+      if (path?.kind === 'add' && path.relativePath === 'Old/Chosen.rivet-project' && outcome === 'error')
+        return route.fulfill({ status: 503, json: { error: 'Obsolete preview failure' } });
+      const value = preview(choices);
+      if (value.fingerprint)
+        value.fingerprint = (path?.kind === 'add' && path.relativePath.startsWith('Old/') ? 'a' : 'b').repeat(64);
+      if (path?.kind === 'add' && path.relativePath === 'Blocked/Chosen.rivet-project') {
+        delete value.fingerprint;
+        value.blockers = [{ id: 'blocked', message: 'The current selection is blocked.' }];
+      }
+      return route.fulfill({ json: value });
+    });
+    const modal = await openMerge(page);
+    const submit = modal.getByRole('button', { name: 'Merge projects', exact: true });
+    await expect(submit).toBeEnabled();
+    const gate = await holdMergePreview(page, 'Old/Chosen.rivet-project');
+    try {
+      const path = modal.getByRole('textbox', { name: 'Project name for C1', exact: true });
+      await path.fill('Old/Chosen');
+      await gate.parsed();
+      await path.fill('Blocked/Chosen');
+      await gate.expectAborted();
+      await expect(modal.getByRole('alert')).toContainText('The current selection is blocked.');
+      await gate.release();
+      await expect(modal.getByRole('alert')).toContainText('The current selection is blocked.');
+      await expect(modal).not.toContainText('Obsolete preview failure');
+      await expect(path).toHaveValue('Blocked/Chosen');
+      await expect(submit).toBeDisabled();
+      await path.fill('Valid/Chosen');
+      await expect(submit).toBeEnabled();
+      // A hold belongs to one response; revisiting the old path must settle normally.
+      await path.fill('Old/Chosen');
+      if (outcome === 'error') {
+        await expect(modal.getByRole('alert')).toContainText('Obsolete preview failure');
+        await expect(submit).toBeDisabled();
+      } else await expect(submit).toBeEnabled();
+      await page.keyboard.press('Escape');
+      await expect(modal).toHaveCount(0);
+      await expect(page.getByRole('button', { name: 'Expand Working bundle', exact: true })).toBeFocused();
+      expect(writes).toEqual([]);
+    } finally {
+      await gate.dispose();
+    }
   });
-  let waiting = false;
-  await page.route('**/api/workflows/tree', (route) =>
-    route.fulfill({
-      json: {
-        root: '/managed/workflows',
-        capabilities: { explicitBundles: true, namespaceMutations: true, bundleMerge: true },
-        folders: [folder(source), folder(destination)],
-        projects: [],
-      },
-    }),
-  );
-  await page.route(`**/api/workflows/bundles/${sourceId}/merge/preview*`, async (route) => {
-    const choices: BundleMergeChoices = route.request().postDataJSON();
-    const path = choices.actions.find((action) => action.kind === 'add');
-    if (path?.kind === 'add' && path.relativePath === 'Old/Chosen.rivet-project') {
-      waiting = true;
-      await held;
-    }
-    const value = preview(choices);
-    if (path?.kind === 'add' && path.relativePath === 'Blocked/Chosen.rivet-project') {
-      delete value.fingerprint;
-      value.blockers = [{ id: 'blocked', message: 'The current selection is blocked.' }];
-    }
+}
+
+test('a disposed merge preview cannot enter a reopened modal', async ({ page }) => {
+  const writes = await captureTreeWrites(page);
+  let replacement = false;
+  await page.route(`**/api/workflows/bundles/${sourceId}/merge/preview*`, (route) => {
+    const value = preview(route.request().postDataJSON());
+    value.destination = { ...destination, name: replacement ? 'Replacement destination' : destination.name };
+    if (value.fingerprint) value.fingerprint = (replacement ? 'b' : 'a').repeat(64);
     return route.fulfill({ json: value });
   });
-  await mockHostedEditorBootstrap(page);
-  await page.goto('/');
-  await authenticateIfNeeded(page);
-  await waitForDashboardReady(page);
-  await page.getByRole('button', { name: 'Expand Working bundle', exact: true }).click({ button: 'right' });
-  await openBundleActions(page);
-  await page.getByRole('menuitem', { name: 'Merge into another bundle…', exact: true }).click();
+  const modal = await openMerge(page);
+  await expect(modal.getByRole('button', { name: 'Merge projects', exact: true })).toBeEnabled();
+  const gate = await holdMergePreview(page, 'Old/Disposed.rivet-project');
+  try {
+    await modal.getByRole('textbox', { name: 'Project name for C1', exact: true }).fill('Old/Disposed');
+    await gate.parsed();
+    await modal.getByRole('button', { name: 'Cancel', exact: true }).click();
+    await expect(modal).toHaveCount(0);
+    await gate.expectAborted();
+    replacement = true;
+    await openMergeDialog(page);
+    await select(page, 'Destination bundle', 'Original — Original');
+    const path = modal.getByRole('textbox', { name: 'Project name for C1', exact: true });
+    await expect(path).toBeVisible();
+    await path.fill('Replacement/Chosen');
+    await expect(modal.getByRole('button', { name: 'Merge projects', exact: true })).toBeEnabled();
+    await gate.release();
+    await expect(path).toHaveValue('Replacement/Chosen');
+    await expect(
+      modal.getByRole('columnheader', { name: 'Destination in Replacement destination', exact: true }).first(),
+    ).toBeVisible();
+    await expect(modal.getByRole('alert')).toHaveCount(0);
+    await expect(modal.getByRole('button', { name: 'Merge projects', exact: true })).toBeEnabled();
+    expect(writes).toEqual([]);
+    await modal.getByRole('button', { name: 'Cancel', exact: true }).click();
+  } finally {
+    await gate.dispose();
+  }
+});
+
+test('changing destination retires its catalogs and submits only the replacement review', async ({ page }) => {
+  const firstAlternative = mergeRouteGate();
+  let firstValue: BundleMergePreview | undefined;
+  let writes = 0;
+  await page.route(`**/api/workflows/bundles/${sourceId}/merge/preview*`, (route) => {
+    const choices: BundleMergeChoices = route.request().postDataJSON();
+    const value = preview(choices);
+    if (choices.destinationBundleId === alternative.bundleId) {
+      value.destination = alternative;
+      value.suggestions = value.suggestions!.map((suggestion) => ({
+        ...suggestion,
+        ...(suggestion.targetProjectId ? { targetProjectId: 'other-' + suggestion.targetProjectId } : {}),
+      }));
+      if (!choices.actions.length) {
+        firstValue = value;
+        return firstAlternative.handler(route);
+      }
+    }
+    if (value.fingerprint)
+      value.fingerprint = (choices.destinationBundleId === alternative.bundleId ? 'b' : 'a').repeat(64);
+    value.warnings = [{ id: 'e'.repeat(64), message: 'Acknowledge this destination.' }];
+    return route.fulfill({ json: value });
+  });
+  await page.route(`**/api/workflows/bundles/${sourceId}/merge`, (route) => {
+    writes++;
+    const request = route.request().postDataJSON();
+    expect(request.fingerprint).toBe('b'.repeat(64));
+    expect(request.acknowledgedWarnings).toEqual(['e'.repeat(64)]);
+    expect(request.choices.destinationBundleId).toBe(alternative.bundleId);
+    expect(request.choices.actions).toContainEqual({
+      sourceProjectId: 'c1',
+      kind: 'add',
+      relativePath: 'Alternative/Chosen.rivet-project',
+    });
+    expect(request.choices.actions).toContainEqual({
+      sourceProjectId: 'a1',
+      kind: 'replace',
+      targetProjectId: 'other-a',
+    });
+    expect(request.mutation.expectedSource.id).toBe(sourceNamespace);
+    expect(request.mutation.expectedDestinationId).toBe(alternative.namespaceId);
+    return route.fulfill({
+      json: {
+        operationId: request.mutation.operationId,
+        folder: folder(alternative),
+        projectMapping: { c1: 'new-c' },
+        projects: [
+          {
+            projectId: 'new-c',
+            path: '/managed/workflows/Alternative/C.rivet-project',
+            revisionId: 'new-c',
+            added: true,
+          },
+        ],
+        warnings: [],
+      } satisfies BundleMergeResult,
+    });
+  });
+  await openLibrary(page, true, [source, destination, alternative]);
+  const modal = await openMergeDialog(page);
   await select(page, 'Destination bundle', 'Original — Original');
-  const modal = page.getByRole('dialog', { name: 'Merge bundle', exact: true });
-  const submit = modal.getByRole('button', { name: 'Merge projects', exact: true });
-  await expect(submit).toBeEnabled();
   const path = modal.getByRole('textbox', { name: 'Project name for C1', exact: true });
-  await path.fill('Old/Chosen');
-  await expect.poll(() => waiting).toBe(true);
-  await path.fill('Blocked/Chosen');
-  await expect(modal.getByRole('alert')).toContainText('The current selection is blocked.');
-  release();
-  await expect(submit).toBeDisabled();
-  await path.fill('Valid/Chosen');
-  await expect(submit).toBeEnabled();
-  await page.keyboard.press('Escape');
-  await expect(modal).toHaveCount(0);
-  await expect(page.getByRole('button', { name: 'Expand Working bundle', exact: true })).toBeFocused();
+  await expect(path).toBeVisible();
+  await modal.getByRole('checkbox', { name: 'Acknowledge this destination.' }).check();
+  await expect(modal.getByRole('button', { name: 'Merge projects', exact: true })).toBeEnabled();
+  const gate = await holdMergePreview(page, 'Old/Destination.rivet-project');
+  try {
+    await path.fill('Old/Destination');
+    await gate.parsed();
+    await select(page, 'Destination bundle', 'Alternative — Alternative');
+    await firstAlternative.received();
+    await gate.expectAborted();
+    await expect(path).toHaveCount(0);
+    await gate.release();
+    await expect(path).toHaveCount(0);
+    await expect(modal.getByRole('button', { name: 'Merge projects', exact: true })).toBeDisabled();
+    await firstAlternative.reply(firstValue);
+    await expect(path).toHaveValue('C');
+    await path.fill('Alternative/Chosen');
+    const warning = modal.getByRole('checkbox', { name: 'Acknowledge this destination.' });
+    await expect(warning).not.toBeChecked();
+    await warning.check();
+    const submit = modal.getByRole('button', { name: 'Merge projects', exact: true });
+    await expect(submit).toBeEnabled();
+    await submit.click();
+    await expect(modal).toHaveCount(0);
+    expect(writes).toBe(1);
+    await expect(page.getByText('Project changes merged into Alternative.', { exact: true })).toBeVisible();
+  } finally {
+    await gate.dispose();
+    await firstAlternative.dispose();
+  }
 });
 
 test('required graph correspondence and warning acknowledgement gate the current review', async ({ page }) => {
@@ -505,6 +642,179 @@ test('required graph correspondence and warning acknowledgement gate the current
   await modal.getByRole('button', { name: 'Cancel', exact: true }).click();
 });
 
+test('legacy merge previews retain manual choices and can clear a resolved graph mapping', async ({ page }) => {
+  let latest: BundleMergeChoices | undefined;
+  await page.route(`**/api/workflows/bundles/${sourceId}/merge/preview*`, (route) => {
+    latest = route.request().postDataJSON();
+    const value = preview(latest!);
+    delete value.suggestions;
+    delete value.mappedGraphs;
+    if (latest!.dependencies.some((choice) => choice.kind === 'existing') && !latest!.graphs.length) {
+      delete value.fingerprint;
+      value.requiredGraphs = [
+        {
+          sourceProjectId: 'x1',
+          sourceGraphId: 'child',
+          sourceGraphName: 'Child',
+          targetProjectId: 'x',
+          options: [{ id: 'target-child', name: 'Child' }],
+          sites: [],
+        },
+      ];
+    }
+    value.warnings = [{ id: 'a'.repeat(64), message: 'Review the legacy graph mapping.' }];
+    return route.fulfill({ json: value });
+  });
+  const modal = await openMerge(page);
+  await expect(modal.getByText('Choose project changes manually.', { exact: false })).toBeVisible();
+  await expect(modal.getByRole('button', { name: 'Merge projects', exact: true })).toBeDisabled();
+  await expect(modal.getByRole('region', { name: 'Project changes', exact: true }).getByRole('combobox')).toHaveCount(
+    5,
+  );
+  await select(page, /^A1/, 'Replace A');
+  await expect(modal.getByRole('combobox', { name: /Graph match for X/ })).toBeVisible();
+  expect(latest?.dependencies).toEqual([{ sourceProjectId: 'x1', kind: 'existing', targetProjectId: 'x' }]);
+  expect(latest?.actions).toEqual([{ sourceProjectId: 'a1', kind: 'replace', targetProjectId: 'a' }]);
+  await select(page, /Graph match for X/, 'Child');
+  const change = modal.getByRole('button', { name: 'Change graph', exact: true });
+  await expect(change).toBeVisible();
+  const warning = modal.getByRole('checkbox', { name: 'Review the legacy graph mapping.' });
+  await warning.check();
+  await expect(modal.getByRole('button', { name: 'Merge projects', exact: true })).toBeEnabled();
+  await change.click();
+  await expect(modal.getByRole('combobox', { name: /Graph match for X/ })).toBeVisible();
+  await expect(change).toHaveCount(0);
+  await expect(warning).not.toBeChecked();
+  await expect.poll(() => latest?.graphs).toEqual([]);
+  await expect(modal.getByRole('button', { name: 'Merge projects', exact: true })).toBeDisabled();
+  await select(page, /^X/, 'Add as a new project', 'Required project references');
+  await expect(modal.getByRole('combobox', { name: /Graph match for X/ })).toHaveCount(0);
+  await modal.getByRole('button', { name: 'Cancel', exact: true }).click();
+});
+
+test('debounced review and explicit retry preserve edited choices and current warning authority', async ({ page }) => {
+  await page.clock.install();
+  const reviews: Array<{ choices: BundleMergeChoices; compare: boolean }> = [];
+  let comparisons = 0;
+  let writes = 0;
+  let receipts = 0;
+  const warningId = 'd'.repeat(64);
+  await page.route(`**/api/workflows/bundles/${sourceId}/merge/preview*`, (route) => {
+    const choices: BundleMergeChoices = route.request().postDataJSON();
+    const compare = new URL(route.request().url()).searchParams.get('suggestChanges') === '1';
+    reviews.push({ choices, compare });
+    if (compare) comparisons++;
+    const value = preview(choices);
+    if (!compare) delete value.suggestions;
+    // A changed server snapshot on explicit comparison gives this fixture a distinct token.
+    if (value.fingerprint) value.fingerprint = (comparisons > 1 ? 'b' : 'a').repeat(64);
+    value.warnings = [{ id: warningId, message: 'Acknowledge the current review.' }];
+    return route.fulfill({ json: value });
+  });
+  await page.route(`**/api/workflows/bundles/${sourceId}/merge`, (route) => {
+    writes++;
+    const request = route.request().postDataJSON();
+    expect(request.choices).toEqual(reviews.at(-1)!.choices);
+    expect(request.fingerprint).toBe('b'.repeat(64));
+    expect(request.acknowledgedWarnings).toEqual([warningId]);
+    return route.fulfill({ status: 409, json: { error: 'The destination changed. Review again.' } });
+  });
+  await page.route('**/api/workflows/namespace/receipt', (route) => {
+    receipts++;
+    return route.fulfill({ json: { state: 'unknown' } });
+  });
+  await openLibrary(page);
+  await page.getByRole('button', { name: 'Expand Working bundle', exact: true }).click({ button: 'right' });
+  await openBundleActions(page);
+  await page.clock.pauseAt((await page.evaluate(() => Date.now())) + 60_000);
+  await page.getByRole('menuitem', { name: 'Merge into another bundle…', exact: true }).click();
+  await page.clock.runFor(500); // Finish the modal transition before its first preview timer.
+  const modal = page.getByRole('dialog', { name: 'Merge bundle', exact: true });
+  const submit = modal.getByRole('button', { name: 'Merge projects', exact: true });
+  const advance = async (count: number) => {
+    await page.clock.runFor(180);
+    await consumedMergePreviews(page, count);
+    await page.clock.runFor(16);
+  };
+  await select(page, 'Destination bundle', 'Original — Original');
+  await expect(modal.getByRole('status')).toContainText('Checking selected projects');
+  await page.clock.runFor(179);
+  expect(reviews).toHaveLength(0);
+  await page.clock.runFor(1);
+  await consumedMergePreviews(page, 1);
+  await page.clock.runFor(16);
+  await advance(2); // Initial actions; then the newly discovered dependency.
+  await advance(3);
+  const warning = modal.getByRole('checkbox', { name: 'Acknowledge the current review.' });
+  await expect(warning).toBeVisible();
+  expect(reviews.map((value) => value.compare)).toEqual([true, false, false]);
+  const path = modal.getByRole('textbox', { name: 'Project name for C1', exact: true });
+  await path.fill('Nested/First');
+  await path.fill('Nested/Chosen');
+  await page.clock.runFor(179);
+  expect(reviews).toHaveLength(3);
+  await page.clock.runFor(1);
+  await consumedMergePreviews(page, 4);
+  await page.clock.runFor(16);
+  expect(reviews[3]!.choices.actions).toContainEqual({
+    sourceProjectId: 'c1',
+    kind: 'add',
+    relativePath: 'Nested/Chosen.rivet-project',
+  });
+  await select(page, /^B1/, 'Skip');
+  await advance(5);
+  await select(page, /^X/, 'Add as a new project', 'Required project references');
+  await advance(6);
+  const dependency = modal.getByRole('textbox', { name: 'Referenced project name for X', exact: true });
+  await dependency.fill('Dependencies/Chosen');
+  await advance(7);
+  await warning.check();
+  await expect(submit).toBeEnabled();
+  await select(page, /^C1/, 'Add as a new project');
+  await select(page, /^X/, 'Add as a new project', 'Required project references');
+  await select(page, 'Destination bundle', 'Original — Original');
+  await page.clock.runFor(180);
+  expect(reviews).toHaveLength(7);
+  await expect(path).toHaveValue('Nested/Chosen');
+  await expect(dependency).toHaveValue('Dependencies/Chosen');
+  await expect(modal.getByRole('table', { name: 'Selected project changes', exact: true })).toContainText(
+    'Nested/Chosen',
+  );
+  await expect(warning).toBeChecked();
+  const edited = reviews[6]!.choices;
+  await modal.getByRole('button', { name: 'Refresh review', exact: true }).click();
+  await advance(8);
+  expect(reviews[7]).toEqual({ choices: edited, compare: true });
+  await expect(path).toHaveValue('Nested/Chosen');
+  await expect(dependency).toHaveValue('Dependencies/Chosen');
+  await expect(modal.getByRole('row').filter({ has: page.getByRole('combobox', { name: /^B1/ }) })).toContainText(
+    'Skip',
+  );
+  await expect(warning).not.toBeChecked();
+  await expect(submit).toBeDisabled();
+  await warning.check();
+  await submit.click();
+  await expect(modal.getByRole('alert')).toContainText('The destination changed. Review again.');
+  await expect(path).toHaveValue('Nested/Chosen');
+  await expect(dependency).toHaveValue('Dependencies/Chosen');
+  await expect(submit).toBeDisabled();
+  await page.clock.runFor(180);
+  expect(reviews).toHaveLength(8);
+  expect(writes).toBe(1);
+  expect(receipts).toBe(0);
+  await modal.getByRole('button', { name: 'Refresh review', exact: true }).click();
+  await advance(9);
+  await expect(warning).not.toBeChecked();
+  await warning.check();
+  await expect(submit).toBeEnabled();
+  expect(writes).toBe(1);
+  await path.fill('Must/Not/Dispatch');
+  await modal.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await page.clock.runFor(500);
+  await expect(modal).toHaveCount(0);
+  expect(reviews).toHaveLength(9);
+});
+
 test('an unconfirmed merge acknowledgement remains explicit and cannot be submitted twice', async ({ page }) => {
   let submissions = 0,
     reads = 0;
@@ -527,9 +837,18 @@ test('an unconfirmed merge acknowledgement remains explicit and cannot be submit
   await expect(modal.getByRole('alert')).toContainText('outcome is unknown');
   await expect(submit).toBeDisabled();
   await expect(modal.getByRole('button', { name: 'Refresh review' })).toBeDisabled();
+  await expect(modal.getByLabel('Destination bundle', { exact: true })).toBeDisabled();
+  await expect(modal.getByRole('textbox', { name: 'Project name for C1', exact: true })).toBeDisabled();
   expect(submissions).toBe(1);
   expect(reads).toBe(1);
   await modal.getByRole('button', { name: 'Close', exact: true }).click();
+  await expect(modal).toHaveCount(0);
+  await openMergeDialog(page);
+  await select(page, 'Destination bundle', 'Original — Original');
+  await expect(submit).toBeEnabled();
+  expect(submissions).toBe(1);
+  expect(reads).toBe(1);
+  await modal.getByRole('button', { name: 'Cancel', exact: true }).click();
 });
 
 test('an older managed API keeps existing bundle actions without advertising unsupported merging', async ({ page }) => {
@@ -591,19 +910,18 @@ test('a failed merge review stays blocked and clears its error after a successfu
 });
 
 test('only saved changes are listed with automatic suggested choices and familiar section cards', async ({ page }) => {
-  let reads = 0;
   const extra = Array.from({ length: 40 }, (_, index) => ({
     projectId: 'extra-' + index,
     title: 'Extra ' + index,
     relativePath: 'More/Extra-' + index + '.rivet-project',
   }));
   await page.route('**/api/workflows/bundles/' + sourceId + '/merge/preview*', (route) => {
-    reads++;
     const value = preview(route.request().postDataJSON());
     value.source = { ...source, projects: [...sourceProjects, ...extra] };
     value.suggestions!.push(
       ...extra.map((project) => ({ sourceProjectId: project.projectId, state: 'unchanged' as const })),
     );
+    if (new URL(route.request().url()).searchParams.get('suggestChanges') !== '1') delete value.suggestions;
     return route.fulfill({ json: value });
   });
   const modal = await openMerge(page);
@@ -625,21 +943,15 @@ test('only saved changes are listed with automatic suggested choices and familia
       exact: true,
     }),
   ).toBeVisible();
-  await expect(modal).not.toContainText(/datasets/i);
   await expect(modal).not.toContainText('.rivet-project');
-  await expect(modal.getByText(/\d+ projects? selected/)).toHaveCount(0);
   await expect(changes.getByRole('textbox', { name: 'Project name for C1', exact: true })).toHaveValue('C');
   await expect(changes.getByText('Project name', { exact: true })).toBeVisible();
-  await expect(modal.getByText('Destination path', { exact: true })).toHaveCount(0);
-  await expect(modal.getByText('Copy selected saved projects into another bundle.', { exact: false })).toHaveCount(0);
   await expect(row(/^A1/).locator('.workflow-bundle-merge-option code')).toHaveText('A');
   await expect(
     modal
       .getByRole('region', { name: 'Required project references', exact: true })
       .locator('.workflow-bundle-merge-option code'),
   ).toHaveText('X');
-  await expect(changes.getByRole('textbox', { name: 'Filter source projects' })).toHaveCount(0);
-  await expect(changes.getByRole('checkbox', { name: 'Show selected only' })).toHaveCount(0);
   await expect(modal.getByText('Working → Original', { exact: true })).toBeVisible();
   for (const section of [
     changes,
@@ -666,15 +978,6 @@ test('only saved changes are listed with automatic suggested choices and familia
   await expect(page.getByText('Suggested', { exact: true }).last()).toBeVisible();
   await page.keyboard.press('Escape');
   await expect(submit).toBeEnabled();
-  const before = reads;
-  await select(page, /^C1/, 'Add as a new project');
-  expect(reads).toBe(before);
-  await select(page, /^C1/, 'Skip');
-  await expect(submit).toBeEnabled();
-  await modal.getByRole('button', { name: 'Refresh review', exact: true }).click();
-  await expect(submit).toBeEnabled();
-  await expect(row(/^C1/)).toContainText('Skip');
-  await expect(modal.getByRole('button', { name: 'Review changes', exact: true })).toHaveCount(0);
   await modal.getByRole('heading', { name: 'Review changes', exact: true }).scrollIntoViewIfNeeded();
   await expect(modal.getByText('Merge bundle', { exact: true })).toBeInViewport();
   await expect(modal.getByRole('table', { name: 'Selected project changes', exact: true })).toBeInViewport();
@@ -735,8 +1038,6 @@ test('an unchanged duplicate shows no project actions and cannot submit an empty
   });
   const modal = await openMerge(page);
   await expect(modal.getByRole('region', { name: 'Project changes', exact: true })).toHaveCount(0);
-  await expect(modal.getByRole('heading', { name: 'Choose project changes', exact: true })).toHaveCount(0);
-  await expect(modal.getByText('Only changed and newly added projects are listed', { exact: true })).toHaveCount(0);
   const notice = modal.getByRole('status').filter({ hasText: 'The projects already match the destination.' });
   await expect(notice).toHaveText('No saved project changes to merge. The projects already match the destination.');
   await expect(notice).toHaveCSS('color', 'rgb(255, 207, 128)');
@@ -773,36 +1074,6 @@ test('required addition paths retain focus and remain editable through review er
   await expect(modal.getByRole('table', { name: 'Selected project changes', exact: true })).toContainText(
     'New/Dependencies/Shared',
   );
-  await modal.getByRole('button', { name: 'Cancel', exact: true }).click();
-});
-
-test('reselecting the current destination or action preserves choices without another preview', async ({ page }) => {
-  let reads = 0;
-  let lastChoices: BundleMergeChoices | undefined;
-  await page.route('**/api/workflows/bundles/' + sourceId + '/merge/preview*', (route) => {
-    reads++;
-    lastChoices = route.request().postDataJSON();
-    return route.fulfill({ json: preview(lastChoices!) });
-  });
-  const modal = await openMerge(page);
-  await select(page, /^C1/, 'Add as a new project');
-  const path = modal.getByRole('textbox', { name: 'Project name for C1', exact: true });
-  await path.fill('Nested/Chosen');
-  await expect(modal.getByRole('button', { name: 'Merge projects', exact: true })).toBeEnabled();
-  expect(lastChoices?.actions.find((action) => action.sourceProjectId === 'c1')).toEqual({
-    sourceProjectId: 'c1',
-    kind: 'add',
-    relativePath: 'Nested/Chosen.rivet-project',
-  });
-  const before = reads;
-  await select(page, /^C1/, 'Add as a new project');
-  await expect(path).toHaveValue('Nested/Chosen');
-  await select(page, 'Destination bundle', 'Original — Original');
-  await expect(path).toHaveValue('Nested/Chosen');
-  await expect(modal.getByRole('table', { name: 'Selected project changes', exact: true })).toContainText(
-    'Nested/Chosen',
-  );
-  expect(reads).toBe(before);
   await modal.getByRole('button', { name: 'Cancel', exact: true }).click();
 });
 
@@ -949,43 +1220,245 @@ for (const empty of ['source', 'destination'] as const) {
   });
 }
 
-test('a pending merge blocks dismissal and shows success only after its acknowledged refresh', async ({ page }) => {
-  let release!: () => void;
-  const held = new Promise<void>((resolve) => {
-    release = resolve;
+test('rapid warning changes retain every acknowledgement and block a revoked one', async ({ page }) => {
+  const warningIds = ['a'.repeat(64), 'b'.repeat(64)];
+  const writes: Array<{ acknowledgedWarnings: string[] }> = [];
+  let reads = 0;
+  await page.route(`**/api/workflows/bundles/${sourceId}/merge/preview*`, (route) => {
+    reads++;
+    const value = preview(route.request().postDataJSON());
+    value.warnings = warningIds.map((id, index) => ({ id, message: `Review warning ${index + 1}.` }));
+    return route.fulfill({ json: value });
   });
-  let writes = 0;
-  await page.route('**/api/workflows/bundles/' + sourceId + '/merge/preview*', (route) =>
-    route.fulfill({ json: preview(route.request().postDataJSON()) }),
-  );
-  await page.route('**/api/workflows/bundles/' + sourceId + '/merge', async (route) => {
-    writes++;
-    const request = route.request().postDataJSON();
-    await held;
-    return route.fulfill({
-      json: {
-        operationId: request.mutation.operationId,
-        folder: folder(destination),
-        projectMapping: { c1: 'new-c' },
-        projects: [
-          { projectId: 'new-c', path: '/managed/workflows/Original/C.rivet-project', revisionId: 'new-c', added: true },
-        ],
-        warnings: [],
-      } satisfies BundleMergeResult,
-    });
+  await page.route(`**/api/workflows/bundles/${sourceId}/merge`, (route) => {
+    writes.push(route.request().postDataJSON());
+    return route.fulfill({ status: 409, json: { error: 'This merge needs another review.' } });
   });
   const modal = await openMerge(page);
-  await select(page, /^C1/, 'Add as a new project');
-  await modal.getByRole('button', { name: 'Merge projects', exact: true }).click();
-  await expect(modal.getByRole('status')).toContainText('Merging saved project changes');
-  await expect(modal.getByRole('button', { name: 'Close bundle merge', exact: true })).toBeDisabled();
-  await expect(modal.getByRole('button', { name: 'Cancel', exact: true })).toBeDisabled();
-  await page.keyboard.press('Escape');
-  await expect(modal).toBeVisible();
-  expect(writes).toBe(1);
-  release();
-  await expect(modal).toHaveCount(0);
-  await expect(page.getByText('Project changes merged into Original.', { exact: true })).toBeVisible();
+  const submit = modal.getByRole('button', { name: 'Merge projects', exact: true });
+  const warnings = modal.getByRole('checkbox');
+  await expect(warnings).toHaveCount(2);
+  await expect(modal.getByRole('status')).toContainText('2 warnings to acknowledge');
+  await expect(submit).toBeDisabled();
+  const before = reads;
+  await modal.evaluate((element) => {
+    for (const warning of element.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')) warning.click();
+  });
+  await expect(warnings.nth(0)).toBeChecked();
+  await expect(warnings.nth(1)).toBeChecked();
+  await expect(submit).toBeEnabled();
+  await modal.evaluate((element) => {
+    element.querySelector<HTMLInputElement>('input[type="checkbox"]')!.click();
+    [...element.querySelectorAll('button')]
+      .find((button) => button.textContent?.trim() === 'Merge projects')!
+      .dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+  });
+  await expect(warnings.nth(0)).not.toBeChecked();
+  await expect(warnings.nth(1)).toBeChecked();
+  await expect(submit).toBeDisabled();
+  await warnings.nth(0).check();
+  await expect(submit).toBeEnabled();
+  await submit.click();
+  await expect(modal.getByRole('alert')).toContainText('This merge needs another review.');
+  expect(writes).toHaveLength(1);
+  expect(writes[0]!.acknowledgedWarnings).toEqual([warningIds[1], warningIds[0]]);
+  expect(reads).toBe(before);
+  await modal.getByRole('button', { name: 'Cancel', exact: true }).click();
+});
+
+for (const action of ['Refresh review', 'Cancel']) {
+  test(`${action} retires submission authority before the next render`, async ({ page }) => {
+    const writes: Array<{ choices: BundleMergeChoices; fingerprint: string }> = [];
+    let retired = false;
+    let reads = 0;
+    await page.route(`**/api/workflows/bundles/${sourceId}/merge/preview*`, (route) => {
+      reads++;
+      const value = preview(route.request().postDataJSON());
+      if (value.fingerprint) value.fingerprint = (retired ? 'b' : 'a').repeat(64);
+      return route.fulfill({ json: value });
+    });
+    await page.route(`**/api/workflows/bundles/${sourceId}/merge`, (route) => {
+      writes.push(route.request().postDataJSON());
+      return route.fulfill({ status: 409, json: { error: 'Review the current destination again.' } });
+    });
+    const modal = await openMerge(page);
+    const submit = modal.getByRole('button', { name: 'Merge projects', exact: true });
+    await expect(submit).toBeEnabled();
+    const before = reads;
+    retired = true;
+    const disabledAtDispatch = await modal.evaluate((element, action) => {
+      const buttons = [...element.querySelectorAll('button')];
+      const first = buttons.find((button) => button.textContent?.trim() === action)!;
+      const merge = buttons.find((button) => button.textContent?.trim() === 'Merge projects')!;
+      first.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+      const disabled = merge.disabled;
+      merge.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+      return disabled;
+    }, action);
+    expect(disabledAtDispatch).toBe(false);
+    if (action === 'Cancel') {
+      await expect(modal).toHaveCount(0);
+      await openMergeDialog(page);
+      await select(page, 'Destination bundle', 'Original — Original');
+    } else await expect.poll(() => reads).toBe(before + 1);
+    await expect(submit).toBeEnabled();
+    expect(writes).toEqual([]);
+    await submit.click();
+    await expect(modal.getByRole('alert')).toContainText('Review the current destination again.');
+    expect(writes).toHaveLength(1);
+    expect(writes[0]!.fingerprint).toBe('b'.repeat(64));
+    await modal.getByRole('button', { name: 'Cancel', exact: true }).click();
+  });
+}
+
+for (const command of ['refresh', 'destination']) {
+  test(`a queued ${command} cannot reset an admitted merge or its retained draft`, async ({ page }) => {
+    await page.clock.install();
+    const mutation = mergeRouteGate();
+    const reviews: BundleMergeChoices[] = [];
+    let writes = 0;
+    await page.route(`**/api/workflows/bundles/${sourceId}/merge/preview*`, (route) => {
+      const choices: BundleMergeChoices = route.request().postDataJSON();
+      reviews.push(choices);
+      return route.fulfill({ json: preview(choices) });
+    });
+    await page.route(`**/api/workflows/bundles/${sourceId}/merge`, (route) => {
+      writes++;
+      expect(route.request().postDataJSON().choices).toEqual(reviews.at(-1));
+      return mutation.handler(route);
+    });
+    await openLibrary(page, true, [source, destination, alternative]);
+    const modal = await openMergeDialog(page);
+    await select(page, 'Destination bundle', 'Original — Original');
+    const path = modal.getByRole('textbox', { name: 'Project name for C1', exact: true });
+    await expect(path).toBeVisible();
+    await path.fill('Retained/Chosen');
+    const submit = modal.getByRole('button', { name: 'Merge projects', exact: true });
+    await expect(submit).toBeEnabled();
+    const before = reviews.length;
+    await page.clock.pauseAt((await page.evaluate(() => Date.now())) + 60_000);
+    let queued = modal.getByRole('button', { name: 'Refresh review', exact: true });
+    if (command === 'destination') {
+      await modal.getByRole('combobox', { name: 'Destination bundle' }).click();
+      queued = page.getByText('Alternative — Alternative', { exact: true }).last();
+    }
+    await expect(queued).toBeVisible();
+    try {
+      const disabledAtDispatch = await queued.evaluate((element) => {
+        const merge = [...document.querySelectorAll('button')].find(
+          (button) => button.textContent?.trim() === 'Merge projects',
+        )!;
+        const disabled = merge.disabled;
+        merge.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+        element.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+        return disabled;
+      });
+      expect(disabledAtDispatch).toBe(false);
+      await mutation.received();
+      await expect(modal.getByRole('status')).toContainText('Merging saved project changes');
+      await page.clock.runFor(180);
+      await mutation.reply({ error: 'The destination changed. Review again.' }, 409);
+      await expect(modal.getByRole('alert')).toContainText('The destination changed. Review again.');
+      await page.clock.runFor(16);
+      expect(reviews).toHaveLength(before);
+      expect(writes).toBe(1);
+      await expect(path).toHaveValue('Retained/Chosen');
+      await expect(modal.getByText('Original — Original', { exact: true })).toBeVisible();
+      const refresh = modal.getByRole('button', { name: 'Refresh review', exact: true });
+      await expect(refresh).toBeEnabled();
+      await expect(submit).toBeDisabled();
+      await refresh.click();
+      await page.clock.runFor(180);
+      await consumedMergePreviews(page, before + 1);
+      await page.clock.runFor(16);
+      await expect(submit).toBeEnabled();
+      expect(reviews.at(-1)).toEqual(reviews[before - 1]);
+      expect(writes).toBe(1);
+    } finally {
+      await mutation.dispose();
+      await page.clock.resume();
+    }
+    await modal.getByRole('button', { name: 'Cancel', exact: true }).click();
+  });
+}
+
+test('a pending merge admits one synchronous submission and closes before its tree refresh settles', async ({
+  page,
+}) => {
+  const mutation = mergeRouteGate();
+  const tree = mergeRouteGate();
+  const fingerprint = 'c'.repeat(64);
+  const warning = 'a'.repeat(64);
+  let writes = 0;
+  let committed = false;
+  let operationId = '';
+  let reviewed: BundleMergeChoices | undefined;
+  await page.route(`**/api/workflows/bundles/${sourceId}/merge/preview*`, (route) => {
+    reviewed = route.request().postDataJSON();
+    const value = preview(reviewed!);
+    if (value.fingerprint) value.fingerprint = fingerprint;
+    value.warnings = [{ id: warning, message: 'Review this saved change.' }];
+    return route.fulfill({ json: value });
+  });
+  await page.route(`**/api/workflows/bundles/${sourceId}/merge`, async (route) => {
+    writes++;
+    const request = route.request().postDataJSON();
+    expect(request.choices).toEqual(reviewed);
+    expect(request.fingerprint).toBe(fingerprint);
+    expect(request.acknowledgedWarnings).toEqual([warning]);
+    expect(request.mutation.expectedSource.id).toBe(sourceNamespace);
+    expect(request.mutation.expectedDestinationId).toBe(destinationNamespace);
+    operationId = request.mutation.operationId;
+    await mutation.handler(route);
+  });
+  try {
+    const modal = await openMerge(page);
+    await modal.getByRole('checkbox', { name: 'Review this saved change.' }).check();
+    const submit = modal.getByRole('button', { name: 'Merge projects', exact: true });
+    await expect(submit).toBeEnabled();
+    await page.route('**/api/workflows/tree', (route) => (committed ? tree.handler(route) : route.fallback()));
+    const disabledAtDispatch = await submit.evaluate((element) => {
+      const states: boolean[] = [];
+      for (let click = 0; click < 2; click++) {
+        states.push((element as HTMLButtonElement).disabled);
+        element.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+      }
+      return states;
+    });
+    expect(disabledAtDispatch).toEqual([false, false]);
+    await mutation.received();
+    await expect(modal.getByRole('status')).toContainText('Merging saved project changes');
+    await expect(modal.getByRole('button', { name: 'Close bundle merge', exact: true })).toBeDisabled();
+    await expect(modal.getByRole('button', { name: 'Cancel', exact: true })).toBeDisabled();
+    await page.keyboard.press('Escape');
+    await expect(modal).toBeVisible();
+    expect(writes).toBe(1);
+    committed = true;
+    await mutation.reply({
+      operationId,
+      folder: folder(destination),
+      projectMapping: { c1: 'new-c' },
+      projects: [
+        { projectId: 'new-c', path: '/managed/workflows/Original/C.rivet-project', revisionId: 'new-c', added: true },
+      ],
+      warnings: [],
+    } satisfies BundleMergeResult);
+    await tree.received();
+    await expect(modal).toHaveCount(0);
+    const success = page.getByText('Project changes merged into Original.', { exact: true });
+    await expect(success).toHaveCount(0);
+    await tree.reply({
+      root: '/managed/workflows',
+      capabilities: { explicitBundles: true, namespaceMutations: true, bundleMerge: true },
+      folders: [folder(source), folder(destination)],
+      projects: [],
+    });
+    await expect(success).toBeVisible();
+    expect(writes).toBe(1);
+  } finally {
+    await mutation.dispose();
+    await tree.dispose();
+  }
 });
 
 test('long errors on a narrow screen keep actions and error details accessible', async ({ page }, testInfo) => {

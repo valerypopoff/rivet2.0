@@ -557,10 +557,14 @@ test('observer uses the remote browser without installing a host Chromium and pr
 });
 
 test('balanced editor shards cover every selected spec exactly once and reject invalid selection', () => {
-  assert.equal(editorCiSpecs.length, 42);
+  assert.equal(editorCiSpecs.length, 46);
+  assert.ok(editorCiSpecs.includes('local-storage-upgrade.spec.ts'));
+  assert.ok(editorCiSpecs.includes('local-storage-upgrade-prompt.spec.ts'));
+  assert.ok(editorCiSpecs.includes('oauth-mechanics.spec.ts'));
   assert.ok(editorCiSpecs.includes('bundle-merge.spec.ts'));
   assert.ok(editorCiSpecs.includes('bundle-comparison.spec.ts'));
   assert.ok(editorCiSpecs.includes('published-revision-history.spec.ts'));
+  assert.ok(editorCiSpecs.includes('project-settings-modal.spec.ts'));
   assert.ok(editorCiSpecs.includes('managed-debugger-channels.spec.ts'));
   assert.ok(editorCiSpecs.includes('hosted-editor-search-shortcuts.spec.ts'));
   assert.ok(editorCiSpecs.includes('bundle-local-execution-history.spec.ts'));
@@ -577,17 +581,17 @@ test('balanced editor shards cover every selected spec exactly once and reject i
   assert.ok(editorCiSpecs.includes('ha-browser-contracts.spec.ts'));
   assert.equal(new Set(editorCiSpecs).size, editorCiSpecs.length);
   assert.deepEqual(selectEditorCiSpecs(), editorCiSpecs);
-  const selected = ['1/4', '2/4', '3/4', '4/4'].flatMap(selectEditorCiSpecs);
+  const selected = ['1/5', '2/5', '3/5', '4/5', '5/5'].flatMap(selectEditorCiSpecs);
   assert.equal(new Set(selected).size, selected.length);
   assert.deepEqual(selected.sort(), [...editorCiSpecs].sort());
   const weights = editorCiShards.map((shard) => shard.seconds);
   assert.ok(Math.max(...weights) <= Math.min(...weights) * 1.05);
-  for (const invalid of ['', '0/4', '5/4', '1/2', '1/3', '1/4extra', '1/4\n'])
+  for (const invalid of ['', '0/5', '6/5', '1/2', '1/3', '1/4', '2/4', '3/4', '4/4', '1/5extra', '1/5\n'])
     assert.throws(() => selectEditorCiSpecs(invalid), /RIVET_EDITOR_TEST_SHARD/);
 });
 
 test('editor shard work leaves headroom under the two-worker hosted step budget', () => {
-  assert.equal(editorCiShards.length, 4);
+  assert.equal(editorCiShards.length, 5);
   // At most 75% of the 12-minute, two-worker budget; setup, scheduling tails
   // and hosted-runner variance also consume wall time. Weights are work hints.
   const workBudgetSeconds = 12 * 60 * 2 * 0.75;

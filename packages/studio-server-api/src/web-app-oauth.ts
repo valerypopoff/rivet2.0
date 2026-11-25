@@ -1,7 +1,21 @@
-import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
+import { createHmac, randomBytes } from 'node:crypto';
 import { getDevelopmentAuthPolicyVersion, isDevelopmentAuthRequest } from './development-auth.js';
 import type { IncomingMessage } from 'node:http';
 import { Router, type Request, type Response } from 'express';
+import {
+  signOAuthPayload,
+  readSignedOAuthPayload,
+  readOAuthCookie,
+  createOAuthCookie,
+  type ExpiringOAuthPayload as SignedPayload,
+} from './oauth-browser-state.js';
+import {
+  requestOAuthToken,
+  requestOAuthProfile,
+  readOAuthProviderJsonResponse,
+  readOAuthAccessToken,
+  readOAuthProfileEmail,
+} from './oauth-provider-client.js';
 import { createSmallCredentialBodyParser } from './middleware/body-parsers.js';
 
 import { getPublishedWebAppsBasePath } from './workflowEndpointPaths.js';
@@ -22,11 +36,6 @@ export type WebAppOAuthSession = {
   email: string;
   expiresAt: number;
   settingsVersion: string;
-};
-
-type SignedPayload = {
-  expiresAt: number;
-  [key: string]: unknown;
 };
 
 type OAuthStatePayload = SignedPayload & {
@@ -116,51 +125,12 @@ function getSigningSecret(): string {
   return secret;
 }
 
-function base64UrlEncodeJson(value: unknown): string {
-  return Buffer.from(JSON.stringify(value), 'utf8').toString('base64url');
-}
-
 function signPayload(value: SignedPayload): string {
-  const payload = base64UrlEncodeJson(value);
-  const signature = createHmac('sha256', getSigningSecret()).update(payload).digest('base64url');
-  return `${payload}.${signature}`;
-}
-
-function safeEqual(left: string, right: string): boolean {
-  const leftBuffer = Buffer.from(left);
-  const rightBuffer = Buffer.from(right);
-  return leftBuffer.length === rightBuffer.length && timingSafeEqual(leftBuffer, rightBuffer);
+  return signOAuthPayload(value, getSigningSecret);
 }
 
 function readSignedPayload<T extends SignedPayload>(value: string | null): T | null {
-  if (!value) {
-    return null;
-  }
-
-  const separatorIndex = value.lastIndexOf('.');
-  if (separatorIndex <= 0 || separatorIndex === value.length - 1) {
-    return null;
-  }
-
-  const payload = value.slice(0, separatorIndex);
-  const signature = value.slice(separatorIndex + 1);
-  let expectedSignature: string;
-  try {
-    expectedSignature = createHmac('sha256', getSigningSecret()).update(payload).digest('base64url');
-  } catch {
-    return null;
-  }
-
-  if (!safeEqual(signature, expectedSignature)) {
-    return null;
-  }
-
-  try {
-    const parsed = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')) as T;
-    return Number(parsed.expiresAt) > Date.now() ? parsed : null;
-  } catch {
-    return null;
-  }
+  return readSignedOAuthPayload<T>(value, getSigningSecret);
 }
 
 function getOAuthSettingsSessionVersion(): string {
@@ -194,20 +164,7 @@ function getOAuthSettingsSessionVersion(): string {
 }
 
 function readCookie(req: Request | IncomingMessage, name: string): string | null {
-  const rawCookieHeader = 'get' in req ? req.get('cookie') : req.headers.cookie;
-  const cookieHeader = Array.isArray(rawCookieHeader) ? rawCookieHeader.join(';') : rawCookieHeader ?? '';
-  for (const cookie of cookieHeader.split(';')) {
-    const separatorIndex = cookie.indexOf('=');
-    if (separatorIndex < 0) {
-      continue;
-    }
-
-    if (cookie.slice(0, separatorIndex).trim() === name) {
-      return cookie.slice(separatorIndex + 1).trim();
-    }
-  }
-
-  return null;
+  return readOAuthCookie(req, name);
 }
 
 function getForwardedProtocol(req: Request): string {
@@ -244,22 +201,11 @@ function escapeHtml(value: string): string {
 }
 
 function createCookie(name: string, value: string, req: Request, maxAgeSeconds: number): string {
-  return [
-    `${name}=${value}`,
-    'Path=/',
-    'HttpOnly',
-    'SameSite=Lax',
-    `Max-Age=${maxAgeSeconds}`,
-    getCookieSecuritySuffix(req),
-  ]
-    .filter(Boolean)
-    .join('; ');
+  return createOAuthCookie(name, value, maxAgeSeconds, getCookieSecuritySuffix(req));
 }
 
 function clearCookie(name: string, req: Request): string {
-  return [`${name}=`, 'Path=/', 'HttpOnly', 'SameSite=Lax', 'Max-Age=0', getCookieSecuritySuffix(req)]
-    .filter(Boolean)
-    .join('; ');
+  return createOAuthCookie(name, '', 0, getCookieSecuritySuffix(req));
 }
 
 function getCallbackUrl(req: Request): string {
@@ -389,25 +335,6 @@ export function isWebAppOAuthSessionAllowed(
   return allowed.size > 0 && allowed.has(session.email);
 }
 
-function getClaimFromObject(value: unknown, claimPath: string): unknown {
-  return claimPath.split('.').reduce<unknown>((current, segment) => {
-    if (!current || typeof current !== 'object') {
-      return undefined;
-    }
-
-    return (current as Record<string, unknown>)[segment];
-  }, value);
-}
-
-async function readJsonResponse(response: globalThis.Response, description: string): Promise<Record<string, unknown>> {
-  const payload = await response.json().catch(() => null);
-  if (!response.ok || !payload || typeof payload !== 'object' || Array.isArray(payload)) {
-    throw createHttpError(401, `OAuth ${description} failed`);
-  }
-
-  return payload as Record<string, unknown>;
-}
-
 async function exchangeCodeForToken(req: Request, code: string): Promise<string> {
   const config = getRequiredOauthConfig();
   if (config.provider === 'dummy') {
@@ -422,35 +349,9 @@ async function exchangeCodeForToken(req: Request, code: string): Promise<string>
     return code;
   }
 
-  const body = new URLSearchParams({
-    grant_type: 'authorization_code',
-    code,
-    redirect_uri: getCallbackUrl(req),
-  });
-  const headers: Record<string, string> = {
-    'content-type': 'application/x-www-form-urlencoded',
-    accept: 'application/json',
-  };
-
-  if (config.clientAuthMethod === 'basic') {
-    headers.authorization = `Basic ${Buffer.from(`${config.clientId}:${config.clientSecret}`).toString('base64')}`;
-  } else {
-    body.set('client_id', config.clientId);
-    body.set('client_secret', config.clientSecret);
-  }
-
-  const response = await fetch(config.tokenUrl, {
-    method: 'POST',
-    headers,
-    body,
-  });
-  const payload = await readJsonResponse(response, 'token exchange');
-  const accessToken = payload.access_token;
-  if (typeof accessToken !== 'string' || !accessToken) {
-    throw createHttpError(401, 'OAuth token response did not include an access token');
-  }
-
-  return accessToken;
+  const response = await requestOAuthToken(config, code, getCallbackUrl(req));
+  const payload = await readOAuthProviderJsonResponse(response, 'token exchange');
+  return readOAuthAccessToken(payload);
 }
 
 async function fetchOAuthUserEmail(accessToken: string): Promise<string> {
@@ -465,23 +366,13 @@ async function fetchOAuthUserEmail(accessToken: string): Promise<string> {
     return email;
   }
 
-  const response = await fetch(config.userUrl, {
-    headers: {
-      accept: 'application/json',
-      authorization: `Bearer ${accessToken}`,
-    },
-  });
-  const profile = await readJsonResponse(response, 'profile request');
+  const response = await requestOAuthProfile(config.userUrl, accessToken);
+  const profile = await readOAuthProviderJsonResponse(response, 'profile request');
   if (readWebAppAuthSettingsSync().debugLogProfile) {
     console.warn('[web-app-oauth] OAuth profile response:', JSON.stringify(profile));
   }
 
-  const email = getClaimFromObject(profile, config.emailClaim);
-  if (typeof email !== 'string' || !email.trim()) {
-    throw createHttpError(401, `OAuth profile did not include ${config.emailClaim}`);
-  }
-
-  return email.trim().toLowerCase();
+  return readOAuthProfileEmail(profile, config.emailClaim);
 }
 
 function getOAuthCallbackFailureCode(error: unknown): string {

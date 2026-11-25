@@ -1,5 +1,8 @@
 # Scheduled runs
 
+The [controller refactor and verification record](scheduled-runs-refactor-plan.md)
+describes the dashboard ownership split, preserved behavior and validation gates.
+
 The calendar-icon sidebar action immediately before Settings opens
 `ScheduledRunsModal.tsx`. Schedules are durable
 control-plane work, not browser timers or public endpoint self-requests. Closing
@@ -117,6 +120,19 @@ silently rebound: edit and reselect the intended project to repair the target.
 
 ## Guarantees and owners
 
+- `ScheduledRunsModal.tsx` owns rendering, pagination, select menus, modal stacking,
+  alert scrolling and DOM focus restoration. Its public props and controls are unchanged.
+- `useScheduledRunsController.ts` owns one mounted modal's list/poll lifetime,
+  action admission/settlement, captured editing revision, draft/input/preview state
+  and dirty baseline. Named commands retain the existing request bodies and
+  continuation after list close. Mount disposal and poll-effect cleanup remain
+  separate; neither cancels an already-admitted server mutation.
+- `scheduledRunForm.ts` owns pure payload conversion and schedule-kind transitions.
+  Creation defaults stay next to editor initialization in the controller.
+- `scheduledRunApi.ts` still owns transport deadlines and the page-owned uncertain
+  request ledger. It outlives modal close; no new requester is created by the hook.
+- `WorkflowLibraryPanel.tsx` retains the independent closed-modal summary poll and
+  the stable enabled-count setter. Polling never rebases an already-open edit.
 - `calendar.ts`: once, elapsed interval, daily, weekly, monthly and next-five preview
   use the same explicit IANA-zone calculator. DST gaps are skipped and repeated
   times run once (first instant). Ambiguous/nonexistent one-time dates are rejected,
@@ -145,9 +161,15 @@ silently rebound: edit and reselect the intended project to repair the target.
 - `scheduledRunApi.ts` owns the page-scoped request ledger. JSON syntax alone is
   not an acknowledgement: Create requires its saved ID/revision, and Run/Retry
   require an occurrence ID, schedule ID and known status. Malformed/empty success
-  replies retain the key. Retired replies may clear only their own key, never a
-  newer same-intent action. List reconnection dismisses only its stale accepted-
-  action warning; validation/conflict errors are not hidden.
+  replies retain the key. A definitive rejection releases the key only while
+  its ID has been used for a single attempt. Once an identity is reused, later
+  rejections retain it until validated success: authentication can reject a retry
+  before the server looks up the original receipt, and another attempt may still
+  be committing. A single
+  rejection cannot settle that history. In-flight attempts share the entry's
+  reuse flag so older replies observe later reuse. Retired replies may clear only
+  their own key, never a newer same-intent action. List reconnection dismisses only
+  its stale accepted-action warning; validation/conflict errors are not hidden.
 - Claims expire after 60 seconds, renewed every five seconds. Acceptance is durable
   before processor invocation. Unaccepted expired claims can be reclaimed; accepted
   worker loss becomes interrupted, outcome uncertain, never automatic retry. Late
@@ -324,9 +346,38 @@ A busy-worker test verifies continued reconciliation with no extra invocation;
 the real execution fixture injects recorder setup failure before acceptance.
 It also injects acceptance errors before and after commit and verifies that no
 uninvoked root/child recording is published.
-`scheduled-run-api.test.ts` runs in the regular web suite and covers malformed
-acknowledgements, retired-response races, definitive/uncertain HTTP errors and
-the client ledger's age/count limits with deterministic request fixtures.
+`scheduled-run-api.test.ts` has five focused cases in the regular web suite:
+Create/Run/Retry acknowledgement shapes, first-attempt HTTP classification,
+retired success, overlapping rejection and fixed expiry/capacity bounds. The
+status cases begin with fresh IDs so reuse cannot mask the 408/409 exceptions.
+The expiry case retries just before the boundary, then verifies that reuse did
+not extend the original 24-hour limit. Deferred responses signal actual body
+consumption and have bounded test deadlines; no scheduler-turn guess is needed.
+The real-API browser journey owns the sequential auth-rejection check: it drops a committed
+Create reply, sends one retry with invalid fixture proxy authentication, restores
+authentication and checks all three request IDs and the single saved schedule.
+`scheduled-run-form.test.ts` covers input omission/object distinctions, validation
+order, edited-field/wire-order compatibility and kind transitions with an explicit
+clock. `check:scheduled-runs` typechecks the view, controller, form, requester,
+picker, focused tests and closed browser fixture; it also runs in the web test command.
+The seven isolated lifecycle cases in `scheduled-runs.spec.ts` protect completion-relative
+polling, busy ticks, stale success/failure, disposal/reopen, admitted mutation
+continuation, uncertain Create identity across close and recording-command settlement.
+The pagination case shares their closed API/clock fixture, preserving its
+keyboard, viewport, clamping and reopen checks while counting six list reads and
+zero writes. Its four live updates advance individual poll ticks instead of
+waiting through real polling intervals. The real API journey remains on real
+time; its state checkpoints use one response snapshot each. Footer button
+coordinates are sampled together to avoid modal-animation races.
+Exact cadence uses `runFor`;
+single-poll lifetime jumps can use `fastForward` without simulating unrelated
+editor animation frames. Requests remain owned and counted independently of the
+sidebar summary. The stale-edit step observes a newer polled list before sending
+the unchanged opening revision, so a poll cannot silently rebase the draft.
+The recording case dispatches two clicks in one browser task and asserts that
+both saw `busy=false` while only one recording request was admitted. It also
+checks a click after busy is rendered, covering admission before and after the
+view updates without another fixture or test case.
 Also run affected first-start/copy/recording suites and both test-style guards.
 The browser fixture stops its dashboard timers by navigating to `about:blank`,
 then waits for pending route handlers before stopping its API on restart or final

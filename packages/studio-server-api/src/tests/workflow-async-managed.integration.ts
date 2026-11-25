@@ -18,6 +18,8 @@ import { verifyClassifierHealthContract } from './helpers/classifier-health-cont
 import { PostgresRivetLLMProfileHealthStore } from '../llm-profile-health/managed-store.js';
 import { verifyManagedEvaluationHistoryCursorContract } from './helpers/evaluation-history-managed-contract.js';
 import { verifyHostedEvaluationProjectionContract } from './helpers/hosted-evaluation-projection-contract.js';
+import { verifyHostedEvaluationConcurrencyContract } from './helpers/hosted-evaluation-concurrency-contract.js';
+import { verifyHostedEvaluationHttpContract } from './helpers/hosted-evaluation-http-contract.js';
 import { verifyWorkflowPublicationContract } from './helpers/workflow-publication-contract.js';
 import { ManagedWorkflowBackend } from '../routes/workflows/managed/backend.js';
 import { getManagedWorkflowStorageConfigFromSettings } from '../routes/workflows/storage-config.js';
@@ -86,6 +88,7 @@ try {
   await migrateManagedWorkflowSchema(pool);
   await verifyManagedEvaluationHistoryCursorContract(pool);
   await verifyHostedEvaluationProjectionContract(pool);
+  await verifyHostedEvaluationConcurrencyContract(pool);
   console.log(
     'Hosted Evaluation compact progress: complete evidence, rename, interruption/retry, cancellation and finalization passed.',
   );
@@ -558,6 +561,7 @@ try {
   console.log(
     'Managed async endpoints: three routes, early replies, retained ownership and persisted success/failure passed.',
   );
+  await verifyHostedEvaluationHttpContract(pool, storageSettings);
 } finally {
   for (const response of pending.values()) response.end();
   await tail.close();

@@ -1,10 +1,20 @@
 import type {
+  BundleMergeAction,
+  BundleMergeDependency,
   BundleMergeProject,
   BundleMergePreview,
   BundleMergeSite,
   BundleMergeChoices,
   BundleMergeSuggestion,
 } from '../../studio-server-shared/workflow-bundle-types';
+
+export const graphKey = (id: string, graph: string) => JSON.stringify([id, graph]);
+
+export const actionValue = (action?: BundleMergeAction) =>
+  !action ? 'skip' : action.kind === 'add' ? 'add' : 'replace:' + action.targetProjectId;
+
+export const dependencyValue = (choice?: BundleMergeDependency) =>
+  !choice ? '' : choice.kind === 'add' ? 'add' : 'existing:' + choice.targetProjectId;
 
 const projectExtension = '.rivet-project';
 

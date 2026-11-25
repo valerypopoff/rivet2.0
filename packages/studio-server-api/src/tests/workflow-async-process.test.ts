@@ -1,10 +1,62 @@
 import assert from 'node:assert/strict';
-import test from 'node:test';
+import { createHash } from 'node:crypto';
+import fs from 'node:fs/promises';
 import http from 'node:http';
+import os from 'node:os';
+import path from 'node:path';
+import test from 'node:test';
 import { setTimeout as delay } from 'node:timers/promises';
+import { pathToFileURL } from 'node:url';
 import { startAsyncWorkflowProcess, withAsyncDeadline } from './helpers/workflow-async-process.js';
 import { listenTestServer } from './helpers/http-server-harness.js';
-import { createHash } from 'node:crypto';
+
+test('workflow fixture exits when its owner disconnects before readiness', { timeout: 60_000 }, async () => {
+  const temporaryDirectory = await fs.realpath(os.tmpdir());
+  const prefix = `rivet-async-owner-${process.pid}-`;
+  const root = await fs.mkdtemp(path.join(temporaryDirectory, prefix));
+  const preload = path.join(root, 'disconnect.mjs');
+  const previousOptions = process.env.NODE_OPTIONS;
+  try {
+    await fs.writeFile(preload, 'if (process.connected) process.disconnect();\n');
+    process.env.NODE_OPTIONS = `${previousOptions ?? ''} --import=${pathToFileURL(preload).href}`;
+    await assert.rejects(startAsyncWorkflowProcess(), {
+      message: /API exited during startup/,
+      exitCode: 0,
+      signalCode: null,
+    });
+  } finally {
+    if (previousOptions === undefined) delete process.env.NODE_OPTIONS;
+    else process.env.NODE_OPTIONS = previousOptions;
+    assert.equal(path.dirname(root), temporaryDirectory);
+    assert.ok(path.basename(root).startsWith(prefix));
+    await fs.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+  }
+});
+
+test('owning IPC disconnect settles a held reply and rejects closed-channel commands', { timeout: 60_000 }, async () => {
+  const api = await startAsyncWorkflowProcess();
+  const pending = assert.rejects(api.command('hold-recordings-reply'), /API exited/);
+  const settlements = [pending.catch(() => undefined)];
+  try {
+    assert.equal(await api.command('wait-recordings-reply'), true);
+    const disconnected = assert.rejects(api.command('disconnect-parent'), /API exited/);
+    settlements.push(disconnected.catch(() => undefined));
+    assert.equal(await withAsyncDeadline(api.exited, 'exit after owning IPC disconnect', 5_000), 0, api.logs);
+    await disconnected;
+    await pending;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      await assert.rejects(withAsyncDeadline(api.command('snapshot'), 'closed IPC rejection'), {
+        code: 'ERR_IPC_CHANNEL_CLOSED',
+      });
+    }
+  } finally {
+    try {
+      await api.close();
+    } finally {
+      await Promise.all(settlements);
+    }
+  }
+});
 
 test(
   'live UI policy changes preserve a real accepted endpoint tail and recording without restarting the server',

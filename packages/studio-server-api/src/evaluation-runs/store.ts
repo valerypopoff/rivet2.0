@@ -112,7 +112,8 @@ function resourceVersion(
   kind: EvaluationLibraryResourceKind,
   id: string,
 ): string | null {
-  return kind === "suite" ? versions.suites[id] ?? null : versions.datasets[id] ?? null;
+  const resources = kind === 'suite' ? versions.suites : versions.datasets;
+  return Object.hasOwn(resources, id) ? resources[id]! : null;
 }
 
 function resourceMatchesChange(

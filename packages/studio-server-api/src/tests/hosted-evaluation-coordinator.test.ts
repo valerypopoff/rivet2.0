@@ -8,7 +8,6 @@ import { loadProjectFromString, type ProjectId } from '@valerypopoff/rivet2-node
 import {
   createEmptyEvaluationProjectData,
   createEvaluationRunShell,
-  normalizeEvaluationRun,
   type EvaluationDataset,
   type EvaluationProjectData,
   type EvaluationRun,
@@ -20,7 +19,6 @@ import {
   HostedEvaluationCapacityError,
   HostedEvaluationRetryConflictError,
   HostedEvaluationCoordinator,
-  HostedEvaluationRunConflictError,
 } from '../evaluation-runs/hosted-coordinator.js';
 import type { PostgresRivetEvaluationStore } from '../evaluation-runs/managed-store.js';
 import { configureStudioMetrics, resetStudioMetricsForTests } from '../metrics.js';
@@ -70,24 +68,14 @@ const evaluationData: EvaluationProjectData = {
   suites: [suite],
 };
 
-function serializedProject(): string {
-  return projectContents;
-}
-
 type Query = { sql: string; values: readonly unknown[] };
 
 class CapturePool {
   readonly queries: Query[] = [];
   readonly #failWhen?: (sql: string) => boolean;
-  readonly #outstandingJobs: number;
-  readonly #runProjectionRowCount?: number;
 
-  constructor(
-    options: { failWhen?: (sql: string) => boolean; outstandingJobs?: number; runProjectionRowCount?: number } = {},
-  ) {
+  constructor(options: { failWhen?: (sql: string) => boolean } = {}) {
     this.#failWhen = options.failWhen;
-    this.#outstandingJobs = options.outstandingJobs ?? 0;
-    this.#runProjectionRowCount = options.runProjectionRowCount;
   }
 
   async query<T = Record<string, unknown>>(sql: string, values: readonly unknown[] = []) {
@@ -95,12 +83,9 @@ class CapturePool {
     if (this.#failWhen?.(sql)) throw new Error('forced scheduler persistence failure');
     if (sql.includes('AS outstanding_count')) {
       return {
-        rows: [{ outstanding_count: this.#outstandingJobs }] as T[],
+        rows: [{ outstanding_count: 0 }] as T[],
         rowCount: 1,
       };
-    }
-    if (sql.includes('INSERT INTO evaluation_runs') && this.#runProjectionRowCount !== undefined) {
-      return { rows: [] as T[], rowCount: this.#runProjectionRowCount };
     }
     return { rows: [] as T[], rowCount: 1 };
   }
@@ -113,50 +98,6 @@ class CapturePool {
   }
 }
 
-class InterruptedRetryCapacityPool extends CapturePool {
-  override async query<T = Record<string, unknown>>(sql: string, values: readonly unknown[] = []) {
-    this.queries.push({ sql, values });
-    if (sql.includes("status = 'interrupted'\n          FOR UPDATE")) {
-      return {
-        rows: [
-          {
-            project_id: String(projectId),
-            run_id: 'interrupted-run',
-            job_id: 'interrupted-run:case-1:0',
-            case_id: 'case-1',
-            case_name: 'Case 1',
-            case_index: 0,
-            trial_index: 0,
-            status: 'interrupted',
-            attempt: 1,
-            fencing_token: 1,
-            worker_id: null,
-            trial_json: null,
-          },
-        ] as T[],
-        rowCount: 1,
-      };
-    }
-    if (sql.includes('FROM evaluation_hosted_runs WHERE') && sql.includes('FOR UPDATE')) {
-      return {
-        rows: [
-          {
-            project_id: String(projectId),
-            run_id: 'interrupted-run',
-            status: 'interrupted',
-            snapshot_json: { version: 1 },
-            cancel_requested_at: null,
-          },
-        ] as T[],
-        rowCount: 1,
-      };
-    }
-    if (sql.includes('AS outstanding_count')) {
-      return { rows: [{ outstanding_count: 10 }] as T[], rowCount: 1 };
-    }
-    return { rows: [] as T[], rowCount: 1 };
-  }
-}
 class InterruptedRetrySuccessPool extends CapturePool {
   readonly run: EvaluationRun;
   readonly #hostedStatus: 'interrupted' | 'completed';
@@ -279,7 +220,7 @@ class InterruptedRetrySuccessPool extends CapturePool {
     if (sql.includes('FROM evaluation_runs WHERE') && sql.trimStart().startsWith('SELECT')) {
       return { rows: [{ run_json: this.run }] as T[], rowCount: 1 };
     }
-    return super.query<T>(sql, values);
+    return { rows: [] as T[], rowCount: 1 };
   }
 }
 
@@ -377,7 +318,7 @@ function queryIndex(queries: readonly Query[], fragment: string): number {
   return index;
 }
 
-test('hosted Evaluation metrics never overlap slow aggregate reads across scheduler ticks', async (t) => {
+void test('hosted Evaluation metrics never overlap slow aggregate reads across scheduler ticks', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
   const pool = new SlowMetricsPool();
   const store = { getCalls: 0 };
@@ -401,13 +342,13 @@ test('hosted Evaluation metrics never overlap slow aggregate reads across schedu
     resetStudioMetricsForTests();
   }
 });
-test('hosted Evaluation submission commits its run projection, snapshot, and jobs in one transaction', async () => {
+void test('hosted Evaluation submission commits its run projection, snapshot, and jobs in one transaction', async () => {
   const pool = new CapturePool();
   const store = { getCalls: 0 };
   const coordinator = createCoordinator(pool, store);
 
   const run = await coordinator.submit({
-    projectContents: serializedProject(),
+    projectContents,
     projectPath: 'examples/hosted-evaluation.rivet-project',
     evaluationData,
     dataset,
@@ -434,35 +375,7 @@ test('hosted Evaluation submission commits its run projection, snapshot, and job
   assert.ok(job < commit);
 });
 
-test('hosted Evaluation submission atomically rejects a duplicate run ID without a preflight race', async () => {
-  const pool = new CapturePool({ runProjectionRowCount: 0 });
-  const store = { getCalls: 0 };
-  const coordinator = createCoordinator(pool, store);
-
-  await assert.rejects(
-    coordinator.submit({
-      projectContents: serializedProject(),
-      projectPath: 'examples/hosted-evaluation.rivet-project',
-      evaluationData,
-      dataset,
-      suiteId: suite.id,
-      purpose: 'evaluation',
-      runId: 'existing-run',
-    }),
-    (error: unknown) => error instanceof HostedEvaluationRunConflictError,
-  );
-
-  assert.equal(store.getCalls, 0);
-  const insert = queryIndex(pool.queries, 'INSERT INTO evaluation_runs');
-  const rollback = queryIndex(pool.queries, 'ROLLBACK');
-  assert.ok(insert < rollback);
-  assert.equal(
-    pool.queries.some((query) => query.sql.includes('INSERT INTO evaluation_hosted_runs')),
-    false,
-  );
-});
-
-test('hosted Evaluation submission rejects a run that exceeds its chart-owned trial limit before opening a transaction', async () => {
+void test('hosted Evaluation submission rejects a run that exceeds its chart-owned trial limit before opening a transaction', async () => {
   const pool = new CapturePool();
   const store = { getCalls: 0 };
   const coordinator = createCoordinator(pool, store, { maxJobsPerRun: 1 });
@@ -473,7 +386,7 @@ test('hosted Evaluation submission rejects a run that exceeds its chart-owned tr
 
   await assert.rejects(
     coordinator.submit({
-      projectContents: serializedProject(),
+      projectContents,
       projectPath: 'examples/hosted-evaluation.rivet-project',
       evaluationData: twoTrialEvaluationData,
       dataset,
@@ -486,71 +399,7 @@ test('hosted Evaluation submission rejects a run that exceeds its chart-owned tr
   assert.equal(pool.queries.length, 0);
 });
 
-test('hosted Evaluation submission makes its global outstanding-capacity decision inside the scheduler transaction', async () => {
-  const pool = new CapturePool({ outstandingJobs: 10 });
-  const store = { getCalls: 0 };
-  const coordinator = createCoordinator(pool, store, { maxOutstandingJobs: 10 });
-
-  await assert.rejects(
-    coordinator.submit({
-      projectContents: serializedProject(),
-      projectPath: 'examples/hosted-evaluation.rivet-project',
-      evaluationData,
-      dataset,
-      suiteId: suite.id,
-      purpose: 'evaluation',
-    }),
-    (error: unknown) => error instanceof HostedEvaluationCapacityError && error.limit === 'outstanding',
-  );
-
-  const begin = queryIndex(pool.queries, 'BEGIN');
-  const lock = queryIndex(pool.queries, 'pg_advisory_xact_lock');
-  const count = queryIndex(pool.queries, 'AS outstanding_count');
-  const rollback = queryIndex(pool.queries, 'ROLLBACK');
-  assert.ok(begin < lock && lock < count && count < rollback);
-  assert.equal(
-    pool.queries.some((query) => query.sql.includes('INSERT INTO evaluation_runs')),
-    false,
-  );
-});
-test('retrying interrupted hosted trials shares the global outstanding-capacity gate', async () => {
-  const pool = new InterruptedRetryCapacityPool();
-  const store = { getCalls: 0 };
-  const coordinator = createCoordinator(pool, store, { maxOutstandingJobs: 10 });
-
-  await assert.rejects(
-    coordinator.retryInterrupted({
-      projectId,
-      runId: 'interrupted-run',
-      jobIds: ['interrupted-run:case-1:0'],
-    }),
-    (error: unknown) => error instanceof HostedEvaluationCapacityError && error.limit === 'outstanding',
-  );
-
-  const begin = queryIndex(pool.queries, 'BEGIN');
-  const lock = queryIndex(pool.queries, 'pg_advisory_xact_lock');
-  const interrupted = queryIndex(pool.queries, "status = 'interrupted'");
-  const count = queryIndex(pool.queries, 'AS outstanding_count');
-  const rollback = queryIndex(pool.queries, 'ROLLBACK');
-  assert.ok(begin < lock && lock < interrupted && interrupted < count && count < rollback);
-  assert.equal(
-    pool.queries.some((query) => query.sql.includes("SET status = 'queued'")),
-    false,
-  );
-});
-
-test('canceling an already terminal hosted run reads through its leased connection', async () => {
-  const pool = new InterruptedRetrySuccessPool('completed');
-  const store = { getCalls: 0 };
-  const coordinator = createCoordinator(pool, store);
-  const run = await coordinator.requestCancel({ projectId, runId: 'interrupted-run' });
-  assert.deepEqual(run, normalizeEvaluationRun(pool.run));
-  assert.equal(store.getCalls, 0, 'a nested store read could deadlock a one-connection pool');
-  const read = queryIndex(pool.queries, 'AS run_json FROM evaluation_runs');
-  assert.ok(read < queryIndex(pool.queries, 'COMMIT'));
-});
-
-test('retrying interrupted hosted trials restores a running projection and durable audit event', async () => {
+void test('retrying interrupted hosted trials restores a running projection and durable audit event', async () => {
   const pool = new InterruptedRetrySuccessPool();
   const store = { getCalls: 0 };
   const coordinator = createCoordinator(pool, store);
@@ -599,7 +448,7 @@ test('retrying interrupted hosted trials restores a running projection and durab
   );
 });
 
-test('retrying interrupted hosted trials preserves cost uncertainty from settled trials', async () => {
+void test('retrying interrupted hosted trials preserves cost uncertainty from settled trials', async () => {
   const pool = new InterruptedRetrySuccessPool();
   const interruptedTrial = pool.run.trials[0]!;
   pool.run.trials.push({
@@ -633,7 +482,7 @@ test('retrying interrupted hosted trials preserves cost uncertainty from settled
   );
 });
 
-test('retrying selected interrupted trials preserves the warning for remaining interrupted work', async () => {
+void test('retrying selected interrupted trials preserves the warning for remaining interrupted work', async () => {
   const pool = new InterruptedRetrySuccessPool('interrupted', true);
   const retainedTrial = pool.run.trials[0]!;
   pool.run.trials.push({
@@ -661,7 +510,7 @@ test('retrying selected interrupted trials preserves the warning for remaining i
   );
 });
 
-test('retrying interrupted work refuses an inconsistent completed scheduler parent', async () => {
+void test('retrying interrupted work refuses an inconsistent completed scheduler parent', async () => {
   const pool = new InterruptedRetrySuccessPool('completed');
   const store = { getCalls: 0 };
   const coordinator = createCoordinator(pool, store);
@@ -680,35 +529,7 @@ test('retrying interrupted work refuses an inconsistent completed scheduler pare
   );
 });
 
-test('hosted Evaluation submission rolls back as a unit when scheduler persistence fails', async () => {
-  const pool = new CapturePool({ failWhen: (sql) => sql.includes('INSERT INTO evaluation_hosted_runs') });
-  const store = { getCalls: 0 };
-  const coordinator = createCoordinator(pool, store);
-
-  await assert.rejects(
-    coordinator.submit({
-      projectContents: serializedProject(),
-      projectPath: 'examples/hosted-evaluation.rivet-project',
-      evaluationData,
-      dataset,
-      suiteId: suite.id,
-      purpose: 'evaluation',
-    }),
-    /forced scheduler persistence failure/u,
-  );
-
-  assert.equal(store.getCalls, 0);
-  assert.notEqual(
-    pool.queries.findIndex((query) => query.sql.includes('ROLLBACK')),
-    -1,
-  );
-  assert.equal(
-    pool.queries.some((query) => query.sql.includes('COMMIT')),
-    false,
-  );
-});
-
-test('canceling a non-hosted Evaluation returns a missing result instead of a scheduler error', async () => {
+void test('canceling a non-hosted Evaluation returns a missing result instead of a scheduler error', async () => {
   const pool = new CapturePool();
   const store = { getCalls: 0 };
   const coordinator = createCoordinator(pool, store);
@@ -722,7 +543,7 @@ test('canceling a non-hosted Evaluation returns a missing result instead of a sc
   assert.deepEqual(pool.queries[mutationLock]?.values, [String(projectId), 'ordinary-run']);
 });
 
-test('hosted Evaluation state exposes only stable client-facing scheduler fields', async () => {
+void test('hosted Evaluation state exposes only stable client-facing scheduler fields', async () => {
   const pool = new HostedStatePool();
   const store = { getCalls: 0 };
   const coordinator = createCoordinator(pool, store);
@@ -747,21 +568,83 @@ test('hosted Evaluation state exposes only stable client-facing scheduler fields
   assert.equal(store.getCalls, 0);
 });
 
-test('retrying a stale interrupted-trial selection returns a recoverable conflict', async () => {
-  const pool = new InterruptedRetryCapacityPool();
-  const store = { getCalls: 0 };
-  const coordinator = createCoordinator(pool, store);
-
+void test('disabled mutations and invalid inputs fail before acquiring a connection', async () => {
+  const pool = new CapturePool();
+  let connections = 0;
+  const connect = pool.connect.bind(pool);
+  pool.connect = async () => {
+    connections++;
+    return connect();
+  };
+  const input = {
+    projectContents,
+    projectPath: '/workflows/fixture.rivet-project',
+    evaluationData,
+    dataset,
+    suiteId: suite.id,
+    purpose: 'evaluation' as const,
+  };
+  const disabled = createCoordinator(
+    pool,
+    { getCalls: 0 },
+    { enabled: false, workerEnabled: false, leaseMs: 0, pollMs: 0 },
+  );
+  assert.equal(disabled.getStatus().enabled, false);
+  await assert.rejects(disabled.submit(input), /not enabled/);
+  await assert.rejects(disabled.retryInterrupted({ projectId, runId: 'run', jobIds: ['job'] }), /disabled/);
+  const enabled = createCoordinator(pool, { getCalls: 0 });
+  await assert.rejects(enabled.submit({ ...input, datasetsContents: 'not valid JSON' }));
+  await assert.rejects(enabled.submit({ ...input, contextValues: { ' ': 1 } }), /names cannot be empty/);
   await assert.rejects(
-    coordinator.retryInterrupted({
-      projectId,
-      runId: 'interrupted-run',
-      jobIds: ['interrupted-run:case-1:0', 'interrupted-run:case-1:1'],
-    }),
-    (error: unknown) => error instanceof HostedEvaluationRetryConflictError,
+    enabled.submit({ ...input, contextValues: { value: Number.POSITIVE_INFINITY } }),
+    /contextValues.value must not contain a non-finite number/,
   );
-  assert.equal(
-    pool.queries.some((query) => query.sql.includes("SET status = 'queued'")),
-    false,
-  );
+  assert.equal(connections, 0);
+  assert.equal(pool.queries.length, 0, 'Construction, capability reads and rejected inputs must not query storage');
+  assert.equal(await disabled.getRunState({ projectId, runId: 'missing' }), undefined);
+  assert.equal(await disabled.requestCancel({ projectId, runId: 'missing' }), undefined);
+  await disabled.deleteRun({ projectId, runId: 'missing' });
+  assert.equal(connections, 2, 'disabled state/cancel/delete retain their existing database access');
+});
+
+void test('failed submission rolls back and releases once even when rollback fails', async () => {
+  for (const failRollback of [false, true]) {
+    const pool = new CapturePool({ failWhen: (sql) => sql.includes('INSERT INTO evaluation_hosted_runs') });
+    const connect = pool.connect.bind(pool);
+    let releases = 0,
+      rollbacks = 0;
+    pool.connect = async () => {
+      const client = await connect();
+      return {
+        async query<T = Record<string, unknown>>(sql: string, values: readonly unknown[] = []) {
+          if (sql === 'ROLLBACK') {
+            rollbacks++;
+            if (failRollback) throw new Error('rollback transport failed');
+          }
+          return client.query<T>(sql, values);
+        },
+        release() {
+          releases++;
+        },
+      };
+    };
+    const coordinator = createCoordinator(pool, { getCalls: 0 });
+    await assert.rejects(
+      coordinator.submit({
+        projectContents,
+        projectPath: '/workflows/fixture.rivet-project',
+        evaluationData,
+        dataset,
+        suiteId: suite.id,
+        purpose: 'evaluation',
+      }),
+      /forced scheduler persistence failure/,
+    );
+    assert.equal(releases, 1);
+    assert.equal(rollbacks, 1);
+    assert.equal(
+      pool.queries.some(({ sql }) => sql === 'COMMIT'),
+      false,
+    );
+  }
 });

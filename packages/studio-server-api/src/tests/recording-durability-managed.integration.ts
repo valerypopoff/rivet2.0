@@ -36,6 +36,7 @@ import { startAsyncWorkflowProcess, withAsyncDeadline } from './helpers/workflow
 import { listenTestServer } from './helpers/http-server-harness.js';
 import { verifyHistoricalRecordingCompaction } from '../../maintenance/tests/recording-project-compaction.js';
 import { verifyRecordingRecompression } from '../../maintenance/tests/recording-recompression.js';
+import { verifyRecordingStorageTransition } from '../../maintenance/tests/recording-storage-transition.js';
 import { parseManagedArtifactDescriptor } from '../routes/workflows/managed/artifact-descriptor.js';
 import { DEFAULT_MANAGED_RECORDING_ENCODING } from '@valerypopoff/rivet-studio-server-bootstrap/recording-storage.mjs';
 import http from 'node:http';
@@ -706,6 +707,7 @@ async function main() {
     };
     if (process.argv.includes('--recompression-only')) {
       await verifyRecordingRecompression(context, config, copyBackup);
+      await verifyRecordingStorageTransition(pool, config);
       return;
     }
     const evidence = new ManagedRecordingEvidence(context);
@@ -1399,6 +1401,7 @@ async function main() {
       },
       readTraceFromApi,
     );
+    await verifyRecordingStorageTransition(pool, config);
     await verifyHistoricalRecordingCompaction(context, {
       baseUrl: api.baseUrl,
       headers: proxyHeaders,

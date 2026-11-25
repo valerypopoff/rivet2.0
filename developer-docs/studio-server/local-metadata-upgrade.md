@@ -30,6 +30,15 @@ backup certification and restart coordination remain in
 `local-metadata/operator-service.ts`. The [HTTP separation record](app-settings-http-separation-plan.md)
 describes the preserved contracts and local verification.
 
+The frontend screen keeps rendering and accessibility in
+`LocalStorageUpgradeSettingsTab.tsx`. `useLocalStorageUpgradeController.ts` owns
+its tab-mount polling, serialized actions, reconciliation, browser attestations
+and downloads; `localStorageUpgradeModel.ts` owns pure capability, proof and
+control calculations. The prompt and Settings eligibility checks retain their
+independent lifetimes. The [screen refactor record](local-storage-upgrade-screen-refactor-plan.md)
+describes the behavior baselines and verification. This ownership change alters
+no operating step, token format, request timeout or backend authority.
+
 This is an explicit, non-destructive upgrade for the supervised single-host VM/Compose deployment. It does not select S3 or PostgreSQL, and a Storage-tab Save never starts it. Kubernetes uses managed storage instead. Upgrade availability is automatic for eligible, authenticated deployments; removing or setting the retired `RIVET_LOCAL_METADATA_UPGRADE_ENABLED` variable does not disable it. Availability never authorizes a copy or write resumption by itself.
 
 Remaining delivery and production qualification work is tracked in the [completion plan](./local-metadata-upgrade-completion-plan.md). Its acceptance gates distinguish repository readiness from a completed rehearsal on this VM's actual data.
@@ -114,9 +123,25 @@ The panel discards its last status and locks actions when status polling loses c
 
 Runtime validation has visible in-progress, failure and success feedback directly below its action button. Success identifies SQLite or legacy and states that writes remain paused; it is derived from the server's durable validation state, not from an empty HTTP 204 response or a transient toast, so it survives reopening the panel. A different generation, validation phase, required restart, lost operator status or failed revalidation cannot leave a stale success message visible. Revalidation clears the browser acknowledgement, and a failed attempt locks acknowledgement/resumption for that generation and revision until validation succeeds. The feedback never checks the resumption acknowledgement or resumes writes automatically.
 
+Runtime validation commits evidence and advances the journal revision together.
+If its acknowledgement is lost, fresh status for the new revision can establish
+durable success; the earlier revision's browser failure cannot invalidate that
+proof. The action diagnostic remains visible, validation is not replayed, and
+the write-resumption acknowledgement still starts unchecked. A failed validation
+without a new successful journal revision retains its existing failure gates.
+
 Every upgrade action uses the same loading-button/progress component. Inspection, pause/drain, fingerprint, copy, activation, validation, return to legacy, both resumption paths, cancellation and report download show a theme-contrasting spinner on the initiating button and an adjacent live progress message. Local pending actions own request feedback, while server-reported workers keep controls busy after admission and reopening. A synchronous guard rejects repeated clicks while a request and its status refresh are outstanding. Long-running work continues independently of bounded preparation-admission and status requests. Pending indicators clear on success or failure, never select a backend or resume writes themselves.
 
 Action settlement suspends background polling and invalidates older status reads. Every completed or failed action attempts a fresh status read before unlocking controls: a lost HTTP response does not prove that the server made no durable change. If reconciliation fails, the connection gate stays locked while the original action diagnostic is retained. Restart completion is derived from current server status, not a sticky browser flag; validation, acknowledgement and resumption all require the running backend to match the selected backend. A fingerprint is shown and accepted only for the maintenance session in which it was read. Failed repeat fingerprint/inspection reads discard their earlier proof/inventory instead of silently enabling the next step from stale results. These are browser safeguards in addition to server-side revision, source and backup checks, not replacements for them.
+
+First-time **Prepare server for migration** also stays locked when its setup
+read or reconciliation fails. A cached preparation capability cannot re-enable
+the button after an uncertain acknowledgement while reconciliation is failing.
+A successful setup read can
+enable explicit preparation again while retaining the original action diagnostic;
+it never replays the request. This read-error gate is distinct from unavailable
+upgrade status: a fresh setup confirming incomplete prerequisites must still
+allow the initial preparation that makes the upgrade available.
 
 Authenticated status also reports a fixed, non-secret `operation` name while any local-upgrade operation or copy worker is running. Reopened panels and other operator browsers display its progress and lock competing actions; the server still arbitrates races with a fixed 409 `local-upgrade-busy` response. This volatile activity signal is not authority or a durable job: interrupted copies are recovered through the existing ledger, and a restarted process never invents a successful operation. Local pending actions take display precedence so "Finish durable resumption" does not also spin the ordinary Resume button. Backup attestations are bound to the current pause, transition revision, frozen fingerprint and backup reference; changing either evidence field clears both checkboxes, and a new pause/revision requires review again. A lost operator status clears the write-resumption acknowledgement, so reconnect cannot silently re-enable an already-checked Resume button. The UI blocks new inspection/fingerprint/copy cycles and unchanged-legacy cancellation while a restart is required. Validation failures have one adjacent diagnostic rather than duplicate alerts.
 

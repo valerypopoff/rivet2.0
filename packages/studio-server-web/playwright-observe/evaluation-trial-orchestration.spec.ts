@@ -56,7 +56,7 @@ for (const storageFails of [false, true]) {
         return route.fulfill({
           json: {
             revision: 1,
-            resourceVersions: { suites: { suite: 1 }, datasets: { dataset: 1 } },
+            resourceVersions: { suites: { suite: 'suite-v1' }, datasets: { dataset: 'dataset-v1' } },
             library: {
               version: 1,
               data: { version: 1, suites: [suite], baselines: [] },

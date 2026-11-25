@@ -1,39 +1,17 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import {
-  sumWorkflowRecordingCounts,
-  type WorkflowRecordingCounts,
-} from '../../studio-server-shared/workflow-recording-types';
+import { sumWorkflowRecordingCounts } from '../../studio-server-shared/workflow-recording-types';
 import {
   deleteWorkflowRecording as deleteWorkflowRecordingRequest,
-  fetchWorkflowRecordingRuns,
-  fetchRecordingSubRuns,
   fetchWorkflowRecordingWorkflows,
 } from './workflowApi';
+import { useRecordingSubRuns } from './useRecordingSubRuns';
+import { useRecordingRunsQuery } from './useRecordingRunsQuery';
+import { countsAfterDeletingRun } from './recording-run-counts';
 import type {
   WorkflowProjectItem,
   WorkflowRecordingFilterStatus,
-  WorkflowRecordingInputFilter,
-  WorkflowRecordingInputFilterOperator,
-  WorkflowRecordingRunSummary,
-  WorkflowRecordingRunsPageResponse,
   WorkflowRecordingWorkflowListResponse,
 } from './types';
-
-type InputSearchStatus = 'idle' | 'searching' | 'complete' | 'stopped';
-
-type InputSearchProgress = {
-  analyzedRuns: number;
-  availableRuns: number | null;
-};
-
-function countsAfterDeletingRun<T extends WorkflowRecordingCounts>(counts: T, run: WorkflowRecordingRunSummary): T {
-  return {
-    ...counts,
-    totalRuns: Math.max(0, counts.totalRuns - 1),
-    failedRuns: Math.max(0, counts.failedRuns - Number(run.status === 'failed')),
-    suspiciousRuns: Math.max(0, counts.suspiciousRuns - Number(run.status === 'suspicious')),
-  };
-}
 
 function getAvailableInputSearchRuns(
   response: WorkflowRecordingWorkflowListResponse | null,
@@ -46,36 +24,6 @@ function getAvailableInputSearchRuns(
     : response.totals ?? sumWorkflowRecordingCounts(response.workflows);
   if (!counts) return 0;
   return statusFilter === 'failed' ? counts.failedRuns + counts.suspiciousRuns : counts.totalRuns;
-}
-
-function getNextInputSearchProgress(
-  currentProgress: InputSearchProgress,
-  response: WorkflowRecordingRunsPageResponse,
-): InputSearchProgress {
-  const responseAnalyzedRuns = response.inputSearchAnalyzedRuns ?? response.nextInputCursor;
-  const availableRuns = response.scopeCounts
-    ? response.statusFilter === 'failed'
-      ? response.scopeCounts.failedRuns + response.scopeCounts.suspiciousRuns
-      : response.scopeCounts.totalRuns
-    : currentProgress.availableRuns;
-  const analyzedRuns = Math.max(
-    currentProgress.analyzedRuns,
-    responseAnalyzedRuns ??
-      (response.hasMore ? currentProgress.analyzedRuns : availableRuns ?? currentProgress.analyzedRuns),
-  );
-
-  return {
-    // Catalog counts are an estimate, not a frozen search snapshot. Use the
-    // scanner's cumulative count once it reaches the end of its keyset.
-    availableRuns: response.hasMore
-      ? availableRuns === null
-        ? null
-        : Math.max(availableRuns, analyzedRuns)
-      : responseAnalyzedRuns !== undefined || availableRuns !== null
-        ? analyzedRuns
-        : null,
-    analyzedRuns,
-  };
 }
 
 export function useRunRecordingsController(
@@ -91,35 +39,61 @@ export function useRunRecordingsController(
   const [workflowsResponse, setWorkflowsResponse] = useState<WorkflowRecordingWorkflowListResponse | null>(null);
   const [workflowsLoading, setWorkflowsLoading] = useState(true);
   const [catalogError, setCatalogError] = useState<string | null>(null);
-  const [runsLoading, setRunsLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const [selectedWorkflowId, setSelectedWorkflowId] = useState('');
-  const [runsPage, setRunsPage] = useState<WorkflowRecordingRunsPageResponse | null>(null);
-  const [relatedCounts, setRelatedCounts] = useState<{ workflowId: string; counts: WorkflowRecordingCounts } | null>(
-    null,
-  );
-  const [runsPerPage, setRunsPerPage] = useState<number>(20);
-  const [page, setPage] = useState(1);
-  const [statusFilter, setStatusFilter] = useState<WorkflowRecordingFilterStatus>('all');
-  const [inputFilterVisible, setInputFilterVisible] = useState(false);
-  const [inputFilterPath, setInputFilterPath] = useState('$');
-  const [inputFilterOperator, setInputFilterOperator] = useState<WorkflowRecordingInputFilterOperator>('==');
-  const [inputFilterValue, setInputFilterValue] = useState('');
-  const [appliedInputFilter, setAppliedInputFilter] = useState<WorkflowRecordingInputFilter | null>(null);
-  const [inputFilterRuns, setInputFilterRuns] = useState<WorkflowRecordingRunSummary[]>([]);
-  const [subRuns, setSubRuns] = useState<WorkflowRecordingRunSummary[]>([]);
-  const [childLoadStates, setChildLoadStates] = useState<Record<string, 'loading' | 'complete' | 'failed'>>({});
-  const [childLoadErrors, setChildLoadErrors] = useState<Record<string, string>>({});
-  const childRequestsRef = useRef(new Map<string, AbortController>());
-  const [inputSearchStatus, setInputSearchStatus] = useState<InputSearchStatus>('idle');
-  const [inputSearchProgress, setInputSearchProgress] = useState<InputSearchProgress | null>(null);
-  const [inputFilterError, setInputFilterError] = useState<string | null>(null);
+  const {
+    runsLoading,
+    error,
+    runsPage,
+    relatedCounts,
+    runsPerPage,
+    page,
+    statusFilter,
+    inputFilterVisible,
+    inputFilterPath,
+    inputFilterOperator,
+    inputFilterValue,
+    appliedInputFilter,
+    inputFilterRuns,
+    inputSearchStatus,
+    inputSearchProgress,
+    inputFilterError,
+    setRunsPerPage,
+    setPage,
+    setStatusFilter,
+    setInputFilterPath,
+    setInputFilterOperator,
+    setInputFilterValue,
+    handleSetInputFilterVisible,
+    handleClearInputFilter,
+    handleStopInputSearch,
+    handleApplyInputFilter: applyInputFilter,
+    reset: resetRunQuery,
+    startView: startRunQuery,
+    rememberScopeCounts,
+    beginDeletion,
+    reconcileDeletedRecording: reconcileDeletedRuns,
+    clearMissingWorkflowResults,
+    restartInputSearch,
+    readPageAfterDeletion,
+    acceptPageAfterDeletion,
+    reportDeletionError,
+    finishDeletion,
+  } = useRecordingRunsQuery();
   const [deletingRecordingId, setDeletingRecordingId] = useState<string | null>(null);
-  const inputSearchAbortControllerRef = useRef<AbortController | null>(null);
   const workflowsRef = useRef<WorkflowRecordingWorkflowListResponse | null>(null);
   const runsRequestVersionRef = useRef(0);
   const deletionRequestRef = useRef<object | null>(null);
   const catalogAbortControllerRef = useRef<AbortController | null>(null);
+  const primaryRuns = appliedInputFilter ? inputFilterRuns : runsPage?.runs ?? [];
+  const {
+    subRuns,
+    childLoadStates,
+    childLoadErrors,
+    handleLoadSubRuns,
+    resetForView: resetSubRuns,
+    abortPending: abortSubRuns,
+    reconcileDeletedRecording: reconcileDeletedSubRuns,
+  } = useRecordingSubRuns(primaryRuns, selectedWorkflowId, runsRequestVersionRef);
 
   const abortCatalog = useCallback(() => {
     catalogAbortControllerRef.current?.abort();
@@ -155,51 +129,15 @@ export function useRunRecordingsController(
   const retryCatalog = useCallback(() => {
     void loadWorkflowRecordingWorkflows().catch(() => {});
   }, [loadWorkflowRecordingWorkflows]);
-  const loadWorkflowRecordingRunsPage = useCallback(
-    (
-      workflowId: string,
-      options: {
-        page: number;
-        pageSize: number;
-        status: WorkflowRecordingFilterStatus;
-        inputFilter?: WorkflowRecordingInputFilter | null;
-        inputCursor?: number;
-        inputAfter?: string;
-        signal?: AbortSignal;
-      },
-    ) => fetchWorkflowRecordingRuns(workflowId, { ...options, includeSubgraphRuns: true, groupByRoot: true }),
-    [],
-  );
-  const abortInputSearch = useCallback(() => {
-    inputSearchAbortControllerRef.current?.abort();
-    inputSearchAbortControllerRef.current = null;
-  }, []);
-
   const resetReadState = useCallback(() => {
-    abortInputSearch();
+    resetRunQuery();
     abortCatalog();
     runsRequestVersionRef.current++;
     deletionRequestRef.current = null;
-    setRunsPage(null);
-    setRelatedCounts(null);
-    setError(null);
     setCatalogError(null);
-    setPage(1);
-    setRunsPerPage(20);
-    setStatusFilter('all');
-    setInputFilterVisible(false);
-    setInputFilterPath('$');
-    setInputFilterOperator('==');
-    setInputFilterValue('');
-    setAppliedInputFilter(null);
-    setInputFilterRuns([]);
-    setInputSearchStatus('idle');
-    setInputSearchProgress(null);
-    setInputFilterError(null);
-    setRunsLoading(false);
     setWorkflowsLoading(true);
     setDeletingRecordingId(null);
-  }, [abortInputSearch, abortCatalog]);
+  }, [resetRunQuery, abortCatalog]);
 
   useEffect(() => {
     resetReadState();
@@ -253,146 +191,29 @@ export function useRunRecordingsController(
   useEffect(() => {
     if (!sessionActive || !sessionReady) return;
     const requestVersion = ++runsRequestVersionRef.current;
-    for (const request of childRequestsRef.current.values()) request.abort();
-    childRequestsRef.current.clear();
-    setSubRuns([]);
-    setChildLoadStates({});
-    setChildLoadErrors({});
-    setRelatedCounts(null);
+    resetSubRuns();
     deletionRequestRef.current = null;
     setDeletingRecordingId(null);
-    let cancelled = false;
-    const abortController = new AbortController();
-    inputSearchAbortControllerRef.current = appliedInputFilter ? abortController : null;
-    setRunsLoading(true);
-    setRunsPage(null);
-    setError(null);
-
-    if (appliedInputFilter) {
-      const seenIds = new Set<string>();
-      setInputFilterRuns([]);
-      setInputSearchStatus('searching');
-      setInputSearchProgress({
-        analyzedRuns: 0,
-        availableRuns: getAvailableInputSearchRuns(workflowsRef.current, selectedWorkflowId, statusFilter),
-      });
-
-      void (async () => {
-        let nextCursor = 0;
-        let nextAfter: string | undefined;
-        while (!cancelled && !abortController.signal.aborted) {
-          const response = await loadWorkflowRecordingRunsPage(selectedWorkflowId, {
-            page: 1,
-            // Preserve quick initial discovery; subsequent search batches are
-            // independent of ordinary table pagination and fill the virtual list.
-            pageSize: nextCursor === 0 && !nextAfter ? runsPerPage : 100,
-            status: statusFilter,
-            inputFilter: appliedInputFilter,
-            inputCursor: nextCursor,
-            inputAfter: nextAfter,
-            signal: abortController.signal,
-          });
-
-          if (cancelled || abortController.signal.aborted) {
-            return;
-          }
-
-          setRunsPage((current) => ({
-            ...response,
-            unsearchableRuns: response.unsearchableRuns ?? current?.unsearchableRuns,
-          }));
-          if (response.scopeCounts) {
-            setRelatedCounts({ workflowId: response.workflowId, counts: response.scopeCounts });
-          }
-          const newRuns = response.runs.filter((run) => {
-            if (seenIds.has(run.id)) {
-              return false;
-            }
-            seenIds.add(run.id);
-            return true;
-          });
-          if (newRuns.length > 0) {
-            setInputFilterRuns((currentRuns) => [...currentRuns, ...newRuns]);
-          }
-          setInputSearchProgress((currentProgress) =>
-            currentProgress ? getNextInputSearchProgress(currentProgress, response) : currentProgress,
-          );
-
-          const responseNextCursor = response.nextInputCursor;
-          const responseNextAfter = response.nextInputAfter;
-          if (!response.hasMore) {
-            setInputSearchStatus('complete');
-            return;
-          }
-
-          if (
-            (responseNextAfter != null && responseNextAfter === nextAfter) ||
-            (responseNextAfter == null && (responseNextCursor == null || responseNextCursor <= nextCursor))
-          ) {
-            throw new Error('Recording input search returned a continuation that did not advance.');
-          }
-
-          nextCursor = responseNextCursor ?? nextCursor;
-          nextAfter = responseNextAfter;
-        }
-      })()
-        .catch((err) => {
-          if (!cancelled && !abortController.signal.aborted) {
-            setError(err instanceof Error ? err.message : String(err));
-            setInputSearchStatus('stopped');
-          }
-        })
-        .finally(() => {
-          const isCurrentSearch = inputSearchAbortControllerRef.current === abortController;
-          if (!cancelled && isCurrentSearch) {
-            setRunsLoading(false);
-          }
-          if (isCurrentSearch) {
-            inputSearchAbortControllerRef.current = null;
-          }
-        });
-    } else {
-      setInputFilterRuns([]);
-      setInputSearchStatus('idle');
-      setInputSearchProgress(null);
-
-      void loadWorkflowRecordingRunsPage(selectedWorkflowId, {
+    const cancelQuery = startRunQuery(
+      {
+        workflowId: selectedWorkflowId,
         page,
         pageSize: runsPerPage,
         status: statusFilter,
-        inputFilter: null,
-        signal: abortController.signal,
-      })
-        .then((response) => {
-          if (!cancelled) {
-            setRunsPage(response);
-          }
-        })
-        .catch((err) => {
-          if (!cancelled && !abortController.signal.aborted) {
-            setError(err instanceof Error ? err.message : String(err));
-          }
-        })
-        .finally(() => {
-          if (!cancelled) {
-            setRunsLoading(false);
-          }
-        });
-    }
-
+        inputFilter: appliedInputFilter,
+      },
+      getAvailableInputSearchRuns(workflowsRef.current, selectedWorkflowId, statusFilter),
+    );
     return () => {
-      cancelled = true;
-      for (const request of childRequestsRef.current.values()) request.abort();
-      childRequestsRef.current.clear();
+      cancelQuery();
+      abortSubRuns();
       if (runsRequestVersionRef.current === requestVersion) runsRequestVersionRef.current++;
-      abortController.abort();
-      if (inputSearchAbortControllerRef.current === abortController) {
-        inputSearchAbortControllerRef.current = null;
-      }
     };
   }, [
     appliedInputFilter,
-    loadWorkflowRecordingRunsPage,
+    startRunQuery,
+    resetSubRuns,
+    abortSubRuns,
     page,
     runsPerPage,
     selectedWorkflowId,
@@ -408,109 +229,16 @@ export function useRunRecordingsController(
     (runsPage?.workflowId === selectedWorkflowId ? runsPage.scopeCounts : undefined) ??
     (relatedCounts?.workflowId === selectedWorkflowId ? relatedCounts.counts : undefined);
   useEffect(() => {
-    if (runsPage?.scopeCounts) setRelatedCounts({ workflowId: runsPage.workflowId, counts: runsPage.scopeCounts });
-  }, [runsPage]);
+    rememberScopeCounts(runsPage);
+  }, [runsPage, rememberScopeCounts]);
   const overallRunsCount =
     scopeCounts?.totalRuns ?? getAvailableInputSearchRuns(workflowsResponse, selectedWorkflowId, 'all');
   const badRunsCount = scopeCounts
     ? scopeCounts.failedRuns + scopeCounts.suspiciousRuns
     : getAvailableInputSearchRuns(workflowsResponse, selectedWorkflowId, 'failed');
-  const primaryRuns = appliedInputFilter ? inputFilterRuns : runsPage?.runs ?? [];
   const visibleRuns = [...primaryRuns, ...subRuns];
   const filteredRunsCount = appliedInputFilter ? inputFilterRuns.length : runsPage?.totalRuns ?? null;
   const totalPages = appliedInputFilter ? 1 : Math.max(1, Math.ceil((filteredRunsCount ?? 0) / runsPerPage));
-
-  const handleLoadSubRuns = useCallback(
-    async (key: string) => {
-      if (!key.startsWith('correlation:')) return;
-      const candidates = primaryRuns.filter((run) => `correlation:${run.executionIdentity?.correlationId}` === key);
-      const primaries = candidates.filter((run) => run.executionIdentity?.surface !== 'subgraph_project');
-      const root =
-        candidates.find((run) => run.familyContext) ??
-        (primaries.length === 1
-          ? primaries[0]
-          : candidates.find((run) => run.executionIdentity?.surface === 'subgraph_project'));
-      if (!root || childLoadStates[root.id] === 'complete' || childRequestsRef.current.has(root.id)) return;
-      const controller = new AbortController();
-      const version = runsRequestVersionRef.current;
-      childRequestsRef.current.set(root.id, controller);
-      const isCurrent = () => !controller.signal.aborted && version === runsRequestVersionRef.current;
-      setChildLoadStates((states) => ({ ...states, [root.id]: 'loading' }));
-      setChildLoadErrors((errors) => {
-        const next = { ...errors };
-        delete next[root.id];
-        return next;
-      });
-      try {
-        // Fetch metadata in bounded pages, not input artifacts or all history.
-        // Publish complete families only; failed attempts can safely retry.
-        const children = new Map<string, WorkflowRecordingRunSummary>();
-        let expectedCount: number | undefined;
-        for (let childPage = 1; ; childPage++) {
-          const response = await fetchRecordingSubRuns(
-            root.id,
-            childPage,
-            controller.signal,
-            root.executionIdentity?.surface === 'subgraph_project'
-              ? selectedWorkflowId === root.workflowId
-                ? 'project'
-                : 'all'
-              : undefined,
-          );
-          if (!isCurrent()) return;
-          if (
-            response.workflowId !== root.id ||
-            response.page !== childPage ||
-            !Number.isSafeInteger(response.totalRuns) ||
-            response.totalRuns < 0
-          ) {
-            throw new Error('Sub-run pagination returned the wrong recording or page.');
-          }
-          expectedCount ??= response.totalRuns;
-          if (response.totalRuns !== expectedCount) {
-            throw new Error('Sub-runs changed while loading. Retry to refresh the family.');
-          }
-          const previousCount = children.size;
-          if (
-            response.runs.some(
-              (run) =>
-                run.executionIdentity?.surface !== 'subgraph_project' ||
-                run.executionIdentity.correlationId !== root.executionIdentity?.correlationId,
-            )
-          ) {
-            throw new Error('Sub-run pagination returned an unrelated recording.');
-          }
-          for (const run of response.runs) children.set(run.id, run);
-          if (
-            children.size > expectedCount ||
-            (response.hasMore && (children.size === previousCount || children.size >= expectedCount))
-          ) {
-            throw new Error('Sub-run pagination did not advance consistently.');
-          }
-          if (!response.hasMore) {
-            if (children.size !== expectedCount) {
-              throw new Error('Sub-run pagination was incomplete. Retry to refresh the family.');
-            }
-            break;
-          }
-        }
-        if (!isCurrent()) return;
-        setSubRuns((current) => [...new Map([...current, ...children.values()].map((run) => [run.id, run])).values()]);
-        setChildLoadStates((states) => ({ ...states, [root.id]: 'complete' }));
-      } catch (err) {
-        if (isCurrent()) {
-          setChildLoadStates((states) => ({ ...states, [root.id]: 'failed' }));
-          setChildLoadErrors((errors) => ({
-            ...errors,
-            [root.id]: `Could not load sub-runs: ${err instanceof Error ? err.message : String(err)}`,
-          }));
-        }
-      } finally {
-        if (childRequestsRef.current.get(root.id) === controller) childRequestsRef.current.delete(root.id);
-      }
-    },
-    [primaryRuns, childLoadStates, selectedWorkflowId],
-  );
 
   useEffect(() => {
     // Loading clears runsPage. Do not clamp against a possibly stale catalog
@@ -522,129 +250,39 @@ export function useRunRecordingsController(
   }, [appliedInputFilter, page, runsLoading, runsPage, totalPages]);
 
   const handleApplyInputFilter = useCallback(() => {
-    if (!sessionActive || !sessionReady || deletingRecordingId || inputSearchStatus === 'searching') return false;
-    const path = inputFilterPath.trim();
-    if (!path.startsWith('$')) {
-      setInputFilterError('JSON path must start with $');
-      return false;
-    }
-
-    setInputFilterError(null);
-    setAppliedInputFilter({
-      path,
-      operator: inputFilterOperator,
-      value: inputFilterOperator === 'exists' || inputFilterOperator === 'not_exists' ? '' : inputFilterValue,
-    });
-    setInputFilterRuns([]);
-    setInputSearchStatus('searching');
-    setInputSearchProgress(null);
-    setPage(1);
-    return true;
-  }, [
-    inputFilterOperator,
-    inputFilterPath,
-    inputFilterValue,
-    sessionActive,
-    sessionReady,
-    deletingRecordingId,
-    inputSearchStatus,
-  ]);
-
-  const handleClearInputFilter = useCallback(() => {
-    abortInputSearch();
-    setInputFilterError(null);
-    setAppliedInputFilter(null);
-    setInputFilterPath('$');
-    setInputFilterOperator('==');
-    setInputFilterValue('');
-    setInputFilterRuns([]);
-    setInputSearchStatus('idle');
-    setInputSearchProgress(null);
-    setPage(1);
-  }, [abortInputSearch]);
-
-  const handleSetInputFilterVisible = useCallback(
-    (visible: boolean) => {
-      setInputFilterVisible(visible);
-      setInputFilterError(null);
-      if (!visible) {
-        abortInputSearch();
-        setAppliedInputFilter(null);
-        setInputFilterRuns([]);
-        setInputSearchStatus('idle');
-        setInputSearchProgress(null);
-        setPage(1);
-      }
-    },
-    [abortInputSearch],
-  );
-
-  const handleStopInputSearch = useCallback(() => {
-    abortInputSearch();
-    if (appliedInputFilter) {
-      setInputSearchStatus('stopped');
-      setRunsLoading(false);
-    }
-  }, [abortInputSearch, appliedInputFilter]);
+    if (!sessionActive || !sessionReady || deletingRecordingId) return false;
+    return applyInputFilter();
+  }, [sessionActive, sessionReady, deletingRecordingId, applyInputFilter]);
 
   const handleDeleteRecording = useCallback(
     async (recordingId: string) => {
-      // Serialize mutations within this view. A replacement view owns a fresh
-      // token, so an older server-side deletion cannot block or update it.
+      // A replacement view owns a fresh token; old mutations cannot update it.
       if (deletionRequestRef.current) return;
-      if (!window.confirm('Are you sure you want to delete this recording? This action cannot be undone.')) {
-        return;
-      }
-
-      const currentWorkflowId = selectedWorkflowId;
-      const currentPage = page;
-      const currentPageSize = runsPerPage;
-      const currentStatusFilter = statusFilter;
-      const currentInputFilter = appliedInputFilter;
+      if (!window.confirm('Are you sure you want to delete this recording? This action cannot be undone.')) return;
+      const view = {
+        workflowId: selectedWorkflowId,
+        page,
+        pageSize: runsPerPage,
+        status: statusFilter,
+        inputFilter: appliedInputFilter,
+      };
       const deletingRun = visibleRuns.find((run) => run.id === recordingId);
-      const changesRelatedScope =
-        !currentInputFilter &&
-        Boolean(currentWorkflowId && deletingRun?.executionIdentity?.correlationId) &&
-        deletingRun?.executionIdentity?.surface !== 'subgraph_project';
       const requestVersion = runsRequestVersionRef.current;
       const deletionRequest = {};
       deletionRequestRef.current = deletionRequest;
       const isCurrent = () =>
         runsRequestVersionRef.current === requestVersion && deletionRequestRef.current === deletionRequest;
       let deleted = false;
-
       try {
-        abortInputSearch();
-        if (currentInputFilter && inputSearchStatus === 'searching') setInputSearchStatus('stopped');
+        beginDeletion();
         setDeletingRecordingId(recordingId);
-        setRunsLoading(true);
-        setError(null);
-
         await deleteWorkflowRecordingRequest(recordingId);
         deleted = true;
         if (!isCurrent()) return;
-        // An opening catalog snapshot may predate this committed deletion.
+        // Do not let an opening snapshot restore counts after this committed deletion.
         abortCatalog();
-        // The mutation already committed, even if refreshing metadata later fails.
-        setInputFilterRuns((currentRuns) => currentRuns.filter((run) => run.id !== recordingId));
-        setChildLoadErrors((errors) => {
-          const next = { ...errors };
-          delete next[recordingId];
-          return next;
-        });
-        for (const request of childRequestsRef.current.values()) request.abort();
-        childRequestsRef.current.clear();
-        setChildLoadStates((states) =>
-          Object.fromEntries(Object.entries(states).map(([id, state]) => [id, state === 'loading' ? 'failed' : state])),
-        );
-        setSubRuns((currentRuns) =>
-          currentRuns.filter(
-            (run) =>
-              run.id !== recordingId &&
-              (deletingRun?.executionIdentity?.surface === 'subgraph_project' ||
-                run.executionIdentity?.correlationId !== deletingRun?.executionIdentity?.correlationId),
-          ),
-        );
+        reconcileDeletedRuns(recordingId, deletingRun, view);
+        reconcileDeletedSubRuns(recordingId, deletingRun);
         if (deletingRun) {
           setWorkflowsResponse((current) =>
             current
@@ -659,98 +297,56 @@ export function useRunRecordingsController(
                 }
               : current,
           );
-          setRelatedCounts((current) =>
-            current?.workflowId === currentWorkflowId &&
-            (!currentInputFilter || deletingRun.executionIdentity?.surface !== 'subgraph_project')
-              ? { ...current, counts: countsAfterDeletingRun(current.counts, deletingRun) }
-              : null,
-          );
         }
-        setRunsPage((current) => {
-          if (!current) return current;
-          return {
-            ...current,
-            runs: current.runs.filter((run) => run.id !== recordingId),
-            // A child does not consume a page slot. The authoritative refresh
-            // recalculates family counts, including deleted context anchors.
-            totalRuns: current.totalRuns,
-            scopeCounts:
-              deletingRun &&
-              current.scopeCounts &&
-              (!currentInputFilter || deletingRun.executionIdentity?.surface !== 'subgraph_project')
-                ? countsAfterDeletingRun(current.scopeCounts, deletingRun)
-                : current.scopeCounts,
-          };
-        });
-        if (changesRelatedScope) {
-          // Removing a root anchor can remove other, still-retained children
-          // from this scope, even if the following catalog refresh fails.
-          setRunsPage(null);
-          setRelatedCounts(null);
-        }
-
         const nextWorkflowsResponse = await loadWorkflowRecordingWorkflows(false);
         if (!isCurrent() || !nextWorkflowsResponse) return;
-
         const refreshedWorkflow =
-          nextWorkflowsResponse.workflows.find((workflow) => workflow.workflowId === currentWorkflowId) ?? null;
-        if (currentWorkflowId && !refreshedWorkflow) {
-          setRunsPage(null);
-          setInputFilterRuns([]);
-          // Ordinary selections fall back to Any. An explicitly inspected
-          // project stays selected, so reload its now-empty history normally.
-          if (currentWorkflowId !== initialProjectId) return;
+          nextWorkflowsResponse.workflows.find((workflow) => workflow.workflowId === view.workflowId) ?? null;
+        if (view.workflowId && !refreshedWorkflow) {
+          clearMissingWorkflowResults();
+          // Ordinary selections fall back to Any; inspected projects retain their empty history.
+          if (view.workflowId !== initialProjectId) return;
         }
-
-        if (currentInputFilter) {
+        if (view.inputFilter) {
           if (deletingRun?.executionIdentity?.surface === 'subgraph_project') return;
-          setAppliedInputFilter({ ...currentInputFilter });
+          restartInputSearch(view.inputFilter);
           return;
         }
-
-        setRunsPage(null);
-        const nextRunsPage = await loadWorkflowRecordingRunsPage(currentWorkflowId, {
-          page: currentPage,
-          pageSize: currentPageSize,
-          status: currentStatusFilter,
-          inputFilter: null,
-        });
+        const nextRunsPage = await readPageAfterDeletion(view);
         if (!isCurrent()) return;
-        if (nextRunsPage.totalRuns > 0 && nextRunsPage.runs.length === 0 && currentPage > 1) {
-          const nextPage = Math.max(1, Math.ceil(nextRunsPage.totalRuns / currentPageSize));
-          // The page effect owns the replacement request. Do not race it with
-          // another manually fetched page from this deletion callback.
-          setPage(nextPage);
-          return;
-        }
-
-        setRunsPage(nextRunsPage);
+        acceptPageAfterDeletion(nextRunsPage, view);
       } catch (err) {
         if (isCurrent()) {
           const message = err instanceof Error ? err.message : String(err);
-          setError(deleted ? `Recording deleted, but refreshing the list failed: ${message}` : message);
+          reportDeletionError(deleted ? 'Recording deleted, but refreshing the list failed: ' + message : message);
         }
       } finally {
         if (isCurrent()) {
-          setRunsLoading(false);
+          finishDeletion();
           setDeletingRecordingId(null);
           deletionRequestRef.current = null;
         }
       }
     },
     [
-      loadWorkflowRecordingRunsPage,
-      loadWorkflowRecordingWorkflows,
       page,
       runsPerPage,
       selectedWorkflowId,
       statusFilter,
       appliedInputFilter,
-      inputSearchStatus,
       visibleRuns,
-      abortInputSearch,
+      beginDeletion,
       abortCatalog,
+      reconcileDeletedRuns,
+      reconcileDeletedSubRuns,
+      loadWorkflowRecordingWorkflows,
+      clearMissingWorkflowResults,
       initialProjectId,
+      restartInputSearch,
+      readPageAfterDeletion,
+      acceptPageAfterDeletion,
+      reportDeletionError,
+      finishDeletion,
     ],
   );
 

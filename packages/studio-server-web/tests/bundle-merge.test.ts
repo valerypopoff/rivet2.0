@@ -8,9 +8,34 @@ import {
   savedBundleMergePath,
   suggestBundleMergeCounterpart,
 } from '../dashboard/bundleMerge.js';
-import type { BundleMergeChoices, BundleMergePreview } from '../../studio-server-shared/workflow-bundle-types.js';
+import type {
+  BundleMergeChoices,
+  BundleMergePreview,
+  BundleMergeProject,
+} from '../../studio-server-shared/workflow-bundle-types.js';
 
-test('counterpart suggestions prefer one exact relative path and leave ambiguous names unresolved', () => {
+function previewFor(source: BundleMergeProject[], destination: BundleMergeProject[] = []): BundleMergePreview {
+  return {
+    source: { bundleId: 'copy', namespaceId: 'copy-folder', name: 'Copy', relativePath: 'Copy', projects: source },
+    destination: {
+      bundleId: 'original',
+      namespaceId: 'original-folder',
+      name: 'Original',
+      relativePath: 'Original',
+      projects: destination,
+    },
+    actions: [],
+    requiredProjects: [],
+    requiredGraphs: [],
+    blockers: [],
+    warnings: [],
+    rewrites: 0,
+    versionChanges: 0,
+    datasets: [],
+  };
+}
+
+void test('counterpart suggestions prefer one exact relative path and leave ambiguous names unresolved', () => {
   const source = { projectId: 'copy', title: 'Same', relativePath: 'Nested/A.rivet-project' };
   const targets = [
     { projectId: 'one', title: 'Same', relativePath: 'Other/A.rivet-project' },
@@ -22,7 +47,7 @@ test('counterpart suggestions prefer one exact relative path and leave ambiguous
   assert.equal(suggestBundleMergeCounterpart(source, []), null);
 });
 
-test('reference locations start with the bundle name and identify projects and saved variants', () => {
+void test('reference locations start with the bundle name and identify projects and saved variants', () => {
   const catalogs = {
     source: {
       bundleId: 'copy',
@@ -55,7 +80,7 @@ test('reference locations start with the bundle name and identify projects and s
   assert.equal(describeBundleMergeSite(site, null), 'Same (source) / Main / (call) / variant 1 / (inactive)');
 });
 
-test('project labels hide only the storage suffix and retain useful disambiguation', () => {
+void test('project labels hide only the storage suffix and retain useful disambiguation', () => {
   assert.equal(formatBundleMergeProject({ projectId: 'a', title: 'A', relativePath: 'A.rivet-project' }), 'A');
   assert.equal(
     formatBundleMergeProject({ projectId: 'b', title: 'A', relativePath: 'Nested/A.rivet-project' }),
@@ -64,14 +89,14 @@ test('project labels hide only the storage suffix and retain useful disambiguati
   assert.equal(displayBundleMergePath('Folder.rivet-project/A.rivet-project'), 'Folder.rivet-project/A');
 });
 
-test('extension-free path editing round-trips the actual storage path without changing names', () => {
+void test('extension-free path editing round-trips the actual storage path without changing names', () => {
   for (const path of ['A.rivet-project', 'Nested/A.rivet-project', 'A.rivet-project.rivet-project'])
     assert.equal(savedBundleMergePath(displayBundleMergePath(path)), path);
   assert.equal(savedBundleMergePath('Nested/New'), 'Nested/New.rivet-project');
   assert.equal(savedBundleMergePath(''), '');
 });
 
-test('automatic choices include only changed/new projects and required clear matches', () => {
+void test('automatic choices include only changed/new projects and required clear matches', () => {
   const source = ['changed', 'new', 'same', 'ambiguous'].map((projectId) => ({
     projectId,
     title: projectId,
@@ -83,13 +108,13 @@ test('automatic choices include only changed/new projects and required clear mat
     { sourceProjectId: 'same', state: 'unchanged', targetProjectId: 'kept' },
     { sourceProjectId: 'ambiguous', state: 'ambiguous' },
   ];
-  const preview = {
-    source: { projects: source },
-    destination: { projects: [] },
-    requiredProjects: [{ project: source[2]!, sites: [] }],
-    suggestions,
-  } as unknown as BundleMergePreview;
-  const choices: BundleMergeChoices = { destinationBundleId: 'destination', actions: [], dependencies: [], graphs: [] };
+  const preview = previewFor(source, [
+    { ...source[0]!, projectId: 'original' },
+    { ...source[2]!, projectId: 'kept' },
+  ]);
+  preview.requiredProjects = [{ project: source[2]!, sites: [] }];
+  preview.suggestions = suggestions;
+  const choices: BundleMergeChoices = { destinationBundleId: 'original', actions: [], dependencies: [], graphs: [] };
   const defaults = applyBundleMergeSuggestions(choices, preview, suggestions, true);
   assert.deepEqual(defaults.actions, [
     { sourceProjectId: 'changed', kind: 'replace', targetProjectId: 'original' },
@@ -111,4 +136,22 @@ test('automatic choices include only changed/new projects and required clear mat
     ),
     choices,
   );
+});
+
+void test('only an absent suggestions cache permits legacy dependency matching', () => {
+  const source = { projectId: 'copy', title: 'Shared', relativePath: 'Shared.rivet-project' };
+  const target = { ...source, projectId: 'original' };
+  const preview = previewFor([source], [target]);
+  preview.requiredProjects = [{ project: source, sites: [] }];
+  const choices: BundleMergeChoices = { destinationBundleId: 'original', actions: [], dependencies: [], graphs: [] };
+  for (const suggestions of [undefined, []]) {
+    const result = applyBundleMergeSuggestions(choices, preview, suggestions, false);
+    assert.deepEqual(
+      result.dependencies,
+      suggestions === undefined ? [{ sourceProjectId: 'copy', kind: 'existing', targetProjectId: 'original' }] : [],
+    );
+    assert.equal(result.actions, choices.actions);
+    if (suggestions) assert.equal(result, choices);
+  }
+  assert.deepEqual(choices.dependencies, []);
 });

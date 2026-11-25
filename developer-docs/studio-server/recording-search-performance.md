@@ -210,6 +210,12 @@ previous success file cannot fail a valid rerun or masquerade as fresh evidence.
 
 ## All-workflow scope
 
+The [Run recordings controller refactor](run-recordings-controller-refactor-plan.md)
+separates root browsing/search into `useRecordingRunsQuery.ts` and child-family
+loading into `useRecordingSubRuns.ts`. The parent retains catalog, session,
+selection and deletion coordination. This changes ownership, not the behavior
+or performance contract described below.
+
 ### Immediate modal interaction (November 12, 2026)
 
 The modal renders its Project picker and filter controls without waiting for the
@@ -225,7 +231,10 @@ The controller initializes its reset generation and starting project before
 issuing either request. A fresh closed modal performs no recordings reads. The
 existing open/retained state owns the session: temporary dismissal preserves its
 requests and results, whereas explicit close discards it. Catalog completion and
-retry do not restart results requests or erase input edits. Catalog errors have
+retry do not restart results requests or erase input edits while the selected
+scope remains available. If an ordinary selected project disappears from the
+catalog, the existing selection pruning switches to Any and replaces its query;
+an explicitly inspected project retains its empty history. Catalog errors have
 a local retry action and cannot disable an independent search. All catalog
 loads, including deletion refreshes, use the same cancellation/stale-response
 guard; a confirmed deletion invalidates an older opening snapshot before
@@ -238,6 +247,21 @@ the response establishes a denominator. Legacy responses lacking both counts
 and cumulative analysis retain this unknown state even on completion. Real
 zero counts remain zero. Catalog recording counts, family pagination totals,
 and root-only input-search counts retain their separate meanings.
+
+Deleting a displayed child during input search preserves that query's cached
+root-only scope counts, including Bad only counts. Later continuations may omit
+`scopeCounts`; their omission does not make catalog totals authoritative again.
+The catalog still acknowledges the removed recording, and the child is removed
+locally without restarting the root search. A regression uses three children to
+keep the two totals distinct after deletion: 13 roots versus 15 recordings.
+
+While more results are claimed, an input search rejects any opaque continuation
+token already followed in that search, including a non-adjacent A → B → A cycle.
+It uses the existing stopped-search error path and retains partial matches and
+progress. Tokens remain opaque; their contents are not decoded in the browser.
+The legacy numeric-cursor check is unchanged, and a new query starts with fresh
+token history. No deadline or fixed request-count limit is imposed on a valid
+advancing search.
 
 Applying during an initial read does not weaken guards around active searches,
 deletion or replay opening. Browser cancellation stops subsequent reads and

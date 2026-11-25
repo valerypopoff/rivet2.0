@@ -1,6 +1,8 @@
 import { spawn } from 'node:child_process';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { fileURLToPath } from 'node:url';
+import { settleOwnedCommandTree, spawnOwnedWindowsCommand } from './owned-command-tree.mjs';
+import { findExecutableOnPath } from './k8s-tools.mjs';
 
 const rootDir = fileURLToPath(new URL('../../../../', import.meta.url));
 const scope = new AsyncLocalStorage();
@@ -23,6 +25,8 @@ export async function runManagedGateCommand(program, args, options = {}) {
     env = process.env,
     signal: commandSignal,
     killAfterMs = 5000,
+    settleTree = false,
+    retainOnFailure = false,
   } = options;
   const phaseSignal = scope.getStore();
   const signal =
@@ -32,14 +36,27 @@ export async function runManagedGateCommand(program, args, options = {}) {
     // Release workers run on Linux. Give each client its own process group so
     // cancellation also reaches auth helpers that inherited its output pipes.
     const processGroup = process.platform !== 'win32';
-    const child = spawn(program, args, {
+    const windowsJob = settleTree && process.platform === 'win32';
+    if (windowsJob) {
+      // Spread Windows environments lose process.env's case-insensitive lookup.
+      const pathKey = Object.keys(env)
+        .sort()
+        .find((key) => key.toUpperCase() === 'PATH');
+      program = findExecutableOnPath(program, { ...env, PATH: env[pathKey] });
+      if (!program || !program.toLowerCase().endsWith('.exe'))
+        throw Error('Owned release executable is unavailable on this runner.');
+    }
+    const spawnOptions = {
       cwd,
       shell: false,
       windowsHide: true,
       detached: processGroup,
       env,
       stdio: capture ? ['pipe', 'pipe', 'pipe'] : input == null ? 'inherit' : ['pipe', 'inherit', 'inherit'],
-    });
+    };
+    const child = windowsJob
+      ? spawnOwnedWindowsCommand(program, args, { ...spawnOptions, retainOnFailure })
+      : spawn(program, args, spawnOptions);
     let stdout = '',
       stderr = '',
       childError,
@@ -78,12 +95,29 @@ export async function runManagedGateCommand(program, args, options = {}) {
     child.once('error', (error) => {
       childError = error;
     });
-    child.once('close', (code) => {
+    let settlement;
+    const settle = (code) => {
+      if (settleTree && processGroup && child.pid && !(retainOnFailure && code !== 0 && !signal?.aborted))
+        settlement ??= settleOwnedCommandTree(child, killAfterMs).then(
+          (confirmed) => {
+            if (!confirmed) childError ??= Error('Owned release process-tree shutdown is unconfirmed.');
+          },
+          (error) => {
+            childError ??= error;
+          },
+        );
+      return settlement;
+    };
+    // Descendants may keep the output pipes open after the CLI exits. Waiting
+    // for close before stopping them deadlocks that otherwise successful exit.
+    if (settleTree && processGroup) child.once('exit', settle);
+    child.once('close', async (code) => {
       // A helper can close/inherit no pipes and outlive the client. Finish its
       // cancelled group even when the client closes before the escalation timer.
       if (signal?.aborted && processGroup) terminate('SIGKILL');
       clearTimeout(timer);
       signal?.removeEventListener('abort', abort);
+      if (settleTree && processGroup) await settle(code);
       active.delete(closure);
       closed(); // A kill request is not proof of closure.
       if (signal?.aborted) return reject(signal.reason);

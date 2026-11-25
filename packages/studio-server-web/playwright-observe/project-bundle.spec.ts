@@ -73,6 +73,12 @@ test('download dependencies survives closing the dialog and runs the real downlo
   const temporary = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-browser-bundle-'));
   const jobs = new ProjectBundleJobs(path.join(temporary, 'jobs'));
   const fixture = projectBundleFixture();
+  const publishedFixture = projectBundleFixture();
+  const publishedChild = publishedFixture.child.project.graphs[publishedFixture.child.project.metadata.mainGraphId!]!;
+  publishedChild.nodes[0]!.data = { ...publishedChild.nodes[0]!.data, text: 'published-child-result' };
+  publishedFixture.child.projectContents = serializeProject(publishedFixture.child.project) as string;
+  publishedFixture.root.selectedVersion = 'published';
+  publishedFixture.child.selectedVersion = 'published';
   let releaseAcknowledgement!: () => void;
   const acknowledgement = new Promise<void>((resolve) => {
     releaseAcknowledgement = resolve;
@@ -96,8 +102,11 @@ test('download dependencies survives closing the dialog and runs the real downlo
   };
   let loseAcknowledgement = false;
   let failPreparation = false;
-  let refuseCancellation = false;
+  let cancellationStatus: number | null = null;
+  const cancellationMessage = 'Owned cancellation response';
   let statusReads = 0;
+  let expectedVersion: 'latest' | 'published' = 'latest';
+  const startedIds: string[] = [];
   const rootProject = bundleProject(fixture.root.project.metadata.id);
   await page.route(
     (url) => url.pathname.startsWith('/api/'),
@@ -111,7 +120,8 @@ test('download dependencies survives closing the dialog and runs the real downlo
       if (url.pathname === '/api/workflows/project-bundles/container' && request.method() === 'POST') {
         const body = request.postDataJSON();
         expect(body.bundleId).toBe(rootProject.id);
-        expect(body.version).toBe('latest');
+        expect(body.version).toBe(expectedVersion);
+        startedIds.push(body.requestId);
         const source = failPreparation
           ? {
               ...fixture.source,
@@ -119,8 +129,10 @@ test('download dependencies survives closing the dialog and runs the real downlo
                 throw new Error('Owned fixture read failed');
               },
             }
-          : gatedSource;
-        const status = await jobs.start(source, 'latest', body.requestId);
+          : body.version === 'published'
+            ? publishedFixture.source
+            : gatedSource;
+        const status = await jobs.start({ ...source, versionPolicy: body.version }, body.version, body.requestId);
         if (loseAcknowledgement)
           return route.fulfill({ status: 524, contentType: 'text/html', body: '<html>Owned gateway response</html>' });
         await acknowledgement;
@@ -129,11 +141,12 @@ test('download dependencies survives closing the dialog and runs the real downlo
       const match = /^\/api\/workflows\/project-bundles\/([^/]+)(\/download)?$/.exec(url.pathname);
       if (match) {
         if (request.method() === 'DELETE') {
-          if (refuseCancellation)
+          if (cancellationStatus !== null)
             return route.fulfill({
-              status: 524,
-              contentType: 'text/html',
-              body: '<html>Owned cancellation timeout</html>',
+              status: cancellationStatus,
+              ...(cancellationStatus === 202
+                ? { json: { accepted: true } }
+                : { contentType: 'text/html', body: `<html>${cancellationMessage}</html>` }),
             });
           await jobs.cancel(match[1]!);
           return route.fulfill({ status: 204 });
@@ -218,19 +231,10 @@ test('download dependencies survives closing the dialog and runs the real downlo
     await expect(dialog.locator('.project-settings-help').first()).toHaveCSS('font-size', '14px');
     await expect(dialog.locator('.project-settings-help').first()).toHaveCSS('line-height', '21px');
     const prepare = dialog.getByRole('button', { name: 'Prepare bundle', exact: true });
-    const openFreshTestSession = async () => {
-      // Failure scenarios use independent client sessions now that completed
-      // exports intentionally have no restart action. Server jobs stay owned
-      // by this fixture and are disposed together in finally.
-      await dialog.getByRole('button', { name: 'Close bundle download' }).click();
-      await expect(dialog).toHaveCount(0);
-      await page.evaluate((key) => sessionStorage.removeItem(key), `rivet-container-bundle:${rootProject.id}`);
-      await page.reload();
-      await waitForDashboardReady(page);
-      await row.click({ button: 'right' });
-      await openBundleActions(page);
-      await downloadBundle.click();
+    const prepareAnother = async () => {
+      await dialog.getByRole('button', { name: 'Prepare another bundle', exact: true }).click();
       await expect(prepare).toBeEnabled();
+      await expect(rootVersions).toBeVisible();
     };
     await expect(prepare).toHaveCSS('background-color', 'rgb(12, 102, 228)');
     for (const width of [1600, 390]) {
@@ -270,16 +274,16 @@ test('download dependencies survives closing the dialog and runs the real downlo
     await openBundleActions(page);
     await page.getByRole('menuitem', { name: 'Download bundle', exact: true }).click();
     await expect(spinner).toBeVisible();
-    refuseCancellation = true;
+    cancellationStatus = 524;
     await dialog.getByRole('button', { name: 'Cancel export', exact: true }).click();
     const cancellationError = dialog.getByRole('alert');
     await expect(cancellationError).toContainText('HTML instead of JSON (HTTP 524)');
-    await expect(cancellationError).not.toContainText('Owned cancellation timeout');
+    await expect(cancellationError).not.toContainText(cancellationMessage);
     const readsAfterCancellation = statusReads;
     await expect.poll(() => statusReads).toBeGreaterThan(readsAfterCancellation);
     await expect(cancellationError).toContainText('HTML instead of JSON (HTTP 524)');
     await expect(spinner).toBeVisible();
-    refuseCancellation = false;
+    cancellationStatus = null;
     releaseCollection();
     await expect(dialog.getByRole('status')).toContainText('Export: packaging.');
     await expect(spinner).toBeVisible();
@@ -293,8 +297,9 @@ test('download dependencies survives closing the dialog and runs the real downlo
     await expect(spinner).toHaveCount(0);
     await expect(link).toHaveCSS('background-color', 'rgb(12, 102, 228)');
     await expect(link).toHaveAttribute('href', /\/api\/workflows\/project-bundles\/[^/]+\/download$/);
+    const another = dialog.getByRole('button', { name: 'Prepare another bundle', exact: true });
     releaseAcknowledgement();
-    await expect(dialog.getByRole('button', { name: 'Prepare another bundle' })).toHaveCount(0);
+    await expect(another).toBeEnabled();
     await expect(preparationNotice).toHaveCount(0);
     await expect
       .poll(() =>
@@ -309,6 +314,7 @@ test('download dependencies survives closing the dialog and runs the real downlo
     await page.setViewportSize({ width: 390, height: 520 });
     await expectStudioModalSizing(dialog);
     await expect(link).toBeInViewport();
+    await expect(another).toBeInViewport();
     await expect(dialog.getByRole('button', { name: 'Close bundle download' })).toBeInViewport();
     await page.screenshot({ path: test.info().outputPath('bundle-modal-ready-narrow.png') });
     await page.setViewportSize({ width: 1600, height: 1000 });
@@ -317,23 +323,71 @@ test('download dependencies survives closing the dialog and runs the real downlo
       'Export: ready.',
     );
     expect(statusReads).toBeGreaterThan(0);
-    const downloadPromise = page.waitForEvent('download');
-    await link.click();
-    const download = await downloadPromise;
-    const archive = path.join(temporary, 'browser.zip');
-    await download.saveAs(archive);
-    expect(await download.failure()).toBeNull();
-    const extracted = path.join(temporary, 'relocated');
-    await extractProjectBundleFixture(await fs.readFile(archive), extracted);
-    const bundle = await loadProjectBundle(path.join(extracted, 'rivet-bundle.json'));
-    const runner = bundle.createProcessor();
-    try {
-      expect((await runner.run()).result?.value).toBe('child-result');
-    } finally {
-      runner.dispose();
+    const downloadAndRun = async (name: string, expectedResult: string) => {
+      const downloadPromise = page.waitForEvent('download');
+      await link.click();
+      const download = await downloadPromise;
+      const archive = path.join(temporary, `${name}.zip`);
+      await download.saveAs(archive);
+      expect(await download.failure()).toBeNull();
+      const extracted = path.join(temporary, name);
+      await extractProjectBundleFixture(await fs.readFile(archive), extracted);
+      const bundle = await loadProjectBundle(path.join(extracted, 'rivet-bundle.json'));
+      const runner = bundle.createProcessor();
+      try {
+        expect((await runner.run()).result?.value).toBe(expectedResult);
+      } finally {
+        runner.dispose();
+      }
+    };
+    await downloadAndRun('original', 'child-result');
+    const originalHref = await link.getAttribute('href');
+    const savedChild = fixture.child.project.graphs[fixture.child.project.metadata.mainGraphId!]!;
+    savedChild.nodes[0]!.data = { ...savedChild.nodes[0]!.data, text: 'updated-child-result' };
+    fixture.child.projectContents = serializeProject(fixture.child.project) as string;
+    await dialog.getByRole('button', { name: 'Close bundle download' }).click();
+    await row.click({ button: 'right' });
+    await openBundleActions(page);
+    await downloadBundle.click();
+    await expect(link).toHaveAttribute('href', originalHref!);
+    for (const status of [200, 202]) {
+      cancellationStatus = status;
+      await another.click();
+      await expect(dialog.getByRole('alert')).toContainText(
+        status === 200 ? 'HTML instead of JSON (HTTP 200)' : 'The server did not confirm export cleanup.',
+      );
+      await expect(link).toHaveAttribute('href', originalHref!);
+      await expect(rootVersions).toHaveCount(0);
+      expect(startedIds).toHaveLength(1);
     }
+    cancellationStatus = null;
+    await prepareAnother();
+    await prepare.click();
+    await expect(link).toBeVisible();
+    await expect(link).not.toHaveAttribute('href', originalHref!);
+    await downloadAndRun('updated', 'updated-child-result');
+
+    await prepareAnother();
+    await rootVersions.getByRole('button', { name: 'Published', exact: true }).click();
+    expectedVersion = 'published';
+    await prepare.click();
+    await expect(link).toBeVisible();
+    await downloadAndRun('published', 'published-child-result');
+    expect(new Set(startedIds).size).toBe(3);
+    await page.reload();
+    await waitForDashboardReady(page);
+    await row.click({ button: 'right' });
+    await openBundleActions(page);
+    await downloadBundle.click();
+    await expect(link).toBeVisible();
+    await prepareAnother();
+    await expect(rootVersions.getByRole('button', { name: 'Published', exact: true })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+    await rootVersions.getByRole('button', { name: 'Saved latest', exact: true }).click();
+    expectedVersion = 'latest';
     await expect(row).toBeVisible();
-    await openFreshTestSession();
     loseAcknowledgement = true;
     await page.getByRole('button', { name: 'Prepare bundle', exact: true }).click();
     await expect(link).toBeVisible();
@@ -341,7 +395,7 @@ test('download dependencies survives closing the dialog and runs the real downlo
     // A real preparation failure must not strand the dialog or require reloading
     // the workspace. Retrying disposes the failed job before preparing a fresh one.
     loseAcknowledgement = false;
-    await openFreshTestSession();
+    await prepareAnother();
     failPreparation = true;
     await page.getByRole('button', { name: 'Prepare bundle', exact: true }).click();
     const modal = page.getByRole('dialog', { name: 'Download bundle' });
@@ -361,7 +415,7 @@ test('download dependencies survives closing the dialog and runs the real downlo
     await expect(modal.getByRole('alert')).toHaveCount(0);
     // Port changes are adopted automatically, but a missing graph still needs
     // an actionable location and must recover after the target is restored.
-    await openFreshTestSession();
+    await prepareAnother();
     delete fixture.child.project.graphs[childGraphId];
     fixture.child.projectContents = serializeProject(fixture.child.project) as string;
     await page.getByRole('button', { name: 'Prepare bundle', exact: true }).click();
@@ -390,6 +444,8 @@ test('download dependencies survives closing the dialog and runs the real downlo
     releaseCollection();
     releasePackaging();
     releaseAcknowledgement();
+    await page.goto('about:blank');
+    await page.unrouteAll({ behavior: 'wait' });
     await jobs.dispose();
     await fs.rm(temporary, { recursive: true, force: true });
   }
@@ -595,6 +651,119 @@ test('a delayed status failure cannot replace a successful bundle admission', as
   }
 });
 
+test('invalid export responses retain identity and recover without an automatic new start', async ({ page }) => {
+  const project = bundleProject('bundle-invalid-status');
+  const endpoint = '/api/workflows/project-bundles';
+  let id = '';
+  const postedIds: string[] = [];
+  let reply: unknown = null;
+  let invalidStart = false;
+  let firstRead = true;
+  let releaseInitialRead!: () => void;
+  const initialRead = new Promise<void>((resolve) => (releaseInitialRead = resolve));
+  let releaseStartRead!: () => void;
+  const startRead = new Promise<void>((resolve) => (releaseStartRead = resolve));
+  const status = (phase: 'collecting' | 'ready', projects = 1) => ({
+    id,
+    phase,
+    projects,
+    bytes: 1024,
+    expiresAt: '2099-01-01T00:00:00Z',
+  });
+  await page.clock.install();
+  await page.route(
+    (url) => url.pathname.startsWith('/api/'),
+    async (route) => {
+      const request = route.request();
+      const pathname = new URL(request.url()).pathname;
+      if (pathname === '/api/workflows/tree') return route.fulfill({ json: bundleTree(project) });
+      if (pathname === endpoint + '/container') {
+        id = request.postDataJSON().requestId;
+        postedIds.push(id);
+        return route.fulfill({
+          status: 202,
+          contentType: 'application/json',
+          body: JSON.stringify(invalidStart ? null : status('collecting')),
+        });
+      }
+      if (pathname.startsWith(endpoint + '/')) {
+        if (request.method() === 'DELETE') return route.fulfill({ status: 204 });
+        if (firstRead) {
+          firstRead = false;
+          await initialRead;
+        }
+        if (invalidStart) {
+          await startRead;
+          return route.fulfill({ json: status('ready') });
+        }
+        return route.fulfill({ contentType: 'application/json', body: JSON.stringify(reply) });
+      }
+      return route.fulfill({ status: 503, json: { error: 'Unused fixture route' } });
+    },
+  );
+  try {
+    const dialog = await openFixtureBundleDownload(page);
+    await page.clock.pauseAt((await page.evaluate(() => Date.now())) + 60_000);
+    await dialog.getByRole('button', { name: 'Prepare bundle', exact: true }).click();
+    await expect(dialog.getByRole('status')).toContainText('Export: collecting.');
+    reply = status('collecting', 2);
+    releaseInitialRead();
+    await expect(dialog.getByRole('status')).toContainText('Export: collecting. 2 project snapshots');
+    reply = null;
+    await page.clock.fastForward(1000);
+    await expect(dialog.getByRole('alert')).toContainText('The server returned invalid export status.');
+    const confirmRetainedIdentity = async () => {
+      await expect(dialog.getByRole('button', { name: 'Prepare bundle', exact: true })).toHaveCount(0);
+      await expect(dialog.getByRole('link', { name: 'Download bundle', exact: true })).toHaveCount(0);
+      expect(await page.evaluate((key) => sessionStorage.getItem(key), `rivet-container-bundle:${project.id}`)).toBe(
+        id,
+      );
+    };
+    await confirmRetainedIdentity();
+    const invalidReplies = [
+      { ...status('ready'), id: 'another-job' },
+      { ...status('ready'), phase: 'unknown' },
+      { ...status('ready'), projects: '1' },
+      { ...status('ready'), bytes: -1 },
+      { ...status('ready'), expiresAt: 'invalid' },
+      { ...status('ready'), versionPolicy: 'unknown' },
+      { ...status('ready'), error: { message: 'Do not render this object' } },
+      { ...status('ready'), archiveBytes: '1024' },
+      { ...status('ready'), archiveHash: {} },
+    ];
+    for (const [index, invalidReply] of invalidReplies.entries()) {
+      reply = status('collecting', index + 3);
+      await page.clock.fastForward(5000);
+      await expect(dialog.getByRole('status')).toContainText(`Export: collecting. ${index + 3} project snapshots`);
+      await expect(dialog.getByRole('alert')).toHaveCount(0);
+      expect(postedIds).toHaveLength(1);
+      reply = invalidReply;
+      await page.clock.fastForward(1000);
+      await expect(dialog.getByRole('alert')).toContainText('The server returned invalid export status.');
+      await confirmRetainedIdentity();
+    }
+    reply = status('ready');
+    await page.clock.fastForward(5000);
+    await expect(dialog.getByRole('link', { name: 'Download bundle', exact: true })).toBeVisible();
+    await dialog.getByRole('button', { name: 'Prepare another bundle', exact: true }).click();
+    invalidStart = true;
+    await dialog.getByRole('button', { name: 'Prepare bundle', exact: true }).click();
+    await expect(dialog.getByRole('alert')).toContainText('The server returned invalid export status.');
+    await confirmRetainedIdentity();
+    expect(postedIds).toHaveLength(2);
+    expect(postedIds[0]).not.toBe(postedIds[1]);
+    releaseStartRead();
+    await expect(dialog.getByRole('status')).toContainText('Export: ready.');
+    await expect(dialog.getByRole('alert')).toHaveCount(0);
+    expect(postedIds).toHaveLength(2);
+  } finally {
+    releaseInitialRead();
+    releaseStartRead();
+    await page.goto('about:blank');
+    await page.unrouteAll({ behavior: 'wait' });
+  }
+});
+
 test('a missing resumed export still displays a genuine status error', async ({ page }) => {
   const project = bundleProject('bundle-missing-resume');
   const id = 'cba5c1c1-b8c8-4d9e-9c9f-553d0a11af6a';
@@ -739,14 +908,18 @@ for (const phase of ['ready', 'failed'] as const) {
       await expect(dialog.getByRole('alert')).toHaveCount(0);
       releasePoll();
       await expect(dialog.getByRole('status')).toContainText(`Export: ${phase}.`);
-      if (phase === 'failed') await expect(dialog.getByRole('button', { name: 'Retry export' })).toBeDisabled();
+      const terminalAction = dialog.getByRole('button', {
+        name: phase === 'failed' ? 'Retry export' : 'Prepare another bundle',
+        exact: true,
+      });
+      await expect(terminalAction).toBeDisabled();
       // Terminal status stops polling, but settling the original request must
       // still update this remounted dialog without unrelated periodic renders.
       await page.clock.pauseAt((await page.evaluate(() => Date.now())) + 100);
       releaseAdmission();
       await expect.poll(() => accepted).toBe(true);
+      await expect(terminalAction).toBeEnabled();
       if (phase === 'failed') {
-        await expect(dialog.getByRole('button', { name: 'Retry export' })).toBeEnabled();
         await expect(dialog.getByRole('alert')).toHaveText('Fixture export failed.');
       } else {
         await expect(dialog.getByRole('link', { name: 'Download bundle', exact: true })).toBeVisible();

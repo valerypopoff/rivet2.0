@@ -4,14 +4,9 @@ import Checkbox from '@atlaskit/checkbox';
 import Select from '@atlaskit/select';
 import ModalDialog, { ModalBody, ModalTransition } from '@atlaskit/modal-dialog';
 import DeleteBinIcon from 'majesticons/line/delete-bin-line.svg?react';
-import type {
-  ScheduledRun,
-  ScheduledRunDraft,
-  ScheduledRunList,
-  RunSchedule,
-} from '../../studio-server-shared/scheduled-run-types';
+import type { ScheduledRun, ScheduledRunDraft, RunSchedule } from '../../studio-server-shared/scheduled-run-types';
 import type { WorkflowProjectItem } from './types';
-import { requestScheduledRuns as request } from './scheduledRunApi';
+import { useScheduledRunsController } from './useScheduledRunsController';
 import { ScheduledProjectSelect } from './ScheduledProjectSelect';
 import { SegmentedControl, SegmentedControlButton } from './SegmentedControl';
 import './ScheduledRunsModal.css';
@@ -80,14 +75,6 @@ function ScheduleSelect({
   );
 }
 
-const reconnectWarning =
-  'The action was accepted, but the updated list could not be loaded. Wait for the list to reconnect; do not repeat the action.';
-const describeError = (error: unknown) =>
-  error instanceof Error && error.name === 'TimeoutError'
-    ? 'The request timed out. Check the refreshed schedule and history before retrying; the server may have accepted the action.'
-    : error instanceof Error
-      ? error.message
-      : 'Could not update scheduled runs.';
 const date = (time: number | null | undefined, zone?: string) =>
   time == null
     ? '—'
@@ -108,7 +95,10 @@ export const ScheduledRunsModal: FC<{
   onOpenRecording(id: string): Promise<unknown>;
   onEnabledCountChange(count: number): void;
 }> = ({ projects, onClose, onOpenRecording, onEnabledCountChange }) => {
-  const [data, setData] = useState<ScheduledRunList>({ schedules: [], history: [] });
+  const {
+    state: { data, loaded, busy, error, pollError, draft, editing, input, times, dirty },
+    actions,
+  } = useScheduledRunsController({ projects, onOpenRecording, onEnabledCountChange });
   const [historyPageSize, setHistoryPageSize] = useState(10);
   const [historyPage, setHistoryPage] = useState(1);
   const historyPages = Math.max(1, Math.ceil(data.history.length / historyPageSize));
@@ -116,23 +106,10 @@ export const ScheduledRunsModal: FC<{
   useEffect(() => {
     setHistoryPage((current) => Math.min(current, historyPages));
   }, [historyPages]);
-  const [loaded, setLoaded] = useState(false),
-    [busy, setBusy] = useState(false),
-    [error, setError] = useState('');
-  const [pollError, setPollError] = useState('');
   const [listForeground, setListForeground] = useState(true);
   const [openSelect, setOpenSelect] = useState<string | null>(null);
   const trackSelect = (id: string, open: boolean) =>
     setOpenSelect((current) => (open ? id : current === id ? null : current));
-  const [draft, setDraft] = useState<ScheduledRunDraft | null>(null),
-    [editing, setEditing] = useState<ScheduledRun | null>(null);
-  const [input, setInput] = useState(''),
-    [times, setTimes] = useState<number[]>([]);
-  const initialForm = useRef('');
-  const dirty = draft !== null && JSON.stringify({ draft, input }) !== initialForm.current;
-  const mounted = useRef(true),
-    epoch = useRef(0),
-    working = useRef(false);
   const editorOpener = useRef<HTMLElement | null>(null);
   const listClose = useRef<HTMLButtonElement>(null);
   const editorContent = useRef<HTMLDivElement>(null);
@@ -150,131 +127,16 @@ export const ScheduledRunsModal: FC<{
     });
     return () => cancelAnimationFrame(frame);
   }, [draft, busy, listForeground]);
-  useEffect(() => {
-    mounted.current = true;
-    return () => {
-      mounted.current = false;
-      epoch.current++;
-    };
-  }, []);
-  useEffect(() => {
-    const controller = new AbortController();
-    let timer: ReturnType<typeof setTimeout>;
-    const poll = async () => {
-      const current = epoch.current;
-      try {
-        if (!working.current) {
-          const result = await request<ScheduledRunList>('', 'GET', undefined, controller.signal);
-          if (!controller.signal.aborted && current === epoch.current) {
-            setPollError('');
-            setError((current) => (current === reconnectWarning ? '' : current));
-            setData(result);
-            onEnabledCountChange(result.schedules.filter((schedule) => schedule.enabled).length);
-            setLoaded(true);
-          }
-        }
-      } catch (failure) {
-        if (!controller.signal.aborted && current === epoch.current) setPollError(describeError(failure));
-      }
-      if (!controller.signal.aborted) timer = setTimeout(() => void poll(), 3000);
-    };
-    void poll();
-    return () => {
-      controller.abort();
-      clearTimeout(timer);
-    };
-  }, [onEnabledCountChange]);
-  const action = async (operation: () => Promise<unknown>, refresh = true) => {
-    if (working.current) return;
-    working.current = true;
-    epoch.current++;
-    setBusy(true);
-    setError('');
-    let acknowledged = false;
-    try {
-      await operation();
-      if (!refresh) return;
-      acknowledged = true;
-      const result = await request<ScheduledRunList>();
-      if (mounted.current) {
-        setData(result);
-        onEnabledCountChange(result.schedules.filter((schedule) => schedule.enabled).length);
-        setLoaded(true);
-        setPollError('');
-      }
-    } catch (failure) {
-      if (mounted.current) setError(acknowledged ? reconnectWarning : describeError(failure));
-    } finally {
-      working.current = false;
-      if (mounted.current) setBusy(false);
-    }
-  };
-  const edit = (s: ScheduledRun | undefined, opener: HTMLElement) => {
+  const edit = (schedule: ScheduledRun | undefined, opener: HTMLElement) => {
     editorOpener.current = opener;
     setOpenSelect(null);
-    setEditing(s ?? null);
-    setTimes([]);
-    setError('');
-    const initialInput = s?.input === undefined ? '' : JSON.stringify(s.input, null, 2);
-    const initialDraft: ScheduledRunDraft = s
-      ? structuredClone(s)
-      : {
-          name: '',
-          description: '',
-          projectId: projects.find((project) => project.projectMetadataId)?.projectMetadataId ?? '',
-          version: 'latest',
-          enabled: true,
-          timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-          schedule: { kind: 'daily', time: '10:00' },
-          record: true,
-          timeoutMinutes: 60,
-          missed: 'skip',
-        };
-    initialForm.current = JSON.stringify({ draft: initialDraft, input: initialInput });
-    setInput(initialInput);
-    setDraft(initialDraft);
-  };
-  const update = (changes: Partial<ScheduledRunDraft>) => {
-    setDraft((d) => (d ? { ...d, ...changes } : d));
-    setTimes([]);
-  };
-  const payload = () => {
-    if (!draft) throw new Error('No schedule selected.');
-    if (!draft.projectId) throw new Error('Choose a project.');
-    const { input: previous, ...rest } = draft;
-    if (!input.trim()) return rest;
-    let value: unknown;
-    try {
-      value = JSON.parse(input);
-    } catch {
-      throw new Error('Input must be valid JSON.');
-    }
-    if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Input must be a JSON object.');
-    return { ...rest, input: value };
-  };
-  const changeKind = (kind: RunSchedule['kind']) => {
-    const time =
-      draft?.schedule.kind === 'daily' || draft?.schedule.kind === 'weekly' || draft?.schedule.kind === 'monthly'
-        ? draft.schedule.time
-        : '10:00';
-    const schedule: RunSchedule =
-      kind === 'interval'
-        ? { kind, minutes: 60, anchor: new Date(Date.now() + 3600000).toISOString() }
-        : kind === 'once'
-          ? { kind, localTime: '' }
-          : kind === 'weekly'
-            ? { kind, time, weekdays: [1] }
-            : kind === 'monthly'
-              ? { kind, time, day: 1 }
-              : { kind: 'daily', time };
-    update({ schedule });
+    actions.openEditor(schedule);
   };
   const closeEditor = () => {
-    if (working.current) return;
-    setDraft(null);
-    setOpenSelect(null);
-    setError('');
+    if (actions.closeEditor()) setOpenSelect(null);
   };
+  const update = actions.updateDraft;
+  const changeKind = actions.changeKind;
   return (
     <ModalTransition>
       <ModalDialog
@@ -331,9 +193,7 @@ export const ScheduledRunsModal: FC<{
                             'Delete this schedule? Pending work is cancelled; an already-running graph continues.',
                           )
                         )
-                          void action(() =>
-                            request(`/${encodeURIComponent(s.id)}`, 'DELETE', { revision: s.revision }),
-                          );
+                          void actions.deleteSchedule(s);
                       }}
                     >
                       <DeleteBinIcon aria-hidden="true" />
@@ -353,25 +213,10 @@ export const ScheduledRunsModal: FC<{
                     <ScheduleButton disabled={busy} onClick={(event) => edit(s, event.currentTarget)}>
                       Edit
                     </ScheduleButton>
-                    <ScheduleButton
-                      disabled={busy}
-                      onClick={() =>
-                        void action(() =>
-                          request(`/${encodeURIComponent(s.id)}`, 'PUT', {
-                            revision: s.revision,
-                            draft: { ...s, enabled: !s.enabled },
-                          }),
-                        )
-                      }
-                    >
+                    <ScheduleButton disabled={busy} onClick={() => void actions.toggleEnabled(s)}>
                       {s.enabled ? 'Pause' : 'Unpause'}
                     </ScheduleButton>
-                    <ScheduleButton
-                      disabled={busy}
-                      onClick={() =>
-                        void action(() => request(`/${encodeURIComponent(s.id)}/run`, 'POST', { revision: s.revision }))
-                      }
-                    >
+                    <ScheduleButton disabled={busy} onClick={() => void actions.runNow(s)}>
                       Run now
                     </ScheduleButton>
                   </div>
@@ -422,7 +267,7 @@ export const ScheduledRunsModal: FC<{
                             tabIndex={busy ? -1 : undefined}
                             onClick={(event) => {
                               event.preventDefault();
-                              if (!busy) void action(() => onOpenRecording(run.recordingId!), false);
+                              if (!busy) void actions.openRecording(run.recordingId!);
                             }}
                           >
                             Open recording
@@ -431,9 +276,7 @@ export const ScheduledRunsModal: FC<{
                         {['queued', 'claimed', 'running'].includes(run.status) ? (
                           <ScheduleButton
                             disabled={busy || run.cancelRequested}
-                            onClick={() =>
-                              void action(() => request(`/runs/${encodeURIComponent(run.id)}/cancel`, 'POST', {}))
-                            }
+                            onClick={() => void actions.cancelRun(run.id)}
                           >
                             {run.cancelRequested ? 'Cancelling…' : 'Cancel run'}
                           </ScheduleButton>
@@ -448,11 +291,7 @@ export const ScheduledRunsModal: FC<{
                                   'Retry may repeat external side effects. Check what happened before retrying. Continue?',
                                 )
                               )
-                                void action(() =>
-                                  request(`/runs/${encodeURIComponent(run.id)}/retry`, 'POST', {
-                                    confirmSideEffects: true,
-                                  }),
-                                );
+                                void actions.retryRun(run.id);
                             }}
                           >
                             Retry run
@@ -522,13 +361,7 @@ export const ScheduledRunsModal: FC<{
                 onSubmit={(event) => {
                   event.preventDefault();
                   if (!dirty) return;
-                  void action(async () => {
-                    await request(editing ? `/${encodeURIComponent(editing.id)}` : '', editing ? 'PUT' : 'POST', {
-                      draft: payload(),
-                      ...(editing ? { revision: editing.revision } : {}),
-                    });
-                    if (mounted.current) setDraft(null);
-                  });
+                  void actions.save();
                 }}
               >
                 <div className="scheduled-runs-content" ref={editorContent}>
@@ -769,10 +602,7 @@ export const ScheduledRunsModal: FC<{
                         rows={5}
                         value={input}
                         placeholder="Leave blank to use Graph Input defaults; {} sends an empty object."
-                        onChange={(e) => {
-                          setInput(e.target.value);
-                          setTimes([]);
-                        }}
+                        onChange={(e) => actions.updateInput(e.target.value)}
                       />
                     </label>
                     <div className="scheduled-run-toggles scheduled-run-wide">
@@ -796,16 +626,7 @@ export const ScheduledRunsModal: FC<{
                   ) : null}
                 </div>
                 <div className="scheduled-run-footer">
-                  <ScheduleButton
-                    type="button"
-                    disabled={busy}
-                    onClick={() =>
-                      void action(async () => {
-                        const result = await request<{ times: number[] }>('/preview', 'POST', payload());
-                        if (mounted.current) setTimes(result.times);
-                      }, false)
-                    }
-                  >
+                  <ScheduleButton type="button" disabled={busy} onClick={() => void actions.preview()}>
                     Preview next runs
                   </ScheduleButton>
                   <ScheduleButton primary type="submit" disabled={busy || !dirty}>

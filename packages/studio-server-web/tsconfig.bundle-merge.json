@@ -1,0 +1,25 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "composite": false,
+    "declaration": false,
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "noEmit": true,
+    "jsx": "react-jsx",
+    "jsxImportSource": "@emotion/react",
+    "types": ["vite/client", "node"],
+    "rootDir": ".."
+  },
+  "files": [
+    "svgr.d.ts",
+    "dashboard/WorkflowBundleMergeModal.tsx",
+    "dashboard/WorkflowBundleDeleteModal.tsx",
+    "dashboard/useWorkflowBundleMergeController.ts",
+    "dashboard/bundleMerge.ts",
+    "playwright-observe/helpers/bundleApiFixture.ts",
+    "playwright-observe/helpers/bundleMergeFixture.ts",
+    "playwright-observe/bundle-merge.spec.ts",
+    "tests/bundle-merge.test.ts"
+  ]
+}

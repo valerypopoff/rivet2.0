@@ -68,10 +68,10 @@ Hosted validation on `d10faabc9` passed both workflows on their first attempts:
 log confirms the complete copy/retry/verification fixture and both supervised
 restore variants; CI did not use the reduced feedback mode.
 
-| Workflow | Previous full run | After the split | Observed reduction |
-| --- | --- | --- | --- |
-| Studio Server verification | [18m46s](https://github.com/valerypopoff/rivet2.0/actions/runs/45048439797) | [16m10s](https://github.com/valerypopoff/rivet2.0/actions/runs/45052324511) | 2m36s (13.9%) |
-| Build | [10m17s](https://github.com/valerypopoff/rivet2.0/actions/runs/45048208040) | [9m33s](https://github.com/valerypopoff/rivet2.0/actions/runs/45052324608) | 44s (7.1%) |
+| Workflow                   | Previous full run                                                           | After the split                                                             | Observed reduction |
+| -------------------------- | --------------------------------------------------------------------------- | --------------------------------------------------------------------------- | ------------------ |
+| Studio Server verification | [18m46s](https://github.com/valerypopoff/rivet2.0/actions/runs/45048439797) | [16m10s](https://github.com/valerypopoff/rivet2.0/actions/runs/45052324511) | 2m36s (13.9%)      |
+| Build                      | [10m17s](https://github.com/valerypopoff/rivet2.0/actions/runs/45048208040) | [9m33s](https://github.com/valerypopoff/rivet2.0/actions/runs/45052324608)  | 44s (7.1%)         |
 
 These timings run from workflow creation through the last job's completion,
 including setup, artifact transfers and runner queueing. The Studio baseline
@@ -343,6 +343,40 @@ renders. Release selection tests verify that source, chart or checkout drift is
 rejected before publishing deployment artifacts. Helm rejection tests check the
 required controller without hard-coding the list of supported topologies.
 
+## Owned API fixture shutdown and IPC
+
+The OAuth and async-workflow fixture clients remove pending commands and clear
+their deadlines when IPC sending fails, including synchronous JSON serialization
+errors. Handle transport errors through the send callback; a closed channel must
+reject the command instead of emitting an unhandled error or waiting for its
+ordinary command timeout.
+
+The async-workflow child treats loss of its owning IPC channel as a request for
+the real API entrypoint's SIGTERM shutdown. This also covers an owner lost during
+startup, before the disconnect listener was installed. Its replies check channel
+ownership and use a send callback so an in-flight reply cannot crash the process
+while accepted work and recordings drain. Production shutdown grace and recording
+observation windows are unchanged.
+
+Keep the real-process regressions in `workflow-async-process.test.ts`: disconnect
+before readiness, a held recording-list reply released by disconnect, and
+repeated commands against the closed channel. Await `wait-recordings-reply`
+before disconnecting so the late reply is certain to be pending. That case also
+covers loss of the owner while the API has no active HTTP work; it replaces a
+separate idle-process case and five racing reads. Startup rejection must include
+exit code zero and no signal, so an unrelated startup crash cannot pass the test.
+The seven accepted-work, response-failure and recording-drain cases retain their
+fresh processes and original observation windows.
+
+The OAuth HTTP suite checks failed-send deadline cleanup and concurrent close
+behavior for both healthy and crashed children. It always verifies the synthetic
+baseline cookie values and positive readers without an optional local receipt.
+HTTP requests have bounded test-driver deadlines, and request-snapshot checks
+verify both the original signing secret and settings version. These are fixture
+reliability fixes, with no hosted speedup claim; the
+[OAuth extraction record](oauth-mechanics-refactor-plan.md) records the local
+verification boundary.
+
 ## Schema and browser fixture contracts
 
 The shared Docker launcher dotenv contract keeps a closed inventory of documented
@@ -573,7 +607,8 @@ of parallel execution. They remain scheduling hints, not wall-clock acceptance
 thresholds.
 
 Keep every case, assertion and the existing 12-minute step limit. Validate the
-complete affected shard with `RIVET_EDITOR_TEST_SHARD=1/4 yarn studio-server:ui:ci`
+complete affected shard with `yarn studio-server:ui:ci`, using the current
+`RIVET_EDITOR_TEST_SHARD` selection described below,
 and confirm the recordings results use both workers with overlapping intervals.
 Use the JSON reporter for worker/start/duration evidence when checking locally.
 Do not infer a hosted runtime guarantee from a faster local browser.
@@ -1000,8 +1035,8 @@ promotion. It does not replace Yarn/Cargo audits or introduce a cloud rehearsal.
   required by the Build aggregator. Set `RIVET_CORE_TEST_SHARD=1/2` or `2/2`, then
   run `yarn workspace @valerypopoff/rivet2-core run test:shard` to reproduce one.
   Local `yarn test:core` still runs the full suite.
-- Browser CI uses four required matrix shards, each with two browser workers.
-  `scripts/ci/editor-test-shards.mjs` assigns all 40
+- Browser CI uses five required matrix shards, each with two browser workers.
+  `scripts/ci/editor-test-shards.mjs` assigns all 46
   selected specs exactly once using measured file weights (plus explicit estimates
   for new specs). The cost-statistics specs are included explicitly: the fast modal
   contract and the real mixed-model bundle/HTTP/WebSocket/cancellation fixture.
@@ -1009,18 +1044,80 @@ promotion. It does not replace Yarn/Cargo audits or introduce a cloud rehearsal.
   opening, independent catalog/results, retained sessions, deletion and replay.
   Bundle comparison, the expanded export suite, Bus ordering and Passthrough
   port labels are included explicitly.
+  Both local-storage upgrade suites are included: the panel's request/action and
+  attestation lifetimes, plus the surrounding prompt/Settings recovery journey.
+  Their shared fixture refuses ambient API access, validates upgrade methods and
+  requires explicit scenario responses. Live upgrade/origin rehearsals keep their
+  separate prerequisites and are not selected as mocked editor cases.
+  The 70 isolated panel cases now opt into parallel scheduling on the same two
+  workers; the 23 prompt cases remain serial. Scoped prompt dismissal, shared
+  navigation and collection assertions remove repeated waits/setup. Exact-count
+  cases pause time before mounting the upgrade controller; native stalled-read
+  deadline cases retain real time. No scenario or assertion policy was dropped.
+  The 2026-11-24 local characterization measured 450.7 seconds of panel case work
+  and 137.5 seconds of prompt work; their initial hints are 455 and 140 seconds.
+  Four previous shards already used all 4,320 seconds of their combined allowance.
+  At that stage, five allocated 985/985/985/980/980 seconds, preserving the 1,080-second
+  per-shard allowance, two workers, 12-minute test step and 20-minute job limit.
+  The initial post-extraction local receiving shard passed all 134 cases in 545.3 seconds, including
+  automatic preview cleanup; panel/prompt case work was 472.1/126.9 seconds.
+  These observations show local variability, not a reliable before/after change.
+  Reassessment and preparation-read recovery added two cases. That checkpoint
+  collected 502 cases in 45 files, with all 93 upgrade cases in shard 2/5 (136 cases).
+  Before the test cleanup, the complete local receiving shard passed in 544.0 seconds with
+  automatic preview cleanup; it had no skips or retries.
+  After the test review, all 136 cases passed in 403.6 seconds locally, without
+  skips or retries and with automatic preview cleanup plus an independently
+  closed port. Both workers ran panel cases. Panel/prompt case work was
+  498.1/122.8 seconds, compared with 481.3/125.9 seconds in the preceding run.
+  This local elapsed-time comparison does not establish lower CPU cost or a
+  hosted speedup. A neighboring restore journey initially raced unchanged row
+  text against mutation settlement; it now waits for the newly restored version's
+  enabled control before navigation and passed four focused repetitions before
+  the complete successful shard. The scheduling hints and budgets were unchanged.
+  The fifth job added runner capacity for coverage, without establishing a hosted
+  speedup.
+  The 2026-11-25 publication-review refactor adds the previously omitted Project
+  Settings suite (initially 31 cases, including three new characterization cases;
+  30 after the duplicate-case cleanup). Current
+  collection was **533 cases in 46 files**. Two opening-read history race cases
+  brought it to 535; two adjacent manual-review cases bring the current selection
+  to 537 cases in the same 46 files. Removing a duplicate publish-conflict case
+  brings the current selection to **536 cases in those 46 files**. Settings measured 94.4 seconds of local
+  total case work with the actual CI configuration and failure-only artifacts,
+  versus 102.9 seconds with observe artifacts. Its conservative initial hint is
+  105 seconds. Five shards now allocate **1005/1005/1000/1010/1000 seconds**; the
+  five jobs, two workers, 12-minute test step, 20-minute job limit, 5% balance and
+  1,080-second work allowance remain intact. All five memberships change, so the
+  final gate runs all five, with independently owned fresh previews and cleanup.
+  All 533 cases passed in the initial extraction's local runs without skips or
+  Playwright retries. The follow-up history race fix passed the two affected
+  shards again (124 and 120 cases), plus the complete publication/history and
+  layout selection. The adjacent manual-review correction passed those shards
+  with 126 and 120 cases and the expanded 47-case publication/history/layout
+  selection, again without skips or retries. History measured 54.1 seconds of CI
+  case work and Settings 93.7 seconds, within their existing 90/105-second hints.
+  The subsequent test cleanup passed the two affected suites together under the
+  normal CI configuration (44 cases), plus the 46-case settings/history/layout
+  observe selection. It removed redundant coverage and setup, kept the same
+  file membership and retained the existing work estimates.
+  The unchanged shards retain their initial extraction receipts.
+  The [publication-review record](project-publication-review-refactor-plan.md)
+  carries the final local receipts and the initial concurrent Windows run's
+  Chromium resource failure. Hosted queue/setup/elapsed time remains a
+  separate exact-commit measurement after an authorized push.
   Refresh materially stale work estimates from complete hosted timings, retaining
   slower observations rather than replacing them with a single faster run. Adding a selected spec
   also updates the inventory count and membership assertions in
   `ci-performance.test.mjs`; run its `balanced editor shards` and `editor shard work`
   cases before pushing.
   Their inclusion is asserted by the shard regression. These weights balance work,
-  not predict hosted wall time. Independently isolated recordings cases can use
-  both workers; other files preserve serial scenarios. Test-owned contexts,
+  not predict hosted wall time. Independently isolated recordings and local-upgrade
+  panel cases can use both workers; other files preserve serial scenarios. Test-owned contexts,
   mocks, temporary paths, assertions and retry policy are unchanged. Each shard
   has separate reports and failure artifacts. Executor-retirement verification
-  runs exactly once, on shard 1.
-  Set `RIVET_EDITOR_TEST_SHARD=1/4`, `2/4`, `3/4` or `4/4` before
+  runs exactly once in the web-tests job.
+  Set `RIVET_EDITOR_TEST_SHARD=1/5`, `2/5`, `3/5`, `4/5` or `5/5` before
   `yarn studio-server:ui:ci` to reproduce a lane. Omit it to run the complete
   selection; unknown shard values fail instead of silently dropping coverage.
   Locally, finish build-mutating checks (including `yarn test:style`) before

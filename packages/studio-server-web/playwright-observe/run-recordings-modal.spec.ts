@@ -538,6 +538,7 @@ async function installRunRecordingRoutes(
     relatedSubgraphRunCount?: number;
     relatedSubgraphStatus?: 'succeeded' | 'failed';
     transformSubRunPage?: (response: WorkflowRecordingRunsPageResponse) => WorkflowRecordingRunsPageResponse;
+    transformRunsPage?: (response: WorkflowRecordingRunsPageResponse, url: URL) => WorkflowRecordingRunsPageResponse;
     missingSourceProject?: boolean;
     staleCatalog?: boolean;
     unavailableEvidence?: boolean;
@@ -777,35 +778,32 @@ async function installRunRecordingRoutes(
       const nextInputCursor = offset + candidateRuns.length;
       const hasMore = hasInputFilter && nextInputCursor < filteredRuns.length;
 
-      await route.fulfill({
-        status: 200,
-        contentType: 'application/json',
-        body: JSON.stringify({
-          workflowId,
-          ...((workflowId && options.relatedSubgraphRuns && !hasInputFilter) ||
-          (hasInputFilter && !inputAfter && inputCursor === 0)
-            ? {
-                scopeCounts: {
-                  totalRuns: sourceRuns.length,
-                  failedRuns: sourceRuns.filter((run) => run.status === 'failed').length,
-                  suspiciousRuns: sourceRuns.filter((run) => run.status === 'suspicious').length,
-                },
-              }
-            : {}),
-          page: pageNumber,
-          pageSize,
-          totalRuns: hasInputFilter ? pageRuns.length : paginationRuns.length,
-          totalRunsExact: !hasInputFilter || !hasMore,
-          hasMore,
-          nextInputCursor: hasMore ? nextInputCursor : undefined,
-          inputSearchAnalyzedRuns: hasInputFilter ? nextInputCursor : undefined,
-          unsearchableRuns:
-            hasInputFilter && options.unavailableEvidence && !inputAfter && inputCursor === 0 ? 2 : undefined,
-          nextInputAfter: hasMore ? `fixture:${nextInputCursor}` : undefined,
-          statusFilter: status,
-          runs: pageRuns,
-        }),
-      });
+      const response: WorkflowRecordingRunsPageResponse = {
+        workflowId,
+        ...((workflowId && options.relatedSubgraphRuns && !hasInputFilter) ||
+        (hasInputFilter && !inputAfter && inputCursor === 0)
+          ? {
+              scopeCounts: {
+                totalRuns: sourceRuns.length,
+                failedRuns: sourceRuns.filter((run) => run.status === 'failed').length,
+                suspiciousRuns: sourceRuns.filter((run) => run.status === 'suspicious').length,
+              },
+            }
+          : {}),
+        page: pageNumber,
+        pageSize,
+        totalRuns: hasInputFilter ? pageRuns.length : paginationRuns.length,
+        totalRunsExact: !hasInputFilter || !hasMore,
+        hasMore,
+        nextInputCursor: hasMore ? nextInputCursor : undefined,
+        inputSearchAnalyzedRuns: hasInputFilter ? nextInputCursor : undefined,
+        unsearchableRuns:
+          hasInputFilter && options.unavailableEvidence && !inputAfter && inputCursor === 0 ? 2 : undefined,
+        nextInputAfter: hasMore ? `fixture:${nextInputCursor}` : undefined,
+        statusFilter: status,
+        runs: pageRuns,
+      };
+      await route.fulfill({ json: options.transformRunsPage?.(response, url) ?? response });
       return;
     }
 
@@ -2368,6 +2366,50 @@ test.describe('Run recordings modal', () => {
     }
   });
 
+  test('refresh reloads the same child root without accepting the aborted attempt', async ({ page }) => {
+    const oldLoad = responseGate();
+    const newLoad = responseGate();
+    let attempts = 0;
+    let oldHandlerReleased = false;
+    await installRunRecordingRoutes(page, {
+      relatedSubgraphRuns: true,
+      beforeRuns: async (url) => {
+        if (!url.pathname.endsWith('/recording-a-1/sub-runs')) return;
+        if (++attempts === 1) {
+          await oldLoad.promise;
+          oldHandlerReleased = true;
+        } else {
+          await newLoad.promise;
+        }
+      },
+    });
+    try {
+      const modal = await openLatestFlowRecordings(page);
+      await selectPublishedFlow(page, modal);
+      await modal.getByRole('button', { name: 'Show sub-runs', exact: true }).click();
+      await expect(modal.getByRole('button', { name: 'Loading sub-runs...', exact: true })).toBeVisible();
+      const aborted = page.waitForEvent('requestfailed', (request) =>
+        new URL(request.url()).pathname.endsWith('/recording-a-1/sub-runs'),
+      );
+      await modal.getByRole('button', { name: 'Refresh run recordings', exact: true }).click();
+      await aborted;
+      await modal.getByRole('button', { name: 'Show sub-runs', exact: true }).click();
+      await expect.poll(() => attempts).toBe(2);
+      oldLoad.release();
+      await expect.poll(() => oldHandlerReleased).toBe(true);
+      await expect(modal.getByRole('button', { name: 'Loading sub-runs...', exact: true })).toBeVisible();
+      await expect(modal.locator('[data-recording-id="recording-b-1"]')).toHaveCount(0);
+      await expect(modal.getByRole('alert')).toHaveCount(0);
+      newLoad.release();
+      await expect(modal.getByRole('button', { name: 'Hide 1 sub-run', exact: true })).toBeVisible();
+      await expect(modal.locator('[data-recording-id="recording-b-1"]')).toBeVisible();
+      expect(attempts).toBe(2);
+    } finally {
+      oldLoad.release();
+      newLoad.release();
+    }
+  });
+
   test('failed child loading can retry without changing root matches or requiring a second expansion', async ({
     page,
   }) => {
@@ -2817,6 +2859,57 @@ test.describe('Run recordings modal', () => {
     });
   }
 
+  for (const refreshFails of [false, true]) {
+    test(`an old deletion catalog refresh cannot finish a newer deletion: ${refreshFails ? 'failure' : 'success'}`, async ({
+      page,
+    }) => {
+      const oldCatalog = responseGate();
+      const newDeletion = responseGate();
+      const { runFetches } = await installRunRecordingRoutes(page, {
+        beforeDelete: async (id) => {
+          if (id.startsWith('recording-a')) await newDeletion.promise;
+        },
+      });
+      let catalogLoads = 0;
+      await page.route(recordingCatalogRoute, async (route) => {
+        if (++catalogLoads !== 2) return route.fallback();
+        await oldCatalog.promise;
+        if (refreshFails) await route.fulfill({ status: 503, json: { error: 'Old catalog refresh failed' } });
+        else await route.fallback();
+      });
+      try {
+        const modal = await openLatestFlowRecordings(page);
+        await deleteFirstRun(page, modal);
+        await expect.poll(() => catalogLoads).toBe(2);
+        await expect(modal.locator('[data-recording-id="recording-b-1"]')).toHaveCount(0);
+        await selectPublishedFlow(page, modal);
+        await expect(modal.locator('.run-recordings-run')).toHaveCount(2);
+        await deleteFirstRun(page, modal);
+        const oldScopeReads = runFetches.filter((url) => new URL(url).pathname.endsWith('/workflow-b/runs')).length;
+        const response = page.waitForResponse((reply) => recordingCatalogRoute.test(reply.url()));
+        oldCatalog.release();
+        await (await response).finished();
+        // Delivery and a browser render boundary, not just route-handler completion.
+        await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())));
+        await expect(modal.locator('.run-recordings-error')).toHaveCount(0);
+        await expect(modal.locator('.run-recordings-run')).toHaveCount(2);
+        for (const button of await modal.getByRole('button', { name: 'Delete', exact: true }).all()) {
+          await expect(button).toBeDisabled();
+        }
+        expect(runFetches.filter((url) => new URL(url).pathname.endsWith('/workflow-b/runs'))).toHaveLength(
+          oldScopeReads,
+        );
+        newDeletion.release();
+        await expect(modal.locator('.run-recordings-run')).toHaveCount(1);
+        await expect(modal.getByRole('button', { name: 'Delete', exact: true })).toBeEnabled();
+        await expect(modal.locator('.run-recordings-error')).toHaveCount(0);
+      } finally {
+        oldCatalog.release();
+        newDeletion.release();
+      }
+    });
+  }
+
   test('deleting the final recording returns to Any', async ({ page }) => {
     await installRunRecordingRoutes(page, { latestFlowRunCount: 1 });
     const modal = await openLatestFlowRecordings(page, 1);
@@ -2998,6 +3091,160 @@ test.describe('Run recordings modal', () => {
       'Analyzed 11 of 11 available runs (100%)',
     );
     expect(runFetches.some((url) => new URL(url).searchParams.has('inputAfter'))).toBe(true);
+  });
+
+  for (const scenario of ['completed search', 'catalog failure', 'pending continuation'] as const) {
+    test(`child deletion preserves cached root-only counts after count-free continuations: ${scenario}`, async ({
+      page,
+    }) => {
+      const continuation = responseGate();
+      let lastBatchStarted = false;
+      let lastHandlerReleased = false;
+      const pendingSearch = scenario === 'pending continuation';
+      const { runFetches } = await installRunRecordingRoutes(page, {
+        relatedSubgraphRuns: true,
+        relatedSubgraphRunCount: 3,
+        inputSearchWindowSize: 1,
+        beforeRuns: async (url) => {
+          if (pendingSearch && url.searchParams.has('inputPath') && url.searchParams.get('inputCursor') === '12') {
+            lastBatchStarted = true;
+            await continuation.promise;
+            lastHandlerReleased = true;
+          }
+        },
+      });
+      try {
+        const modal = await openRunRecordings(page);
+        await modal.getByRole('button', { name: 'Filter by input', exact: true }).click();
+        await modal.getByLabel('Input JSON path').fill('$.foo');
+        await modal.getByLabel('Value', { exact: true }).fill('bar');
+        await modal.getByRole('button', { name: 'Apply', exact: true }).click();
+        if (pendingSearch) await expect.poll(() => lastBatchStarted).toBe(true);
+        else
+          await expect(modal.locator('.run-recordings-input-search-status')).toContainText(
+            'Search complete, 3 matches found',
+          );
+        await expect(modal.getByRole('button', { name: 'All (13)', exact: true })).toBeVisible();
+        const badRunsLabel = await modal.getByRole('button', { name: /^Bad only/ }).innerText();
+        await modal.getByRole('button', { name: 'Show sub-runs', exact: true }).click();
+        await expect(modal.getByRole('button', { name: 'Hide 3 sub-runs', exact: true })).toBeVisible();
+        if (scenario === 'catalog failure') {
+          await page.route(recordingCatalogRoute, (route) =>
+            route.fulfill({ status: 503, json: { error: 'Catalog refresh unavailable' } }),
+          );
+        }
+        const child = modal.locator('[data-recording-id="recording-b-1"]');
+        await child.hover();
+        const aborted = pendingSearch
+          ? page.waitForEvent('requestfailed', (request) => {
+              const url = new URL(request.url());
+              return url.searchParams.has('inputPath') && url.searchParams.get('inputCursor') === '12';
+            })
+          : null;
+        const refreshedCatalog = page.waitForResponse((response) => recordingCatalogRoute.test(response.url()));
+        await child.getByRole('button', { name: 'Delete', exact: true }).click();
+        if (aborted) await aborted;
+        await (await refreshedCatalog).finished();
+        await expect(child).toHaveCount(0);
+        await expect(modal.getByRole('button', { name: 'Apply', exact: true })).toBeEnabled();
+        continuation.release();
+        if (pendingSearch) await expect.poll(() => lastHandlerReleased).toBe(true);
+        await expect(modal.getByRole('button', { name: 'All (13)', exact: true })).toBeVisible();
+        await expect(modal.getByRole('button', { name: badRunsLabel, exact: true })).toBeVisible();
+        await expect(modal.locator('.run-recordings-runs-title')).toHaveText('13 Runs');
+        await expect(modal.locator('.run-recordings-input-search-status')).toContainText(
+          `Search ${pendingSearch ? 'stopped' : 'complete'}, 3 matches found`,
+        );
+        await expect(modal.getByRole('progressbar', { name: 'Input search progress' })).toHaveAttribute(
+          'aria-valuenow',
+          pendingSearch ? '12' : '13',
+        );
+        if (scenario === 'catalog failure') {
+          await expect(modal.locator('.run-recordings-error')).toHaveText(
+            'Recording deleted, but refreshing the list failed: Catalog refresh unavailable',
+          );
+        } else await expect(modal.locator('.run-recordings-error')).toHaveCount(0);
+        expect(runFetches.filter((url) => new URL(url).searchParams.has('inputPath'))).toHaveLength(13);
+        await modal.locator('.run-recordings-selector-section .run-recordings-select__control').click();
+        await expect(page.locator('.run-recordings-select__option').filter({ hasText: /^Any/ })).toContainText(
+          '15 runs',
+        );
+      } finally {
+        continuation.release();
+      }
+    });
+  }
+
+  for (const continuation of [
+    'repeated opaque token',
+    'cyclic opaque token',
+    'missing numeric cursor',
+    'non-advancing numeric cursor',
+  ] as const) {
+    test(`input search rejects a ${continuation} without losing partial matches`, async ({ page }) => {
+      let batches = 0;
+      const expectedBatches = continuation === 'cyclic opaque token' ? 3 : 2;
+      await installRunRecordingRoutes(page, {
+        inputSearchWindowSize: 1,
+        transformRunsPage: (response, url) => {
+          if (!url.searchParams.has('inputPath')) return response;
+          if (++batches > expectedBatches) return { ...response, hasMore: false, runs: [] };
+          if (continuation === 'cyclic opaque token') {
+            return { ...response, hasMore: true, nextInputAfter: batches === 2 ? 'fixture:2' : 'fixture:1' };
+          }
+          return {
+            ...response,
+            hasMore: true,
+            nextInputAfter: continuation === 'repeated opaque token' ? 'same-token' : undefined,
+            nextInputCursor: batches === 1 ? 1 : continuation === 'missing numeric cursor' ? undefined : 1,
+          };
+        },
+      });
+      const modal = await openLatestFlowRecordings(page);
+      await modal.getByRole('button', { name: 'Filter by input', exact: true }).click();
+      await modal.getByLabel('Input JSON path').fill('$.foo');
+      await modal.getByLabel('Value', { exact: true }).fill('baz');
+      await modal.getByRole('button', { name: 'Apply', exact: true }).click();
+      await expect(modal.locator('.run-recordings-error')).toHaveText(
+        'Recording input search returned a continuation that did not advance.',
+      );
+      await expect(modal.locator('.run-recordings-input-search-status')).toContainText('Search stopped');
+      await expect(modal.locator('.run-recordings-run')).toHaveCount(2);
+      await expect(modal.getByRole('progressbar', { name: 'Input search progress' })).toHaveAttribute(
+        'aria-valuenow',
+        String(expectedBatches),
+      );
+      await expect(modal.getByRole('button', { name: 'Apply', exact: true })).toBeEnabled();
+      expect(batches).toBe(expectedBatches);
+    });
+  }
+
+  test('input search deduplicates repeated recordings across advancing batches', async ({ page }) => {
+    let batches = 0;
+    let firstRun: WorkflowRecordingRunSummary;
+    await installRunRecordingRoutes(page, {
+      inputSearchWindowSize: 1,
+      transformRunsPage: (response, url) => {
+        if (!url.searchParams.has('inputPath')) return response;
+        if (++batches === 1) {
+          firstRun = response.runs[0]!;
+          return response;
+        }
+        return { ...response, runs: [firstRun, ...response.runs], hasMore: false };
+      },
+    });
+    const modal = await openLatestFlowRecordings(page);
+    await modal.getByRole('button', { name: 'Filter by input', exact: true }).click();
+    await modal.getByLabel('Input JSON path').fill('$.foo');
+    await modal.getByLabel('Value', { exact: true }).fill('baz');
+    await modal.getByRole('button', { name: 'Apply', exact: true }).click();
+    await expect(modal.locator('.run-recordings-input-search-status')).toContainText(
+      'Search complete, 2 matches found',
+    );
+    await expect(modal.locator('[data-recording-id="recording-b-1"]')).toHaveCount(1);
+    await expect(modal.locator('[data-recording-id="recording-b-2"]')).toHaveCount(1);
+    await expect(modal.getByRole('alert')).toHaveCount(0);
+    expect(batches).toBe(2);
   });
 
   test('reports how many available runs an input search has analyzed', async ({ page }) => {

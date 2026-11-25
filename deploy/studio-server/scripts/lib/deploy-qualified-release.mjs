@@ -9,6 +9,7 @@ import { prepareQualificationPolicy } from './runtime-qualification-readiness.mj
 import { privateCloudEvidence } from './private-cloud-evidence.mjs';
 import { applicationInputDigest, releaseToolingSource } from './release-tooling.mjs';
 import { qualificationSafetyDigest } from './release-qualification-policy.mjs';
+import { runRecordingTransitionCommand } from './recording-transition-command.mjs';
 
 /** One deployment invocation owns live checks, checkpoint, rollout and acceptance.
  * Inputs come from the successful qualification and protected runner settings;
@@ -28,6 +29,9 @@ export async function deployQualifiedRelease({
   run,
   preflightOnly = false,
   cloudEvidence = privateCloudEvidence,
+  environment = process.env,
+  configurationFile = environment.RIVET_RECORDING_TRANSITION_CONFIGURATION,
+  runGuardedRelease = runRecordingTransitionCommand,
 }) {
   assert.equal(typeof preflightOnly, 'boolean');
   assert.ok(!operation.sizingRequests, 'Sizing observations cannot authorize production deployment');
@@ -89,13 +93,16 @@ export async function deployQualifiedRelease({
     ? `production-preflight/${operation.operationId}/${randomUUID()}`
     : `production/${operation.operationId}`;
   const cloud = evidenceBucket ? cloudEvidence({ bucket: evidenceBucket, prefix }) : undefined;
-  if (!preflightOnly) await cloud?.acquire(Buffer.from(JSON.stringify({ operationId: operation.operationId, digest })));
-  await cloud?.saveDirectory(artifacts);
   const profile = manifest.evidence.runtimeControl.requestContinuity?.profile;
+  const failures = [];
   try {
-    await run(
-      process.execPath,
-      [
+    if (!preflightOnly)
+      await cloud?.acquire(Buffer.from(JSON.stringify({ operationId: operation.operationId, digest })));
+    await cloud?.saveDirectory(artifacts);
+    await runGuardedRelease({
+      root,
+      program: process.execPath,
+      args: [
         path.join(root, 'deploy/studio-server/scripts/deploy-kubernetes-release.mjs'),
         '--manifest',
         file,
@@ -116,10 +123,10 @@ export async function deployQualifiedRelease({
         artifacts,
         ...(profile ? ['--timeout', `${continuityTimeoutMs(profile) / 1000}s`] : []),
       ],
-      {
+      options: {
         capture: true,
         env: {
-          ...process.env,
+          ...environment,
           ...(evidenceBucket
             ? {
                 RIVET_PRODUCTION_EVIDENCE_BUCKET: evidenceBucket,
@@ -128,19 +135,41 @@ export async function deployQualifiedRelease({
             : {}),
         },
       },
-    );
+      identity: { ...identity, namespaceUid: operation.installed.namespaceUid },
+      required: manifest.recordingStorage?.coordinationProtocol === 1,
+      configurationFile,
+      run,
+    });
   } catch (error) {
-    await fs.writeFile(
-      path.join(artifacts, 'command-failure.log'),
-      String(error?.message ?? 'Deployment command failed').slice(0, 1048576),
-      { flag: 'wx', mode: 0o600 },
-    );
-    throw error;
+    failures.push(error);
+    try {
+      await fs.writeFile(
+        path.join(artifacts, 'command-failure.log'),
+        String(error?.message ?? 'Deployment command failed').slice(0, 1048576),
+        { flag: 'wx', mode: 0o600 },
+      );
+    } catch (diagnosticError) {
+      failures.push(diagnosticError);
+    }
   } finally {
-    if (archive)
-      await fs.cp(artifacts, path.join(archive, 'receipts'), { recursive: true, errorOnExist: true, force: false });
-    await cloud?.saveDirectory(artifacts);
+    try {
+      if (archive)
+        await fs.cp(artifacts, path.join(archive, 'receipts'), { recursive: true, errorOnExist: true, force: false });
+    } catch (error) {
+      failures.push(error);
+    }
+    try {
+      await cloud?.saveDirectory(artifacts);
+    } catch (error) {
+      failures.push(error);
+    }
   }
+  if (failures.length === 1) throw failures[0];
+  if (failures.length)
+    throw new AggregateError(
+      failures,
+      'Qualified deployment or private evidence settlement failed; no write was retried.',
+    );
   if (preflightOnly) {
     const result = JSON.parse(await fs.readFile(path.join(artifacts, 'deployment-preflight.json'), 'utf8'));
     assert.equal(result.passed, true);

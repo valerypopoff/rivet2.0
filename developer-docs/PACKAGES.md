@@ -2,6 +2,31 @@
 
 > Detailed package-by-package reference for the current monorepo.
 
+## Version update 2026-11-26 — recording storage and reliability
+
+Every release track last changed version in `aa50e6a79`. This review covers
+subsequent changes through `0c5068b89`, including the changes already delivered
+with the November 23 Server rollout and the later controller/deployment repairs.
+
+| Packages | Version | Changes since the last bump |
+| --- | --- | --- |
+| All five Studio Server packages | `1.44.0` → `1.45.0` | Adds Brotli recording storage and guarded recompression; improves public endpoint admission, retention leases, OAuth and Hosted Evaluation ownership; refactors recordings, upgrade, publication, scheduling and merge controllers; fixes bundle regeneration and queued mutation admission. API, bootstrap, shared and web changed; executor is a required product companion. |
+| Core, Node, CLI, Evaluations | `2.34.0` → `2.34.1` | Evaluations fixes compound resource-key collisions and inherited-property synchronization versions. Core, Node and CLI have no package-local changes and follow the public npm lockstep policy. |
+| App | `2.39.2` → `2.39.3` | Fixes fullscreen-output controls blocked by transparent toolbar space, includes patched Rust URL dependencies and picks up the compatible Evaluations fixes. |
+| Docs | `2.33.0` → `2.33.1` | Corrects the Run statistics menu label in the recording guide. |
+| App Executor | `2.24.2` (unchanged) | No package-local changes or changes to its bundled Core/Node implementations; the Evaluations fixes do not enter this sidecar. |
+
+The Server's compatible recording-storage capabilities warrant a minor release.
+The other changed tracks contain compatible fixes. Tauri/Cargo metadata and the
+CLI Docker fallback follow their owning manifests. Existing `workspace:^`
+dependency ranges remain valid; managed schema 23 and Helm metadata are unchanged.
+
+See [release preparation](BUILD-AND-CI.md#prepared-release-versions-2026-11-26)
+for the metadata checks. These versions do not imply publication, deployment or
+hosted performance qualification. The investigated browser timeout and native
+allocation failures remain explicitly
+[unresolved](studio-server/bundle-merge-controller-refactor-plan.md#investigation-of-intermittent-local-validation-failures---2026-11-26).
+
 ## Version update 2026-11-21 — bounded recording memory and request admission
 
 All runtime tracks last changed versions in `4c4d7b934`; Docs last changed in

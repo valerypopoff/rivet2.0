@@ -119,6 +119,52 @@ test('in-memory evaluation stores keep library values detached from callers', as
   assert.deepEqual((await store.getLibrary()).migratedLegacyProjectIds, ['project']);
 });
 
+test('in-memory run identities remain distinct when project and run IDs contain slashes', async () => {
+  const store = new InMemoryEvaluationRunStore();
+  const first = { ...run(1, 'completed'), projectId: 'project/part' as ProjectId, id: 'run' };
+  const second = { ...run(1, 'completed'), projectId: 'project' as ProjectId, id: 'part/run' };
+  const firstKey = { projectId: first.projectId, runId: first.id };
+  const secondKey = { projectId: second.projectId, runId: second.id };
+  await store.put(first);
+  await store.put(second);
+  assert.equal((await store.get(firstKey))?.projectId, first.projectId);
+  assert.equal((await store.get(secondKey))?.id, second.id);
+  await store.updateRunName({ ...firstKey, name: 'First only' });
+  assert.equal((await store.get(firstKey))?.name, 'First only');
+  assert.equal((await store.get(secondKey))?.name, undefined);
+  await store.delete(firstKey);
+  assert.equal(await store.get(firstKey), undefined);
+  assert.deepEqual(
+    (await store.list({ projectId: second.projectId })).map((value) => value.id),
+    [second.id],
+  );
+});
+
+test('in-memory recording identities isolate retention and deletion for slash-containing IDs', async () => {
+  const store = new InMemoryEvaluationRunStore();
+  const first = recording({
+    projectId: 'project/part' as ProjectId,
+    reference: { id: 'recording', retention: 'retained' },
+  });
+  const second = recording({
+    projectId: 'project' as ProjectId,
+    reference: { id: 'part/recording', retention: 'failure' },
+  });
+  const firstKey = { projectId: first.projectId, recordingId: first.reference.id };
+  const secondKey = { projectId: second.projectId, recordingId: second.reference.id };
+  await store.putRecording(first);
+  await store.putRecording(second);
+  assert.equal((await store.getRecording(firstKey))?.projectId, first.projectId);
+  assert.equal((await store.getRecording(secondKey))?.reference.retention, 'failure');
+  await store.updateRecordingRetention({ ...firstKey, retention: 'temporary', expiresAt: '2000-01-01T00:00:00.000Z' });
+  assert.equal(await store.getRecording(firstKey), undefined);
+  assert.equal((await store.getRecording(secondKey))?.reference.retention, 'failure');
+  await store.putRecording(first);
+  await store.delete({ projectId: first.projectId, runId: first.runId });
+  assert.equal(await store.getRecording(firstKey), undefined);
+  assert.equal((await store.getRecording(secondKey))?.projectId, second.projectId);
+});
+
 test('library normalization removes baselines whose suites no longer exist', () => {
   const completed = run(1, 'completed');
   const aggregate = {

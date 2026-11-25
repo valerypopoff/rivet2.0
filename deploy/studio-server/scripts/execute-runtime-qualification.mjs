@@ -36,6 +36,7 @@ import {
 } from './lib/release-tooling.mjs';
 import { selectReleaseInputs } from './lib/release-inputs.mjs';
 import { deployQualifiedRelease } from './lib/deploy-qualified-release.mjs';
+import { runRecordingTransitionCommand } from './lib/recording-transition-command.mjs';
 import { privateCloudEvidence } from './lib/private-cloud-evidence.mjs';
 import { coordinatorKubernetes, prepareStagingActor } from './lib/reusable-staging-coordinator.mjs';
 import { sizingInput } from './lib/resource-sizing.mjs';
@@ -266,9 +267,10 @@ async function main(mode) {
         release: process.env.RIVET_QUALIFICATION_PRODUCTION_RELEASE,
       },
     });
-    await run(
-      process.execPath,
-      [
+    await runRecordingTransitionCommand({
+      root,
+      program: process.execPath,
+      args: [
         path.join(root, 'deploy/studio-server/scripts/deploy-kubernetes-release.mjs'),
         '--preflight-only',
         ...(qualified.evidence.runtimeControl?.requestContinuity
@@ -292,8 +294,16 @@ async function main(mode) {
         '--artifacts',
         artifacts,
       ],
-      { capture: true },
-    );
+      options: { capture: true },
+      identity: {
+        context: process.env.RIVET_QUALIFICATION_PRODUCTION_CONTEXT,
+        namespace: process.env.RIVET_QUALIFICATION_PRODUCTION_NAMESPACE,
+        release: process.env.RIVET_QUALIFICATION_PRODUCTION_RELEASE,
+        namespaceUid: operation.installed.namespaceUid,
+      },
+      required: qualified.recordingStorage?.coordinationProtocol === 1,
+      run,
+    });
     assertQualificationInstallationMatches(await inspect(), operation.installed);
     const result = assertQualificationPreflight(
       await read(path.join(artifacts, 'deployment-preflight.json')),

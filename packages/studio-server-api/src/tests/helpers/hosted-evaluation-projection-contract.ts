@@ -1,63 +1,14 @@
-// test-style: fixture-read: reads the canonical serialized project, never implementation source.
 import assert from 'node:assert/strict';
-import fs from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import type { Pool } from 'pg';
-import { loadProjectFromString, serializeProject } from '@valerypopoff/rivet2-node';
-import {
-  createEmptyEvaluationProjectData,
-  type EvaluationDataset,
-  type EvaluationSuite,
-} from '@valerypopoff/rivet2-evaluations';
-import { HostedEvaluationCoordinator } from '../../evaluation-runs/hosted-coordinator.js';
-import { PostgresRivetEvaluationStore } from '../../evaluation-runs/managed-store.js';
-import { getHostedEvaluationsCoordinatorConfig } from '../../hosted-evaluations-config.js';
+import { createHostedEvaluationFixture } from './hosted-evaluation-fixture.js';
 
 /** Runs the real scheduler against only the integration runner's owned database. */
 export async function verifyHostedEvaluationProjectionContract(pool: Pool) {
-  const project = loadProjectFromString(
-    await fs.readFile(
-      new URL(
-        '../../../../../deploy/studio-server/scripts/fixtures/managed-release-gate.rivet-project',
-        import.meta.url,
-      ),
-      'utf8',
-    ),
-  );
-  project.metadata.id = randomUUID() as typeof project.metadata.id;
-  const suite: EvaluationSuite = {
-    id: 'projection-suite',
-    name: 'Projection',
-    targetGraphId: project.metadata.mainGraphId!,
-    datasetId: 'projection-data',
-    inputBindings: [{ graphInputId: 'input', datasetFieldId: 'input' }],
-    assertions: [
-      {
-        id: 'output-type',
-        name: 'Output',
-        outputPath: '$',
-        operator: 'type-is',
-        expected: { kind: 'literal', value: 'object' },
-        required: true,
-      },
-    ],
-    evaluators: [],
-    thresholds: [],
-    configuration: { trialCount: 1 },
-  };
-  const dataset: EvaluationDataset = {
-    id: suite.datasetId,
-    projectId: project.metadata.id,
-    name: 'Projection',
-    fields: [{ id: 'input', name: 'Input', dataType: 'string', role: 'input', required: true }],
-    cases: Array.from({ length: 4 }, (_, index) => ({
-      id: `case-${index}`,
-      name: `Case ${index}`,
-      values: { input: `case-${index}` },
-    })),
-  };
-  const store = new PostgresRivetEvaluationStore(pool);
+  const fixture = await createHostedEvaluationFixture(pool, 4);
+  const projectId = fixture.identity.projectId;
+  const store = fixture.store;
   let block = true;
   let release: (() => void) | undefined;
   const schedulerQueries: string[] = [];
@@ -74,21 +25,8 @@ export async function verifyHostedEvaluationProjectionContract(pool: Pool) {
       };
     },
   } as unknown as Pool;
-  const coordinator = new HostedEvaluationCoordinator({
+  const coordinator = fixture.coordinator({
     pool: schedulerPool,
-    runStore: store,
-    config: getHostedEvaluationsCoordinatorConfig(
-      {
-        RIVET_HOSTED_EVALUATIONS_ENABLED: 'true',
-        RIVET_HOSTED_EVALUATIONS_WORKER_CONCURRENCY: '1',
-        RIVET_HOSTED_EVALUATIONS_LEASE_MS: '15000',
-        RIVET_HOSTED_EVALUATIONS_MAX_JOBS_PER_RUN: '100',
-        RIVET_HOSTED_EVALUATIONS_MAX_OUTSTANDING_JOBS: '100',
-        RIVET_HOSTED_EVALUATIONS_POLL_MS: '250',
-      },
-      'control',
-      true,
-    ),
     runGraph: async ({ inputs, metadata, signal }) => {
       if (metadata.caseId === 'case-2' && block)
         await new Promise<void>((resolve, reject) => {
@@ -114,24 +52,12 @@ export async function verifyHostedEvaluationProjectionContract(pool: Pool) {
     }
   };
   try {
-    await pool.query(
-      `INSERT INTO workflows(workflow_id, name, file_name, relative_path, folder_relative_path, current_draft_revision_id)
-      VALUES ($1, 'Projection', 'Projection.rivet-project', $2, '', 'fixture-draft')`,
-      [project.metadata.id, `projection-${project.metadata.id}.rivet-project`],
-    );
     for (const scenario of ['complete', 'retry', 'cancel', 'lease-recovery'] as const) {
       schedulerQueries.length = 0;
       block = true;
       release = undefined;
-      const run = await coordinator.submit({
-        projectContents: serializeProject(project) as string,
-        projectPath: '/workflows/Projection.rivet-project',
-        evaluationData: { ...createEmptyEvaluationProjectData(), suites: [suite] },
-        dataset,
-        suiteId: suite.id,
-        purpose: 'evaluation',
-      });
-      const identity = { projectId: project.metadata.id, runId: run.id };
+      const run = await coordinator.submit({ ...fixture.submission, runId: undefined });
+      const identity = { projectId, runId: run.id };
       await assert.rejects(
         store.delete(identity),
         /queued or running/,
@@ -174,7 +100,7 @@ export async function verifyHostedEvaluationProjectionContract(pool: Pool) {
       } else {
         assert.deepEqual(
           renamed?.trials.map((trial) => trial.outputs.output),
-          ['case-0', 'case-1'],
+          ['value-0', 'value-1'],
         );
       }
       await assert.rejects(store.put(renamed!), /fenced coordinator/);
@@ -203,7 +129,7 @@ export async function verifyHostedEvaluationProjectionContract(pool: Pool) {
         assert.ok(!('_hostedTrialsFromJobs' in canceled));
         assert.deepEqual(
           canceled.trials.slice(0, 2).map((trial) => trial.outputs.output),
-          ['case-0', 'case-1'],
+          ['value-0', 'value-1'],
         );
       } else {
         block = false;
@@ -237,6 +163,6 @@ export async function verifyHostedEvaluationProjectionContract(pool: Pool) {
     block = false;
     release?.();
     await coordinator.stop();
-    await pool.query('DELETE FROM workflows WHERE workflow_id = $1', [project.metadata.id]);
+    await fixture.dispose();
   }
 }

@@ -2,6 +2,25 @@
 
 ## Implementation versus activation
 
+The hosted production command now establishes real recording-storage coordination
+through the qualified source's shared transition lifetime. Both apply and
+production-only preflight use it. Protected setup materializes a bound private
+connection configuration and, when needed, a generation/checksum-pinned database
+proxy. Missing configuration, old qualified tooling or failed coordination stops
+execution without a raw-CLI fallback.
+
+This is a local implementation, awaiting fresh hosted production preflight and
+an independently authorized rollout. Existing frozen qualifications are not
+retroactively repaired. The [implementation and activation record](hosted-recording-transition-repair-plan.md)
+separates those gates; the [operating contract](deployment-operations.md#hosted-recording-storage-coordination)
+describes the protected installation data and recovery rules.
+
+Production setup builds only Core, Node and Evaluations exports in its selected
+qualified checkout before cloud preparation. The broader
+`studio-server:build:dependencies` target also packages the desktop executor and
+is unnecessary here. This compilation prepares the source-loaded operator; it
+does not rebuild or replace qualified application images.
+
 The [release performance changes](ci-performance.md#release-iteration-improvements-november-3-2026)
 add early source contracts, scan prerequisites, balanced Kind checks and cached
 qualification tooling within the existing release contracts. Provider progress
@@ -1376,7 +1395,15 @@ also retains the lock.
 Setup failures report a safe phase/code publicly. Bounded underlying error details
 remain in private `RUNNER_TEMP/rivet-staging/preparation-failure.json` (or
 `rivet-production`), and after staging authentication in the private bucket under
-`qualification/setup/OPERATION/`. Closure failures use
+`qualification/setup/OPERATION/`. Production preparation uses the same bounded
+private writer under `production/setup/GITHUB_RUN_ID-GITHUB_RUN_ATTEMPT/`, once
+the protected bucket and pinned installation reference are validated. Google
+authentication precedes preparation, so this includes a subsequent Kubernetes
+credential/permission refusal. It acquires no production or staging lock and
+uploads no failure object on successful preparation. Failures before protected
+configuration can be validated remain local; unavailable cloud access is
+reported as a diagnostic-persistence failure alongside the original cause.
+Closure failures use
 `setup-closure-failure.json`; diagnostic persistence failures preserve the
 original error rather than replacing it. Raw configuration, native command
 output and cause chains are never printed by the CLI or uploaded to public
@@ -1426,6 +1453,13 @@ cleanup proof. An admitted failed/unknown operation holds that lock and cannot
 silently start another test. The verified pre-operation setup closure above is a
 separate bounded case. Successful fixture cleanup removes only the exact lock generation;
 the shared cluster, Gateway, certificate and identities remain.
+
+Receiving successful upload headers is not a complete acknowledgement: decoding
+the response body can still fail. For ordinary content-addressed evidence, the
+writer then reads the exact object's metadata and confirms its checksum and size;
+it does not retransmit the write. An exclusive admission lock instead remains
+explicitly uncertain, without readback adoption, reacquisition or overwrite.
+The local HTTP contracts cover loss before headers and a truncated JSON body.
 
 Production uses a separate private bucket and per-operation replay fence. Its
 command persists all online recovery files before admitting workload mutation,

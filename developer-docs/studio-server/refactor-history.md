@@ -4,6 +4,417 @@ This document records intentional architecture and cleanup changes that future m
 
 It is not a changelog. Keep entries focused on why a refactor happened, which ownership boundary changed, and which verification paths should be kept alive.
 
+## 2026-11-25 - Bundle Merge Review Controller Ownership
+
+`WorkflowBundleMergeModal.tsx` previously combined preview and mutation lifetimes
+with rendering. `useWorkflowBundleMergeController.ts` now owns the choices,
+retained catalogs, current review, suggestion cache, warning acknowledgements and
+named commands. The view retains the existing markup, option formatting, select
+portal/events and DOM focus/scrolling. Small action/dependency value and graph-key
+codecs share the existing `bundleMerge.ts`; its suggestion rules remain authoritative.
+
+The extraction keeps the 180 ms debounce, choices-reference/abort fencing,
+synchronous submission guard, per-destination suggestion cache and independent
+retained-form/current-review distinction. Omitted suggestions retain comparison
+state; `[]` replaces it. Warning acknowledgements expire on edits/refresh.
+Acknowledged merges schedule parent reconciliation and close before its read
+settles; a success toast still requires a successful tree read. Unknown outcomes
+retain the existing local lock and receipt-only recovery without replaying writes.
+Parent mount keys, opener focus and transport/persistence owners are unchanged.
+
+Characterization was established on the original build before production code
+moved. Keep the six pure cases, focused `check:bundle-merge`/typed lint and the
+complete `bundle-merge.spec.ts` selected in ordinary editor CI. Browser coverage
+includes parsed stale results, disposal/destination replacement, legacy optional
+fields, debounce/request counts, preserved drafts, synchronous duplicate admission
+and acknowledged-but-pending reconciliation. The
+[implementation record](bundle-merge-controller-refactor-plan.md) tracks exact
+validation evidence and its limits.
+
+Review on 2026-11-26 reproduced four admission gaps already present in the original
+modal: refresh/close could admit a queued submission against the retired review,
+and a queued refresh/destination change could partially reset an admitted merge.
+The controller now checks the existing abort signal before submission, aborts on
+close immediately and rejects refresh/destination commands before their reset
+work when a mutation is pending or its outcome is unknown. No state, ref, effect
+or request layer was added. Four browser cases protect these boundaries, and the
+held-response fixtures now consume one response and settle routes even when
+disposed before arrival.
+
+The adjacent Delete Bundle dialog had the same cancel-before-render admission
+gap. Its close handler now retires the dialog before notifying the parent, and
+submission checks that flag. The existing blocked-deletion case covers Cancel,
+a queued Delete, reopening and a fresh confirmed request. Rapid multi-warning
+acknowledgement and revocation also have a focused merge browser check; that
+check passed without changing the acknowledgement implementation.
+
+Test maintenance subsequently consolidated reselection into its clock-controlled
+case, removed assertions for retired UI controls and shared API isolation between
+merge and explicit-bundle browser tests. Race, compatibility and receipt-recovery
+cases remain independent; see the implementation record for the coverage mapping.
+
+## 2026-11-25 - Scheduled Runs Controller Ownership
+
+`ScheduledRunsModal.tsx` previously combined request settlement, polling and form
+state with rendering and modal focus. `useScheduledRunsController.ts` now owns
+the mounted request/form session and named commands; the modal retains pagination,
+select menus, stack state, alert scrolling and DOM focus. `scheduledRunForm.ts`
+contains only payload conversion and schedule-kind transitions. Creation defaults
+remain in the controller, and the existing page-owned request ledger and independent
+sidebar summary poll retain their lifetimes.
+
+The extraction preserves the two cleanup effects, synchronous action guard,
+epoch checks, three-second completion-relative timer, 20-second transport bound,
+captured editing revision, payload fields/order and mutation-versus-read settlement.
+An admitted mutation continues after list close, while obsolete UI updates remain
+suppressed. Preview and Open recording share busy/error handling without an immediate
+mutation-style list refresh. No backend, recording format, CSS or deployment policy changed.
+
+An adjacent requester fix prevents a rejected retry from discarding an earlier
+uncertain identity and allowing duplicate work. The page-owned ledger now tracks
+whether an identity has been reused; a later
+rejection cannot retire it, including while another attempt remains in flight.
+Validated success still resolves it, and rejection of the sole attempt still
+releases its key. Real-API lost-reply/auth-rejection and focused overlapping-attempt cases
+protect this behavior correction separately from the mechanical extraction.
+
+Keep the focused `check:scheduled-runs`, ordinary web tests and complete editor
+CI selection. Pure form/requester tests protect conversion, acknowledgement and
+ledger bounds; controlled browser cases protect polling, stale responses,
+disposal, single action admission, captured editing revisions and pagination.
+The authenticated execution/restart journey remains on real time. Related
+layout measurements use one browser evaluation, including the adjacent Project
+Settings test, to avoid sampling different animation frames without relaxing
+assertions. Total state/effect counts are unchanged; the gain is clearer ownership.
+The [implementation record](scheduled-runs-refactor-plan.md) distinguishes original
+characterization, final verification and local-versus-hosted timing evidence.
+
+## 2026-11-25 - Project Settings Publication Review Ownership
+
+Project Settings previously combined reviewed snapshots and editable draft
+reconciliation with every publication mutation. `useProjectPublicationReview.ts`
+now owns that single review session; `useProjectSettingsActions.ts` retains its
+public interface, validation, mutation locks, release review and deletion.
+The combined owners still have 13 state hooks and two effects. Three refs retain
+draft baselines; a fourth identifies the current read within its modal/project owner.
+The extraction adds no request, timer, cache or state-synchronization callback.
+
+`projectPublicationReview.ts` shares only the common field-agreement and returned
+settings-publication rules. History keeps its own review and restore receipt
+policy. The identical email parsers and the existing dirty-field merge now live
+in `projectSettingsForm.ts`; `publicationVersion.ts` remains authoritative for
+version encoding and advancement. An own-key-guarded non-null assertion fixes
+the existing indexed-access type diagnostic without changing emitted JavaScript.
+
+Reassessment reproduced overlaps between History Restore and both the opening
+read and an explicit review. A late response could replace the restored review
+with older tokens or re-enable an uncertain review. The existing server
+preconditions still rejected stale writes. Opening, explicit review and mutation
+follow-up reads now share one read identity; newer reads and mutation outcomes
+retire their predecessor. The same identity check protects result, error and
+loading completion, and closing or replacing the owner retires every pending
+read. This uses one ref without adding requests or changing mutation/restore
+receipt rules. Uncertain mutations still reconcile the project tree. The endpoint
+draft handler also accepts only its actual string field, removing an unnecessary
+generic cast over transport-only boolean fields.
+
+The focused no-emit project and typed lint cover the moved owners, action facade,
+history and pure tests. Project Settings joins the ordinary editor CI selection.
+Its browser checks cover late reads after reopen or Restore, unusable review tokens,
+draft preservation and request counts, alongside the existing mutation/recovery
+and history scenarios. See the [implementation record](project-publication-review-refactor-plan.md)
+for baseline and final validation evidence and hosted-measurement limits.
+
+The test review removed a publish-conflict case that duplicated the stronger
+retry scenario and never exercised its claimed refresh failure. Shared snapshot
+construction and strict fixture project lookup replace repeated response bodies
+and permissive fallback to the first project. The existing compiler/lint project
+now includes that fixture. Recovery assertions prove that review controls become
+usable; fault injection showed that checking only the displayed status could
+miss a missing review token. The four distinct opening/manual and
+confirmed/unconfirmed Restore races remain covered.
+
+## 2026-11-24 - Local Storage Upgrade Screen Ownership
+
+The upgrade screen previously mixed rendering with polling, mutation settlement,
+revision-bound attestations and recovery. A pure `localStorageUpgradeModel.ts`
+now owns derived policy; `useLocalStorageUpgradeController.ts` keeps one mounted
+request/action lifetime. The existing screen renders their state and named
+commands. Its 16 state hooks, eight refs and six effects retain their order;
+there is no additional poller, reducer or global store. Setup caching, read/action
+timeout differences, fresh reconciliation and server authority remain intact.
+
+A separate baseline correction prevents an absent ready fingerprint payload from
+crashing proof adoption when maintenance is also absent. The browser regression
+failed before the presence guard and passed on the corrected baseline. Backup
+and resume bindings retain their distinct formats; preparation and interrupted
+repair retain their separate disabled rules.
+
+The web-test lane now typechecks the actual screen/model/controller and their
+focused policy tests. Existing panel/prompt browser cases use a closed fixture
+and run in the normal editor selection, with explicit races for stale reads,
+acknowledgement identity, automatic validation and diagnostic replacement. A fifth
+editor shard supplies coverage capacity while preserving the existing worker,
+timeout and work-budget rules. New modules use shared-package paths and remove
+the screen's two obsolete deep-import allowances. The
+[implementation record](local-storage-upgrade-screen-refactor-plan.md) separates
+local checks from hosted CI and actual upgrade/recovery qualification.
+
+Reassessment retained the production implementation and removed nine redundant
+empty-tree and paused-editor route overrides in favor of the shared fixture.
+A new lost-validation-acknowledgement case models the real journal's revision
+advance: fresh durable evidence reconciles success without replay or an inherited
+resumption acknowledgement. The old diagnostic remains visible. An unchanged-
+revision validation-success mock would invent a recovery failure that the real
+journal cannot produce; it is not a reason to change production controls.
+
+Adjacent review on 2026-11-25 reproduced a real preparation exception to the
+connection lock: after a failed preparation response and failed reconciliation,
+the spinner stopped but the initial Prepare button became enabled. The pure model
+now receives the existing `statusError` and includes it in that button's gate.
+A fresh successful setup read restores explicit preparation without replay or
+clearing the action diagnostic. Fresh setup still permits initial preparation
+when ordinary upgrade status is unavailable. No state hook, effect, request,
+timer or backend guard was added or changed.
+
+The test review removed duplicate panel navigation, replaced the optional prompt
+timeout probe with a scoped locator handler, and made button-lock checks one
+auto-waiting collection assertion. Request-count cases explicitly pause the clock
+before mounting the upgrade controller, after the modal transition has settled;
+`clock.install()` alone does not pause time. Real stalled-read cases retain their
+native deadlines. The 70 independently isolated panel cases can share the existing
+two workers; the 23 prompt cases keep their serial scheduling. No scenario was
+removed or production source changed in this test cleanup. The implementation
+record above owns the measured local results and their hosted-evidence limits.
+
+## 2026-11-24 - Hosted Recording Transition Ownership
+
+`withRecordingStorageTransition` owns settings reads, real database coordination,
+storage/restore identity, required encodings, the loopback guard and optional
+pinned proxy transport. The standalone operator and shared qualified-release
+library use this one lifetime. A source-only ESM bridge lazily imports the helper
+from the exact qualified workspace and supervises the existing CLI directly.
+Production-only preflight shares preparation without gaining apply side effects.
+
+Protected setup accepts closed installation data and materializes private inputs
+outside deployment archives. Existing CLI compatibility checks, admission fences,
+recovery journals, backup/acceptance adapters and observation windows retain their
+ownership. The managed command runner shares the existing owned-tree shutdown
+primitive; its strict Windows path needs a creation-time kernel Job Object and
+explicit inherited handles. Ordinary failed CLI attempts preserve their original
+receipt-managed observer for acceptance-only recovery. Cancellation remains a
+failure and does not authorize replay.
+
+Real PostgreSQL contracts reuse the recording-durability lane and the extracted
+deployment-command fixture. They exercise actual locks, settings, guard, qualified
+preflight/apply and ownership loss; native lifecycle checks remain in the source
+gate. The clean Linux check identified and removed an unnecessary desktop native
+packaging dependency from production operator preparation. Ordinary application
+request paths, schema and recording formats are unchanged. The
+[implementation record](hosted-recording-transition-repair-plan.md) separates local
+verification from pending hosted preflight and production activation.
+
+Reassessment reproduced a Linux completion hang caused by inherited output pipes,
+PostgreSQL host/port query overrides escaping canonical proxy routing, credential
+reads preceding standalone identity validation, and rejected secret-file line
+endings. Strict settlement now starts at process exit, identity uses the existing
+validator before credential access, and URL/credential handling have shared
+owners. Cancellation during proxy cleanup cannot report success. The managed
+lane tests the real qualified TypeScript loader from an isolated controller,
+covering cancellation and successful acquisition with PostgreSQL locks and the
+live guard; the overlapping loader-only unit test was removed. Existing guarded
+preflight/apply cases execute the actual CLI. Managed fixture cleanup attempts
+every disposer and preserves earlier failures.
+
+An adjacent PostgreSQL characterization found URL startup options could replace
+the settings reader's read-only mode and query bound. A private operator
+connection helper now enforces the original 15-second timeout and read-only
+lookup, preserving other startup options and converter write access. The
+managed lane checks actual session settings, including repeated-option
+precedence, without adding another fixture service or a timeout-length wait.
+
+Holistic review found that the transition outcome stayed empty during execution,
+and production setup diagnostics did not survive runner disposal. An immutable,
+flushed intent now precedes the guarded CLI and enters its existing archive before
+mutation; the final outcome remains separate. Production preparation also reuses
+the private failure writer under the current hosted run/attempt, without acquiring
+a deployment fence. Regression checks cover evidence visibility before invocation,
+refusal when intent persistence fails, and private archival after access denial.
+
+The private evidence writer treats response-body loss like other lost upload
+acknowledgements: exact metadata readback can confirm ordinary evidence, while
+exclusive admission stays uncertain without replay or adoption. Transition
+configuration also shares one Windows environment-key matcher for credential
+reads and private-input filtering; differently cased aliases cannot survive
+stripping or bypass the protected configuration digest. Existing HTTP and native
+contract suites cover both boundaries; Linux retains case-sensitive semantics.
+
+The extracted deployment fixture also owns its environment boundary. It removes
+inherited production archival and recording-transition bindings before using
+local stand-ins, passes the same environment through qualified preparation, and
+honors the bridge's filtered child environment. The managed guard contract uses
+an environment-backed settings key to verify the fixture cannot put that key
+back into the CLI environment. Original native journey assertions are retained.
+
+Windows proxy shutdown now reuses the creation-time Job Object supervisor rather
+than launching `taskkill` at cleanup. A bounded local contention reproduction
+with the original helper output handles made all 32 helpers miss the original
+five-second deadline. All 32 job-owned shutdowns passed. The new proxy mode
+uses owner EOF to request termination and requires zero active job processes;
+spontaneous zero exit, failed confirmation and deadline expiry cannot succeed.
+The five-second bound, real coordination and journaled observer retention remain.
+Native tree tests and the existing real PostgreSQL lane own these checks. The
+original uninstrumented failure has no helper result, so its exact trigger cannot
+be established retrospectively from that log.
+
+## 2026-11-24 - Hosted Evaluation Persistence Ownership
+
+`HostedEvaluationJobStore` owns durable job transitions and their complete
+transactions. `HostedEvaluationCoordinator` owns process-local scheduling and
+the public facade. They borrow the same managed pool and run store; the
+extraction adds no pool, schema, background service or endpoint middleware.
+Existing projection and deletion helpers remain authoritative.
+
+Preserve commit-before-notification and notification-before-release for
+cancellation/retry, release-before-notification for submission, and the
+coordinator's unconfirmed-retirement flag when terminal ownership is lost.
+Acceptance/heartbeat require an unexpired lease; terminal writes retain the
+existing worker/fence check without an additional expiry predicate.
+
+The [implementation record](hosted-evaluation-persistence-refactor-plan.md)
+tracks baseline/candidate PostgreSQL concurrency, source and compiled workers,
+mounted HTTP coverage and the bounded endpoint performance comparison. The
+new concurrency helper runs inside the existing managed integration job.
+
+The original and extracted code passed the same 26 PostgreSQL scenarios. Initial
+verification passed 134 focused API tests, the full managed and published-execution
+suites, and three headless browser cases. All 84 SQL calls and bindings stayed
+identical. Four local performance conditions and a bounded reversed-order
+diagnostic repeat found no reproducible latency or evaluation-throughput
+regression at the recorded resolution; the implementation record retains the
+CPU variation and confidence limits rather than claiming a speedup.
+
+A subsequent review reproduced two identifier-collision defects: active jobs from
+different runs could share an encoded job ID and overwrite cancellation ownership,
+and colon-containing project/run pairs could share a recovery-cache key, leaving
+one recovered run marked running. One promise-keyed map now owns active metadata
+and draining, and recovery uses a JSON tuple key. Persisted identifiers and all
+SQL remain unchanged. The post-commit callback type rejects asynchronous callbacks.
+The native worker fixture also distinguishes unexpected exit from explicit fault
+injection and coalesces concurrent cleanup; its release callbacks use a set.
+All 29 PostgreSQL cases, 103 focused API tests and the three selected browser
+cases passed after these fixes. A six-pair loaded-combined comparison passed
+12,000 measured endpoint requests and all expected recording audits without a
+reproducible latency increase; the implementation record retains its uncertainty
+and local-workload limits.
+
+The completion audit additionally compared executed SQL/bindings and transaction
+paths across 23 shared PostgreSQL scenarios using the frozen original runtime.
+Source and compiled worker acknowledgements now include the resolved coordinator
+module URL. Fast boundary checks retain rejection of disabled retry and invalid
+context before database access. These close verification gaps without changing
+production behavior.
+
+An adjacent review reproduced the same identity-risk pattern in the shared
+evaluation adapters. Slash-containing project/resource pairs could overwrite
+in-memory run or recording entries. Their private map keys now use JSON tuples.
+Library mutations also mistook inherited object properties for collaboration
+versions, rejecting valid IDs such as `constructor`; a deleted resource could
+expose an inherited function as its conflict version. Server checks and client
+diff/retry lookups now require own properties. Persisted IDs, PostgreSQL queries,
+access checks and the collaboration protocol are unchanged.
+The dataset-toggle browser fixture now owns its bootstrap and library responses
+and verifies saved toggle values, avoiding an unrelated ambient-API dependency.
+The subsequent test audit removed six redundant coordinator unit cases, moved
+their remaining assertions into existing PostgreSQL scenarios, and reused the
+shared fixture in the projection contract. Rollback failure remains covered in
+the consolidated unit case. Real lease/recovery and source/compiled checks retain
+their observation windows. Browser fixtures use current string version tokens.
+
+## 2026-11-24 - Run Recordings Read Ownership
+
+`useRecordingRunsQuery.ts` owns root browsing, progressive input search, filter
+state and query-specific deletion reconciliation. `useRecordingSubRuns.ts`
+owns child metadata pagination, validation, retry state and family reconciliation.
+`useRunRecordingsController.ts` keeps the public facade, independent catalog
+requests, session/selection policy, shared view generation and deletion sequence.
+The existing count-decrement calculation is shared in `recording-run-counts.ts`.
+
+Keep the owners mounted across retained dismissal. Stable lifecycle commands
+must not acquire dependencies on input drafts or query results; catalog arrival
+and progressive append cannot restart the root query. A confirmed deletion is
+reconciled locally before refresh, and the parent checks its view/mutation token
+after each awaited read before accepting results. The manual post-delete page
+read returns data without publishing its completion, preserving that check and
+the page effect's ownership of last-page correction.
+
+The normal modal suite retains its existing cases and adds seven characterization
+cases for same-root replacement, continuation validation/deduplication and
+post-delete catalog races. All 90 passed both against the original controller
+and against the final built application. The two extraction checkpoints also
+passed the required headless repo runner. See the [implementation record](run-recordings-controller-refactor-plan.md)
+for final verification results and the pre-existing focused typecheck diagnostics.
+
+A follow-up review reproduced a count-reconciliation defect in the preserved
+logic: deleting a child after a count-free continuation discarded root-only scope
+counts and fell back to recording totals. Child deletion now retains the matching
+cached scope. Cached and page counts share one inclusion condition. The stateless
+grouped-page request helper is a module function, with options derived from the
+existing API signature, rather than a React callback and a copied request type.
+That 91-case suite passed locally through both the required headless
+repo runner and the normal two-worker CI configuration after that correction.
+
+An adjacent audit found that the continuation guard rejected only immediate
+repeats: an injected A → B → A sequence could keep the client requesting older
+pages. Each input search now remembers followed opaque tokens and stops on any
+revisit, preserving partial results and the existing error message. No server
+cursor format or valid-search budget changed. Additional held-continuation and
+catalog-failure deletion probes confirmed the cached-count fix already covered
+those paths and required no further runtime change.
+The expanded 94-case suite passed locally under the normal CI configuration;
+all four focused adjacent probes also passed through the headless repo runner.
+The [comparative assessment](run-recordings-controller-refactor-plan.md#comparative-assessment-against-the-committed-version)
+records the larger combined source/interface cost and the remaining dashboard
+typecheck coverage gap. The extraction improves ownership without removing the
+need to review cross-owner reset and mutation coordination.
+
+## 2026-11-23 - Shared OAuth Mechanics
+
+`oauth-browser-state.ts` owns the existing signed-envelope verification/signing
+and cookie mechanics. `oauth-provider-client.ts` owns external request formation,
+response validation and email-claim extraction. The original UI/visitor modules
+keep their exports, dummy branches, policy and HTTP registration. Secret lookup
+remains deferred inside the original signature-error boundary. Token and profile
+wrappers keep their response/JSON awaits and logging at the original points.
+
+Settings context is unchanged: both mounted HTTP callbacks use the request's
+captured revision, direct helper calls retain their existing repository reads,
+and watch/Socket reauthorization still escapes the opening snapshot. Preserve
+the distinct fingerprints, UI secret fallback, return-target comparison and
+cookie wire representation when extending either surface.
+
+The source/prebuilt HTTP tests use one owned local provider fixture, with held
+token/profile responses, independent settings changes and actual request capture.
+Two browser journeys share one fixture per worker while retaining isolated
+browser contexts; they cover real redirects, cookie admission, allowlist denial
+and independent logout. API discovery and the hosted browser manifest include
+the new tests. Fixture cleanup waits for process settlement before removing its
+owned root and rejects missing shutdown acknowledgements or abnormal exits;
+lifecycle regressions cover unexpected exit and startup failure. Mounted
+callbacks also cover dropped provider connections.
+The initial browser weight reflects local case work only;
+hosted timing remains a separate measurement. See the
+[implementation record](oauth-mechanics-refactor-plan.md) for validation results
+and their release boundaries.
+
+An adjacent fixture review also repaired failed-send deadline cleanup and
+async-workflow owner loss. The workflow child uses its real SIGTERM drain when
+IPC ownership ends, and guarded replies cannot abort that drain on a closed
+channel. Keep its startup and acknowledged held-reply owner-loss regressions with
+the existing recording lifecycle suite; production auth and shutdown policy are
+unchanged. Cookie compatibility is always checked against synthetic baseline
+values; request snapshots verify their original signing key and settings version.
+
 ## 2026-11-22 - Managed Recording Retention Ownership
 
 `managed/recording-retention.ts` owns the existing PostgreSQL retention task,

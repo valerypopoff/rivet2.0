@@ -9,11 +9,20 @@ const weightedSpecs = [
   ['bundle-comparison.spec.ts', 295],
   ['modal-sizing.spec.ts', 25],
   ['deployment-status.spec.ts', 35],
-  ['scheduled-runs.spec.ts', 90],
+  // Initial local total case work on 2026-11-24, rounded up to five seconds:
+  // panel 450.7s, prompt 137.5s. Refresh with hosted evidence; no speed claim.
+  ['local-storage-upgrade.spec.ts', 455],
+  ['local-storage-upgrade-prompt.spec.ts', 140],
+  // Local 2026-11-25 case work: 97.5s in CI config, 87.0s in observe.
+  // Includes held-request lifecycle cases; refresh with hosted evidence.
+  ['scheduled-runs.spec.ts', 100],
   ['fullscreen-output-search-paging.spec.ts', 30],
   ['hosted-modal-focus.spec.ts', 165],
   ['hosted-editor-search-shortcuts.spec.ts', 45],
   ['hosted-dashboard-contracts.spec.ts', 25],
+  // Initial local case-work allocation (1.8s, rounded up); the shared beforeAll
+  // startup uses setup headroom. Refresh with hosted evidence, not a speed claim.
+  ['oauth-mechanics.spec.ts', 5],
   // Preview recording, incomplete-history and receipt recovery.
   ['hosted-executor-origin.spec.ts', 110],
   // Includes admission races and error-recovery regressions.
@@ -37,6 +46,9 @@ const weightedSpecs = [
   ['recording-playback-history.spec.ts', 90],
   ['graph-deletion-references.spec.ts', 90],
   ['published-revision-history.spec.ts', 90],
+  // Local 2026-11-25 case work: 94.4s in CI, 102.9s with observe artifacts.
+  // Keep the higher rounded hint; refresh with hosted evidence, not a speed claim.
+  ['project-settings-modal.spec.ts', 105],
   ['node-editor-ownership.spec.ts', 90],
   ['node-editor-lifecycle.spec.ts', 220],
   ['llm-temperature.spec.ts', 60],
@@ -56,7 +68,7 @@ const weightedSpecs = [
 ];
 
 export const editorCiSpecs = Object.freeze(weightedSpecs.map(([spec]) => spec));
-const groups = Array.from({ length: 4 }, () => ({ specs: [], seconds: 0 }));
+const groups = Array.from({ length: 5 }, () => ({ specs: [], seconds: 0 }));
 for (const [spec, seconds] of [...weightedSpecs].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))) {
   const group = groups.reduce((best, candidate) => (candidate.seconds < best.seconds ? candidate : best));
   group.specs.push(spec);
@@ -74,7 +86,7 @@ export const editorCiShards = Object.freeze(
 /** No shard means the complete CI suite, preserving local commands. */
 export function selectEditorCiSpecs(shard) {
   if (shard === undefined) return editorCiSpecs;
-  const index = ['1/4', '2/4', '3/4', '4/4'].indexOf(shard);
-  if (index < 0) throw Error('RIVET_EDITOR_TEST_SHARD must be 1/4, 2/4, 3/4 or 4/4.');
+  const index = ['1/5', '2/5', '3/5', '4/5', '5/5'].indexOf(shard);
+  if (index < 0) throw Error('RIVET_EDITOR_TEST_SHARD must be 1/5, 2/5, 3/5, 4/5 or 5/5.');
   return editorCiShards[index].specs;
 }

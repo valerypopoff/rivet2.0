@@ -1,0 +1,25 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "composite": false,
+    "declaration": false,
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "noEmit": true,
+    "jsx": "react-jsx",
+    "jsxImportSource": "@emotion/react",
+    "types": ["vite/client", "node"],
+    "rootDir": ".."
+  },
+  "files": [
+    "dashboard/useProjectSettingsActions.ts",
+    "dashboard/useProjectPublicationReview.ts",
+    "dashboard/projectSettingsForm.ts",
+    "dashboard/publicationVersion.ts",
+    "dashboard/WorkflowPublishedVersionHistoryModal.tsx",
+    "dashboard/projectPublicationReview.ts",
+    "playwright-observe/helpers/projectSettingsObserve.ts",
+    "tests/project-publication-review.test.ts",
+    "tests/publication-version.test.ts"
+  ]
+}

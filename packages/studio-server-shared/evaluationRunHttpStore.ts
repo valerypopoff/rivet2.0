@@ -365,23 +365,17 @@ export function createHttpEvaluationStore(options: {
       const current = getEvaluationLibraryResource(snapshot.library, kind, change.id).value;
       const desired = desiredResourceValue(change);
       if (resourceEquals(current, desired)) continue;
+      const versions = kind === 'suite' ? snapshot.resourceVersions.suites : snapshot.resourceVersions.datasets;
+      const currentVersion = Object.hasOwn(versions, change.id) ? versions[change.id] : undefined;
       if (!resourceEquals(current, before)) {
-        const currentVersion =
-          kind === 'suite'
-            ? snapshot.resourceVersions.suites[change.id] ?? null
-            : snapshot.resourceVersions.datasets[change.id] ?? null;
         conflicts.push({
           kind,
           id: change.id,
-          expectedVersion: before === undefined ? null : currentVersion,
-          currentVersion,
+          expectedVersion: before === undefined ? null : currentVersion ?? null,
+          currentVersion: currentVersion ?? null,
         });
         continue;
       }
-      const currentVersion =
-        kind === 'suite'
-          ? snapshot.resourceVersions.suites[change.id]
-          : snapshot.resourceVersions.datasets[change.id];
       if (before !== undefined && !currentVersion) {
         throw new Error(`The ${kind} "${change.id}" is missing its collaboration version.`);
       }

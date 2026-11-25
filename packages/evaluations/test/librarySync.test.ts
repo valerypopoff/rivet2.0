@@ -59,8 +59,14 @@ test('library mutation diffs keep unrelated suite and dataset edits separate', (
     datasets: { 'dataset-a': 'dataset-a-v1', 'dataset-b': 'dataset-b-v1' },
   });
 
-  assert.deepEqual(mutation?.changes.map((change) => change.kind), ['put-dataset', 'put-suite']);
-  assert.deepEqual(mutation?.changes.map((change) => change.id), ['dataset-b', 'suite-a']);
+  assert.deepEqual(
+    mutation?.changes.map((change) => change.kind),
+    ['put-dataset', 'put-suite'],
+  );
+  assert.deepEqual(
+    mutation?.changes.map((change) => change.id),
+    ['dataset-b', 'suite-a'],
+  );
   assert.deepEqual(applyEvaluationLibraryMutation(previous, mutation!), next);
 });
 
@@ -82,6 +88,32 @@ test('library mutation diffs require a current token only for changed existing r
     () => diffEvaluationLibraryMutation(previous, changed, { suites: { 'suite-a': 'suite-a-v1' }, datasets: {} }),
     /dataset "dataset-a" has no synchronization version/u,
   );
+});
+
+test('library mutation diffs require own version entries for prototype-named resources', () => {
+  for (const id of ['constructor', 'toString', '__proto__']) {
+    for (const kind of ['suite', 'dataset'] as const) {
+      const previous = library();
+      if (kind === 'suite') previous.data.suites[0]!.id = id;
+      else {
+        previous.datasets[0]!.id = id;
+        previous.data.suites[0]!.datasetId = id;
+      }
+      const next = structuredClone(previous);
+      if (kind === 'suite') next.data.suites[0]!.name = 'Renamed';
+      else next.datasets[0]!.name = 'Renamed';
+      assert.throws(
+        () => diffEvaluationLibraryMutation(previous, next, { suites: {}, datasets: {} }),
+        /has no synchronization version/u,
+      );
+      const versions = {
+        suites: {},
+        datasets: {},
+        [kind === 'suite' ? 'suites' : 'datasets']: { [id]: 'own-version' },
+      };
+      assert.equal(diffEvaluationLibraryMutation(previous, next, versions)?.changes[0]?.expectedVersion, 'own-version');
+    }
+  }
 });
 
 test('library mutation diffs ignore equivalent resource property ordering', () => {

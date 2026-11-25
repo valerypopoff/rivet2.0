@@ -1,4 +1,5 @@
-import { expect, test, type Page, type Route } from '@playwright/test';
+import { expect, type Page, type Request, type Route } from '@playwright/test';
+import { test } from './helpers/projectPublicationFixture';
 import {
   createBuiltInRegistry,
   getGraphBoundary,
@@ -11,6 +12,7 @@ import { authenticateIfNeeded, openProjectContextMenu, waitForDashboardReady } f
 import {
   createProjectSettingsFixture,
   createProjectSettingsRouteTrackers,
+  createProjectWebAppsResponse,
   installProjectSettingsRoutes,
   openProjectSettingsModal,
   showProjectSettingsModal,
@@ -47,6 +49,98 @@ async function expectHistoryReadCancelled(
 }
 
 test.describe('Published revision history', () => {
+  for (const [readSource, outcome] of [
+    ['opening', 'confirmed'],
+    ['opening', 'unconfirmed'],
+    ['manual', 'confirmed'],
+    ['manual', 'unconfirmed'],
+  ] as const) {
+    test(`a late ${readSource} read cannot replace ${outcome} restore review`, async ({ page }) => {
+      const project = createProjectSettingsFixture(`late-${readSource}-${outcome}`);
+      project.settings.status = 'published';
+      project.settings.endpointName = project.settings.publishedEndpointName = 'late-opening';
+      const trackers = createProjectSettingsRouteTrackers();
+      await installProjectSettingsRoutes(
+        page,
+        project,
+        trackers,
+        outcome === 'unconfirmed' ? { loseAcknowledgement: 'restore' } : {},
+      );
+      const heldRead = Promise.withResolvers<Request>();
+      const releaseRead = Promise.withResolvers<void>();
+      const heldReadNumber = readSource === 'opening' ? 1 : 2;
+      let reads = 0;
+      await page.route('**/api/workflows/projects/web-apps?**', async (route) => {
+        reads++;
+        if (readSource === 'manual' && reads === 1)
+          return route.fulfill({ status: 503, json: { error: 'Initial read unavailable' } });
+        if (reads !== heldReadNumber) return route.fallback();
+        const originalProject = structuredClone(project);
+        heldRead.resolve(route.request());
+        await releaseRead.promise;
+        await route.fulfill({
+          json: createProjectWebAppsResponse(originalProject),
+        });
+      });
+      try {
+        // This races settings reads against Restore, independently of editor startup refreshes.
+        const { modal } = await openProjectSettingsModal(page, project, { activateProject: false });
+        if (readSource === 'manual') await modal.getByRole('button', { name: 'Review latest', exact: true }).click();
+        const request = await heldRead.promise;
+        project.revisionId = 'reviewed-before-restore';
+        await modal.getByRole('tab', { name: 'Published revision history' }).click();
+        const history = modal.getByRole('tabpanel', { name: 'Published revision history' });
+        page.once('dialog', (dialog) => dialog.accept());
+        await history.getByRole('button', { name: 'Restore', exact: true }).first().click();
+        if (outcome === 'confirmed') {
+          await expect(
+            history.getByRole('button', { name: 'Add comment for published version restored-published-version-1' }),
+          ).toBeEnabled();
+        } else {
+          await expect(history.getByText('The restore outcome could not be confirmed.')).toBeVisible();
+          await expect(modal.getByRole('tab', { name: 'Endpoint', exact: true })).toBeEnabled();
+        }
+        expect(trackers.publishedVersionRestoreRequests).toHaveLength(1);
+        expect(project.settings.publicationVersion).toBe('1');
+        await modal.getByRole('tab', { name: 'Endpoint', exact: true }).click();
+        let reviewReads = 0;
+        if (outcome === 'confirmed') {
+          // A concurrent tree refresh may supersede the automatic review. Establish
+          // the new review before releasing the old response in either valid outcome.
+          const review = modal.getByRole('button', { name: 'Review latest', exact: true });
+          if (await review.isVisible()) {
+            await review.click();
+            reviewReads++;
+          }
+          await expect(modal.getByRole('button', { name: 'Unpublish', exact: true })).toBeEnabled();
+        }
+        const lateResponse = page.waitForResponse((response) => response.request() === request);
+        releaseRead.resolve();
+        expect(await (await lateResponse).finished()).toBeNull();
+        await modal.locator('#workflow-project-endpoint-name').fill('after-restored-review');
+        const update = modal.getByRole('button', { name: 'Update', exact: true });
+        if (outcome === 'unconfirmed') {
+          await expect(update).toBeDisabled();
+          await modal.getByRole('button', { name: 'Review latest', exact: true }).click();
+        }
+        await expect(update).toBeEnabled();
+        await update.click();
+        await expect(modal.getByRole('tab', { name: 'Web apps', exact: true })).toBeEnabled();
+        expect(trackers.endpointPublishRequests).toHaveLength(1);
+        expect(trackers.endpointPublishRequests[0]?.preconditions).toEqual({
+          expectedProjectId: project.projectMetadataId,
+          expectedDraftRevisionId: 'reviewed-before-restore',
+          expectedPublicationVersion: '1',
+        });
+        expect(project.settings.publicationVersion).toBe('2');
+        expect(reads).toBe(heldReadNumber + 2 + reviewReads);
+        expect(trackers.projectLoadRequests).toEqual([]);
+      } finally {
+        releaseRead.resolve();
+      }
+    });
+  }
+
   test('history mutations lock navigation and a failed restore refresh requires fresh review', async ({ page }) => {
     const project = createProjectSettingsFixture('history-restore-refresh');
     project.settings.status = 'published';
@@ -90,8 +184,10 @@ test.describe('Published revision history', () => {
     );
     page.once('dialog', (dialog) => dialog.accept());
     await history.getByRole('button', { name: 'Restore' }).first().click();
-    await expect.poll(() => trackers.publishedVersionRestoreRequests.length).toBe(1);
-    await expect(modal.getByRole('tab', { name: 'Endpoint', exact: true })).toBeEnabled();
+    await expect(
+      history.getByRole('button', { name: 'Add comment for published version restored-published-version-1' }),
+    ).toBeEnabled();
+    expect(trackers.publishedVersionRestoreRequests).toHaveLength(1);
     await modal.getByRole('tab', { name: 'Endpoint', exact: true }).click();
     await modal.locator('#workflow-project-endpoint-name').fill('reviewed-restored-name');
     await expect(modal.getByRole('button', { name: 'Update', exact: true })).toBeDisabled();
@@ -123,12 +219,14 @@ test.describe('Published revision history', () => {
         json: {
           complete: true,
           bundles: [],
-          endpoints: [{
-            projectId: project.projectMetadataId,
-            coverage: project.settings.publicationVersion === '0' ? 'project-only' : 'complete',
-            dependencies: [],
-            canCaptureRelease: project.settings.publicationVersion === '0',
-          }],
+          endpoints: [
+            {
+              projectId: project.projectMetadataId,
+              coverage: project.settings.publicationVersion === '0' ? 'project-only' : 'complete',
+              dependencies: [],
+              canCaptureRelease: project.settings.publicationVersion === '0',
+            },
+          ],
         },
       }),
     );
@@ -144,10 +242,7 @@ test.describe('Published revision history', () => {
     expect(trackers.endpointPublishRequests).toHaveLength(0);
 
     page.once('dialog', (dialog) => dialog.accept());
-    await Promise.all([
-      page.waitForResponse('**/api/workflows/tree', { timeout: 10_000 }),
-      update.click(),
-    ]);
+    await Promise.all([page.waitForResponse('**/api/workflows/tree', { timeout: 10_000 }), update.click()]);
     await expect(modal.getByText('The publication outcome could not be confirmed.', { exact: false })).toBeVisible();
     await expect(update).toBeDisabled();
     expect(trackers.endpointPublishRequests).toHaveLength(1);
@@ -173,6 +268,8 @@ test.describe('Published revision history', () => {
     await expect(modal.getByRole('button', { name: 'Publish', exact: true })).toBeDisabled();
     expect(trackers.endpointPublishRequests).toHaveLength(1);
     await modal.getByRole('button', { name: 'Review latest', exact: true }).click();
+    await expect(modal.getByRole('button', { name: 'Unpublish', exact: true })).toBeEnabled();
+    await expect(modal.getByText('The publication outcome could not be confirmed.', { exact: false })).toHaveCount(0);
     await expect(modal.locator('.project-status-badge.published')).toBeVisible();
     expect(trackers.endpointPublishRequests).toHaveLength(1);
   });
@@ -356,15 +453,17 @@ test.describe('Published revision history', () => {
     root.settings.status = 'published';
     root.settings.endpointName = 'owner';
     root.stats!.webAppCount = 1;
-    root.webApps = [{
-      uiGraphId: 'owner-web-app',
-      name: 'Owner web app',
-      publishedSlug: null,
-      publishedAt: null,
-      status: 'unpublished',
-      isMissingFromProject: false,
-      allowedEmails: [],
-    }];
+    root.webApps = [
+      {
+        uiGraphId: 'owner-web-app',
+        name: 'Owner web app',
+        publishedSlug: null,
+        publishedAt: null,
+        status: 'unpublished',
+        isMissingFromProject: false,
+        allowedEmails: [],
+      },
+    ];
     const isOwnerWebAppRead = (url: string) => {
       const { pathname, searchParams } = new URL(url);
       return pathname === '/api/workflows/projects/web-apps' && searchParams.get('relativePath') === root.relativePath;
@@ -680,7 +779,9 @@ test.describe('Published revision history', () => {
     const childGraph = child.graphs[childGraphId]!;
     const publishedChild: Project = {
       ...child,
-      graphs: { [childGraphId]: { ...childGraph, metadata: { ...childGraph.metadata!, name: 'Published child graph' } } },
+      graphs: {
+        [childGraphId]: { ...childGraph, metadata: { ...childGraph.metadata!, name: 'Published child graph' } },
+      },
     };
     const member: Project = {
       ...child,
@@ -724,11 +825,13 @@ test.describe('Published revision history', () => {
           savedAt,
         },
       ],
-      references: ([
-        [subgraph, 'child-artifact', 'latest'],
-        [bundleMemberCall, 'member-artifact', 'latest'],
-        [publishedCall, 'published-child-artifact', 'published'],
-      ] as const).map(([call, targetArtifactId, selector]) => ({
+      references: (
+        [
+          [subgraph, 'child-artifact', 'latest'],
+          [bundleMemberCall, 'member-artifact', 'latest'],
+          [publishedCall, 'published-child-artifact', 'published'],
+        ] as const
+      ).map(([call, targetArtifactId, selector]) => ({
         sourceArtifactId: 'root-artifact',
         sourceGraphId: 'frozen-root',
         nodeId: call.id,
@@ -793,7 +896,9 @@ test.describe('Published revision history', () => {
     const rootRow = preview.getByRole('button', { name: 'History root Endpoint', exact: true });
     await rootRow.click();
     await expect(caller.getByText('Frozen child graph')).toBeVisible();
-    await expect(frame.locator('.node[data-nodeid="historical-published-call"]').getByText('Published child graph')).toBeVisible();
+    await expect(
+      frame.locator('.node[data-nodeid="historical-published-call"]').getByText('Published child graph'),
+    ).toBeVisible();
     await expect(activeTabTitle).toHaveText(`${root.name} (history preview)`);
     await expect(caller.locator('.subgraph-target-path-separator')).toBeVisible();
     await expect(frame.getByText('Read-only graph', { exact: true })).toHaveCount(0);
@@ -1036,7 +1141,10 @@ test.describe('Published revision history', () => {
 
     const previewPanel = page.getByRole('region', { name: 'History preview' });
     await expect(previewPanel).toBeVisible();
-    await expect(previewPanel.locator('.project-row', { hasText: project.name })).toHaveAttribute('aria-current', 'true');
+    await expect(previewPanel.locator('.project-row', { hasText: project.name })).toHaveAttribute(
+      'aria-current',
+      'true',
+    );
     await expect(projectRow).toHaveCount(1);
     await previewPanel.getByRole('button', { name: 'Exit history preview' }).click();
     await expect(previewPanel).toHaveCount(0);
@@ -1063,6 +1171,14 @@ test.describe('Published revision history', () => {
       relativePath: project.relativePath,
       versionId: 'published-version-1',
     });
+    // The old current row also matches the text below. Wait for the restored
+    // identity and completed mutation before navigating away from history.
+    await expect(
+      historyModal.getByRole('button', {
+        name: 'Add comment for published version restored-published-version-1',
+        exact: true,
+      }),
+    ).toBeEnabled();
     await expect(historyModal.getByRole('listitem').first()).toContainText(endpointName);
     await expect(historyModal.getByRole('listitem').first()).toContainText('Current');
     await expect(historyModal.getByText('Page 1 of 2')).toBeVisible();

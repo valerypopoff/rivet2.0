@@ -1,6 +1,7 @@
 import { expect, test } from '@playwright/test';
+import { applyEvaluationLibraryMutation, createEmptyEvaluationLibrary } from '@valerypopoff/rivet2-evaluations';
 
-import { authenticateIfNeeded, waitForDashboardReady } from './helpers/hostedEditorObserve';
+import { authenticateIfNeeded, mockHostedEditorBootstrap, waitForDashboardReady } from './helpers/hostedEditorObserve';
 import { seedHostedEditorProject } from './helpers/hostedEditorStorage';
 
 test.describe('Evaluation dataset case bulk enable toggle', () => {
@@ -8,6 +9,28 @@ test.describe('Evaluation dataset case bulk enable toggle', () => {
     page,
   }) => {
     test.slow();
+    await mockHostedEditorBootstrap(page);
+    let library = createEmptyEvaluationLibrary();
+    let revision = 0;
+    await page.route(/\/api\/workflows\/evaluation-runs\/library(?:\/mutations)?$/, async (route) => {
+      if (route.request().method() === 'POST') {
+        library = applyEvaluationLibraryMutation(library, route.request().postDataJSON());
+        revision++;
+      } else if (route.request().method() !== 'GET') {
+        await route.fallback();
+        return;
+      }
+      await route.fulfill({
+        json: {
+          revision,
+          library,
+          resourceVersions: {
+            suites: Object.fromEntries(library.data.suites.map((suite) => [suite.id, `version-${revision}`])),
+            datasets: Object.fromEntries(library.datasets.map((dataset) => [dataset.id, `version-${revision}`])),
+          },
+        },
+      });
+    });
     await seedHostedEditorProject(page, {
       graphId: 'evaluation-dataset-case-bulk-toggle-graph',
       loaded: true,
@@ -48,15 +71,24 @@ test.describe('Evaluation dataset case bulk enable toggle', () => {
     await firstCaseControl.click({ modifiers: [primaryModifier] });
     await expect(firstCaseInput).not.toBeChecked();
     await expect(secondCaseInput).not.toBeChecked();
+    await expect
+      .poll(() => library.datasets[0]?.cases.slice(0, 2).map((item) => item.enabled !== false))
+      .toEqual([false, false]);
 
     await secondCaseControl.click();
     await expect(firstCaseInput).not.toBeChecked();
     await expect(secondCaseInput).toBeChecked();
+    await expect
+      .poll(() => library.datasets[0]?.cases.slice(0, 2).map((item) => item.enabled !== false))
+      .toEqual([false, true]);
 
     // Exercise the browser's Command-key event even on non-macOS CI. On macOS
     // this is the normal system modifier; elsewhere it verifies metaKey support.
     await firstCaseControl.click({ modifiers: ['Meta'] });
     await expect(firstCaseInput).toBeChecked();
     await expect(secondCaseInput).toBeChecked();
+    await expect
+      .poll(() => library.datasets[0]?.cases.slice(0, 2).map((item) => item.enabled !== false))
+      .toEqual([true, true]);
   });
 });
