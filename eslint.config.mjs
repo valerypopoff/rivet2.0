@@ -166,6 +166,22 @@ export default [
     },
   },
 
+  // Scheduled Runs keeps request and form ownership in a focused hosted-web project.
+  {
+    files: [
+      'packages/studio-server-web/dashboard/ScheduledRunsModal.tsx',
+      'packages/studio-server-web/dashboard/useScheduledRunsController.ts',
+      'packages/studio-server-web/dashboard/scheduledRunForm.ts',
+      'packages/studio-server-web/dashboard/scheduledRunApi.ts',
+      'packages/studio-server-web/playwright-observe/helpers/scheduledRunsFixture.ts',
+      'packages/studio-server-web/tests/scheduled-run-api.test.ts',
+      'packages/studio-server-web/tests/scheduled-run-form.test.ts',
+    ],
+    languageOptions: {
+      parserOptions: { project: ['./packages/studio-server-web/tsconfig.scheduled-runs.json'] },
+    },
+  },
+
   // Configuration for ESLint config files
   {
     files: ['.eslint.config.mjs'],

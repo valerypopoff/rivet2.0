@@ -25,13 +25,13 @@ export function createScheduledRunRequester(
   const send = options.fetch ?? ((input, init) => fetch(input, init));
   const now = options.now ?? Date.now;
   const createId = options.createId ?? (() => crypto.randomUUID());
-  const uncertainActions = new Map<string, { id: string; at: number }>();
+  const uncertainActions = new Map<string, { id: string; at: number; reused: boolean }>();
   return async function request<T>(path = '', method = 'GET', body?: unknown, signal?: AbortSignal): Promise<T> {
     const intent =
       method === 'POST' && (path === '' || /\/(?:run|retry)$/.test(path)) ? JSON.stringify({ path, body }) : undefined;
     let requestId: string | undefined;
+    let pending = intent === undefined ? undefined : uncertainActions.get(intent);
     if (intent !== undefined) {
-      let pending = uncertainActions.get(intent);
       if (pending && now() - pending.at >= 86400_000)
         throw new Error(
           'This action is too old to retry safely. Review schedules and history before starting a new action.',
@@ -39,9 +39,9 @@ export function createScheduledRunRequester(
       if (!pending) {
         if (uncertainActions.size >= 100)
           throw new Error('Too many unresolved actions. Review schedules and history before reloading.');
-        pending = { id: createId(), at: now() };
+        pending = { id: createId(), at: now(), reused: false };
         uncertainActions.set(intent, pending);
-      }
+      } else pending.reused = true;
       requestId = pending.id;
       body = { ...(body as object), requestId };
     }
@@ -56,7 +56,10 @@ export function createScheduledRunRequester(
       body: body === undefined ? undefined : JSON.stringify(body),
       signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(20_000)]) : AbortSignal.timeout(20_000),
     });
-    if (response.status >= 400 && response.status < 500 && ![408, 409].includes(response.status)) acknowledge();
+    // Rejection describes only this attempt. An earlier reused attempt may
+    // have committed or still be in flight; only validated success resolves it.
+    if (response.status >= 400 && response.status < 500 && ![408, 409].includes(response.status) && !pending?.reused)
+      acknowledge();
     if (response.status === 204) {
       if (intent !== undefined) throw new Error(uncertainMessage);
       return undefined as T;

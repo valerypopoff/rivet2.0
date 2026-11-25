@@ -15,117 +15,122 @@ import type { ScheduledRunList } from '../../studio-server-shared/scheduled-run-
 import type { WorkflowTreeResponse } from '../../studio-server-shared/workflow-types';
 import { mockHostedEditorBootstrap, authenticateIfNeeded, waitForDashboardReady } from './helpers/hostedEditorObserve';
 import { expectStudioModalSizing } from './helpers/modalSizing';
+import {
+  consumedScheduledReads,
+  fixtureProject,
+  scheduledList,
+  scheduledPath,
+  scheduledRouteGate,
+  scheduledTest,
+} from './helpers/scheduledRunsFixture';
 
-test('recent scheduled runs paginate all returned history and clamp after live updates', async ({ page }) => {
-  const initialHistory: ScheduledRunList['history'] = Array.from({ length: 105 }, (_, index) => ({
-    id: `history-${index}`,
-    scheduleId: 'pagination-schedule',
-    scheduleRevision: 1,
-    projectId: 'pagination-project',
-    name: `History run ${index + 1}`,
-    scheduledAt: Date.UTC(2026, 9, 6, 12) - index * 60000,
-    status: 'succeeded',
-  }));
-  let history = initialHistory;
-  await page.route(
-    (url) => url.pathname.startsWith('/api/'),
-    async (route) => {
-      const pathname = new URL(route.request().url()).pathname;
-      if (pathname === '/api/workflows/scheduled-runs')
-        return route.fulfill({ json: { schedules: [], history } satisfies ScheduledRunList });
-      if (pathname === '/api/workflows/scheduled-runs/summary') return route.fulfill({ json: { enabledCount: 0 } });
-      if (pathname === '/api/workflows/tree')
-        return route.fulfill({
-          json: { root: '/workflows', folders: [], projects: [], sync: { epoch: 'pagination', revision: 0 } },
-        });
-      if (pathname === '/api/app-settings/local-upgrade/status') return route.fulfill({ json: { available: false } });
-      if (pathname === '/api/app-settings/local-upgrade/setup') return route.fulfill({ json: { eligible: false } });
-      return route.fulfill({ status: 503, json: { error: 'No ambient fixture API allowed' } });
-    },
-  );
-  await mockHostedEditorBootstrap(page);
-  await page.goto('/');
-  await authenticateIfNeeded(page);
-  await waitForDashboardReady(page);
-  await page.getByRole('button', { name: 'Scheduled runs', exact: true }).click();
-  const recent = page.getByTestId('scheduled-runs-modal').locator('.scheduled-run-history');
-  await expect(recent.locator('summary')).toHaveText('Recent runs (105)');
-  await expect(recent.getByRole('group', { name: 'Recent runs per page' })).not.toBeVisible();
-  await recent.locator('summary').click();
-  const sizes = recent.getByRole('group', { name: 'Recent runs per page' });
-  const cards = recent.locator('.scheduled-run-card');
-  const pager = recent.getByRole('navigation', { name: 'Recent runs pages' });
-  await expect(sizes.getByRole('button', { name: '10', exact: true })).toHaveAttribute('aria-pressed', 'true');
-  await expect(cards).toHaveCount(10);
-  await expect(pager).toContainText('Page 1 of 11');
-  await expect(pager.getByRole('button', { name: 'Previous' })).toBeDisabled();
-  await pager.getByRole('button', { name: 'Next' }).click();
-  await expect(cards.first().locator('strong')).toHaveText('History run 11');
-  await expect(pager).toContainText('Page 2 of 11');
-  await sizes.getByRole('button', { name: '10', exact: true }).click();
-  await expect(pager.getByRole('status')).toHaveText('Page 2 of 11');
-  await expect(cards.first().locator('strong')).toHaveText('History run 11');
-  // A refresh must not reset the selected page or collapse the disclosure.
-  history = [...history];
-  history[10] = { ...history[10]!, name: 'Refreshed run 11' };
-  await expect(cards.first().locator('strong')).toHaveText('Refreshed run 11', { timeout: 10000 });
-  await expect(pager).toContainText('Page 2 of 11');
-  await pager.getByRole('button', { name: 'Previous' }).click();
-  await expect(cards.first().locator('strong')).toHaveText('History run 1');
-  for (const [size, pages] of [
-    [20, 6],
-    [50, 3],
-    [100, 2],
-  ] as const) {
-    await sizes.getByRole('button', { name: String(size), exact: true }).click();
-    await expect(cards).toHaveCount(size);
-    await expect(pager).toContainText(`Page 1 of ${pages}`);
-  }
-  await pager.getByRole('button', { name: 'Next' }).click();
-  await expect(cards).toHaveCount(5);
-  await expect(cards.first().locator('strong')).toHaveText('History run 101');
-  await expect(pager.getByRole('button', { name: 'Next' })).toBeDisabled();
-  // Native page controls remain keyboard-operable and inside narrow modals.
-  await page.setViewportSize({ width: 390, height: 700 });
-  await expectStudioModalSizing(page.getByTestId('scheduled-runs-modal'));
-  await pager.scrollIntoViewIfNeeded();
-  for (const button of await pager.getByRole('button').all()) {
-    const box = await button.boundingBox();
-    expect(box).not.toBeNull();
-    expect(box!.x).toBeGreaterThanOrEqual(0);
-    expect(box!.x + box!.width).toBeLessThanOrEqual(390);
-  }
-  await pager.getByRole('button', { name: 'Previous' }).focus();
-  await page.keyboard.press('Enter');
-  await expect(pager.getByRole('status')).toHaveText('Page 1 of 2');
-  await expect(cards.first().locator('strong')).toHaveText('History run 1');
-  await pager.getByRole('button', { name: 'Next' }).focus();
-  await page.keyboard.press('Enter');
-  await expect(pager.getByRole('status')).toHaveText('Page 2 of 2');
-  await page.setViewportSize({ width: 1600, height: 1000 });
-  await page.screenshot({ path: test.info().outputPath('scheduled-history-pagination.png') });
-  history = history.slice(0, 3);
-  await expect(cards).toHaveCount(3, { timeout: 10000 });
-  await expect(cards.first().locator('strong')).toHaveText('History run 1');
-  await expect(pager).toHaveCount(0);
-  // Growing again must not resurrect the now-invalid old page.
-  history = Array.from({ length: 105 }, (_, index) => ({ ...history[0]!, id: `grown-${index}` }));
-  await expect(pager).toContainText('Page 1 of 2', { timeout: 10000 });
-  history = [];
-  await expect(recent.locator('summary')).toHaveText('Recent runs (0)', { timeout: 10000 });
-  await expect(recent.getByText('No recent runs yet.')).toBeVisible();
-  await expect(sizes).toHaveCount(0);
-  await expect(pager).toHaveCount(0);
-  // Closing and reopening resets the view without persisting UI state to storage.
-  history = initialHistory.slice(0, 25);
-  await page.getByTestId('scheduled-runs-modal').getByRole('button', { name: 'Close', exact: true }).click();
-  await page.getByRole('button', { name: 'Scheduled runs', exact: true }).click();
-  await expect(recent.locator('summary')).toHaveText('Recent runs (25)');
-  await expect(recent).not.toHaveAttribute('open');
-  await recent.locator('summary').click();
-  await expect(cards).toHaveCount(10);
-  await expect(pager.getByRole('status')).toHaveText('Page 1 of 3');
-});
+scheduledTest(
+  'recent scheduled runs paginate all returned history and clamp after live updates',
+  async ({ page, scheduledDashboard: fixture }) => {
+    const initialHistory: ScheduledRunList['history'] = Array.from({ length: 105 }, (_, index) => ({
+      id: `history-${index}`,
+      scheduleId: 'pagination-schedule',
+      scheduleRevision: 1,
+      projectId: 'pagination-project',
+      name: `History run ${index + 1}`,
+      scheduledAt: Date.UTC(2026, 9, 6, 12) - index * 60000,
+      status: 'succeeded',
+    }));
+    let history = initialHistory;
+    fixture.onList = (route) => route.fulfill({ json: { schedules: [], history } satisfies ScheduledRunList });
+    await fixture.open({ schedules: [], history });
+    const recent = page.getByTestId('scheduled-runs-modal').locator('.scheduled-run-history');
+    await expect(recent.locator('summary')).toHaveText('Recent runs (105)');
+    await expect(recent.getByRole('group', { name: 'Recent runs per page' })).not.toBeVisible();
+    await recent.locator('summary').click();
+    const sizes = recent.getByRole('group', { name: 'Recent runs per page' });
+    const cards = recent.locator('.scheduled-run-card');
+    const pager = recent.getByRole('navigation', { name: 'Recent runs pages' });
+    await expect(sizes.getByRole('button', { name: '10', exact: true })).toHaveAttribute('aria-pressed', 'true');
+    await expect(cards).toHaveCount(10);
+    await expect(pager).toContainText('Page 1 of 11');
+    await expect(pager.getByRole('button', { name: 'Previous' })).toBeDisabled();
+    await pager.getByRole('button', { name: 'Next' }).click();
+    await expect(cards.first().locator('strong')).toHaveText('History run 11');
+    await expect(pager).toContainText('Page 2 of 11');
+    await sizes.getByRole('button', { name: '10', exact: true }).click();
+    await expect(pager.getByRole('status')).toHaveText('Page 2 of 11');
+    await expect(cards.first().locator('strong')).toHaveText('History run 11');
+    // A refresh must not reset the selected page or collapse the disclosure.
+    history = [...history];
+    history[10] = { ...history[10]!, name: 'Refreshed run 11' };
+    await page.clock.fastForward(3000);
+    await consumedScheduledReads(page, 2);
+    await expect(cards.first().locator('strong')).toHaveText('Refreshed run 11');
+    await expect(pager).toContainText('Page 2 of 11');
+    await pager.getByRole('button', { name: 'Previous' }).click();
+    await expect(cards.first().locator('strong')).toHaveText('History run 1');
+    for (const [size, pages] of [
+      [20, 6],
+      [50, 3],
+      [100, 2],
+    ] as const) {
+      await sizes.getByRole('button', { name: String(size), exact: true }).click();
+      await expect(cards).toHaveCount(size);
+      await expect(pager).toContainText(`Page 1 of ${pages}`);
+    }
+    await pager.getByRole('button', { name: 'Next' }).click();
+    await expect(cards).toHaveCount(5);
+    await expect(cards.first().locator('strong')).toHaveText('History run 101');
+    await expect(pager.getByRole('button', { name: 'Next' })).toBeDisabled();
+    // Native page controls remain keyboard-operable and inside narrow modals.
+    await page.setViewportSize({ width: 390, height: 700 });
+    await expectStudioModalSizing(page.getByTestId('scheduled-runs-modal'));
+    await pager.scrollIntoViewIfNeeded();
+    for (const button of await pager.getByRole('button').all()) {
+      const box = await button.boundingBox();
+      expect(box).not.toBeNull();
+      expect(box!.x).toBeGreaterThanOrEqual(0);
+      expect(box!.x + box!.width).toBeLessThanOrEqual(390);
+    }
+    await pager.getByRole('button', { name: 'Previous' }).focus();
+    await page.keyboard.press('Enter');
+    await expect(pager.getByRole('status')).toHaveText('Page 1 of 2');
+    await expect(cards.first().locator('strong')).toHaveText('History run 1');
+    await pager.getByRole('button', { name: 'Next' }).focus();
+    await page.keyboard.press('Enter');
+    await expect(pager.getByRole('status')).toHaveText('Page 2 of 2');
+    await page.setViewportSize({ width: 1600, height: 1000 });
+    await page.screenshot({ path: test.info().outputPath('scheduled-history-pagination.png') });
+    history = history.slice(0, 3);
+    await page.clock.fastForward(3000);
+    await consumedScheduledReads(page, 3);
+    await expect(cards).toHaveCount(3);
+    await expect(cards.first().locator('strong')).toHaveText('History run 1');
+    await expect(pager).toHaveCount(0);
+    // Growing again must not resurrect the now-invalid old page.
+    history = Array.from({ length: 105 }, (_, index) => ({ ...history[0]!, id: `grown-${index}` }));
+    await page.clock.fastForward(3000);
+    await consumedScheduledReads(page, 4);
+    await expect(pager).toContainText('Page 1 of 2');
+    history = [];
+    await page.clock.fastForward(3000);
+    await consumedScheduledReads(page, 5);
+    await expect(recent.locator('summary')).toHaveText('Recent runs (0)');
+    await expect(recent.getByText('No recent runs yet.')).toBeVisible();
+    await expect(sizes).toHaveCount(0);
+    await expect(pager).toHaveCount(0);
+    // Closing and reopening resets the view without persisting UI state to storage.
+    history = initialHistory.slice(0, 25);
+    await page.getByTestId('scheduled-runs-modal').getByRole('button', { name: 'Close', exact: true }).click();
+    await page.clock.runFor(500);
+    await page.getByRole('button', { name: 'Scheduled runs', exact: true }).click();
+    await page.clock.runFor(500);
+    await consumedScheduledReads(page, 6);
+    await expect(recent.locator('summary')).toHaveText('Recent runs (25)');
+    await expect(recent).not.toHaveAttribute('open');
+    await recent.locator('summary').click();
+    await expect(cards).toHaveCount(10);
+    await expect(pager.getByRole('status')).toHaveText('Page 1 of 3');
+    expect(fixture.reads).toHaveLength(6);
+    expect(fixture.writes).toHaveLength(0);
+  },
+);
 
 test('scheduled UI uses authenticated real API, survives lost acknowledgements and executes recorded cross-project work', async ({
   page,
@@ -181,6 +186,8 @@ test('scheduled UI uses authenticated real API, survives lost acknowledgements a
       loseRunResponse = true,
       loseRetryResponse = true,
       listUnavailable = false;
+    let rejectNextCreate = false;
+    const createRequestIds: string[] = [];
     const installApiRoutes = async () => {
       await page.route(
         (url) => url.pathname.startsWith('/api/'),
@@ -189,6 +196,12 @@ test('scheduled UI uses authenticated real API, survives lost acknowledgements a
           if (url.pathname === base || url.pathname.startsWith(base + '/')) {
             if (listUnavailable && route.request().method() === 'GET')
               return route.fulfill({ status: 503, json: { error: 'Fixture temporary outage' } });
+            const create = route.request().method() === 'POST' && url.pathname === base;
+            const rejectCreate = create && rejectNextCreate;
+            if (create) {
+              createRequestIds.push(route.request().postDataJSON().requestId);
+              rejectNextCreate = false;
+            }
             const upstreamUrl = api.baseUrl + url.pathname + url.search;
             if (holdRestartSummary && url.pathname === base + '/summary') {
               holdRestartSummary = false;
@@ -197,7 +210,11 @@ test('scheduled UI uses authenticated real API, survives lost acknowledgements a
             }
             const response = await route.fetch({
               url: upstreamUrl,
-              headers: { ...route.request().headers(), ...headers },
+              headers: {
+                ...route.request().headers(),
+                ...headers,
+                ...(rejectCreate ? { 'x-rivet-proxy-auth': 'invalid-fixture-proxy-token' } : {}),
+              },
             });
             if (url.pathname.endsWith('/preview') && holdPreview) await previewGate;
             if (response.ok() && route.request().method() === 'POST' && url.pathname === base && loseCreateResponse) {
@@ -326,8 +343,14 @@ test('scheduled UI uses authenticated real API, survives lost acknowledgements a
       expect(
         Math.abs((await footer.evaluate((element) => (element as HTMLElement).offsetTop)) - top),
       ).toBeLessThanOrEqual(1);
-      expect(await save.evaluate((element) => element.getBoundingClientRect().left)).toBeGreaterThan(
-        await preview.evaluate((element) => element.getBoundingClientRect().right),
+      const buttons = await preview.or(save).evaluateAll((elements) =>
+        elements.map((element) => {
+          const { left, right } = element.getBoundingClientRect();
+          return { type: element.getAttribute('type'), left, right };
+        }),
+      );
+      expect(buttons.find((button) => button.type === 'submit')!.left).toBeGreaterThan(
+        buttons.find((button) => button.type === 'button')!.right,
       );
       await editor.locator('.scheduled-runs-content').evaluate((element) => {
         element.scrollTop = 0;
@@ -508,7 +531,20 @@ test('scheduled UI uses authenticated real API, survives lost acknowledgements a
     await page.screenshot({ path: test.info().outputPath('scheduled-run-form.png') });
     await editor.getByRole('button', { name: 'Save', exact: true }).click();
     await expect(editor.getByRole('alert')).toBeVisible();
+    expect((await read()).schedules).toHaveLength(1);
+    // Fresh authentication rejects this retry before the durable receipt lookup.
+    rejectNextCreate = true;
     await editor.getByRole('button', { name: 'Save', exact: true }).click();
+    await expect(editor.getByRole('alert')).toContainText('Forbidden');
+    await expect(editor.getByLabel('Name', { exact: true })).toHaveValue('Useful work');
+    expect((await read()).schedules).toHaveLength(1);
+    await editor.getByRole('button', { name: 'Save', exact: true }).click();
+    await expect(editor).toHaveCount(0);
+    expect(createRequestIds).toEqual([createRequestIds[0], createRequestIds[0], createRequestIds[0]]);
+    const created = await read();
+    expect(created.schedules).toHaveLength(1);
+    expect(created.schedules[0]?.projectId).toBe(project.projectMetadataId);
+    expect(created.schedules[0]?.input).toEqual({ score: 0.5 });
     await expect(modal.getByRole('heading', { name: 'Useful work', exact: true })).toBeVisible();
     await expect(scheduleBadge).toHaveText('Enabled: 1');
     const card = modal.locator('.scheduled-run-card').first();
@@ -526,10 +562,6 @@ test('scheduled UI uses authenticated real API, survives lost acknowledgements a
         return trash.left > heading.right;
       }),
     ).toBe(true);
-    await expect(editor).toHaveCount(0);
-    expect((await read()).schedules).toHaveLength(1);
-    expect((await read()).schedules[0]?.projectId).toBe(project.projectMetadataId);
-    expect((await read()).schedules[0]?.input).toEqual({ score: 0.5 });
     const summaryRefresh = page.waitForResponse(
       (response) => response.url().endsWith(base + '/summary') && response.ok(),
     );
@@ -638,8 +670,9 @@ test('scheduled UI uses authenticated real API, survives lost acknowledgements a
     await waitForDashboardReady(page);
     await page.getByRole('button', { name: 'Scheduled runs', exact: true }).click();
     await expect(modal.getByRole('button', { name: 'Unpause', exact: true })).toBeVisible();
-    expect((await read()).schedules).toHaveLength(1);
-    expect((await read()).history[0]?.id).toBe(state.history[0]?.id);
+    const restarted = await read();
+    expect(restarted.schedules).toHaveLength(1);
+    expect(restarted.history[0]?.id).toBe(state.history[0]?.id);
     // A missing saved target remains visible; opening its editor cannot
     // silently replace it with the first surviving project.
     hideRootProject = true;
@@ -670,8 +703,14 @@ test('scheduled UI uses authenticated real API, survives lost acknowledgements a
       body: JSON.stringify({ revision: current.revision, draft: { ...current, name: 'Changed elsewhere' } }),
     });
     expect(changed.ok).toBe(true);
+    await expect(modal.locator('.scheduled-run-header h3')).toContainText('Changed elsewhere');
+    await expect(editor.getByLabel('Name', { exact: true })).toHaveValue(current.name);
     await editor.getByLabel('Name', { exact: true }).fill('Stale edit');
+    const staleSave = page.waitForRequest(
+      (request) => new URL(request.url()).pathname === base + '/' + current.id && request.method() === 'PUT',
+    );
     await editor.getByRole('button', { name: 'Save', exact: true }).click();
+    expect((await staleSave).postDataJSON().revision).toBe(current.revision);
     await expect(editor.getByRole('alert')).toContainText('another window');
     expect((await read()).schedules[0]?.name).toBe('Changed elsewhere');
     await editor.getByRole('button', { name: 'Close', exact: true }).click();
@@ -749,3 +788,308 @@ test('scheduled UI uses authenticated real API, survives lost acknowledgements a
     }
   }
 });
+
+scheduledTest(
+  'schedule polling is single-flight and preserves completion-relative timing through Preview',
+  async ({ page, scheduledDashboard: fixture }) => {
+    const slow = scheduledRouteGate(),
+      preview = scheduledRouteGate();
+    fixture.onList = (route) =>
+      fixture.reads.length === 2 ? slow.handler(route) : route.fulfill({ json: scheduledList('Refreshed') });
+    await page.route(scheduledPath + '/preview', preview.handler);
+    try {
+      await fixture.open();
+      await page.clock.runFor(2999);
+      expect(fixture.reads).toHaveLength(1);
+      await page.clock.runFor(1);
+      await slow.received();
+      await page.clock.runFor(6000);
+      expect(fixture.reads).toHaveLength(2);
+      await slow.reply(scheduledList('Polled'));
+      await consumedScheduledReads(page, 2);
+      const modal = page.getByTestId('scheduled-runs-modal');
+      await expect(modal.locator('h3')).toContainText('Polled');
+      await modal.getByRole('button', { name: '+ Add scheduled run', exact: true }).click();
+      await page.clock.runFor(500);
+      const editor = page.getByTestId('scheduled-run-editor-modal');
+      await expect(editor.locator('.scheduled-project-name')).toHaveText('Fixture project');
+      await editor.getByLabel('Name', { exact: true }).fill('Keep this draft');
+      await editor.getByRole('button', { name: 'Preview next runs', exact: true }).click();
+      await preview.received();
+      await page.clock.runFor(6500);
+      expect(fixture.reads).toHaveLength(2);
+      expect(fixture.writes).toHaveLength(1);
+      await preview.reply({ times: [Date.UTC(2026, 10, 26)] });
+      await expect(editor.locator('.scheduled-runs')).toHaveAttribute('aria-busy', 'false');
+      await expect(editor.getByRole('list', { name: 'Next runs' })).toBeVisible();
+      expect(fixture.reads).toHaveLength(2);
+      await page.clock.runFor(1999);
+      expect(fixture.reads).toHaveLength(2);
+      await page.clock.runFor(1);
+      await consumedScheduledReads(page, 3);
+      await expect(modal.locator('h3')).toContainText('Refreshed');
+      await expect(editor.getByLabel('Name', { exact: true })).toHaveValue('Keep this draft');
+    } finally {
+      await slow.dispose();
+      await preview.dispose();
+    }
+  },
+);
+
+for (const staleOutcome of ['success', 'failure'] as const) {
+  scheduledTest(
+    `an old schedule poll ${staleOutcome} cannot replace acknowledged mutation state`,
+    async ({ page, scheduledDashboard: fixture }) => {
+      const old = scheduledRouteGate();
+      fixture.onList = (route) =>
+        fixture.reads.length === 2 ? old.handler(route) : route.fulfill({ json: scheduledList('Accepted', false) });
+      await page.route(scheduledPath + '/schedule', async (route) => {
+        expect(route.request().method()).toBe('PUT');
+        expect(route.request().postDataJSON().draft.enabled).toBe(false);
+        await route.fulfill({ json: { updated: true } });
+      });
+      try {
+        await fixture.open();
+        await page.clock.fastForward(3000);
+        await old.received();
+        const modal = page.getByTestId('scheduled-runs-modal');
+        await modal.getByRole('button', { name: 'Pause', exact: true }).click();
+        await consumedScheduledReads(page, 2);
+        await expect(modal.getByRole('button', { name: 'Unpause', exact: true })).toBeEnabled();
+        await old.reply(
+          staleOutcome === 'success' ? scheduledList('Stale') : { error: 'Retired poll error' },
+          staleOutcome === 'success' ? 200 : 503,
+        );
+        await consumedScheduledReads(page, 3);
+        await page.clock.runFor(16);
+        await expect(modal.locator('h3')).toContainText('Accepted');
+        await expect(modal.getByRole('alert')).toHaveCount(0);
+        await expect(page.locator('.panel-bottom-action-summary[aria-label$="enabled scheduled runs"]')).toHaveCount(0);
+        expect(fixture.reads).toHaveLength(3);
+        expect(fixture.writes).toHaveLength(1);
+      } finally {
+        await old.dispose();
+      }
+    },
+  );
+}
+
+scheduledTest(
+  'closing a pending schedule poll retires it before the replacement modal starts',
+  async ({ page, scheduledDashboard: fixture }) => {
+    const old = scheduledRouteGate();
+    fixture.onList = (route) =>
+      fixture.reads.length === 2 ? old.handler(route) : route.fulfill({ json: scheduledList('Replacement') });
+    try {
+      await fixture.open();
+      await page.clock.fastForward(3000);
+      await old.received();
+      const modal = page.getByTestId('scheduled-runs-modal');
+      const cancelled = page.waitForEvent('requestfailed', { predicate: (request) => request === fixture.reads[1] });
+      await modal.getByRole('button', { name: 'Close', exact: true }).click();
+      await cancelled;
+      await page.clock.runFor(500);
+      await page.getByRole('button', { name: 'Scheduled runs', exact: true }).click();
+      await page.clock.runFor(500);
+      await consumedScheduledReads(page, 3);
+      await expect(modal.locator('h3')).toContainText('Replacement');
+      await old.reply(scheduledList('Retired', false));
+      await page.clock.fastForward(3000);
+      await consumedScheduledReads(page, 4);
+      await expect(modal.locator('h3')).toContainText('Replacement');
+      await expect(page.locator('.panel-bottom-action-summary[aria-label$="enabled scheduled runs"]')).toHaveText(
+        'Enabled: 1',
+      );
+      expect(fixture.reads).toHaveLength(4);
+      expect(fixture.writes).toHaveLength(0);
+    } finally {
+      await old.dispose();
+    }
+  },
+);
+
+scheduledTest(
+  'an admitted schedule mutation continues after close without updating its replacement modal',
+  async ({ page, scheduledDashboard: fixture }) => {
+    const mutation = scheduledRouteGate(),
+      settlement = scheduledRouteGate();
+    fixture.onList = (route) =>
+      fixture.reads.length === 3 ? settlement.handler(route) : route.fulfill({ json: scheduledList('Replacement') });
+    await page.route(scheduledPath + '/schedule', mutation.handler);
+    try {
+      await fixture.open();
+      const modal = page.getByTestId('scheduled-runs-modal');
+      await modal.getByRole('button', { name: 'Pause', exact: true }).click();
+      await mutation.received();
+      await modal.getByRole('button', { name: 'Close', exact: true }).click();
+      await page.clock.runFor(500);
+      await page.getByRole('button', { name: 'Scheduled runs', exact: true }).click();
+      await page.clock.runFor(500);
+      await consumedScheduledReads(page, 2);
+      await expect(modal.getByRole('button', { name: 'Pause', exact: true })).toBeEnabled();
+      await mutation.reply({ updated: true });
+      await settlement.received();
+      await settlement.reply(scheduledList('Retired', false));
+      await consumedScheduledReads(page, 3);
+      await page.clock.runFor(16);
+      await expect(modal.locator('h3')).toContainText('Replacement');
+      await expect(page.locator('.panel-bottom-action-summary[aria-label$="enabled scheduled runs"]')).toHaveText(
+        'Enabled: 1',
+      );
+      expect(fixture.reads).toHaveLength(3);
+      expect(fixture.writes).toHaveLength(1);
+    } finally {
+      await mutation.dispose();
+      await settlement.dispose();
+    }
+  },
+);
+
+scheduledTest(
+  'an uncertain Create retires old polling and keeps its request identity across modal close',
+  async ({ page, scheduledDashboard: fixture }) => {
+    const old = scheduledRouteGate();
+    fixture.onList = (route) =>
+      fixture.reads.length === 2
+        ? old.handler(route)
+        : route.fulfill({ json: scheduledList(fixture.writes.length > 1 ? 'Repeated' : 'Original') });
+    await page.route(
+      (url) => url.pathname === scheduledPath,
+      async (route) => {
+        if (route.request().method() !== 'POST') return route.fallback();
+        await route.fulfill(
+          fixture.writes.length === 1
+            ? { status: 503, json: { error: 'Unknown create outcome' } }
+            : { status: 201, json: { id: 'created', revision: 1 } },
+        );
+      },
+    );
+    const fill = async () => {
+      const modal = page.getByTestId('scheduled-runs-modal');
+      await modal.getByRole('button', { name: '+ Add scheduled run', exact: true }).click();
+      await page.clock.runFor(500);
+      const editor = page.getByTestId('scheduled-run-editor-modal');
+      await editor.getByLabel('Name', { exact: true }).fill('Repeated');
+      await editor.getByLabel('Time zone', { exact: true }).fill('UTC');
+      await editor.getByLabel('Input JSON object (optional)').fill('{"count":1}');
+      return editor;
+    };
+    try {
+      await fixture.open();
+      await page.clock.fastForward(3000);
+      await old.received();
+      const editor = await fill();
+      await editor.getByRole('button', { name: 'Save', exact: true }).click();
+      await expect(editor.getByRole('alert')).toContainText('Unknown create outcome');
+      await old.reply(scheduledList('Stale', false));
+      await consumedScheduledReads(page, 2);
+      await page.clock.runFor(16);
+      const modal = page.getByTestId('scheduled-runs-modal');
+      await expect(modal.locator('h3')).toContainText('Original');
+      await expect(editor.getByLabel('Name', { exact: true })).toHaveValue('Repeated');
+      await expect(editor.getByLabel('Input JSON object (optional)')).toHaveValue('{"count":1}');
+      await expect(editor.getByRole('alert')).toContainText('Unknown create outcome');
+      expect(fixture.reads).toHaveLength(2);
+      await editor.getByRole('button', { name: 'Close', exact: true }).click();
+      await page.clock.runFor(500);
+      await modal.getByRole('button', { name: 'Close', exact: true }).click();
+      await page.clock.runFor(500);
+      await page.getByRole('button', { name: 'Scheduled runs', exact: true }).click();
+      await page.clock.runFor(500);
+      await consumedScheduledReads(page, 3);
+      expect(fixture.writes).toHaveLength(1);
+      const reopened = await fill();
+      await reopened.getByRole('button', { name: 'Save', exact: true }).click();
+      await consumedScheduledReads(page, 4);
+      await page.clock.runFor(500);
+      await expect(reopened).toHaveCount(0);
+      const [first, second] = fixture.writes.map((request) => request.postDataJSON());
+      expect(second).toEqual(first);
+      expect(first.draft.projectId).toBe(fixtureProject.projectMetadataId);
+      expect(fixture.writes).toHaveLength(2);
+    } finally {
+      await old.dispose();
+    }
+  },
+);
+
+scheduledTest(
+  'Open recording keeps read-only settlement when its editor load fails',
+  async ({ page, scheduledDashboard: fixture }) => {
+    const recording = scheduledRouteGate();
+    const initial = scheduledList();
+    initial.history.push({
+      id: 'occurrence',
+      scheduleId: 'schedule',
+      scheduleRevision: 1,
+      projectId: fixtureProject.projectMetadataId!,
+      name: 'Recorded run',
+      scheduledAt: 0,
+      status: 'succeeded',
+      recordingId: 'owned-recording',
+    });
+    fixture.onList = (route) => route.fulfill({ json: initial });
+    await page.route('**/api/workflows/recordings/owned-recording/recording', recording.handler);
+    await page.route('**/api/workflows/recordings/owned-recording/summary', (route) =>
+      route.fulfill({ status: 404, json: { error: 'No fixture summary' } }),
+    );
+    try {
+      await fixture.open(initial);
+      const modal = page.getByTestId('scheduled-runs-modal');
+      await modal.locator('.scheduled-run-history > summary').click();
+      await page.evaluate(() => {
+        const owner = window as Window & { __scheduledRecordingFailure?: { error: string; requestId: string } };
+        const frame = document.querySelector<HTMLIFrameElement>('iframe.dashboard-editor-frame');
+        const receive = (event: MessageEvent) => {
+          if (
+            event.source !== frame?.contentWindow ||
+            event.origin !== location.origin ||
+            event.data?.type !== 'project-open-failed' ||
+            event.data.path !== 'owned-recording'
+          )
+            return;
+          owner.__scheduledRecordingFailure = { error: event.data.error, requestId: event.data.requestId };
+          window.removeEventListener('message', receive);
+        };
+        window.addEventListener('message', receive);
+      });
+      const link = modal.getByRole('link', { name: 'Open recording', exact: true });
+      await expect(link).toBeVisible();
+      const busyAtDispatch = await link.evaluate((element) => {
+        const states = [];
+        // Both events must reach the old render before React publishes busy.
+        for (let click = 0; click < 2; click++) {
+          states.push(element.closest('.scheduled-runs')?.getAttribute('aria-busy'));
+          element.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+        }
+        return states;
+      });
+      expect(busyAtDispatch).toEqual(['false', 'false']);
+      await recording.received();
+      await expect(modal.locator('.scheduled-runs')).toHaveAttribute('aria-busy', 'true');
+      await link.dispatchEvent('click');
+      // One due poll is enough here; the cadence case exercises successive ticks.
+      await page.clock.fastForward(3000);
+      expect(fixture.reads).toHaveLength(1);
+      await recording.reply({ error: 'Fixture recording unavailable' }, 503);
+      await expect(modal.locator('.scheduled-runs')).toHaveAttribute('aria-busy', 'false');
+      await expect
+        .poll(() =>
+          page.evaluate(
+            () =>
+              (window as Window & { __scheduledRecordingFailure?: { error: string; requestId: string } })
+                .__scheduledRecordingFailure,
+          ),
+        )
+        .toEqual({ error: 'Fixture recording unavailable', requestId: expect.any(String) });
+      await expect(modal.getByRole('alert')).toHaveCount(0);
+      expect(fixture.reads).toHaveLength(1);
+      expect(fixture.writes).toHaveLength(0);
+      await page.clock.fastForward(3000);
+      await consumedScheduledReads(page, 2);
+      expect(recording.count).toBe(1);
+    } finally {
+      await recording.dispose();
+    }
+  },
+);

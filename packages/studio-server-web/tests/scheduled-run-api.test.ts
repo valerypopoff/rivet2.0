@@ -8,94 +8,142 @@ const json = (body: unknown, status = 201) =>
     headers: { 'content-type': 'application/json' },
   });
 const accepted = () => json({ id: 'schedule', revision: 1 });
-const body = (init?: RequestInit) => JSON.parse(String(init?.body));
-
-test('uncertain or malformed acknowledgements retain the request identity until validated success', async () => {
-  const replies = [json({}), json(null), new Response(null, { status: 204 }), accepted(), accepted()];
+function recordRequests(reply: (attempt: number) => Response | Promise<Response>, now?: () => number) {
   const ids: string[] = [];
   let next = 0;
   const request = createScheduledRunRequester({
+    now,
     createId: () => `request-${++next}`,
     fetch: async (_input, init) => {
-      ids.push(body(init).requestId);
-      return replies.shift()!;
+      ids.push(JSON.parse(String(init?.body)).requestId);
+      return reply(ids.length);
     },
   });
-  for (let i = 0; i < 3; i++) await assert.rejects(request('', 'POST', { draft: {} }), /invalid acknowledgement/);
-  await request('', 'POST', { draft: {} });
-  await request('', 'POST', { draft: {} });
-  assert.deepEqual(ids, ['request-1', 'request-1', 'request-1', 'request-1', 'request-2']);
-});
+  return { request, ids };
+}
 
-test('a retired response cannot delete a newer uncertain action with the same intent', async () => {
-  let complete!: (value: unknown) => void;
-  const retired = accepted();
-  retired.json = () =>
-    new Promise((resolve) => {
-      complete = resolve;
-    });
-  const ids: string[] = [];
-  let next = 0;
-  const request = createScheduledRunRequester({
-    createId: () => `request-${++next}`,
-    fetch: async (_input, init) => {
-      ids.push(body(init).requestId);
-      if (ids.length === 1) return retired;
-      if (ids.length === 3) throw new Error('Lost response');
-      return accepted();
-    },
-  });
-  const first = request('', 'POST', { draft: {} });
-  await new Promise((resolve) => setImmediate(resolve));
-  await request('', 'POST', { draft: {} });
-  await assert.rejects(request('', 'POST', { draft: {} }), /Lost response/);
-  complete({ id: 'schedule', revision: 1 });
-  await first;
-  await request('', 'POST', { draft: {} });
-  assert.deepEqual(ids, ['request-1', 'request-1', 'request-2', 'request-2']);
-});
-
-test('Run now and Retry validate occurrence acknowledgements; definite rejection releases only its own key', async () => {
-  const replies = [
-    json({ id: 'run' }, 202),
-    json({ error: 'Conflict' }, 409),
-    json({ error: 'Bad request' }, 400),
-    json({ id: 'run', scheduleId: 'schedule', status: 'queued' }, 202),
-    json({ id: 'retry', scheduleId: 'schedule', status: 'queued' }, 202),
+void test('Create, Run now and Retry require validated acknowledgements before retiring identities', async () => {
+  const occurrence = { id: 'run', scheduleId: 'schedule', status: 'queued' };
+  const invalidOccurrences = [
+    { ...occurrence, scheduleId: '' },
+    { ...occurrence, scheduleId: 3 },
+    { ...occurrence, status: 'unknown' },
   ];
-  const ids: string[] = [];
-  let next = 0;
-  const request = createScheduledRunRequester({
-    createId: () => `request-${++next}`,
-    fetch: async (_input, init) => {
-      ids.push(body(init).requestId);
-      return replies.shift()!;
+  for (const example of [
+    {
+      path: '',
+      body: { draft: {} },
+      valid: { id: 'schedule', revision: 1 },
+      invalid: [
+        null,
+        {},
+        { id: '', revision: 1 },
+        { id: 3, revision: 1 },
+        { id: 'schedule', revision: 0 },
+        { id: 'schedule', revision: 1.5 },
+      ],
     },
-  });
-  await assert.rejects(request('/s/run', 'POST', { revision: 1 }), /invalid acknowledgement/);
-  await assert.rejects(request('/s/run', 'POST', { revision: 1 }), /Conflict/);
-  await assert.rejects(request('/s/run', 'POST', { revision: 1 }), /Bad request/);
-  await request('/s/run', 'POST', { revision: 1 });
-  await request('/runs/r/retry', 'POST', { confirmSideEffects: true });
-  assert.deepEqual(ids, ['request-1', 'request-1', 'request-1', 'request-2', 'request-3']);
+    { path: '/s/run', body: { revision: 1 }, valid: occurrence, invalid: invalidOccurrences },
+    { path: '/runs/r/retry', body: { confirmSideEffects: true }, valid: occurrence, invalid: invalidOccurrences },
+  ]) {
+    const status = example.path ? 202 : 201;
+    const invalid = example.invalid.map((value) => json(value, status));
+    if (!example.path) invalid.push(new Response(null, { status: 204 }));
+    const replies = [...invalid, json(example.valid, status), json(example.valid, status)];
+    const { request, ids } = recordRequests(() => replies.shift()!);
+    for (const _reply of invalid)
+      await assert.rejects(
+        request(example.path, 'POST', example.body),
+        /invalid acknowledgement/,
+        example.path || 'Create',
+      );
+    assert.deepEqual(await request(example.path, 'POST', example.body), example.valid);
+    await request(example.path, 'POST', example.body);
+    assert.deepEqual(ids, [...Array(invalid.length + 1).fill('request-1'), 'request-2'], example.path || 'Create');
+  }
 });
 
-test('uncertain action age and count limits prohibit unsafe replay without another network request', async () => {
-  let now = 0,
-    sends = 0;
-  const request = createScheduledRunRequester({
-    now: () => now,
-    createId: () => String(sends),
-    fetch: async () => {
-      sends++;
+void test(
+  'a retired response cannot delete a newer uncertain action with the same intent',
+  { timeout: 10_000 },
+  async () => {
+    let complete!: (value: unknown) => void;
+    let entered!: () => void;
+    const bodyEntered = new Promise<void>((resolve) => (entered = resolve));
+    const retired = accepted();
+    retired.json = () => {
+      entered();
+      return new Promise((resolve) => {
+        complete = resolve;
+      });
+    };
+    const { request, ids } = recordRequests((attempt) => {
+      if (attempt === 1) return retired;
+      if (attempt === 3) throw new Error('Lost response');
+      return accepted();
+    });
+    const first = request('', 'POST', { draft: {} });
+    await bodyEntered;
+    await request('', 'POST', { draft: {} });
+    await assert.rejects(request('', 'POST', { draft: {} }), /Lost response/);
+    complete({ id: 'schedule', revision: 1 });
+    await first;
+    await request('', 'POST', { draft: {} });
+    assert.deepEqual(ids, ['request-1', 'request-1', 'request-2', 'request-2']);
+  },
+);
+
+void test('first-attempt HTTP failures distinguish definitive rejection from uncertain outcomes', async () => {
+  for (const [status, retained] of [
+    [400, false],
+    [403, false],
+    [408, true],
+    [409, true],
+    [503, true],
+  ] as const) {
+    const { request, ids } = recordRequests((attempt) =>
+      attempt === 1 ? json({ error: 'Rejected' }, status) : accepted(),
+    );
+    await assert.rejects(request('', 'POST', { draft: {} }), /Rejected/);
+    await request('', 'POST', { draft: {} });
+    assert.deepEqual(ids, ['request-1', retained ? 'request-1' : 'request-2'], `HTTP ${status}`);
+  }
+});
+
+void test(
+  'a late rejected attempt cannot retire an identity reused by an uncertain retry',
+  { timeout: 10_000 },
+  async () => {
+    let completeFirst!: (response: Response) => void;
+    const { request, ids } = recordRequests((attempt) => {
+      if (attempt === 1) return new Promise<Response>((resolve) => (completeFirst = resolve));
+      if (attempt === 2) throw new Error('Lost retry acknowledgement');
+      return accepted();
+    });
+    const first = assert.rejects(request('', 'POST', { draft: {} }), /Forbidden/);
+    await assert.rejects(request('', 'POST', { draft: {} }), /Lost retry acknowledgement/);
+    completeFirst(json({ error: 'Forbidden' }, 403));
+    await first;
+    await request('', 'POST', { draft: {} });
+    assert.deepEqual(ids, ['request-1', 'request-1', 'request-1']);
+  },
+);
+
+void test('uncertain action age and count limits prohibit unsafe replay without another network request', async () => {
+  let now = 0;
+  const { request, ids } = recordRequests(
+    () => {
       throw new Error('Offline');
     },
-  });
+    () => now,
+  );
+  await assert.rejects(request('/s/run', 'POST', { revision: 1 }), /Offline/);
+  now = 86400_000 - 1;
   await assert.rejects(request('/s/run', 'POST', { revision: 1 }), /Offline/);
   now = 86400_000;
   await assert.rejects(request('/s/run', 'POST', { revision: 1 }), /too old/);
-  assert.equal(sends, 1);
+  assert.equal(ids.length, 2);
   for (let i = 1; i < 100; i++) await assert.rejects(request(`/s${i}/run`, 'POST', { revision: 1 }), /Offline/);
   await assert.rejects(request('/another/run', 'POST', { revision: 1 }), /Too many unresolved/);
-  assert.equal(sends, 100);
+  assert.equal(ids.length, 101);
 });

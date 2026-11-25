@@ -4,6 +4,42 @@ This document records intentional architecture and cleanup changes that future m
 
 It is not a changelog. Keep entries focused on why a refactor happened, which ownership boundary changed, and which verification paths should be kept alive.
 
+## 2026-11-25 - Scheduled Runs Controller Ownership
+
+`ScheduledRunsModal.tsx` previously combined request settlement, polling and form
+state with rendering and modal focus. `useScheduledRunsController.ts` now owns
+the mounted request/form session and named commands; the modal retains pagination,
+select menus, stack state, alert scrolling and DOM focus. `scheduledRunForm.ts`
+contains only payload conversion and schedule-kind transitions. Creation defaults
+remain in the controller, and the existing page-owned request ledger and independent
+sidebar summary poll retain their lifetimes.
+
+The extraction preserves the two cleanup effects, synchronous action guard,
+epoch checks, three-second completion-relative timer, 20-second transport bound,
+captured editing revision, payload fields/order and mutation-versus-read settlement.
+An admitted mutation continues after list close, while obsolete UI updates remain
+suppressed. Preview and Open recording share busy/error handling without an immediate
+mutation-style list refresh. No backend, recording format, CSS or deployment policy changed.
+
+An adjacent requester fix prevents a rejected retry from discarding an earlier
+uncertain identity and allowing duplicate work. The page-owned ledger now tracks
+whether an identity has been reused; a later
+rejection cannot retire it, including while another attempt remains in flight.
+Validated success still resolves it, and rejection of the sole attempt still
+releases its key. Real-API lost-reply/auth-rejection and focused overlapping-attempt cases
+protect this behavior correction separately from the mechanical extraction.
+
+Keep the focused `check:scheduled-runs`, ordinary web tests and complete editor
+CI selection. Pure form/requester tests protect conversion, acknowledgement and
+ledger bounds; controlled browser cases protect polling, stale responses,
+disposal, single action admission, captured editing revisions and pagination.
+The authenticated execution/restart journey remains on real time. Related
+layout measurements use one browser evaluation, including the adjacent Project
+Settings test, to avoid sampling different animation frames without relaxing
+assertions. Total state/effect counts are unchanged; the gain is clearer ownership.
+The [implementation record](scheduled-runs-refactor-plan.md) distinguishes original
+characterization, final verification and local-versus-hosted timing evidence.
+
 ## 2026-11-25 - Project Settings Publication Review Ownership
 
 Project Settings previously combined reviewed snapshots and editable draft

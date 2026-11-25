@@ -13,7 +13,9 @@ const weightedSpecs = [
   // panel 450.7s, prompt 137.5s. Refresh with hosted evidence; no speed claim.
   ['local-storage-upgrade.spec.ts', 455],
   ['local-storage-upgrade-prompt.spec.ts', 140],
-  ['scheduled-runs.spec.ts', 90],
+  // Local 2026-11-25 case work: 97.5s in CI config, 87.0s in observe.
+  // Includes held-request lifecycle cases; refresh with hosted evidence.
+  ['scheduled-runs.spec.ts', 100],
   ['fullscreen-output-search-paging.spec.ts', 30],
   ['hosted-modal-focus.spec.ts', 165],
   ['hosted-editor-search-shortcuts.spec.ts', 45],

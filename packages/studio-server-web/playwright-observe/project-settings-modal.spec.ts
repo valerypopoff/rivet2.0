@@ -874,8 +874,14 @@ test.describe('Project settings modal', () => {
     await expect(modal.locator('.project-settings-modal-header-row').getByRole('tablist')).toHaveCount(0);
     await expect(modal.locator('.project-settings-modal-content').getByRole('tablist')).toHaveCount(1);
     const tabs = projectSettingsSections.getByRole('tab');
-    const first = (await tabs.nth(0).boundingBox())!;
-    const second = (await tabs.nth(1).boundingBox())!;
+    // Read both rectangles in one frame; the entering modal moves between protocol calls.
+    const [first, second] = await tabs.evaluateAll((elements) =>
+      elements.slice(0, 2).map((element) => {
+        const { x, y, width, height } = element.getBoundingClientRect();
+        return { x, y, width, height };
+      }),
+    );
+    if (!first || !second) throw new Error('Expected the first two project settings tabs.');
     expect(second.y).toBeGreaterThan(first.y + first.height);
     expect(second.x).toBeCloseTo(first.x);
     expect(second.width).toBeCloseTo(first.width);

@@ -76,6 +76,8 @@ commands; the guides below describe implementation and verification.
 - [Workflow Publication](./studio-server/workflow-publication.md)
 - [Recording Search Performance And Scope](./studio-server/recording-search-performance.md)
 - [Run Recordings Controller Refactor And Verification](./studio-server/run-recordings-controller-refactor-plan.md)
+- [Scheduled Runs](./studio-server/scheduled-runs.md)
+- [Scheduled Runs Controller Refactor And Verification](./studio-server/scheduled-runs-refactor-plan.md)
 - [Recording Memory Accounting And Serialization Assessment](./studio-server/recording-memory-and-serialization-plan.md)
 - [Current Recording Readiness And Latency Assessment](./studio-server/recording-latency-repair-plan.md)
 - [Recording Performance Investigation History](./studio-server/recording-performance-completion-plan.md)
