@@ -1970,11 +1970,12 @@ committing or pushing the source never applies that recovery to a live cluster.
 
 The five private `@valerypopoff/rivet-studio-server-*` workspaces form one
 Studio Server product and use one lockstep package version. Their current
-version is `1.44.0`. `yarn studio-server:verify:repo-structure` rejects version
+version is `1.45.0`. `yarn studio-server:verify:repo-structure` rejects version
 drift between the API, web, executor, shared, and bootstrap manifests.
-This minor release adds bounded HTTP upload waiting and recording memory
-accounting, with earlier execution admission and bounded settings-check sharing.
-API implements these changes; the other four packages follow product lockstep.
+This minor release includes Brotli recording storage and guarded recompression,
+bounded public endpoint admission, maintenance-lease and deployment repairs,
+and controller/OAuth reliability work. API, bootstrap, shared and web contain
+package-local changes; executor follows product lockstep.
 The [recording latency assessment](recording-latency-repair-plan.md) retains the
 open performance gates; a version bump is not qualification evidence.
 Backend overlap was covered by `1.31.0`; compact HA/autoscaling by `1.30.0`.
@@ -1983,7 +1984,7 @@ GKE qualification; see the [performance implementation status](rolling-update-pe
 Bump all five manifests together even when only one workspace has runtime
 changes; run the repository-structure check before
 building a release candidate. See the prepared release matrix in
-[Build and CI](../BUILD-AND-CI.md#prepared-release-versions-2026-11-21) for the
+[Build and CI](../BUILD-AND-CI.md#prepared-release-versions-2026-11-26) for the
 separate desktop, sidecar, documentation and public runtime version decisions.
 
 These private package versions are release metadata, not npm publication or

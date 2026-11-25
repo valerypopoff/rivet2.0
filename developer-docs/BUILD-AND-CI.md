@@ -2185,6 +2185,35 @@ version. It checks npm before publishing each package and skips package versions
 that are already present in the registry, so re-running the same main-branch
 workflow does not turn an already-published package into a hard failure.
 
+### Prepared release versions (2026-11-26)
+
+The review since version commit `aa50e6a79`, through `0c5068b89`, advances Studio
+Server to `1.45.0` for compatible recording-storage capabilities and subsequent
+reliability fixes. All five private Server packages keep the required product
+version. Evaluations identity/synchronization fixes advance the public npm family
+to `2.34.1`; Core, Node and CLI are release companions with unchanged implementations.
+Desktop advances to `2.39.3` for fullscreen-output hit testing, patched Rust URL
+dependencies and the Evaluations fixes. Docs advances to `2.33.1` for the corrected
+Run statistics label. App Executor remains `2.24.2` because its code and bundled
+Core/Node implementations are unchanged.
+
+The [package review](PACKAGES.md#version-update-2026-11-26--recording-storage-and-reliability)
+records the package-local changes separately from required companion bumps.
+Validate with `yarn verify:desktop-version`, `yarn check:npm-publish-versions`,
+an immutable Yarn install, `yarn check:pnp:fresh` and
+`yarn studio-server:verify:repo-structure`. The CLI Docker fallback follows
+`2.34.1`; Tauri and Cargo follow `2.39.3`. This release preparation changes no
+dependency ranges, managed schema or Helm metadata and does not establish
+publication, deployment or hosted performance. The two local validation anomalies
+remain [unresolved](studio-server/bundle-merge-controller-refactor-plan.md#investigation-of-intermittent-local-validation-failures---2026-11-26).
+
+Local preparation passed the Desktop and public-package version guards, immutable
+Yarn installation, fresh PnP and repository-structure checks, and documentation
+link validation. All 35 focused Evaluations store/synchronization tests passed.
+The rebuilt web application passed four headless Playwright checks: the General
+settings version is `1.45.0`, and the existing fullscreen-output cases still pass.
+Native installer creation, npm publication and hosted rollout are separate gates.
+
 ### Prepared release versions (2026-11-21)
 
 Studio Server `1.44.0` adds bounded upload waiting and recording memory
