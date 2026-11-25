@@ -860,3 +860,78 @@ timeout and concurrent local native-allocation failure remain documented; passin
 reruns did not establish their causes. Hosted timing and production behavior were
 not remeasured. Local diagnostic artifacts and the recurrence checklist remain
 Git-ignored and outside the commit.
+
+## Investigation of intermittent local validation failures - 2026-11-26
+
+Follow-up investigation used committed source `6e1e80160` and the same compiled
+dashboard asset. Neither original failure was reproduced, so neither is marked
+fixed. Application code, test assertions, timeouts, worker counts, Chromium
+arguments and deployment safeguards were left unchanged.
+
+### Browser action timeout
+
+**Status: unresolved.** The original timeout's cause has not been established.
+
+The retained failed trace contains a 12.8-second gap between rendered frames.
+Playwright had found the Older bundle input but was still waiting for actionability;
+the later screenshot shows the input unobstructed. Correlation with the original
+shard report found that the other worker's independent `late AI results cannot
+overwrite a retired switch session` case took 16.4 seconds during the same interval.
+This supports investigating a shared browser or machine pause, but does not
+identify its cause or prove an application rendering defect.
+
+Fresh verification passed all 123 cases in the unchanged two-worker CI shard in
+255.9 seconds. A diagnostic wrapper then passed ten repetitions of the exact
+comparison case, followed by ten repetitions of each of the original concurrent
+cases together (20 executions). The wrapper added passive long-task/visibility
+observations and failure-state capture without replacing the application actions.
+The longest observed main-thread task was 291 ms. These 30 diagnostic executions
+supplement the standard shard; they are not additional distinct regression cases.
+All runs had zero skipped cases, retries or global errors and settled their
+preview processes normally. No forced click, animation override or longer timeout
+was used. A persistent selector, modal or initialization failure was not established.
+
+### Native allocation failures
+
+**Status: unresolved.** The original allocation failures' cause has not been established.
+
+The original logs show one Vite native allocation failure and two Node test
+processes failing native allocation. The later measurements cannot reconstruct
+the machine's resource state at that earlier instant. The Windows System log
+query returned no resource-exhaustion events for the retained failure interval.
+
+The diagnostic runs used Node 24.22.3 x64 on this 14-logical-processor machine,
+with no `NODE_OPTIONS` override and a 4.2 GiB JavaScript heap limit. They sampled
+system commit and physical-memory counters and the owned process group, including
+native build tools. The process group's Windows Job Object had no memory limit.
+The paging file was automatically managed and the system drive had about 60 GiB
+free when checked. These are current observations, not evidence of the original
+instant of failure.
+
+| Local diagnostic command       | Wall time | Peak process-group commitment | Minimum system commit headroom | Result                                  |
+| ------------------------------ | --------: | ----------------------------: | -----------------------------: | --------------------------------------- |
+| Production web build alone     |    62.6 s |                       6.4 GiB |                        7.1 GiB | Passed                                  |
+| Full web-test command alone    |    28.9 s |                       6.2 GiB |                        7.4 GiB | 326 tests and focused typechecks passed |
+| Both commands started together |    69.3 s |                       9.2 GiB |                        4.2 GiB | Build and all 326 tests passed          |
+
+The overlap probe would have stopped only its owned Node processes, after checking
+creation identity, if system commit headroom fell below 2 GiB. That diagnostic guard
+did not fire. The overlap's lowest available physical memory was 18.1 GiB, showing
+why physical free memory alone is an incomplete description of the available
+commit budget. Counter definitions follow the Windows
+[performance information](https://learn.microsoft.com/en-us/windows/win32/api/psapi/ns-psapi-performance_information)
+and [Job Object accounting](https://learn.microsoft.com/en-us/windows/win32/api/winnt/ns-winnt-jobobject_extended_limit_information)
+contracts.
+
+Keep local build and full-test verification sequential when resource headroom has
+not been measured. The hosted web-test job already depends on the completed build
+job. The single overlap trial is diagnostic evidence, not a parallelization or
+hosted-speed recommendation. It establishes neither a leak nor the original
+allocation cause, and does not justify changing heap limits, paging configuration,
+test concurrency or retry policy.
+
+Raw traces, passive browser probes, resource samples and command results are kept
+under `artifacts/validation-diagnostics-20261126/`. Both original anomalies remain
+unresolved observations. If either recurs, retain contemporaneous frame/long-task,
+process and system commit evidence before changing code; passing reruns alone
+must not close it. The application asset still matches its pre-investigation hash.
