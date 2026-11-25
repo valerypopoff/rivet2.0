@@ -16,12 +16,27 @@ function createGitHubActionsHandler({ requests = [] } = {}) {
       return res.writeHead(503, { 'content-type': 'text/html' }).end('<html>unavailable</html>');
     if (mode === 'malformed') return res.end('{');
     if (mode === 'redirect') return res.writeHead(302, { location: '/ok' }).end();
+    const transientEndpoint = {
+      'retry-list': '/repos/fixture/repo/actions/workflows/build.yml/runs',
+      'retry-run': '/repos/fixture/repo/actions/runs/101',
+      'retry-artifacts': '/repos/fixture/repo/actions/runs/101/artifacts',
+      'retry-download': '/repos/fixture/repo/actions/artifacts/501/zip',
+      'retry-download-rerun': '/repos/fixture/repo/actions/artifacts/501/zip',
+      'retry-download-replaced': '/repos/fixture/repo/actions/artifacts/501/zip',
+    }[mode];
+    if (endpoint === transientEndpoint) {
+      const key = `${mode}:transient`;
+      const attempts = (reads.get(key) || 0) + 1;
+      reads.set(key, attempts);
+      if (attempts < 3) return res.writeHead(mode === 'retry-artifacts' ? 429 : 500, { 'retry-after': '0' }).end();
+    }
+    if (mode === 'retry-later') return res.writeHead(503, { 'retry-after': '60' }).end();
     const count = (reads.get(mode) || 0) + 1;
     reads.set(mode, count);
     const repository = { id: 10, full_name: 'fixture/repo' };
     const run = {
       id: 101,
-      run_attempt: mode === 'rerun' || (mode === 'download-rerun' && count > 3) ? 2 : 1,
+      run_attempt: mode === 'rerun' || (['download-rerun', 'retry-download-rerun'].includes(mode) && count > 3) ? 2 : 1,
       head_sha: mode === 'stale' ? 'b'.repeat(40) : sha,
       head_branch: mode === 'wrongbranch' ? 'main' : 'develop',
       event: mode === 'pr' ? 'pull_request' : 'push',
@@ -43,7 +58,7 @@ function createGitHubActionsHandler({ requests = [] } = {}) {
     } else if (endpoint === '/repos/fixture/repo/actions/runs/101') body = run;
     else if (endpoint === '/repos/fixture/repo/actions/runs/101/artifacts') {
       const artifact = {
-        id: mode === 'download-replaced' && count > 4 ? 502 : 501,
+        id: ['download-replaced', 'retry-download-replaced'].includes(mode) && count > 4 ? 502 : 501,
         name: `rivet-desktop-web-${sha}`,
         expired: mode === 'expired',
         size_in_bytes: 100,

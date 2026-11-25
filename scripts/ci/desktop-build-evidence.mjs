@@ -4,6 +4,14 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as sleep } from 'node:timers/promises';
 
+class BuildEvidenceApiError extends Error {
+  constructor(response, description = 'Build evidence') {
+    super(`${description} API returned HTTP ${response.status}; refusing release.`);
+    this.status = response.status;
+    this.retryAfter = response.headers.get('retry-after');
+  }
+}
+
 // Read-only bridge between independent workflows. Never select by branch tip,
 // a PR artifact, an arbitrary successful run, or a different source SHA.
 export async function desktopBuildEvidence({
@@ -35,6 +43,7 @@ export async function desktopBuildEvidence({
   const branch = ref.slice('refs/heads/'.length);
   const deadline = Date.now() + maxWaitMs;
   let pendingArtifact;
+  const remaining = () => Math.min(deadline, pendingArtifact?.deadline ?? deadline) - Date.now();
   const request = (endpoint, redirect = 'error') =>
     fetch(new URL(`repos/${repository}/${endpoint}`, base), {
       headers: {
@@ -43,18 +52,13 @@ export async function desktopBuildEvidence({
         'X-GitHub-Api-Version': '2022-11-28',
       },
       redirect,
-      signal: AbortSignal.timeout(
-        Math.max(
-          1,
-          Math.min(requestTimeoutMs, deadline - Date.now(), (pendingArtifact?.deadline ?? deadline) - Date.now()),
-        ),
-      ),
+      signal: AbortSignal.timeout(Math.max(1, Math.min(requestTimeoutMs, remaining()))),
     });
   const get = async (endpoint) => {
     const response = await request(endpoint);
     if (!response.ok) {
       await response.body?.cancel();
-      throw Error(`Build evidence API returned HTTP ${response.status}; refusing release.`);
+      throw new BuildEvidenceApiError(response);
     }
     return response.json();
   };
@@ -70,63 +74,82 @@ export async function desktopBuildEvidence({
     positiveId(run.id) &&
     positiveId(run.run_attempt);
   let pinned;
+  let transientFailures = 0;
   while (Date.now() < deadline) {
     if (pendingArtifact && Date.now() >= pendingArtifact.deadline)
       throw Error('Timed out waiting for the exact Build artifact download; refusing release.');
-    if (!pinned) {
-      if (runId) pinned = { id: Number(runId), attempt: Number(runAttempt) };
-      else {
-        const list = await get(
-          `actions/workflows/build.yml/runs?event=push&branch=${encodeURIComponent(branch)}&head_sha=${sha}&per_page=100`,
+    try {
+      if (!pinned) {
+        if (runId) pinned = { id: Number(runId), attempt: Number(runAttempt) };
+        else {
+          const list = await get(
+            `actions/workflows/build.yml/runs?event=push&branch=${encodeURIComponent(branch)}&head_sha=${sha}&per_page=100`,
+          );
+          assert.ok(Array.isArray(list.workflow_runs), 'Malformed Build run listing.');
+          const run = list.workflow_runs.filter(ownsRun).sort((a, b) => b.id - a.id)[0];
+          if (run) pinned = { id: Number(run.id), attempt: Number(run.run_attempt) };
+        }
+      }
+      if (pinned) {
+        const run = await get(`actions/runs/${pinned.id}`);
+        assert.ok(
+          ownsRun(run) && run.id === pinned.id && run.run_attempt === pinned.attempt,
+          'Build identity/attempt changed; rerun the desktop workflow after Build settles.',
         );
-        assert.ok(Array.isArray(list.workflow_runs), 'Malformed Build run listing.');
-        const run = list.workflow_runs.filter(ownsRun).sort((a, b) => b.id - a.id)[0];
-        if (run) pinned = { id: Number(run.id), attempt: Number(run.run_attempt) };
+        if (run.status === 'completed' && run.conclusion !== 'success')
+          throw Error('The exact Build did not succeed; fix/rerun Build before releasing.');
+        if (mode === 'validated' && run.status === 'completed' && run.conclusion === 'success')
+          return { runId: pinned.id, runAttempt: pinned.attempt };
+        if (mode === 'artifact') {
+          const list = await get(`actions/runs/${pinned.id}/artifacts?per_page=100`);
+          assert.ok(Array.isArray(list.artifacts), 'Malformed Build artifact listing.');
+          const artifacts = list.artifacts.filter((artifact) => artifact.name === `rivet-desktop-web-${sha}`);
+          assert.ok(artifacts.length <= 1, 'Ambiguous desktop artifact.');
+          if (artifacts.length) {
+            const artifact = artifacts[0];
+            assert.ok(
+              artifact.expired === false && positiveId(artifact.id) && artifact.size_in_bytes > 0,
+              'Desktop artifact expired or invalid; rerun Build.',
+            );
+            const owner = artifact.workflow_run;
+            assert.ok(
+              owner?.id === pinned.id &&
+                owner?.head_sha === sha &&
+                owner?.head_branch === branch &&
+                owner?.repository_id === run.repository.id &&
+                owner?.head_repository_id === run.repository.id,
+              'Desktop artifact ownership does not match the pinned Build.',
+            );
+            pendingArtifact ??= { id: Number(artifact.id), deadline: Math.min(deadline, Date.now() + 60_000) };
+            assert.equal(Number(artifact.id), pendingArtifact.id, 'Build artifact changed while awaiting download.');
+            // Listing visibility can precede ZIP availability. Check the exact
+            // download endpoint without following its signed storage redirect.
+            const download = await request(`actions/artifacts/${pendingArtifact.id}/zip`, 'manual');
+            await download.body?.cancel();
+            if (download.status === 302 && download.headers.get('location'))
+              return { runId: pinned.id, runAttempt: pinned.attempt, artifactId: pendingArtifact.id };
+            if (download.status !== 404) throw new BuildEvidenceApiError(download, 'Build artifact download');
+          } else if (run.status === 'completed') throw Error('The exact Build has no desktop artifact; rerun Build.');
+        }
       }
+    } catch (error) {
+      if (
+        !(error instanceof BuildEvidenceApiError) ||
+        ![429, 500, 502, 503, 504].includes(error.status) ||
+        ++transientFailures >= 3
+      )
+        throw error;
+      const retryAfter = /^\d+$/.test(error.retryAfter ?? '')
+        ? Number(error.retryAfter) * 1000
+        : Math.max(0, Date.parse(error.retryAfter) - Date.now()) || 0;
+      const delay = Math.max(250 * transientFailures, retryAfter);
+      if (delay >= remaining()) throw error;
+      await sleep(delay);
+      // Restart the pass so a recovered download still revalidates the pinned
+      // run, attempt and artifact. Recovery never extends either deadline.
+      continue;
     }
-    if (pinned) {
-      const run = await get(`actions/runs/${pinned.id}`);
-      assert.ok(
-        ownsRun(run) && run.id === pinned.id && run.run_attempt === pinned.attempt,
-        'Build identity/attempt changed; rerun the desktop workflow after Build settles.',
-      );
-      if (run.status === 'completed' && run.conclusion !== 'success')
-        throw Error('The exact Build did not succeed; fix/rerun Build before releasing.');
-      if (mode === 'validated' && run.status === 'completed' && run.conclusion === 'success')
-        return { runId: pinned.id, runAttempt: pinned.attempt };
-      if (mode === 'artifact') {
-        const list = await get(`actions/runs/${pinned.id}/artifacts?per_page=100`);
-        assert.ok(Array.isArray(list.artifacts), 'Malformed Build artifact listing.');
-        const artifacts = list.artifacts.filter((artifact) => artifact.name === `rivet-desktop-web-${sha}`);
-        assert.ok(artifacts.length <= 1, 'Ambiguous desktop artifact.');
-        if (artifacts.length) {
-          const artifact = artifacts[0];
-          assert.ok(
-            artifact.expired === false && positiveId(artifact.id) && artifact.size_in_bytes > 0,
-            'Desktop artifact expired or invalid; rerun Build.',
-          );
-          const owner = artifact.workflow_run;
-          assert.ok(
-            owner?.id === pinned.id &&
-              owner?.head_sha === sha &&
-              owner?.head_branch === branch &&
-              owner?.repository_id === run.repository.id &&
-              owner?.head_repository_id === run.repository.id,
-            'Desktop artifact ownership does not match the pinned Build.',
-          );
-          pendingArtifact ??= { id: Number(artifact.id), deadline: Math.min(deadline, Date.now() + 60_000) };
-          assert.equal(Number(artifact.id), pendingArtifact.id, 'Build artifact changed while awaiting download.');
-          // Listing visibility can precede ZIP availability. Check the exact
-          // download endpoint without following its signed storage redirect.
-          const download = await request(`actions/artifacts/${pendingArtifact.id}/zip`, 'manual');
-          await download.body?.cancel();
-          if (download.status === 302 && download.headers.get('location'))
-            return { runId: pinned.id, runAttempt: pinned.attempt, artifactId: pendingArtifact.id };
-          if (download.status !== 404)
-            throw Error(`Build artifact download API returned HTTP ${download.status}; refusing release.`);
-        } else if (run.status === 'completed') throw Error('The exact Build has no desktop artifact; rerun Build.');
-      }
-    }
+    transientFailures = 0;
     await sleep(Math.min(pollMs, Math.max(1, (pendingArtifact?.deadline ?? deadline) - Date.now())));
   }
   throw Error('Timed out waiting for exact Build evidence; no release is authorized. Rerun after Build settles.');

@@ -28,8 +28,32 @@ assumptions:
       a replaced artifact. Only GET requests are accepted by the stand-in.
       These checks cover the caller against synthetic responses; the next
       complete hosted run must verify the real artifact transfer separately.
+      On 2026-11-26 the updated regression and local Postman CLI simulation
+      additionally recover transient metadata/ZIP errors while still rejecting
+      a changed attempt or artifact during that recovery. Persistent server
+      errors remain failures; transient errors no longer fail immediately.
     source: scripts/ci/desktop-build-evidence.mjs; scripts/ci/ci-performance.test.mjs
-    updated_at: '2026-11-22'
+    updated_at: '2026-11-26'
+  - id: single-transient-read-does-not-authorize-or-abort-release
+    status: supported
+    claim: In the modeled cases, transient GitHub read errors recover within existing deadlines without changing the selected producer or authorizing unchecked publication.
+    reason: Stable workflow 45706651168 observed HTTP 500 during Build metadata acquisition; this is a read-only dependency failure, not failed Build evidence.
+    verification: >-
+      On 2026-11-26, the real helper passed two transient failures followed by
+      success at run discovery, run reading, artifact listing and ZIP readiness.
+      It rejected persistent 502/503, a Retry-After beyond the original window,
+      permission denial and producer/artifact replacement during recovery.
+      The maintained Node HTTP tests and Postman CLI 1.75.0 local simulation
+      both exercised the repository-owned contract. Request logs contain only
+      synthetic GETs; no credentials, provider writes, remote mock search or
+      Postman publication were used. These results establish caller behavior
+      against the modeled responses, not GitHub availability or hosted recovery.
+    source: >-
+      https://github.com/valerypopoff/rivet2.0/actions/runs/45706651168;
+      scripts/ci/desktop-build-evidence.mjs;
+      scripts/ci/ci-performance.test.mjs;
+      postman/mocks/github-actions/contract.cjs
+    updated_at: '2026-11-26'
   - id: ha-preparation-admission-and-http-failures
     status: supported
     claim: In the modeled cases, early HA preparation admits only exact successful producers and artifacts, and API unavailability cannot admit unchecked work.
@@ -55,5 +79,11 @@ fingerprints:
     date: '2026-11-22'
     commit: 43f1c7f8f797064950c38fd5adf731a23b65f84d
     cli: null
+  - id: transient-build-evidence-read-repair
+    date: '2026-11-26'
+    commit: 6bff66b7601694908ca50679afb2679344226023
+    cli: 1.75.0
 # Verification includes the uncommitted availability repair after this commit.
 # Tests run the shared HTTP contract directly, without the optional Postman CLI.
+# The transient-read fingerprint includes uncommitted repair changes; the CLI
+# simulation ran locally with synthetic values and start-history disabled.

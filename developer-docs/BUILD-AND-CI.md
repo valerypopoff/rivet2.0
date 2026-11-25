@@ -1903,7 +1903,7 @@ publisher runs `scripts/ci/desktop-build-evidence.mjs validated`. Native release
 pin both Build run ID and attempt from frontend acquisition. Docs-only releases
 resolve the exact current docs SHA's Build independently (not the old installer
 SHA). Only a completed, successful Build passes; failed/canceled runs, changed
-attempts, identity mismatch, API errors and timeouts stop publication. Signing
+attempts, identity mismatch, unrecovered API errors and timeouts stop publication. Signing
 and packaging can overlap the remaining Build checks; **publication cannot**.
 This is a point-in-time gate, not a lock against somebody subsequently rerunning
 Build. The final asset branch-head check must run **after** this potentially long
@@ -1919,7 +1919,11 @@ Evidence waits are bounded to 20 minutes, with individual HTTP calls bounded to
 must also expose its ZIP download redirect before handoff to the download action.
 That read-only check polls a 404 for at most one minute within the original
 deadline, retaining the same artifact ID and rechecking the Build identity and
-attempt. Other errors fail immediately; the helper never follows the signed
+attempt. Transient 429/500/502/503/504 responses may retry at most three
+consecutive failed evidence passes, revalidating the pinned run, attempt and
+artifact on every pass. Backoff honors `Retry-After` only within the remaining
+original window; no deadline is extended. Permission, malformed-response and
+transport errors still fail immediately. The helper never follows the signed
 storage URL or sends it credentials. Missing or expired
 frontend artifacts require rerunning Build before the desktop workflow. Artifacts
 are retained seven days. Do not bypass the gate or rebuild an unqualified
@@ -1954,7 +1958,10 @@ postman simulation run postman/simulations/rivet-build-evidence.sim.yaml --port 
 Use `GITHUB_API_URL=http://127.0.0.1:4920/github/ok/`, repository `fixture/repo`,
 SHA of forty `a` characters, ref `refs/heads/develop` and a synthetic token. Run
 `node scripts/ci/desktop-build-evidence.mjs artifact` or `validated`. `/failed/`,
-`/rerun/` and `/unavailable/` replace `/ok/` for rejection checks. The fixture
+`/rerun/` and `/unavailable/` replace `/ok/` for rejection checks. `/retry-list/`,
+`/retry-run/`, `/retry-artifacts/` and `/retry-download/` model two transient errors
+before recovery; `/retry-download-rerun/` and `/retry-download-replaced/` retain
+the identity rejection checks during that recovery. The fixture
 models the documented GitHub REST GET shapes; an owner-workspace mock was not
 used. Normal CI runs the same contract over disposable local HTTP without a
 Postman installation or provider credentials. Local tests do not certify actual

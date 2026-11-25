@@ -329,6 +329,20 @@ test('desktop Build evidence uses exact owned runs, bounded GETs and fail-closed
   assert.deepEqual(await run('validated', 'advance'), { runId: 101, runAttempt: 1 });
   assert.deepEqual(await run('artifact', 'pending'), { runId: 101, runAttempt: 1, artifactId: 501 });
   assert.deepEqual(await run('artifact', 'download-pending'), { runId: 101, runAttempt: 1, artifactId: 501 });
+  for (const [scenario, endpoint] of [
+    ['retry-list', 'workflows/build.yml/runs'],
+    ['retry-run', 'runs/101'],
+    ['retry-artifacts', 'runs/101/artifacts'],
+    ['retry-download', 'artifacts/501/zip'],
+  ]) {
+    assert.deepEqual(await run('artifact', scenario), { runId: 101, runAttempt: 1, artifactId: 501 });
+    assert.equal(
+      requests.filter((request) => request.split('?')[0] === `GET /${scenario}/repos/fixture/repo/actions/${endpoint}`)
+        .length,
+      3,
+      scenario + ' recovers after two transient reads without selecting another producer.',
+    );
+  }
   assert.equal(
     requests.filter((request) => request === 'GET /download-pending/repos/fixture/repo/actions/artifacts/501/zip')
       .length,
@@ -340,8 +354,18 @@ test('desktop Build evidence uses exact owned runs, bounded GETs and fail-closed
     ['download-broken', /HTTP 502/],
     ['download-rerun', /identity\/attempt changed/],
     ['download-replaced', /artifact changed/],
+    ['retry-download-rerun', /identity\/attempt changed/],
+    ['retry-download-replaced', /artifact changed/],
   ])
     await assert.rejects(run('artifact', scenario), failure, scenario);
+  assert.equal(
+    requests.filter((request) => request.startsWith('GET /download-forbidden/') && request.endsWith('/zip')).length,
+    1,
+  );
+  assert.equal(
+    requests.filter((request) => request.startsWith('GET /download-broken/') && request.endsWith('/zip')).length,
+    3,
+  );
   for (const [scenario, failure] of [
     ['failed', /did not succeed/],
     ['cancelled', /did not succeed/],
@@ -356,6 +380,13 @@ test('desktop Build evidence uses exact owned runs, bounded GETs and fail-closed
   ]) {
     await assert.rejects(run('validated', scenario, { runId: 101, runAttempt: 1 }), failure, scenario);
   }
+  assert.equal(requests.filter((request) => request.startsWith('GET /unavailable/')).length, 3);
+  await assert.rejects(run('validated', 'retry-later', { runId: 101, runAttempt: 1 }), /HTTP 503/);
+  assert.equal(
+    requests.filter((request) => request.startsWith('GET /retry-later/')).length,
+    1,
+    'Backoff cannot extend the original deadline.',
+  );
   for (const [scenario, failure] of [
     ['expired', /expired or invalid/],
     ['missing', /has no desktop artifact/],
