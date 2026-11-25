@@ -4,6 +4,55 @@ This document records intentional architecture and cleanup changes that future m
 
 It is not a changelog. Keep entries focused on why a refactor happened, which ownership boundary changed, and which verification paths should be kept alive.
 
+## 2026-11-25 - Bundle Merge Review Controller Ownership
+
+`WorkflowBundleMergeModal.tsx` previously combined preview and mutation lifetimes
+with rendering. `useWorkflowBundleMergeController.ts` now owns the choices,
+retained catalogs, current review, suggestion cache, warning acknowledgements and
+named commands. The view retains the existing markup, option formatting, select
+portal/events and DOM focus/scrolling. Small action/dependency value and graph-key
+codecs share the existing `bundleMerge.ts`; its suggestion rules remain authoritative.
+
+The extraction keeps the 180 ms debounce, choices-reference/abort fencing,
+synchronous submission guard, per-destination suggestion cache and independent
+retained-form/current-review distinction. Omitted suggestions retain comparison
+state; `[]` replaces it. Warning acknowledgements expire on edits/refresh.
+Acknowledged merges schedule parent reconciliation and close before its read
+settles; a success toast still requires a successful tree read. Unknown outcomes
+retain the existing local lock and receipt-only recovery without replaying writes.
+Parent mount keys, opener focus and transport/persistence owners are unchanged.
+
+Characterization was established on the original build before production code
+moved. Keep the six pure cases, focused `check:bundle-merge`/typed lint and the
+complete `bundle-merge.spec.ts` selected in ordinary editor CI. Browser coverage
+includes parsed stale results, disposal/destination replacement, legacy optional
+fields, debounce/request counts, preserved drafts, synchronous duplicate admission
+and acknowledged-but-pending reconciliation. The
+[implementation record](bundle-merge-controller-refactor-plan.md) tracks exact
+validation evidence and its limits.
+
+Review on 2026-11-26 reproduced four admission gaps already present in the original
+modal: refresh/close could admit a queued submission against the retired review,
+and a queued refresh/destination change could partially reset an admitted merge.
+The controller now checks the existing abort signal before submission, aborts on
+close immediately and rejects refresh/destination commands before their reset
+work when a mutation is pending or its outcome is unknown. No state, ref, effect
+or request layer was added. Four browser cases protect these boundaries, and the
+held-response fixtures now consume one response and settle routes even when
+disposed before arrival.
+
+The adjacent Delete Bundle dialog had the same cancel-before-render admission
+gap. Its close handler now retires the dialog before notifying the parent, and
+submission checks that flag. The existing blocked-deletion case covers Cancel,
+a queued Delete, reopening and a fresh confirmed request. Rapid multi-warning
+acknowledgement and revocation also have a focused merge browser check; that
+check passed without changing the acknowledgement implementation.
+
+Test maintenance subsequently consolidated reselection into its clock-controlled
+case, removed assertions for retired UI controls and shared API isolation between
+merge and explicit-bundle browser tests. Race, compatibility and receipt-recovery
+cases remain independent; see the implementation record for the coverage mapping.
+
 ## 2026-11-25 - Scheduled Runs Controller Ownership
 
 `ScheduledRunsModal.tsx` previously combined request settlement, polling and form

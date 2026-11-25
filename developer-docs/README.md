@@ -72,6 +72,7 @@ commands; the guides below describe implementation and verification.
 - [Hosted Evaluation Persistence Refactor](./studio-server/hosted-evaluation-persistence-refactor-plan.md)
 - [Hosted Recording Transition Repair Plan](./studio-server/hosted-recording-transition-repair-plan.md)
 - [Bundle Actions Separation Plan](./studio-server/bundle-actions-separation-plan.md)
+- [Bundle Merge Controller Refactor And Verification](./studio-server/bundle-merge-controller-refactor-plan.md)
 - [Editor Bridge](./studio-server/editor-bridge.md)
 - [Workflow Publication](./studio-server/workflow-publication.md)
 - [Recording Search Performance And Scope](./studio-server/recording-search-performance.md)

@@ -1,4 +1,5 @@
-import { test, expect, type Page } from '@playwright/test';
+import { expect, type Page } from '@playwright/test';
+import { test } from './helpers/bundleApiFixture';
 import {
   openBundleActions,
   openProjectContextMenu,
@@ -393,6 +394,29 @@ for (const outcome of ['success', 'blocked', 'lost response', 'refresh failure',
     }
     await input.fill('Feature');
     await expect(submit).toBeEnabled();
+    if (outcome === 'blocked') {
+      try {
+        const disabledAtDispatch = await modal.evaluate((element) => {
+          const buttons = [...element.querySelectorAll('button')];
+          buttons.find((button) => button.textContent?.trim() === 'Cancel')!.click();
+          const remove = buttons.find((button) => button.textContent?.trim() === 'Delete bundle')!;
+          const disabled = remove.disabled;
+          remove.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+          return disabled;
+        });
+        expect(disabledAtDispatch).toBe(false);
+        await expect(modal).toHaveCount(0);
+        await expect(editorTab).toBeVisible();
+        await openDelete();
+        await expect(input).toHaveValue('');
+        await input.fill('Feature');
+        await expect(submit).toBeEnabled();
+        expect(requests).toBe(0);
+      } catch (failure) {
+        release();
+        throw failure;
+      }
+    }
     await submit.click();
     try {
       await expect.poll(() => requests).toBe(1);
@@ -740,6 +764,8 @@ for (const failure of ['tree refresh', 'lost response'] as const) {
     };
     let committed = false;
     let attempts = 0;
+    let recoveries = 0;
+    let admittedRequest: unknown;
     let release!: () => void;
     const responseReady = new Promise<void>((resolve) => {
       release = resolve;
@@ -753,10 +779,16 @@ for (const failure of ['tree refresh', 'lost response'] as const) {
     );
     await page.route('**/api/workflows/bundles/*/duplicate', async (route) => {
       attempts++;
+      admittedRequest = route.request().postDataJSON();
       await responseReady;
       if (failure === 'lost response') return route.abort('failed');
       committed = true;
       return route.fulfill({ status: 201, json: { folder: { ...source, id: 'copy', name: 'Feature copy' } } });
+    });
+    await page.route('**/api/workflows/bundles/*/duplicate/recover', (route) => {
+      recoveries++;
+      expect(route.request().postDataJSON()).toEqual(admittedRequest);
+      return route.fulfill({ json: { state: 'unknown' } });
     });
     await mockHostedEditorBootstrap(page);
     await page.goto('/');
@@ -786,6 +818,7 @@ for (const failure of ['tree refresh', 'lost response'] as const) {
     await openBundleActions(page);
     await expect(page.getByRole('menuitem', { name: 'Duplicate bundle', exact: true })).toBeEnabled();
     expect(attempts).toBe(1);
+    expect(recoveries).toBe(failure === 'lost response' ? 1 : 0);
     await expect(page.getByRole('dialog', { name: 'Duplicate bundle', exact: true })).toHaveCount(0);
   });
 }

@@ -284,6 +284,16 @@ their imported definitions retain their own graph IDs. Empty source bundles need
 no content comparison, and empty destinations can suggest additions from metadata
 before normal validation reads the selected projects.
 
+`useWorkflowBundleMergeController.ts` owns the modal session's choices, preview
+debounce/cancellation, retained catalogs, suggestion cache, warning acknowledgements
+and mutation settlement. Add behavioral changes through its named commands;
+`WorkflowBundleMergeModal.tsx` owns option presentation, rendering, select events
+and DOM focus/scrolling. The parent still owns modal identity, opener focus and
+tree reconciliation. Ordinary previews omit suggestions and retain the last
+comparison; an explicit empty suggestions array replaces that cache. Retained
+catalogs and suggestions never authorize a write. The existing transport still
+owns receipt recovery and never automatically replays a merge.
+
 Replacements keep destination project IDs, names, filenames and locations. New
 projects receive fresh IDs and may use ordinary nested folders. Project contents,
 attached data and dataset snapshots are replaced together, including dataset
@@ -348,6 +358,11 @@ fresh tree. A failed or superseded tree read retains the refresh-needed warning
 without claiming that the displayed list is current. While the commit is pending,
 the controls and dismissal are disabled; an unconfirmed outcome offers Close and
 requires a tree refresh before another merge.
+Command admission also covers events queued before those disabled controls render.
+Refresh and close synchronously abort the reviewed request, and submission rejects
+that retired request. Once a merge starts, queued refresh/destination commands
+return before resetting catalogs, drafts or comparison state. A definite rejection
+preserves the edited form and still requires an explicit fresh review.
 An artifact-storage read failure stops the preview with a sanitized 503 error,
 including for inactive calls, rather than claiming a graph-compatibility warning.
 Merge remains disabled until a fresh review succeeds. Manual Refresh review clears
@@ -371,11 +386,20 @@ change is required. Filesystem/SQLite and extracted Desktop bundles retain their
 existing capability boundary and do not expose this action.
 
 Implementation and validation details are tracked in the
-[bundle merge plan](bundle-merge-plan.md). Regression owners are
+[bundle merge plan](bundle-merge-plan.md). UI ownership, baseline characterization
+and validation are recorded in the
+[Bundle Merge controller refactor](bundle-merge-controller-refactor-plan.md).
+Regression owners are
 bundle-merge-plan.test.ts, bundle-merge-suggestions.test.ts, managed-bundle-merge.test.ts, the real local
 PostgreSQL/MinIO bundle-merge contract, web bundle-merge.test.ts, existing hosted
 revision/recovery tests and headless bundle-merge.spec.ts. The API/web/browser
 tests are enrolled in their existing CI lanes.
+`yarn studio-server:verify:web-pure` includes `check:bundle-merge`, which checks
+the controller, Merge/Delete views, pure helpers and focused merge fixtures.
+Merge and explicit-bundle browser scenarios share a fallback API guard that
+blocks ambient requests and rejects unclaimed mutations. Keep debounce and no-op
+request counts in the clock-controlled merge case, rather than adding sleeps or
+duplicating full browser journeys.
 
 **Delete bundle** is available for empty and non-empty bundles. The shared modal
 requires an exact, case-sensitive name match (no trimming) before enabling its
@@ -386,7 +410,9 @@ the dialog in the shared dashboard theme selectors, including the black
 translucent/blurred blanket and zero-padding Atlaskit body, rather than falling
 back to Atlaskit's tinted blanket and extra inner padding. Browser checks cover
 computed theme, input size, desktop compactness and narrow-view controls.
-Cancellation does not issue a write. Pending deletion disables dismissal and resubmission;
+Cancellation immediately retires deletion admission, including a Delete event
+queued before React removes the dialog. Reopening requires fresh name confirmation.
+Pending deletion disables dismissal and resubmission;
 errors retain the confirmation and explain lost-response recovery without an
 automatic retry. Open member tabs, including unsaved edits, are closed only after
 confirmed deletion. A failed follow-up tree read does not turn a committed delete

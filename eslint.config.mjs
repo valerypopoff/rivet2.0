@@ -182,6 +182,23 @@ export default [
     },
   },
 
+  // Bundle review and adjacent deletion admission share a focused hosted-web check.
+  {
+    files: [
+      'packages/studio-server-web/dashboard/WorkflowBundleMergeModal.tsx',
+      'packages/studio-server-web/dashboard/WorkflowBundleDeleteModal.tsx',
+      'packages/studio-server-web/dashboard/useWorkflowBundleMergeController.ts',
+      'packages/studio-server-web/dashboard/bundleMerge.ts',
+      'packages/studio-server-web/playwright-observe/helpers/bundleApiFixture.ts',
+      'packages/studio-server-web/playwright-observe/helpers/bundleMergeFixture.ts',
+      'packages/studio-server-web/playwright-observe/bundle-merge.spec.ts',
+      'packages/studio-server-web/tests/bundle-merge.test.ts',
+    ],
+    languageOptions: {
+      parserOptions: { project: ['./packages/studio-server-web/tsconfig.bundle-merge.json'] },
+    },
+  },
+
   // Configuration for ESLint config files
   {
     files: ['.eslint.config.mjs'],
