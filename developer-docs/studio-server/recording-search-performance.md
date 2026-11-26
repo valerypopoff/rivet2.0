@@ -379,6 +379,27 @@ Catalog counters are snapshots, not pagination or search authorities. Clamp an o
 
 Current input searches select only non-Subgraph root recordings, including legacy rows without execution-surface metadata. Their `scopeCounts`, progress and matches exclude children. Ordinary modal browsing uses `groupByRoot=true` to paginate top-level families, not individual children. Expanding an entry uses the separate authenticated metadata-only `GET /api/workflows/recordings/:recordingId/sub-runs` route, without input or status predicates. Child pages are checked for identity, ownership, progress and consistent totals before publishing a complete family. See [Development](./development.md#collapsible-recording-families) for context groups and pagination invariants. Catalog/status summary counts still include retained recordings; they must not replace authoritative family-page or root-search totals. Flat API browsing without the grouping flag is unchanged.
 
+Run and sub-run cards show **Project name** and **Path** separately, using the
+metadata captured with that recording. Paths retain their full relative location
+but omit the terminal `.rivet-project` extension; the sidebar path follows the
+same display rule. Older records without a name fall back to the path's filename,
+then workflow ID. Missing paths display **Unknown**. Stored metadata and replay
+identities are unchanged.
+
+An expanded group with multiple sub-runs shows **Chronological** and **Project
+name (A–Z)** controls in a **Sub-run sorting** row directly above its first child.
+This separate virtual row follows the child indentation; the parent card retains
+only the Show/Hide action. The label sits directly beside the controls, without a
+green connector. The connector beside actual sub-run cards remains continuous
+across their spacing, including virtualized rows, and stops at the last card.
+Chronological remains the default. Alphabetical order uses
+the same displayed name as the card, with chronology and recording ID resolving
+ties. The choice affects that family only, including Related sub-runs groups,
+and does not reorder primary runs or alter filtering/pagination. It is retained
+while the group is collapsed or virtualized and resets with a new result view.
+Changing order uses the already-loaded metadata, makes no requests and never
+opens a replay. Each child remains a separately measured virtual row.
+
 The November 11 optimization changes read queries, request scheduling and transient process-local work. Recording artifacts, compression, retention, input matching, missing-input semantics, newest-first ordering, and precise PostgreSQL cursor timestamps remain unchanged. Cursors advance through consumed candidates, not completed speculative reads. Errors are not silently converted into non-matches.
 
 The shared scanner batches metadata windows, drains ready ordered decisions, guarantees progress after a budget overrun, and yields between windows. Cache handoff grace is bounded and separate from explicit cancellation. Weighted admission limits simultaneous large reads; compiled workers recover without a permanent inline fallback. No persistent index of extracted inputs or sidecar is introduced.

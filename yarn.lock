@@ -9899,6 +9899,7 @@ __metadata:
     "@types/node": "npm:^22.20.1"
     "@types/react": "npm:^18.2.31"
     "@types/react-dom": "npm:^18.2.14"
+    "@types/react-window": "npm:^1.8.7"
     "@valerypopoff/rivet-app": "workspace:^"
     "@valerypopoff/rivet-studio-server-shared": "workspace:^"
     "@valerypopoff/rivet2-core": "workspace:^"

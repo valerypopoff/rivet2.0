@@ -699,8 +699,16 @@
 
 .run-recordings-child-row {
   margin-left: 24px;
-  padding-left: 12px;
-  border-left: 2px solid rgba(126, 226, 148, 0.3);
+  padding-left: 14px;
+}
+
+.run-recordings-sub-run-connector {
+  position: absolute;
+  top: 0;
+  left: 24px;
+  width: 2px;
+  background: rgba(126, 226, 148, 0.3);
+  pointer-events: none;
 }
 
 .run-recordings-sub-run-label {
@@ -717,6 +725,20 @@
   border-radius: 12px;
   color: var(--grey-light);
   font-size: 12px;
+}
+
+.run-recordings-sub-run-sort {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+  color: var(--grey-light);
+  font-size: 12px;
+}
+
+.run-recordings-sub-run-sort-label {
+  font-weight: 600;
 }
 
 .run-recordings-family-toggle {

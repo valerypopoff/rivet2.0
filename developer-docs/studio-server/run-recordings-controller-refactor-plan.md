@@ -30,8 +30,12 @@ exactly the same three table diagnostics; all three current controller modules
 are included. Evidence is `audit-controller-equivalence.json` under the ignored
 verification directory below. This establishes no new diagnostics, not a clean
 typecheck: normal checked-in projects still do not cover this dashboard, and the
-focused project/lint setup is local. A maintained dashboard typecheck and the
-existing `react-window` typing errors remain follow-up work.
+focused project/lint setup is local. At that checkpoint, a maintained dashboard
+typecheck and the existing `react-window` typing errors remained follow-up work.
+The declaration gap was closed on 2026-11-26 by declaring the already-locked
+`@types/react-window` dependency in the web package. Focused recordings compilation
+now passes without a declaration-path override; broader dashboard type coverage
+remains follow-up work.
 
 The 94-case suite exercises the built frontend with mocked recording responses;
 the 90-case characterization run against the original controller is the behavior

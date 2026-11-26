@@ -25,7 +25,9 @@ import {
   refreshRecordingRowMeasurements,
   type RecordingListRow,
   type RecordingRunFamily,
+  type RecordingSubRunOrder,
 } from './recording-run-hierarchy';
+import { recordingProjectName, recordingProjectPath } from './recording-project-presentation';
 
 const INPUT_FILTER_OPERATOR_LABELS: Partial<Record<WorkflowRecordingInputFilterOperator, string>> = {
   not_exists: 'not exists',
@@ -152,9 +154,12 @@ function RecordingRow({
           <div className="run-recordings-run-detail">Some called-project recordings could not be confirmed.</div>
         )}
         <div className="run-recordings-run-endpoint">
-          Project:{' '}
+          Project name: <span className="run-recordings-run-endpoint-value">{recordingProjectName(recording)}</span>
+        </div>
+        <div className="run-recordings-run-endpoint">
+          Path:{' '}
           <span className="run-recordings-run-endpoint-value">
-            {recording.sourceProjectRelativePath || recording.sourceProjectName || recording.workflowId}
+            {recordingProjectPath(recording.sourceProjectRelativePath) || 'Unknown'}
           </span>
         </div>
         <div className="run-recordings-run-endpoint">
@@ -229,6 +234,40 @@ function RecordingFamilyToggle({
   );
 }
 
+function RecordingSubRunSort({
+  family,
+  disabled,
+  subRunOrder,
+  onSortSubRuns,
+}: {
+  family: RecordingRunFamily;
+  disabled: boolean;
+  subRunOrder: RecordingSubRunOrder;
+  onSortSubRuns: (key: string, order: RecordingSubRunOrder) => void;
+}) {
+  return (
+    <div className="run-recordings-sub-run-sort">
+      <span className="run-recordings-sub-run-sort-label">Sub-run sorting</span>
+      <SegmentedControl label="Sub-run sorting">
+        <SegmentedControlButton
+          selected={subRunOrder === 'chronological'}
+          disabled={disabled}
+          onClick={() => onSortSubRuns(family.key, 'chronological')}
+        >
+          Chronological
+        </SegmentedControlButton>
+        <SegmentedControlButton
+          selected={subRunOrder === 'project'}
+          disabled={disabled}
+          onClick={() => onSortSubRuns(family.key, 'project')}
+        >
+          Project name (A–Z)
+        </SegmentedControlButton>
+      </SegmentedControl>
+    </div>
+  );
+}
+
 type VirtualizedRecordingRowData = {
   recordings: RecordingListRow[];
   deletingRecordingId: string | null;
@@ -237,6 +276,8 @@ type VirtualizedRecordingRowData = {
   onOpen: (recordingId: string) => void;
   onHeightChange: (recordingId: string, height: number) => void;
   onToggle: (key: string) => void;
+  subRunOrders: Readonly<Record<string, RecordingSubRunOrder>>;
+  onSortSubRuns: (key: string, order: RecordingSubRunOrder) => void;
 };
 
 function MeasuredRecordingRow({
@@ -248,6 +289,8 @@ function MeasuredRecordingRow({
   onOpen,
   onHeightChange,
   onToggle,
+  subRunOrder,
+  onSortSubRuns,
 }: {
   row: RecordingListRow;
   isDeleting: boolean;
@@ -257,6 +300,8 @@ function MeasuredRecordingRow({
   onOpen: (recordingId: string) => void;
   onHeightChange: (recordingId: string, height: number) => void;
   onToggle: (key: string) => void;
+  subRunOrder: RecordingSubRunOrder;
+  onSortSubRuns: (key: string, order: RecordingSubRunOrder) => void;
 }) {
   const rowRef = useRef<HTMLDivElement | null>(null);
 
@@ -276,11 +321,19 @@ function MeasuredRecordingRow({
     row.isChild,
     row.family?.children.length,
     row.family?.childLoadState,
+    subRunOrder,
   ]);
 
   return (
-    <div ref={rowRef} className={row.isChild ? 'run-recordings-child-row' : undefined}>
-      {row.recording ? (
+    <div ref={rowRef} className={row.isChild || row.kind === 'sub-run-sort' ? 'run-recordings-child-row' : undefined}>
+      {row.kind === 'sub-run-sort' && row.family ? (
+        <RecordingSubRunSort
+          family={row.family}
+          disabled={isDeleting || isInteractionLocked}
+          subRunOrder={subRunOrder}
+          onSortSubRuns={onSortSubRuns}
+        />
+      ) : row.recording ? (
         <RecordingRow
           recording={row.recording}
           family={row.family}
@@ -317,6 +370,13 @@ function VirtualizedRecordingRow({ index, style, data }: ListChildComponentProps
 
   return (
     <div className="run-recordings-list-row" style={{ ...style, boxSizing: 'border-box' }}>
+      {recording.isChild ? (
+        <span
+          className="run-recordings-sub-run-connector"
+          aria-hidden="true"
+          style={{ bottom: data.recordings[index + 1]?.isChild ? 0 : RECORDING_ROW_GAP }}
+        />
+      ) : null}
       <MeasuredRecordingRow
         row={recording}
         isDeleting={data.deletingRecordingId !== null}
@@ -326,6 +386,12 @@ function VirtualizedRecordingRow({ index, style, data }: ListChildComponentProps
         onOpen={data.onOpen}
         onHeightChange={data.onHeightChange}
         onToggle={data.onToggle}
+        subRunOrder={
+          recording.kind === 'sub-run-sort' && recording.family
+            ? data.subRunOrders[recording.family.key] ?? 'chronological'
+            : 'chronological'
+        }
+        onSortSubRuns={data.onSortSubRuns}
       />
     </div>
   );
@@ -350,7 +416,16 @@ function VirtualizedRecordingList({
   onDelete: (recordingId: string) => void;
   onOpen: (recordingId: string) => void;
 }) {
-  const families = useMemo(() => groupRecordingRuns(runs, childLoadStates), [runs, childLoadStates]);
+  const [subRunOrders, setSubRunOrders] = useState<Record<string, RecordingSubRunOrder>>({});
+  const onSortSubRuns = useCallback((key: string, order: RecordingSubRunOrder) => {
+    setSubRunOrders((current) =>
+      (current[key] ?? 'chronological') === order ? current : { ...current, [key]: order },
+    );
+  }, []);
+  const families = useMemo(
+    () => groupRecordingRuns(runs, childLoadStates, subRunOrders),
+    [runs, childLoadStates, subRunOrders],
+  );
   const recordings = useMemo(() => recordingHierarchyRows(families, expandedKeys), [families, expandedKeys]);
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const listRef = useRef<VariableSizeList | null>(null);
@@ -419,6 +494,8 @@ function VirtualizedRecordingList({
     onOpen,
     onHeightChange,
     onToggle,
+    subRunOrders,
+    onSortSubRuns,
   };
 
   return (
@@ -575,7 +652,7 @@ export const RecordingRunsTable: FC<RecordingRunsTableProps> = ({
               <div className="run-recordings-workflow-field">
                 <div className="run-recordings-field-label">Project path</div>
                 <div className="run-recordings-field-value run-recordings-field-code">
-                  {selectedWorkflow.project.relativePath}
+                  {recordingProjectPath(selectedWorkflow.project.relativePath)}
                 </div>
               </div>
             </div>

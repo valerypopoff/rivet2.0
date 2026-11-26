@@ -1024,9 +1024,17 @@ at 55 seconds. Single-phase runtime fixtures retain their shorter limits.
 `recording-run-hierarchy.ts` groups the current recording results by exact
 `executionIdentity.correlationId`. A unique non-Subgraph row is the primary;
 children start folded and expand into individually virtualized, indented rows.
-Sub-runs within every family are displayed oldest-to-newest by the shown
-`createdAt` timestamp, with recording ID ascending as the deterministic tie-breaker.
-Success, failure and suspicious status never influence this order. Sort the
+Sub-runs default to oldest-to-newest by the shown `createdAt` timestamp, with
+recording ID ascending as the deterministic tie-breaker. An expanded family with
+more than one child offers **Chronological** and **Project name (A–Z)** controls
+in a labeled **Sub-run sorting** row above the children, aligned with their
+indentation. This header is its own measured virtual row, outside the parent card.
+Its label sits beside the controls, without a connector line. The child connector
+spans the gaps between virtual rows and ends at the final sub-run card.
+Alphabetical order uses the displayed recorded project name, ignoring case, then
+uses the same chronological/ID tie-breakers. Each family's choice is independent,
+survives collapsing or virtualizing its rows and resets with a replacement query.
+Success, failure and suspicious status never influence either order. Sort the
 combined family after all child pages arrive, not each newest-first API page
 individually. The same rule applies to input-search and Related sub-runs groups;
 the top-level family/page order remains unchanged (newest-first in normal browsing).

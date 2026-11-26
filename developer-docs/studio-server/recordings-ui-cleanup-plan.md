@@ -146,3 +146,28 @@ The CI inventory loads 394 tests in 42 files, and import boundaries, test style,
 documentation links and formatting pass. These results do not claim a cloud
 rollout or a complete CI run. Recording formats, database and production
 recompression remain unchanged.
+
+## Project details and sub-run sorting (2026-11-26)
+
+- [x] Split run and sub-run metadata into **Project name** and **Path**. Hide the
+      terminal project-file extension in cards and the sidebar; preserve the
+      recorded metadata and fallbacks for older records.
+- [x] Add independent **Chronological** (default) / **Project name (A–Z)** order
+      for each expanded family with multiple children. Equal names retain
+      chronological/recording-ID order; primary pagination is unchanged.
+- [x] Put **Sub-run sorting** in its own stable measured row above the children,
+      with its label beside the controls. Retain the choice across collapse and
+      virtual scrolling, without fetching metadata again or opening a replay.
+- [x] Draw the green connector only beside actual sub-runs, continuously across
+      their gaps, ending at the last card. Keep the sorting row free of that line.
+- [x] Declare the existing `@types/react-window` dependency in the web package so
+      focused compilation no longer needs a declaration-path workaround.
+
+The 19 hierarchy/presentation unit cases pass. The initial complete 95-case
+browser run passed before the header refinements; 32 affected cases passed after
+moving the header, then six final desktop/narrow and multi-page cases passed
+after compacting the controls and joining the connector. The final checks include
+label spacing, line continuity and its end position, alphabetical/chronological
+switching, keyboard use, retained selection, virtualization and request counts.
+Build, scoped TypeScript, runtime/browser lint, formatting and documentation links
+pass. These are local checks; recording storage and deployment are unchanged.

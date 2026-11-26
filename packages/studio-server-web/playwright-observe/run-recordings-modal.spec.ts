@@ -2223,6 +2223,7 @@ test.describe('Run recordings modal', () => {
     await expect(root.getByRole('button', { name: 'Hide 1 sub-run' })).toHaveAttribute('aria-expanded', 'true');
     await expect(child).toHaveClass(/run-recordings-sub-run/);
     await expect(child.locator('.run-recordings-run-title')).toContainText('Sub-run ·');
+    await expect(modal.getByRole('group', { name: 'Sub-run sorting' })).toHaveCount(0);
     await expect(child).toContainText('Related run key: rvt-root-caller-12345');
     const rootBox = await root.boundingBox();
     const childBox = await child.boundingBox();
@@ -2245,6 +2246,137 @@ test.describe('Run recordings modal', () => {
     await page.locator('.run-recordings-select__option', { hasText: 'Published Flow' }).click();
     await expect(root.getByRole('button', { name: 'Show sub-runs' })).toHaveAttribute('aria-expanded', 'false');
     await expect(child).toHaveCount(0);
+  });
+
+  test('run cards split project details and each expanded family can sort by project name', async ({ page }) => {
+    const { runFetches, recordingFetches } = await installRunRecordingRoutes(page, {
+      relatedSubgraphRuns: true,
+      relatedSubgraphRunCount: 103,
+      transformRunsPage: (response) => ({
+        ...response,
+        runs: response.runs.map((run) => ({
+          ...run,
+          sourceProjectName: 'Root display title',
+          sourceProjectRelativePath: 'Folder/Root file.rivet-project',
+        })),
+      }),
+      transformSubRunPage: (response) => ({
+        ...response,
+        runs: response.runs.map((run) => {
+          const index = run.id === 'recording-b-1' ? 0 : Number(run.id.replace('related-child-', ''));
+          return {
+            ...run,
+            createdAt: new Date(Date.UTC(2026, 9, 19, 10, 0, 103 - index)).toISOString(),
+            sourceProjectName: index === 0 ? 'Alpha project' : index === 102 ? 'Zulu project' : 'Middle project',
+            sourceProjectRelativePath: index === 0 ? 'z/First.rivet-project' : 'a/Other.rivet-project',
+          };
+        }),
+      }),
+    });
+    const modal = await openLatestFlowRecordings(page);
+    await selectPublishedFlow(page, modal);
+    const root = modal.locator('[data-recording-id="recording-a-1"]');
+    await expect(root).toContainText('Project name: Root display title');
+    await expect(root).toContainText('Path: Folder/Root file');
+    await expect(root).not.toContainText('.rivet-project');
+    await expect(modal.locator('.run-recordings-workflow-summary')).not.toContainText('.rivet-project');
+    await expect(modal.getByRole('group', { name: 'Sub-run sorting' })).toHaveCount(0);
+    await root.getByRole('button', { name: 'Show sub-runs', exact: true }).click();
+    await expect(root.getByRole('button', { name: 'Hide 103 sub-runs', exact: true })).toBeVisible();
+    const sortRow = modal.locator('.run-recordings-sub-run-sort');
+    const sort = sortRow.getByRole('group', { name: 'Sub-run sorting' });
+    const chronological = sort.getByRole('button', { name: 'Chronological', exact: true });
+    const alphabetical = sort.getByRole('button', { name: 'Project name (A–Z)', exact: true });
+    const firstChild = modal.locator('.run-recordings-sub-run').first();
+    await expect(root.getByRole('group', { name: 'Sub-run sorting' })).toHaveCount(0);
+    await expect(sortRow.getByText('Sub-run sorting', { exact: true })).toBeVisible();
+    await expect
+      .poll(() =>
+        sortRow.evaluate((element) => {
+          const list = element.closest('.run-recordings-list')!;
+          const parent = list.querySelector('[data-recording-id="recording-a-1"]')!.getBoundingClientRect();
+          const child = list.querySelector('.run-recordings-sub-run')!.getBoundingClientRect();
+          const header = element.getBoundingClientRect();
+          const label = element.querySelector('.run-recordings-sub-run-sort-label')!.getBoundingClientRect();
+          const control = element.querySelector('.segmented-control')!.getBoundingClientRect();
+          const lines = list.querySelectorAll('.run-recordings-sub-run-connector');
+          const firstLine = lines[0]!.getBoundingClientRect();
+          const nextLine = lines[1]!.getBoundingClientRect();
+          return {
+            outsideParent: header.top >= parent.bottom,
+            aboveChildren: header.bottom <= child.top,
+            aligned: Math.abs(header.left - child.left) <= 1,
+            compactLabel: control.left - label.right >= 0 && control.left - label.right <= 9,
+            noHeaderLine: !element
+              .closest('.run-recordings-list-row')!
+              .querySelector('.run-recordings-sub-run-connector'),
+            continuousLine: Math.abs(firstLine.bottom - nextLine.top) <= 1,
+            uniformLine: firstLine.width === 2 && nextLine.width === 2,
+          };
+        }),
+      )
+      .toEqual({
+        outsideParent: true,
+        aboveChildren: true,
+        aligned: true,
+        compactLabel: true,
+        noHeaderLine: true,
+        continuousLine: true,
+        uniformLine: true,
+      });
+    await expect(chronological).toHaveAttribute('aria-pressed', 'true');
+    await expect(firstChild).toHaveAttribute('data-recording-id', 'related-child-102');
+    await expect(firstChild).toContainText('Project name: Zulu project');
+    await expect(firstChild).toContainText('Path: a/Other');
+    await expect(firstChild).not.toContainText('.rivet-project');
+    await alphabetical.click();
+    await expect(alphabetical).toHaveAttribute('aria-pressed', 'true');
+    await expect(firstChild).toHaveAttribute('data-recording-id', 'recording-b-1');
+    await expect(firstChild).toContainText('Project name: Alpha project');
+    await expect(firstChild).toContainText('Path: z/First');
+    await page.screenshot({ path: test.info().outputPath('sub-run-project-sort.png') });
+    const viewport = modal.locator('.run-recordings-list');
+    await expect
+      .poll(() =>
+        viewport.evaluate((list) => {
+          list.scrollTop = list.scrollHeight;
+          const last = Array.from(list.querySelectorAll('.run-recordings-sub-run')).at(-1);
+          if (!last) return null;
+          const row = last.getBoundingClientRect();
+          const bounds = list.getBoundingClientRect();
+          const line = last
+            .closest('.run-recordings-list-row')!
+            .querySelector('.run-recordings-sub-run-connector')!
+            .getBoundingClientRect();
+          return {
+            id: last.getAttribute('data-recording-id'),
+            visible: row.top < bounds.bottom && row.bottom > bounds.top,
+            lineStopsAtCard: Math.abs(line.bottom - row.bottom) <= 1,
+          };
+        }),
+      )
+      .toEqual({ id: 'related-child-102', visible: true, lineStopsAtCard: true });
+    await viewport.evaluate((list) => {
+      list.scrollTop = 0;
+    });
+    await root.getByRole('button', { name: 'Hide 103 sub-runs', exact: true }).click();
+    await expect(sort).toHaveCount(0);
+    await root.getByRole('button', { name: 'Show 103 sub-runs', exact: true }).click();
+    await expect(alphabetical).toHaveAttribute('aria-pressed', 'true');
+    await expect(firstChild).toHaveAttribute('data-recording-id', 'recording-b-1');
+    await chronological.press('Space');
+    await expect(chronological).toHaveAttribute('aria-pressed', 'true');
+    await expect(firstChild).toHaveAttribute('data-recording-id', 'related-child-102');
+    await page.setViewportSize({ width: 390, height: 720 });
+    await alphabetical.scrollIntoViewIfNeeded();
+    await expect(chronological).toBeInViewport();
+    await expect(alphabetical).toBeInViewport();
+    await alphabetical.click();
+    await expect(alphabetical).toHaveAttribute('aria-pressed', 'true');
+    expect(await root.evaluate((card) => card.scrollWidth <= card.clientWidth)).toBe(true);
+    await page.screenshot({ path: test.info().outputPath('sub-run-project-sort-narrow.png') });
+    expect(runFetches.filter((url) => url.includes('/sub-runs?'))).toHaveLength(2);
+    expect(recordingFetches).toEqual([]);
   });
 
   for (const badOnly of [false, true]) {
@@ -2617,7 +2749,9 @@ test.describe('Run recordings modal', () => {
     await expect(child).toHaveCount(0);
     await modal.getByRole('button', { name: 'Show sub-runs', exact: true }).click();
     await expect(child).toHaveCount(1);
-    await expect(child).toContainText('Project: Latest Flow.rivet-project');
+    await expect(child).toContainText('Project name: Latest Flow');
+    await expect(child).toContainText('Path: Latest Flow');
+    await expect(child).not.toContainText('.rivet-project');
     await expect(child).toContainText('Subgraph · Latest');
     await expect(child).toContainText('Related run key: rvt-root-caller-12345');
     expect(runFetches.some((url) => url.includes('workflow-a/runs') && url.includes('includeSubgraphRuns=true'))).toBe(

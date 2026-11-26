@@ -6,6 +6,7 @@ import {
   refreshRecordingRowMeasurements,
 } from '../dashboard/recording-run-hierarchy';
 import type { WorkflowRecordingRunSummary } from '../dashboard/types';
+import { recordingProjectName, recordingProjectPath } from '../dashboard/recording-project-presentation';
 
 function run(id: string, correlationId?: string, child = false): WorkflowRecordingRunSummary {
   return {
@@ -36,7 +37,9 @@ test('context groups lazily load children without treating their representative 
   const loaded = groupRecordingRuns([other, representative], { anchor: 'complete' });
   assert.equal(loaded[0]!.root, null);
   assert.equal(loaded[0]!.childLoadState, 'complete');
-  assert.equal(recordingHierarchyRows(loaded, new Set(['correlation:orphan-key'])).length, 3);
+  const rows = recordingHierarchyRows(loaded, new Set(['correlation:orphan-key']));
+  assert.equal(rows.length, 4);
+  assert.equal(rows[1]!.kind, 'sub-run-sort');
 });
 
 test('a paginated context anchor never attaches to one visible member of an ambiguous root key', () => {
@@ -144,6 +147,82 @@ test('sorting descendants does not reorder primary recording families', () => {
   );
 });
 
+test('project names and paths omit only the terminal project extension and retain legacy fallbacks', () => {
+  const recording = {
+    ...run('metadata'),
+    sourceProjectName: 'Display title',
+    sourceProjectRelativePath: 'Folder.rivet-project/Different file.RIVET-PROJECT',
+  };
+  assert.equal(recordingProjectName(recording), 'Display title');
+  assert.equal(recordingProjectPath(recording.sourceProjectRelativePath), 'Folder.rivet-project/Different file');
+  assert.equal(recordingProjectName({ ...recording, sourceProjectName: undefined }), 'Different file');
+  assert.equal(recordingProjectName({ ...recording, sourceProjectName: 'Legacy.rivet-project' }), 'Legacy');
+  assert.equal(
+    recordingProjectName({ ...run('legacy'), sourceProjectRelativePath: 'Folder\\Windows.rivet-project' }),
+    'Windows',
+  );
+  assert.equal(recordingProjectName(run('missing')), 'caller');
+  assert.equal(recordingProjectPath(undefined), '');
+  assert.equal(recording.sourceProjectRelativePath, 'Folder.rivet-project/Different file.RIVET-PROJECT');
+});
+
+test('alphabetical order is per family, follows display names and breaks name ties chronologically', () => {
+  const root = run('root', 'one');
+  const otherRoot = run('other-root', 'two');
+  const children = [
+    { ...run('zulu', 'one', true), sourceProjectName: 'Zulu', sourceProjectRelativePath: 'a/first.rivet-project' },
+    { ...run('alpha-later', 'one', true), sourceProjectName: 'alpha', createdAt: '2026-10-03T00:00:02Z' },
+    { ...run('alpha-earlier', 'one', true), sourceProjectName: 'Alpha', createdAt: '2026-10-03T00:00:01Z' },
+    { ...run('fallback', 'one', true), sourceProjectRelativePath: 'z/Beta.rivet-project' },
+  ];
+  const input = [
+    root,
+    otherRoot,
+    ...children,
+    { ...run('z-first', 'two', true), sourceProjectName: 'Zulu' },
+    { ...run('a-first', 'two', true), sourceProjectName: 'Alpha', createdAt: '2026-10-03T00:00:01Z' },
+  ];
+  const before = [...input];
+  const groups = groupRecordingRuns(input, undefined, { 'correlation:one': 'project' });
+  assert.deepEqual(
+    groups.map((family) => family.root?.id),
+    ['root', 'other-root'],
+  );
+  assert.deepEqual(
+    groups[0]!.children.map((child) => child.id),
+    ['alpha-earlier', 'alpha-later', 'fallback', 'zulu'],
+  );
+  assert.deepEqual(
+    groups[1]!.children.map((child) => child.id),
+    ['z-first', 'a-first'],
+  );
+  const both = groupRecordingRuns(input, undefined, { 'correlation:one': 'project', 'correlation:two': 'project' });
+  assert.deepEqual(
+    both[1]!.children.map((child) => child.id),
+    ['a-first', 'z-first'],
+  );
+  const context = groupRecordingRuns(children, undefined, { 'correlation:one': 'project' });
+  const expanded = new Set(['correlation:one']);
+  const rows = recordingHierarchyRows(groups, expanded);
+  assert.deepEqual(
+    rows.slice(0, 3).map((row) => row.kind),
+    ['recording', 'sub-run-sort', 'recording'],
+  );
+  assert.equal(rows[1]!.id, 'sort:correlation:one');
+  assert.equal(recordingHierarchyRows(groupRecordingRuns(input), expanded)[1]!.id, rows[1]!.id);
+  assert.equal(
+    recordingHierarchyRows(groups, new Set()).some((row) => row.kind === 'sub-run-sort'),
+    false,
+  );
+  assert.equal(context[0]!.root, null);
+  assert.deepEqual(context[0]!.children, groups[0]!.children);
+  assert.deepEqual(
+    groupRecordingRuns(input)[0]!.children.map((child) => child.id),
+    ['fallback', 'zulu', 'alpha-earlier', 'alpha-later'],
+  );
+  assert.deepEqual(input, before);
+});
+
 test('filtered, page-split and retained orphan children get context, never a fake root', () => {
   const families = groupRecordingRuns([run('child-a', 'execution', true), run('child-b', 'execution', true)]);
   assert.equal(families.length, 1);
@@ -151,7 +230,7 @@ test('filtered, page-split and retained orphan children get context, never a fak
   assert.equal(recordingHierarchyRows(families, new Set())[0]!.recording, null);
   assert.deepEqual(
     recordingHierarchyRows(families, new Set([families[0]!.key]))
-      .slice(1)
+      .filter((row) => row.isChild)
       .map((row) => row.recording?.id),
     ['child-a', 'child-b'],
   );
@@ -193,7 +272,7 @@ test('descendants remain individually virtualized even for a large family', () =
   const children = Array.from({ length: 5000 }, (_, i) => run(`child-${i}`, 'execution', true));
   const families = groupRecordingRuns([...children, root]);
   assert.equal(recordingHierarchyRows(families, new Set()).length, 1);
-  assert.equal(recordingHierarchyRows(families, new Set([families[0]!.key])).length, 5001);
+  assert.equal(recordingHierarchyRows(families, new Set([families[0]!.key])).length, 5002);
 });
 
 test('appending an older primary preserves an expanded filtered family identity', () => {

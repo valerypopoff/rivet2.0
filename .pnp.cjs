@@ -16770,6 +16770,7 @@ const RAW_RUNTIME_STATE =
           ["@types/node", "npm:22.20.1"],\
           ["@types/react", "npm:18.2.31"],\
           ["@types/react-dom", "npm:18.2.14"],\
+          ["@types/react-window", "npm:1.8.7"],\
           ["@valerypopoff/rivet-app", "workspace:packages/app"],\
           ["@valerypopoff/rivet-studio-server-shared", "workspace:packages/studio-server-shared"],\
           ["@valerypopoff/rivet-studio-server-web", "workspace:packages/studio-server-web"],\
