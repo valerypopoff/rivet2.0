@@ -6,9 +6,24 @@
 @import './WorkflowLibraryOverlays.css';
 
 .folder-row-with-references {
-  --workflow-bundle-label-inset: calc(
-    var(--workflow-library-row-padding) + var(--workflow-button-height-s) + var(--workflow-library-row-gap)
+  --workflow-bundle-name-inset: calc(
+    var(--workflow-library-row-padding) + var(--workflow-button-height-s) + var(--workflow-library-row-gap) +
+      var(--workflow-bundle-icon-size) + var(--workflow-bundle-icon-gap)
   );
+}
+
+.folder-row-with-references.has-external-references {
+  display: flex;
+  flex-direction: column;
+  border-radius: 6px;
+}
+
+.folder-row-with-references.has-external-references:hover {
+  background: var(--workflow-library-row-highlight);
+}
+
+.workflow-library-panel .folder-row-with-references.has-external-references:hover > .folder-row:not(.drag-over) {
+  background: transparent;
 }
 
 .folder-bundle-icon {
@@ -20,14 +35,16 @@
 
 .bundle-external-references {
   display: block;
-  max-width: calc(100% - var(--workflow-bundle-label-inset));
-  margin: 0 0 4px;
-  margin-inline-start: var(--workflow-bundle-label-inset);
+  align-self: flex-start;
+  max-width: calc(100% - var(--workflow-bundle-name-inset) - var(--workflow-library-row-padding));
+  margin: calc(-1 * var(--workflow-library-row-padding) - 2px) 0 var(--workflow-library-row-padding);
+  margin-inline-start: var(--workflow-bundle-name-inset);
   padding: 0;
   border: 0;
   background: transparent;
   color: var(--grey-light);
   font-size: var(--workflow-library-font-size-xs);
+  line-height: 1.4;
   text-align: start;
   white-space: nowrap;
   overflow: hidden;
@@ -41,19 +58,32 @@
   text-decoration: underline;
 }
 
-.reference-change-badge {
-  border: 1px solid currentColor;
-  border-radius: 999px;
+.publication-status-text {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.publication-status-reference {
+  display: inline-block;
+  max-width: 100%;
+}
+
+.publication-reference-link {
+  position: relative;
+  padding: 0;
+  border: 0;
   background: transparent;
-  color: var(--workflow-status-unpublished-changes-color);
-  padding: 2px 6px;
-  line-height: 0;
+  color: inherit;
+  font: inherit;
+  text-align: inherit;
+  text-decoration: underline;
+  pointer-events: auto;
   cursor: pointer;
 }
 
-.reference-change-badge svg {
-  width: 14px;
-  height: 14px;
+.publication-reference-link:focus-visible {
+  outline: 1px solid currentColor;
+  outline-offset: 2px;
 }
 
 .reference-project-marker {
@@ -399,27 +429,117 @@
 }
 
 .workflow-library-panel .active-project-section {
-  padding: 10px 12px;
+  --project-summary-accent: var(--workflow-status-unpublished-color);
+  padding: 0;
   background: rgba(255, 255, 255, 0.07);
   border: 0;
-  border-radius: 7px;
+  border-radius: 0;
   box-sizing: border-box;
+  color: #fff;
 }
 
 .workflow-library-panel .active-project-section.published {
-  background: var(--workflow-status-published-bg);
+  /* The context-menu mockup has its own palette; tree markers keep theirs. */
+  --project-summary-accent: #6ad775;
+  background: #2d3631;
 }
 
 .workflow-library-panel .active-project-section.unpublished_changes {
-  background: var(--workflow-status-unpublished-changes-bg);
+  --project-summary-accent: #fad478;
+  background: #39352d;
 }
 
-.workflow-library-panel .active-project-section-content {
+.workflow-library-panel .active-project-section.contribution-only {
+  border-radius: 9px 9px 0 0;
+  box-shadow: inset 0 0 0 1px var(--project-summary-accent);
+}
+
+.workflow-library-panel .project-summary-settings-strip {
+  position: relative;
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 12px;
+  gap: 6px;
+  box-sizing: border-box;
+  width: 100%;
+  /* Keep long status text inside the menu's fixed width. */
+  contain: inline-size;
+  min-height: 30px;
+  padding: 7px 6px 7px 18px;
+  border: 0;
+  border-radius: 0;
+  background: var(--project-summary-accent);
+  color: #000;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 16px;
+  text-align: left;
+  white-space: normal;
+  cursor: pointer;
+}
+
+.workflow-library-panel .project-summary-settings-strip:hover {
+  filter: brightness(1.06);
+}
+
+.workflow-library-panel .project-summary-settings-target {
+  position: static;
+  order: 2;
+  flex: 0 0 16px;
+  width: 16px;
+  height: 16px;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: inherit;
   overflow: visible;
+  cursor: pointer;
+}
+
+.workflow-library-panel .project-summary-settings-target:focus-visible {
+  outline: none;
+}
+
+/* Extend the gear's mouse target without putting the reference link inside a button. */
+.workflow-library-panel .project-summary-settings-target::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+}
+
+.workflow-library-panel .project-summary-settings-target:focus-visible::before {
+  outline: 2px solid currentColor;
+  outline-offset: -3px;
+}
+
+.workflow-library-panel .contribution-only .project-summary-settings-strip {
+  border-bottom: 1px solid var(--project-summary-accent);
+  padding-bottom: 6px;
+  background: transparent;
+  color: var(--project-summary-accent);
+  font-weight: 400;
+}
+
+.workflow-library-panel .project-summary-status-text {
+  order: 1;
+  position: relative;
+  z-index: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  pointer-events: none;
+}
+
+.workflow-library-panel .project-summary-settings-icon {
+  position: relative;
+  z-index: 1;
+  display: block;
+  width: 16px;
+  height: 16px;
+  color: inherit;
 }
 
 .workflow-library-panel .active-project-details {
@@ -428,7 +548,9 @@
   align-items: flex-start;
   gap: 6px;
   min-width: 0;
-  flex: 1 1 auto;
+  box-sizing: border-box;
+  width: 100%;
+  padding: 14px 18px;
 }
 
 .button-size-s,
@@ -562,48 +684,37 @@
 .workflow-library-panel .active-project-status-list {
   display: flex;
   flex-direction: column;
-  gap: 5px;
+  gap: 4px;
+  margin-bottom: 4px;
   min-width: 0;
   max-width: 100%;
 }
 
 .workflow-library-panel .active-project-status-line {
   display: flex;
-  align-items: center;
-  gap: 7px;
-  min-height: 22px;
-  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 6px;
+  min-height: 18px;
   min-width: 0;
   max-width: 100%;
-}
-
-.workflow-library-panel .active-project-status-line .project-status-badge {
-  box-sizing: border-box;
-  height: 22px;
-  min-height: 22px;
-}
-
-.workflow-library-panel .active-project-status-label,
-.workflow-library-panel .active-project-status-text {
-  font-size: var(--workflow-library-font-size-s);
-  color: var(--grey-light);
-  line-height: 1.3;
-  white-space: nowrap;
 }
 
 .workflow-library-panel .active-project-status-text {
   display: inline-flex;
   align-items: center;
-  height: 22px;
+  min-height: 18px;
+  font-size: var(--workflow-library-font-size-s);
   color: var(--grey-lighter);
+  line-height: 1.3;
+  white-space: nowrap;
 }
 
 .workflow-library-panel .active-project-name {
   flex: 1 1 auto;
   min-width: 0;
   font-size: var(--workflow-library-font-size-m);
-  font-weight: 600;
-  color: var(--grey-lightest);
+  font-weight: 700;
+  color: inherit;
   white-space: normal;
   overflow-wrap: anywhere;
   max-width: 100%;
@@ -618,14 +729,67 @@
   gap: 8px;
 }
 
-.workflow-library-panel .active-project-endpoint-name {
+.workflow-library-panel .active-project-link {
+  flex: 1 1 auto;
+  min-width: 0;
   max-width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
   font-size: var(--workflow-library-font-size-s);
+  font-weight: 400;
+  line-height: 18px;
   overflow-wrap: anywhere;
+  text-align: left;
+  cursor: pointer;
+  text-decoration: none;
+  text-underline-offset: 2px;
 }
 
-.workflow-library-panel .active-project-actions {
-  display: none;
+.workflow-library-panel .active-project-link:hover .project-summary-route-text,
+.workflow-library-panel .active-project-link:focus-visible .project-summary-route-text {
+  text-decoration: underline;
+}
+
+.workflow-library-panel .active-project-link:focus-visible {
+  outline: 1px solid currentColor;
+  outline-offset: 2px;
+}
+
+.workflow-library-panel .project-summary-route-badge {
+  flex: 0 0 auto;
+  min-width: 26px;
+  box-sizing: border-box;
+  margin-top: 2px;
+  padding: 0 4px;
+  border-radius: 3px;
+  background: var(--project-summary-accent);
+  color: #000;
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 14px;
+  text-align: center;
+}
+
+.workflow-library-panel .project-summary-route-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  line-height: 18px;
+}
+
+.workflow-library-panel .project-summary-contribution-note {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+
+.workflow-library-panel .project-summary-notice {
+  color: var(--grey-light);
+  font-size: 12px;
+  line-height: 1.4;
 }
 
 .active-project-status-row {
@@ -683,24 +847,11 @@
   outline-offset: 2px;
 }
 
-.workflow-library-panel .active-project-save-button,
-.workflow-library-panel .active-project-more-button {
+.workflow-library-panel .active-project-save-button {
   min-width: 72px;
 }
 
-.workflow-library-panel .active-project-more-button.project-settings-secondary-button {
-  border: 1px solid rgba(255, 255, 255, 0.18) !important;
-  background: rgba(255, 255, 255, 0.08) !important;
-}
-
-.workflow-library-panel .active-project-more-button.project-settings-secondary-button:hover:not(:disabled),
-.workflow-library-panel .active-project-more-button.project-settings-secondary-button:focus-visible:not(:disabled) {
-  border-color: rgba(255, 255, 255, 0.28) !important;
-  background: rgba(255, 255, 255, 0.12) !important;
-}
-
 .workflow-library-panel .active-project-save-button,
-.workflow-library-panel .active-project-more-button,
 .workflow-library-panel .project-settings-delete-button,
 .workflow-library-panel .project-settings-primary-button,
 .workflow-library-panel .project-settings-close-button {
@@ -798,6 +949,21 @@
 
 .project-status-badge.unpublished {
   color: var(--workflow-status-unpublished-color);
+}
+
+.project-status-badge.contribution {
+  height: auto;
+  white-space: normal;
+  background: transparent;
+  border: 1px solid currentColor;
+}
+
+.project-status-badge.contribution.published {
+  color: var(--workflow-status-published-color);
+}
+
+.project-status-badge.contribution.changed {
+  color: var(--workflow-status-unpublished-changes-color);
 }
 
 .workflow-library-panel .icon-button,

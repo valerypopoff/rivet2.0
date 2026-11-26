@@ -10,11 +10,18 @@ import {
   openProjectContextMenu,
   waitForDashboardReady,
 } from './helpers/hostedEditorObserve';
+import { createProjectWebAppsResponse } from './helpers/projectSettingsObserve';
 
 const STATUS_DOT_BACKGROUND: Record<WorkflowProjectStatus, string> = {
   unpublished: 'rgb(187, 187, 187)',
   published: 'rgb(126, 226, 148)',
   unpublished_changes: 'rgb(255, 215, 106)',
+};
+
+const SUMMARY_ACCENT: Record<WorkflowProjectStatus, string> = {
+  unpublished: 'rgb(187, 187, 187)',
+  published: 'rgb(106, 215, 117)',
+  unpublished_changes: 'rgb(250, 212, 120)',
 };
 
 for (const session of [
@@ -74,8 +81,8 @@ for (const session of [
 
 const ACTIVE_PROJECT_BACKGROUND: Record<WorkflowProjectStatus, string> = {
   unpublished: 'rgba(255, 255, 255, 0.07)',
-  published: 'rgba(126, 226, 148, 0.12)',
-  unpublished_changes: 'rgba(255, 215, 106, 0.12)',
+  published: 'rgb(45, 54, 49)',
+  unpublished_changes: 'rgb(57, 53, 45)',
 };
 
 function createStatusProject(status: WorkflowProjectStatus): WorkflowProjectItem {
@@ -115,6 +122,7 @@ async function installStatusDotTreeRoute(page: Page, projects: WorkflowProjectIt
 
 async function installProjectWebAppsRoute(
   page: Page,
+  projects: readonly WorkflowProjectItem[],
   webAppsByRelativePath: Record<string, WorkflowProjectWebAppSummary[]>,
 ): Promise<void> {
   await page.route('**/api/workflows/projects/web-apps**', async (route) => {
@@ -125,10 +133,14 @@ async function installProjectWebAppsRoute(
     }
 
     const relativePath = url.searchParams.get('relativePath') ?? '';
+    const project = projects.find((item) => item.relativePath === relativePath);
+    if (!project) {
+      await route.fulfill({ status: 404, json: { error: 'Project not found' } });
+      return;
+    }
     await route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({
+      json: createProjectWebAppsResponse({
+        ...project,
         webApps: webAppsByRelativePath[relativePath] ?? [],
       }),
     });
@@ -1421,11 +1433,218 @@ test.describe('Workflow library layout', () => {
     expect(Math.abs(statusDotBox!.y + statusDotBox!.height / 2 - (sidebarBox!.y + 18.5))).toBeLessThan(2);
   });
 
+  test('renders publication states with separate Settings and reference-details actions', async ({ page }) => {
+    const cases = [
+      { key: 'local', own: 'unpublished_changes', text: 'Unpublished changes', tone: 'unpublished_changes', refs: 0 },
+      {
+        key: 'references',
+        own: 'published',
+        text: 'Unpublished changes in 3 referenced projects',
+        tone: 'unpublished_changes',
+        refs: 3,
+      },
+      {
+        key: 'both',
+        own: 'unpublished_changes',
+        text: 'Unpublished changes here and in 3 referenced projects',
+        tone: 'unpublished_changes',
+        refs: 3,
+      },
+      { key: 'published', own: 'published', text: 'Published', tone: 'published', refs: 0 },
+      { key: 'contributor', own: 'unpublished', text: 'Contributes to published', tone: 'published', refs: 0 },
+      {
+        key: 'changed-contributor',
+        own: 'unpublished',
+        text: 'Contributes to unpublished changes',
+        tone: 'unpublished_changes',
+        refs: 0,
+      },
+      { key: 'unpublished', own: 'unpublished', text: 'Unpublished', tone: 'unpublished', refs: 0 },
+    ] as const;
+    const makeProject = (key: string, own: WorkflowProjectStatus) => {
+      const project = createStatusProject(own);
+      project.id = project.projectMetadataId = `summary-${key}`;
+      project.name = `Summary ${key}`;
+      project.fileName = `${key}.rivet-project`;
+      project.relativePath = project.fileName;
+      project.absolutePath = `/managed/workflows/${project.fileName}`;
+      project.revisionId = 'revision-1';
+      project.settings.publicationVersion = '0';
+      project.settings.endpointName = `${key}-endpoint`;
+      return project;
+    };
+    const projects = cases.map((item) => makeProject(item.key, item.own));
+    const local = projects[0]!;
+    local.stats = { graphCount: 2, totalNodeCount: 4, webAppCount: 1 };
+    local.settings.publishedWebApps = [
+      {
+        uiGraphId: 'app',
+        uiGraphName: 'App',
+        slug: 'live-app',
+        publishedAt: '2026-05-15T09:00:00.000Z',
+        allowedEmails: [],
+      },
+    ];
+    const owner = makeProject('owner', 'published');
+    projects.push(owner);
+    await installStatusDotTreeRoute(page, projects);
+    await installProjectWebAppsRoute(page, projects, {
+      [local.relativePath]: [
+        {
+          uiGraphId: 'app',
+          name: 'Live app',
+          publishedSlug: 'live-app',
+          publishedAt: '2026-05-15T09:00:00.000Z',
+          allowedEmails: [],
+          status: 'published',
+          isMissingFromProject: false,
+        },
+      ],
+    });
+    await page.route('**/api/workflows/projects/reference-overview', (route) =>
+      route.fulfill({
+        json: {
+          complete: true,
+          bundles: [],
+          endpoints: [
+            ...cases
+              .filter((item) => item.refs > 0)
+              .map((item) => ({
+                projectId: `summary-${item.key}`,
+                coverage: 'complete',
+                dependencies: Array.from({ length: item.refs }, (_, index) => ({
+                  projectId: `target-${index}`,
+                  name: `Target ${index}`,
+                  relativePath: null,
+                  changed: true,
+                  unavailable: false,
+                })),
+              })),
+            {
+              projectId: owner.projectMetadataId,
+              coverage: 'complete',
+              dependencies: [
+                {
+                  projectId: 'summary-contributor',
+                  name: 'Contributor',
+                  relativePath: 'contributor.rivet-project',
+                  changed: false,
+                  unavailable: false,
+                },
+                {
+                  projectId: 'summary-changed-contributor',
+                  name: 'Changed contributor',
+                  relativePath: 'changed-contributor.rivet-project',
+                  changed: true,
+                  unavailable: false,
+                },
+              ],
+            },
+          ],
+        },
+      }),
+    );
+    await page.goto('/', { waitUntil: 'domcontentloaded' });
+    await authenticateIfNeeded(page);
+    await waitForDashboardReady(page);
+    const summary = page.locator('.active-project-section');
+    for (const item of cases) {
+      await openProjectContextMenu(page, `Summary ${item.key}`);
+      const strip = summary.locator('.project-summary-settings-strip');
+      const settingsButton = strip.getByRole('button', { name: 'Settings', exact: true });
+      await expect(summary.locator('.project-summary-status-text')).toHaveText(item.text);
+      const menu = page.getByRole('menu', { name: `Actions for Summary ${item.key}`, exact: true });
+      await expect(menu).toHaveCSS('width', '274px');
+      await expect(settingsButton).toHaveAttribute('title', 'Project settings');
+      await expect(strip.locator('button button')).toHaveCount(0);
+      await expect(strip).toHaveCSS('border-radius', '0px');
+      await expect(strip).toHaveCSS('font-size', '14px');
+      await expect(summary.getByRole('button', { name: 'Settings', exact: true })).toHaveCount(1);
+      const contributionOnly = item.key === 'contributor' || item.key === 'changed-contributor';
+      await expect(strip).toHaveCSS(
+        'background-color',
+        contributionOnly ? 'rgba(0, 0, 0, 0)' : SUMMARY_ACCENT[item.tone],
+      );
+      const iconColor = contributionOnly ? SUMMARY_ACCENT[item.tone] : 'rgb(0, 0, 0)';
+      await expect(strip.locator('.project-summary-settings-icon path')).toHaveCSS('fill', iconColor);
+      if (contributionOnly) {
+        await expect(strip).toHaveCSS('color', SUMMARY_ACCENT[item.tone]);
+        await expect(summary).toHaveCSS('box-shadow', `${SUMMARY_ACCENT[item.tone]} 0px 0px 0px 1px inset`);
+        await expect(summary.locator('.active-project-status-line')).toHaveCount(0);
+        expect((await strip.boundingBox())!.height).toBe(30);
+      }
+      if (item.refs) {
+        await expect(summary.locator('.publication-reference-link')).toHaveText('3 referenced projects');
+        expect((await strip.boundingBox())!.height).toBeGreaterThan(30);
+      } else await expect(summary.locator('.publication-reference-link')).toHaveCount(0);
+    }
+    await openProjectContextMenu(page, local.name);
+    await expect(summary.locator('.project-summary-route-badge')).toHaveText(['API', 'APP']);
+    await expect(summary.locator('.project-summary-route-text')).toHaveText([
+      `workflows/${local.settings.endpointName}`,
+      'apps/live-app',
+    ]);
+    await summary.locator('.project-summary-settings-strip').click({ position: { x: 3, y: 3 } });
+    const settings = page.getByTestId('workflow-project-settings-modal');
+    await expect(settings.locator('.project-settings-modal-title')).toHaveText('local');
+    await settings.getByRole('button', { name: 'Close project settings' }).click();
+    await openProjectContextMenu(page, local.name);
+    await summary.locator('.project-summary-settings-icon').click();
+    await expect(settings).toBeVisible();
+    await settings.getByRole('button', { name: 'Close project settings' }).click();
+    await openProjectContextMenu(page, 'Summary references');
+    await summary.getByRole('button', { name: '3 referenced projects', exact: true }).click();
+    const details = page.getByRole('dialog', { name: 'Changes in referenced projects', exact: true });
+    await expect(details).toBeVisible();
+    await expect(settings).toHaveCount(0);
+    await expect(summary).toHaveCount(0);
+    await details.getByRole('button', { name: 'Close reference details' }).click();
+    await openProjectContextMenu(page, 'Summary references');
+    await summary.getByRole('button', { name: 'Settings', exact: true }).focus();
+    await page.keyboard.press('Tab');
+    await expect(summary.getByRole('button', { name: '3 referenced projects', exact: true })).toBeFocused();
+    await page.keyboard.press('Enter');
+    await expect(details).toBeVisible();
+    await expect(settings).toHaveCount(0);
+    await details.getByRole('button', { name: 'Close reference details' }).click();
+    await expect(page.getByTestId('workflow-reference-details-modal')).toHaveCount(0);
+    await page.getByRole('button', { name: 'Settings', exact: true }).focus();
+    await page.keyboard.press('Tab');
+    await expect(page.getByRole('button', { name: 'Expand folders pane', exact: true })).toBeVisible();
+  });
+
   test('shows project details in the context menu with publication fills and no outline', async ({ page }) => {
     const projects = (['unpublished', 'published', 'unpublished_changes'] as const).map(createStatusProject);
     projects[1]!.settings.publishedEndpointName = 'currently-serving-endpoint';
     projects[1]!.settings.endpointName = 'draft-endpoint-name';
+    projects[2]!.settings.endpointAccess = 'internal';
     await installStatusDotTreeRoute(page, projects);
+    await page.route('**/api/config', (route) =>
+      route.fulfill({
+        json: {
+          executorWsUrl: '',
+          remoteDebuggerDefaultWs: '',
+          publishedWorkflowsBasePath: '/custom/workflows/',
+          internalPublishedWorkflowsBaseUrl: 'http://execution.test/internal/workflows/',
+          latestWorkflowsBasePath: '/workflows-latest',
+          publishedAppsBasePath: '/apps',
+          latestAppsBasePath: '/apps-latest',
+          webAppsAuthMode: 'none',
+        },
+      }),
+    );
+    await page.addInitScript(() => {
+      const copied: string[] = [];
+      Object.assign(window, { copiedEndpointUrls: copied });
+      Object.defineProperty(navigator, 'clipboard', {
+        value: {
+          writeText: async (text: string) => {
+            copied.push(text);
+          },
+        },
+        configurable: true,
+      });
+    });
 
     await page.goto('/', { waitUntil: 'domcontentloaded' });
     await authenticateIfNeeded(page);
@@ -1440,33 +1659,177 @@ test.describe('Workflow library layout', () => {
       await openProjectContextMenu(page, project.name);
       await expect(activeProjectSection).toHaveClass(new RegExp(`\\b${project.settings.status}\\b`));
       await expect(activeProjectSection).toHaveCSS('border-width', '0px');
+      await expect(activeProjectSection).toHaveCSS('padding', '0px');
       await expect(activeProjectSection.locator('.active-project-stats')).toHaveCount(0);
       if (project.settings.status === 'unpublished') {
         await expect(activeProjectSection.locator('.active-project-status-list')).toHaveCount(0);
       } else {
-        const badge = activeProjectSection.locator('.project-status-badge');
-        await expect(badge).toHaveCSS('background-color', STATUS_DOT_BACKGROUND[project.settings.status]);
-        await expect(badge).toHaveCSS('border-color', 'rgba(0, 0, 0, 0)');
-        await expect(badge).toHaveCSS('color', 'rgb(31, 34, 40)');
-        await expect(activeProjectSection.locator('.active-project-endpoint-name')).toHaveText(
-          project.settings.publishedEndpointName || project.settings.endpointName,
+        const badge = activeProjectSection.locator('.project-summary-settings-strip');
+        await expect(badge).toHaveCSS('background-color', SUMMARY_ACCENT[project.settings.status]);
+        await expect(badge).toHaveCSS('border-width', '0px');
+        await expect(badge).toHaveCSS('color', 'rgb(0, 0, 0)');
+        await expect(activeProjectSection.locator(':scope > :first-child')).toHaveClass(
+          /project-summary-settings-strip/,
         );
+        const statusGap = await activeProjectSection.evaluate((section) => {
+          const status = section.querySelector('.project-summary-settings-strip')!.getBoundingClientRect();
+          const name = section.querySelector('.active-project-name-row')!.getBoundingClientRect();
+          return name.top - status.bottom;
+        });
+        expect(statusGap).toBeCloseTo(14);
+        await expect(
+          activeProjectSection.locator('.active-project-endpoint-name .project-summary-route-text'),
+        ).toHaveText(
+          project.settings.endpointAccess === 'internal'
+            ? `http://execution.test/internal/workflows/${project.settings.endpointName}`
+            : `custom/workflows/${project.settings.publishedEndpointName}`,
+        );
+        await activeProjectSection.getByTitle('Copy full endpoint URL').click();
+        const expectedUrl =
+          project.settings.endpointAccess === 'internal'
+            ? `http://execution.test/internal/workflows/${project.settings.endpointName}`
+            : new URL(`/custom/workflows/${project.settings.publishedEndpointName}`, page.url()).href;
+        await expect
+          .poll(() =>
+            page.evaluate(() => (window as unknown as { copiedEndpointUrls: string[] }).copiedEndpointUrls.at(-1)),
+          )
+          .toBe(expectedUrl);
+        await expect(
+          page.getByRole('alert').filter({ hasText: 'Endpoint URL copied to clipboard' }).first(),
+        ).toBeVisible();
+        await expect(activeProjectSection).toBeVisible();
+        const line = activeProjectSection.locator('.active-project-status-line').first();
+        const labelBox = (await line.locator('.project-summary-route-badge').boundingBox())!;
+        const linkBox = (await line.locator('.project-summary-route-text').boundingBox())!;
+        expect(Math.abs(labelBox.y - linkBox.y)).toBeLessThan(3);
       }
       await expect(activeProjectSection).toHaveCSS(
         'background-color',
         ACTIVE_PROJECT_BACKGROUND[project.settings.status],
       );
     }
+    await page.evaluate(() => {
+      navigator.clipboard.writeText = async () => {
+        throw new Error('Clipboard denied');
+      };
+      document.execCommand = () => false;
+    });
+    await activeProjectSection.getByTitle('Copy full endpoint URL').click();
+    await expect(page.getByRole('alert').filter({ hasText: 'Could not copy endpoint URL.' })).toBeVisible();
     await activeProjectSection.getByRole('button', { name: 'Settings', exact: true }).click();
     const modal = page.getByTestId('workflow-project-settings-modal');
     await expect(modal.locator('.project-settings-modal-title')).toHaveText(projects.at(-1)!.name);
     await expect(page.getByRole('menu', { name: `Actions for ${projects.at(-1)!.name}` })).toHaveCount(0);
   });
 
-  for (const fails of [false, true]) {
-    const outcome = fails ? 'reports unavailable on read failure' : 'remains visible after removing its draft graph';
-    test(`retained web-app publication ${outcome}`, async ({ page }) => {
+  test('anchors the edge-to-edge project summary above the cursor as details resize', async ({ page }) => {
+    const projects = Array.from({ length: 12 }, (_, index) => {
       const project = createStatusProject('unpublished');
+      project.name = `${String(index).padStart(2, '0')} menu positioning`;
+      project.id = project.name;
+      project.fileName = `${project.name}.rivet-project`;
+      project.relativePath = project.fileName;
+      project.absolutePath = `/managed/workflows/${project.fileName}`;
+      return project;
+    });
+    const project = projects[8]!;
+    project.settings.status = 'published';
+    project.settings.endpointName = 'positioned-endpoint';
+    project.stats = { graphCount: 2, totalNodeCount: 4, webAppCount: 2 };
+    project.settings.publishedWebApps = [
+      {
+        uiGraphId: 'first',
+        uiGraphName: 'First app',
+        slug: 'first',
+        publishedAt: '2026-05-15T09:00:00.000Z',
+        allowedEmails: [],
+      },
+    ];
+    await installStatusDotTreeRoute(page, projects);
+    const releaseApps = Promise.withResolvers<void>();
+    await page.route('**/api/workflows/projects/web-apps**', async (route) => {
+      await releaseApps.promise;
+      await route.fulfill({
+        json: createProjectWebAppsResponse({
+          ...project,
+          webApps: ['first', 'second'].map((id) => ({
+            uiGraphId: id,
+            name: `${id} published web app`,
+            publishedSlug: id,
+            publishedAt: '2026-05-15T09:00:00.000Z',
+            allowedEmails: [],
+            status: 'published',
+            isMissingFromProject: false,
+          })),
+        }),
+      });
+    });
+    await page.goto('/', { waitUntil: 'domcontentloaded' });
+    await authenticateIfNeeded(page);
+    await waitForDashboardReady(page);
+    const row = page.getByRole('button', { name: project.name, exact: true });
+    const rowBox = (await row.boundingBox())!;
+    const point = { x: rowBox.x + rowBox.width - 2, y: rowBox.y + rowBox.height / 2 };
+    await page.mouse.click(point.x, point.y, { button: 'right' });
+    const menu = page.getByRole('menu', { name: `Actions for ${project.name}` });
+    const header = menu.locator('.workflow-project-context-menu-header');
+    const summary = menu.locator('.active-project-section');
+    const expectAnchor = async () => {
+      await expect
+        .poll(async () => {
+          const box = (await summary.boundingBox())!;
+          return Math.max(Math.abs(box.x - point.x), Math.abs(box.y + box.height - point.y));
+        })
+        .toBeLessThan(1.5);
+    };
+    try {
+      await expect(menu).toBeVisible();
+      await expect(menu).toHaveCSS('padding', '0px');
+      await expect(header).toHaveCSS('border-bottom-width', '0px');
+      await expect(header).toHaveCSS('margin-bottom', '0px');
+      await expect(header).toHaveCSS('padding-bottom', '0px');
+      await expect(summary).toHaveCSS('border-radius', '0px');
+      await expect(
+        menu.locator('.workflow-project-context-menu-header + .workflow-project-context-menu-actions'),
+      ).toHaveCount(1);
+      const fillGap = await menu.evaluate((element) => {
+        const box = element.getBoundingClientRect();
+        const content = element.querySelector('.active-project-section')!.getBoundingClientRect();
+        return Math.max(
+          Math.abs(content.left - box.left - element.clientLeft),
+          Math.abs(content.top - box.top - element.clientTop),
+          Math.abs(content.width - element.clientWidth),
+        );
+      });
+      expect(fillGap).toBeLessThan(1);
+      await expectAnchor();
+      const initialHeight = (await summary.boundingBox())!.height;
+      releaseApps.resolve();
+      await expect(summary.getByRole('link')).toHaveCount(2);
+      expect((await summary.boundingBox())!.height).toBeGreaterThan(initialHeight);
+      await expectAnchor();
+      await page.setViewportSize({ width: 390, height: 420 });
+      await expect
+        .poll(async () => {
+          const box = (await menu.boundingBox())!;
+          return box.x >= 7.5 && box.y >= 7.5 && box.x + box.width <= 382.5 && box.y + box.height <= 412.5;
+        })
+        .toBe(true);
+      await menu.getByRole('menuitem', { name: 'Delete project', exact: true }).scrollIntoViewIfNeeded();
+      await expect(menu.getByRole('menuitem', { name: 'Delete project', exact: true })).toBeVisible();
+    } finally {
+      releaseApps.resolve();
+    }
+  });
+
+  for (const [outcome, description] of [
+    ['success', 'remains visible after removing its draft graph'],
+    ['failure', 'reports unavailable on read failure'],
+    ['replacement', 'rejects a replacement project at the same path'],
+  ] as const) {
+    test(`retained web-app publication ${description}`, async ({ page }) => {
+      const project = createStatusProject('unpublished');
+      project.projectMetadataId = 'retained-owner';
       project.stats = { graphCount: 1, totalNodeCount: 2, webAppCount: 0 };
       // Older responses omit the aggregate field; tree metadata still knows
       // that this app remains published with unpublished draft changes.
@@ -1484,22 +1847,25 @@ test.describe('Workflow library layout', () => {
       await installStatusDotTreeRoute(page, [project]);
       await page.route('**/api/workflows/projects/web-apps**', (route) =>
         route.fulfill({
-          status: fails ? 503 : 200,
-          json: fails
-            ? { error: 'Status read unavailable' }
-            : {
-                webApps: [
-                  {
-                    uiGraphId: 'removed-app',
-                    name: 'Still live app',
-                    publishedSlug: 'still-live-app',
-                    publishedAt: '2026-05-15T09:00:00.000Z',
-                    allowedEmails: [],
-                    status: 'unpublished_changes',
-                    isMissingFromProject: true,
-                  },
-                ],
-              },
+          status: outcome === 'failure' ? 503 : 200,
+          json:
+            outcome === 'failure'
+              ? { error: 'Status read unavailable' }
+              : createProjectWebAppsResponse({
+                  ...project,
+                  projectMetadataId: outcome === 'replacement' ? 'replacement-owner' : project.projectMetadataId,
+                  webApps: [
+                    {
+                      uiGraphId: 'removed-app',
+                      name: 'Still live app',
+                      publishedSlug: 'still-live-app',
+                      publishedAt: '2026-05-15T09:00:00.000Z',
+                      allowedEmails: [],
+                      status: 'unpublished_changes',
+                      isMissingFromProject: true,
+                    },
+                  ],
+                }),
         }),
       );
       await page.goto('/', { waitUntil: 'domcontentloaded' });
@@ -1509,13 +1875,107 @@ test.describe('Workflow library layout', () => {
       const lines = page.locator('.active-project-section .active-project-status-line');
       await expect(page.locator('.active-project-section')).toHaveClass(/\bunpublished_changes\b/);
       await expect(lines).toHaveCount(1);
-      await expect(lines.first()).toContainText('Web app:');
-      await expect(lines.first()).toContainText(fails ? 'Unavailable' : 'Unpublished changes');
+      await expect(lines.first()).toContainText('APP');
+      await expect(lines.first()).toContainText(outcome === 'success' ? 'apps/still-live-app' : 'Unavailable');
       await expect(lines.first()).not.toContainText('none');
+      await expect(page.locator('.project-summary-status-text')).toHaveText('Unpublished changes');
+      if (outcome === 'success')
+        await expect(
+          page.locator('.active-project-section').getByRole('link', { name: 'Still live app' }),
+        ).toHaveAttribute('href', '/apps/still-live-app');
+      else await expect(page.locator('.active-project-section').getByRole('link')).toHaveCount(0);
     });
   }
 
-  test('shows workflow and web app publication status lines in the project menu header', async ({ page }) => {
+  test('summary refreshes web app links for each saved revision and ignores superseded reads', async ({ page }) => {
+    const project = createStatusProject('unpublished');
+    project.projectMetadataId = 'summary-project';
+    project.revisionId = 'revision-1';
+    project.stats = { graphCount: 1, totalNodeCount: 2, webAppCount: 1 };
+    project.settings.publishedWebApps = [
+      {
+        uiGraphId: 'portal',
+        uiGraphName: 'Portal',
+        slug: 'portal',
+        publishedAt: '2026-05-15T09:00:00.000Z',
+        allowedEmails: [],
+        status: 'unpublished_changes',
+      },
+    ];
+    await installStatusDotTreeRoute(page, [project]);
+    const reads: string[] = [];
+    const releaseSecond = Promise.withResolvers<void>();
+    const secondFulfilled = Promise.withResolvers<void>();
+    await page.route('**/api/workflows/projects/web-apps**', async (route) => {
+      const snapshot = structuredClone(project);
+      reads.push(snapshot.revisionId!);
+      if (snapshot.revisionId === 'revision-2') await releaseSecond.promise;
+      await route.fulfill({
+        json: createProjectWebAppsResponse({
+          ...snapshot,
+          webApps: [
+            {
+              uiGraphId: 'portal',
+              name: `Portal ${snapshot.revisionId}`,
+              publishedSlug: 'portal',
+              publishedAt: '2026-05-15T09:00:00.000Z',
+              allowedEmails: [],
+              status: 'unpublished_changes',
+              isMissingFromProject: false,
+            },
+          ],
+        }),
+      });
+      if (snapshot.revisionId === 'revision-2') secondFulfilled.resolve();
+    });
+    await page.goto('/', { waitUntil: 'domcontentloaded' });
+    await authenticateIfNeeded(page);
+    await waitForDashboardReady(page);
+    await openProjectContextMenu(page, project.name);
+    const summary = page.locator('.active-project-section');
+    await expect(summary.getByRole('link', { name: 'Portal revision-1' })).toBeVisible();
+
+    const saveRevision = async (revision: string) => {
+      project.revisionId = revision;
+      project.name = `Summary ${revision}`;
+      await page.evaluate((path) => {
+        const editor = document.querySelector<HTMLIFrameElement>('.dashboard-editor-frame')!;
+        window.dispatchEvent(
+          new MessageEvent('message', {
+            data: { type: 'project-saved', path },
+            origin: location.origin,
+            source: editor.contentWindow,
+          }),
+        );
+      }, project.absolutePath);
+      await expect(summary.locator('.active-project-name')).toHaveText(project.name);
+    };
+    try {
+      // Identity, timestamps and publication tokens stay the same: only the saved revision advances.
+      await saveRevision('revision-2');
+      await expect.poll(() => reads).toContain('revision-2');
+      await expect(summary.getByRole('link')).toHaveCount(0);
+      await saveRevision('revision-3');
+      await expect(summary.getByRole('link', { name: 'Portal revision-3' })).toBeVisible();
+      const lateResponse = page.waitForResponse(
+        async (response) =>
+          response.url().includes('/api/workflows/projects/web-apps') &&
+          ((await response.json()) as { draftRevisionId?: string }).draftRevisionId === 'revision-2',
+      );
+      releaseSecond.resolve();
+      await (await lateResponse).finished();
+      await secondFulfilled.promise;
+      await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())));
+      await expect(summary.getByRole('link')).toHaveAccessibleName('Portal revision-3');
+      expect(reads).toEqual(['revision-1', 'revision-2', 'revision-3']);
+    } finally {
+      releaseSecond.resolve();
+    }
+  });
+
+  test('shows publication status before endpoint and live web app links in the project menu header', async ({
+    page,
+  }) => {
     const noAppsProject = createStatusProject('unpublished');
     noAppsProject.name = 'codex-summary-no-apps';
     noAppsProject.fileName = 'codex-summary-no-apps.rivet-project';
@@ -1552,13 +2012,14 @@ test.describe('Workflow library layout', () => {
       sameStatusAppsProject,
       mixedStatusAppsProject,
     ]);
-    await installProjectWebAppsRoute(page, {
+    await installProjectWebAppsRoute(page, [oneAppProject, sameStatusAppsProject, mixedStatusAppsProject], {
       [oneAppProject.relativePath]: [
         {
           uiGraphId: 'one-app',
           name: 'One App',
-          publishedSlug: 'one-app',
+          publishedSlug: 'one app',
           publishedAt: '2026-05-15T09:00:00.000Z',
+          allowedEmails: [],
           status: 'published',
           isMissingFromProject: false,
         },
@@ -1569,6 +2030,7 @@ test.describe('Workflow library layout', () => {
           name: 'Same App A',
           publishedSlug: 'same-app-a',
           publishedAt: '2026-05-15T09:00:00.000Z',
+          allowedEmails: [],
           status: 'unpublished_changes',
           isMissingFromProject: false,
         },
@@ -1577,6 +2039,7 @@ test.describe('Workflow library layout', () => {
           name: 'Same App B',
           publishedSlug: 'same-app-b',
           publishedAt: '2026-05-15T09:00:00.000Z',
+          allowedEmails: [],
           status: 'unpublished_changes',
           isMissingFromProject: false,
         },
@@ -1585,6 +2048,7 @@ test.describe('Workflow library layout', () => {
           name: 'Draft only',
           publishedSlug: null,
           publishedAt: null,
+          allowedEmails: [],
           status: 'unpublished',
           isMissingFromProject: false,
         },
@@ -1595,6 +2059,7 @@ test.describe('Workflow library layout', () => {
           name: 'Mixed App A',
           publishedSlug: 'mixed-app-a',
           publishedAt: '2026-05-15T09:00:00.000Z',
+          allowedEmails: [],
           status: 'published',
           isMissingFromProject: false,
         },
@@ -1603,6 +2068,7 @@ test.describe('Workflow library layout', () => {
           name: 'Mixed App B',
           publishedSlug: 'mixed-app-b',
           publishedAt: '2026-05-15T09:00:00.000Z',
+          allowedEmails: [],
           status: 'unpublished_changes',
           isMissingFromProject: false,
         },
@@ -1634,29 +2100,52 @@ test.describe('Workflow library layout', () => {
     await expect(statusLines).toHaveCount(0);
     await expect(activeProjectSection).not.toContainText('Web app:');
     await expect(activeProjectSection).not.toContainText('Endpoint:');
-    await expect(activeProjectSection.locator('.active-project-actions-row')).toHaveCSS('margin-top', '8px');
+    await expect(activeProjectSection.locator('.active-project-actions-row')).toHaveCount(0);
 
     await openProjectContextMenu(page, oneAppProject.name);
     await expect(activeProjectSection.locator('.active-project-name')).toHaveText(oneAppProject.name);
     await expect(activeProjectSection).toHaveClass(/\bpublished\b/);
     await expect(activeProjectSection).toHaveCSS('background-color', ACTIVE_PROJECT_BACKGROUND.published);
     await expect(statusLines).toHaveCount(1);
-    await expect(statusLines.first()).toContainText('Web app:');
-    await expect(statusLines.first().locator('.project-status-badge')).toHaveText('Published');
+    await expect(statusLines.first()).toContainText('APP');
+    await expect(activeProjectSection.locator('.project-summary-status-text')).toHaveText('Published');
+    const appLink = activeProjectSection.getByRole('link', { name: 'One App', exact: true });
+    await expect(appLink).toHaveAttribute('href', '/apps/one%20app');
+    await expect(appLink).toHaveAttribute('rel', 'noopener noreferrer');
+    await page
+      .context()
+      .route('**/apps/one%20app', (route) => route.fulfill({ contentType: 'text/html', body: '<h1>One App</h1>' }));
+    const popupPromise = page.waitForEvent('popup');
+    await appLink.click();
+    const popup = await popupPromise;
+    await expect(popup).toHaveURL(new URL('/apps/one%20app', page.url()).href);
+    await expect(popup.getByRole('heading', { name: 'One App' })).toBeVisible();
+    await expect(activeProjectSection).toHaveCount(0);
+    await popup.close();
+    await expect(page.locator('.workflow-library-panel')).toBeVisible();
 
     await openProjectContextMenu(page, sameStatusAppsProject.name);
     await expect(activeProjectSection.locator('.active-project-name')).toHaveText(sameStatusAppsProject.name);
     await expect(activeProjectSection).toHaveClass(/\bunpublished_changes\b/);
     await expect(activeProjectSection).toHaveCSS('background-color', ACTIVE_PROJECT_BACKGROUND.unpublished_changes);
-    await expect(statusLines).toHaveCount(2);
-    await expect(statusLines.first().locator('.project-status-badge')).toHaveText('Published');
-    await expect(statusLines.nth(1)).toContainText('Web apps:');
-    await expect(statusLines.nth(1).locator('.project-status-badge')).toHaveText('Unpublished changes');
+    await expect(statusLines).toHaveCount(3);
+    await expect(statusLines.first().locator('.project-summary-route-text')).toHaveText(
+      `workflows/${sameStatusAppsProject.settings.endpointName}`,
+    );
+    await expect(activeProjectSection.getByRole('link').locator('.project-summary-route-text')).toHaveText([
+      'apps/same-app-a',
+      'apps/same-app-b',
+    ]);
+    await expect(activeProjectSection.locator('.project-summary-status-text')).toHaveText('Unpublished changes');
+    await expect(activeProjectSection).not.toContainText('Draft only');
 
     await openProjectContextMenu(page, mixedStatusAppsProject.name);
     await expect(activeProjectSection.locator('.active-project-name')).toHaveText(mixedStatusAppsProject.name);
-    await expect(statusLines).toHaveCount(2);
-    await expect(statusLines.nth(1)).toContainText('Web apps:');
-    await expect(statusLines.nth(1).locator('.active-project-various-statuses')).toHaveText('various statuses');
+    await expect(statusLines).toHaveCount(3);
+    await expect(activeProjectSection.getByRole('link').locator('.project-summary-route-text')).toHaveText([
+      'apps/mixed-app-a',
+      'apps/mixed-app-b',
+    ]);
+    await expect(activeProjectSection.locator('.project-summary-status-text')).toHaveText('Unpublished changes');
   });
 });

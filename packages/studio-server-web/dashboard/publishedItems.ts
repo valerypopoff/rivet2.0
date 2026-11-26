@@ -1,5 +1,8 @@
 import type { HostedRouteConfig, WorkflowProjectItem, WorkflowProjectStatus } from './types';
-import { getWorkflowProjectEndpointStatus, type WorkflowPublicationReferenceChanges } from './workflowProjectPublicationStatus';
+import {
+  getWorkflowProjectEndpointStatus,
+  type WorkflowPublicationReferenceChanges,
+} from './workflowProjectPublicationStatus';
 
 export type PublishedItemStatus = Exclude<WorkflowProjectStatus, 'unpublished'>;
 
@@ -12,8 +15,41 @@ export type PublishedItem = {
   status: PublishedItemStatus;
 };
 
-function buildPublishedRoute(basePath: string, slug: string): string {
+export function buildPublishedRoute(basePath: string, slug: string): string {
   return `${basePath.replace(/\/$/, '')}/${encodeURIComponent(slug)}`;
+}
+
+/** Shorten same-origin routes for display without disguising a different host. */
+export function getPublishedRouteLabel(route: string, origin: string): string {
+  try {
+    const url = new URL(route, origin);
+    return url.origin === origin ? `${url.pathname.replace(/^\//, '')}${url.search}${url.hash}` : url.href;
+  } catch {
+    return route;
+  }
+}
+
+export function getPublishedEndpoint(
+  project: WorkflowProjectItem,
+  routeConfig: HostedRouteConfig,
+  references?: WorkflowPublicationReferenceChanges,
+): PublishedItem | null {
+  const endpointName = (project.settings.publishedEndpointName || project.settings.endpointName).trim();
+  const status = getWorkflowProjectEndpointStatus(project, references);
+  if (!endpointName || status === 'unpublished') return null;
+  return {
+    id: `endpoint:${project.id}:${endpointName}`,
+    kind: 'endpoint',
+    label: endpointName,
+    project,
+    route: buildPublishedRoute(
+      project.settings.endpointAccess === 'internal'
+        ? routeConfig.internalPublishedWorkflowsBaseUrl || 'http://api/internal/workflows'
+        : routeConfig.publishedWorkflowsBasePath,
+      endpointName,
+    ),
+    status,
+  };
 }
 
 export function getPublishedItems(
@@ -24,24 +60,8 @@ export function getPublishedItems(
   return projects
     .flatMap((project): PublishedItem[] => {
       const items: PublishedItem[] = [];
-      const endpointName = (project.settings.publishedEndpointName || project.settings.endpointName).trim();
-
-      const endpointStatus = getWorkflowProjectEndpointStatus(project, references);
-      if (endpointName && endpointStatus !== 'unpublished') {
-        items.push({
-          id: `endpoint:${project.id}:${endpointName}`,
-          kind: 'endpoint',
-          label: endpointName,
-          project,
-          route: buildPublishedRoute(
-            project.settings.endpointAccess === 'internal'
-              ? routeConfig.internalPublishedWorkflowsBaseUrl || 'http://api/internal/workflows'
-              : routeConfig.publishedWorkflowsBasePath,
-            endpointName,
-          ),
-          status: endpointStatus,
-        });
-      }
+      const endpoint = getPublishedEndpoint(project, routeConfig, references);
+      if (endpoint) items.push(endpoint);
 
       for (const webApp of project.settings.publishedWebApps) {
         items.push({

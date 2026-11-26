@@ -2,7 +2,10 @@ import type { FC } from 'react';
 import type { WorkflowProjectItem } from './types';
 import { WorkflowInlineRenameInput } from './WorkflowInlineRenameInput';
 import { useWorkflowPublicationReferences } from './WorkflowPublicationReferences';
-import { getWorkflowProjectPublicationStatus, getWorkflowReferenceProjectId } from './workflowProjectPublicationStatus';
+import {
+  getWorkflowProjectContribution,
+  getWorkflowProjectPublicationStatus,
+} from './workflowProjectPublicationStatus';
 import type { DraggedWorkflowItem } from './workflowLibraryHelpers';
 import { namespaceIdentity } from './workflowNamespaceMutations';
 
@@ -45,8 +48,7 @@ export const WorkflowProjectRow: FC<WorkflowProjectRowProps> = ({
 }) => {
   const references = useWorkflowPublicationReferences();
   const publicationStatus = getWorkflowProjectPublicationStatus(project, references);
-  const marker = references?.markerByProject.get(getWorkflowReferenceProjectId(project));
-  const markerLabel = marker === 'changed' ? 'Changes affect a published endpoint' : 'Used by a published endpoint';
+  const contribution = getWorkflowProjectContribution(project, references);
   const rowClassName = [
     'project-row',
     `project-row-status-${publicationStatus}`,
@@ -71,12 +73,12 @@ export const WorkflowProjectRow: FC<WorkflowProjectRowProps> = ({
       {publicationStatus !== 'unpublished' ? (
         <span className={`project-status-dot ${publicationStatus}`} aria-hidden="true" />
       ) : null}
-      {marker ? (
+      {contribution ? (
         <span
-          className={`reference-project-marker ${marker}`}
+          className={`reference-project-marker ${contribution.status}`}
           role="img"
-          aria-label={markerLabel}
-          title={markerLabel}
+          aria-label={contribution.label}
+          title={contribution.label}
         />
       ) : null}
       {editing ? (

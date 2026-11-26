@@ -18,8 +18,13 @@ import type {
 } from './types';
 import { SegmentedControl, SegmentedControlButton } from './SegmentedControl';
 import { LLMProfileHealthSettings } from './LLMProfileHealthSettings';
-import { PublicationReferencePill, useWorkflowPublicationReferences } from './WorkflowPublicationReferences';
-import { getWorkflowProjectEndpointStatus, getWorkflowReferenceProjectId } from './workflowProjectPublicationStatus';
+import { WorkflowPublicationStatusText, useWorkflowPublicationReferences } from './WorkflowPublicationReferences';
+import {
+  getWorkflowProjectContribution,
+  getWorkflowProjectEndpointStatus,
+  getWorkflowProjectSummaryStatus,
+  getWorkflowReferenceProjectId,
+} from './workflowProjectPublicationStatus';
 import { useProjectSettingsActions } from './useProjectSettingsActions';
 import { WorkflowPublishedVersionHistoryPanel } from './WorkflowPublishedVersionHistoryModal';
 import { ProjectIncomingReferences } from './ProjectIncomingReferences';
@@ -186,6 +191,10 @@ export const ProjectSettingsModal: FC<ProjectSettingsModalProps> = ({
   const displayProject = snapshotProject ?? activeProject;
   const references = useWorkflowPublicationReferences();
   const displayedProjectStatus = getWorkflowProjectEndpointStatus(displayProject, references);
+  // This tab describes the endpoint; an independently published app does not
+  // make an unpublished endpoint appear published or change its action guards.
+  const endpointSummary = getWorkflowProjectSummaryStatus(displayProject, references, displayProject.settings.status);
+  const contribution = getWorkflowProjectContribution(displayProject, references);
   const baseFileName = useMemo(() => activeProject.fileName.replace(/\.[^.]+$/, ''), [activeProject.fileName]);
   const publishedEndpointName =
     displayProject.settings.publishedEndpointName || displayProject.settings.endpointName || 'endpoint-name';
@@ -260,10 +269,15 @@ export const ProjectSettingsModal: FC<ProjectSettingsModalProps> = ({
     <div className="project-settings-tab-panel" role="tabpanel">
       <div className="project-settings-status-block">
         <div className="active-project-status-row">
-          <span className={`project-status-badge ${displayedProjectStatus}`}>
-            {getWorkflowProjectStatusLabel(displayedProjectStatus)}
-          </span>
-          <PublicationReferencePill project={displayProject} />
+          {!isUnpublishedProject || !contribution ? (
+            <span className={`project-status-badge ${displayedProjectStatus}`}>
+              <WorkflowPublicationStatusText project={displayProject} status={endpointSummary} />
+            </span>
+          ) : null}
+          {contribution ? (
+            <span className={`project-status-badge contribution ${contribution.status}`}>{contribution.label}</span>
+          ) : null}
+          {endpointSummary.notice ? <span className="reference-coverage-note">{endpointSummary.notice}</span> : null}
           {isUnpublishedProject ? (
             <span className="project-settings-status-note">Workflow is not published as endpoint.</span>
           ) : null}

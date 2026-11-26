@@ -991,17 +991,50 @@ The endpoint badge and hollow reference indicators use one
 [dashboard projection](../../packages/studio-server-web/dashboard/workflowProjectPublicationStatus.ts)
 of the saved project and dependency revisions. A dependency that matches the revision used by a published
 endpoint keeps its hollow green circle when the endpoint project's draft changes.
-A mismatched dependency gets a hollow yellow circle. The project name uses
+This status is **Contributes to published**. A mismatched dependency gets a
+hollow yellow circle, **Contributes to unpublished changes**. These labels are
+shared by marker tooltips/accessibility text, the project context-menu strip and
+the existing status row in Project Settings. A contributing project without its
+own endpoint shows the contribution pill in place of **Unpublished**; the endpoint
+note and Publish controls still reflect its unpublished endpoint. When a project
+also has its own endpoint publication, both statuses remain visible. Contribution
+statuses do not change publication eligibility or access checks. In the context
+menu, contribution-only summaries use an outlined strip and body, while projects
+with their own publication retain a secondary contribution line. The project name uses
 the same color as its hollow circle. The editor tracks unsaved work for
 the Save controls and the publish review guard. Saving a selected dependency
 refreshes the reference overview even when the caller's saved revision stays
-the same. The active card refreshes web-app data from the owning project's
-saved settings and revision. A change to the derived endpoint badge uses the
-existing web-app summary. The
-tree shows external reference counts beneath each bundle title, aligned with
-the bundle icon. Background refreshes from opening or closing tabs keep the
+the same. The project summary refreshes web-app links from the owning project's
+saved settings and revision, including revision-only changes that keep the same
+timestamp and publication version. Returned links must match the requested path,
+catalog identity and known immutable project identity; a replacement at the same
+path is shown as unavailable until the current project is loaded. Superseded
+reads cannot restore an older link. A change to the derived endpoint status reuses the
+existing web-app result. The **Changes in referenced projects** modal lists the
+changed dependencies without changing release comparisons or access rules. The
+tree shows external reference counts closely beneath each bundle title, aligned
+with the title text after the bundle icon. The name and reference link share one
+hover highlight; the arrow and project count stay aligned with the name line.
+The reference link remains a separate button and does not expand the bundle.
+Background refreshes from opening or closing tabs keep the
 last reference indicators visible until the current request finishes. Only
 the latest tree generation's response can replace them.
+
+The context-menu Settings strip distinguishes saved local changes from changes
+in distinct referenced projects. It says **Unpublished changes** for local-only
+changes, **Unpublished changes in N referenced projects** for reference-only
+changes, and **Unpublished changes here and in N referenced projects** for both.
+Counts are by project, not call site, with singular wording for one project.
+Missing dependencies do not count as confirmed edits; unavailable/unverified
+states remain explicit. The strip body and cog open Project Settings; the
+underlined count is a separate keyboard-accessible button that opens
+**Changes in referenced projects** directly and closes the context menu. Project
+Settings shows the same full status wording and reference link instead of a
+chain-link icon. Closing reference details there preserves pending form drafts.
+The Endpoint tab retains its endpoint-only status and publication action rules.
+Unavailable dependency statuses also retain a link to their diagnostics. API/APP
+rows display the live route path and retain the existing copy/open behavior;
+a different route host is never hidden.
 The **External references** modal groups targets beneath the calling bundle
 project and each Subgraph's graph and node path. Each target shows its name,
 path and **Open project** action in order. The source heading's tooltip shows

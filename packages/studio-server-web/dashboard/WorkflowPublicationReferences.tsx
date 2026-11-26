@@ -1,7 +1,6 @@
 import Button from '@atlaskit/button';
 import ModalDialog, { ModalBody } from '@atlaskit/modal-dialog';
 import { createContext, useContext, useEffect, useMemo, useState } from 'react';
-import { SubgraphLinkIcon } from '../../app/src/components/visualNode/SubgraphLinkIcon';
 import { getWorkflowReleaseSelectorLabel } from '../../studio-server-shared/workflow-types';
 import type {
   WorkflowBundleReferenceDetails,
@@ -11,7 +10,11 @@ import type {
   WorkflowReleaseDependencyStatus,
 } from '../../studio-server-shared/workflow-types';
 import { fetchWorkflowBundleReferenceDetails, fetchWorkflowReferenceOverview } from './workflowApi';
-import { buildWorkflowPublicationReferences, getWorkflowReferenceProjectId } from './workflowProjectPublicationStatus';
+import {
+  buildWorkflowPublicationReferences,
+  getWorkflowReferenceProjectId,
+  type WorkflowProjectSummaryStatus,
+} from './workflowProjectPublicationStatus';
 
 const projectPath = (value: string) => value.replace(/\.rivet-project$/i, '');
 type ReferenceDialog = { bundle: WorkflowFolderItem } | { callerId: string };
@@ -83,34 +86,48 @@ export function useWorkflowReferenceOverview(projects: WorkflowProjectItem[], tr
   return { value, dialog, close: () => setDialog(null) };
 }
 
-export function PublicationReferencePill({ project, onOpen }: { project: WorkflowProjectItem; onOpen?: () => void }) {
+export function WorkflowPublicationStatusText({
+  project,
+  status,
+  onOpenReferences,
+}: {
+  project: WorkflowProjectItem;
+  status: WorkflowProjectSummaryStatus;
+  onOpenReferences?: () => void;
+}) {
   const context = useWorkflowPublicationReferences();
   const id = getWorkflowReferenceProjectId(project);
-  const changed = context?.changedByCaller.get(id);
-  if (context && changed?.length)
-    return (
+  const referenceLink = (text: string) =>
+    context ? (
       <button
-        className="reference-change-badge"
+        className="publication-reference-link"
         type="button"
-        aria-label={`Changed referenced projects (${changed.length})`}
-        title="See changed referenced projects"
+        aria-haspopup="dialog"
+        title="Changes in referenced projects"
         onClick={() => {
           context.open({ callerId: id });
-          onOpen?.();
+          onOpenReferences?.();
         }}
       >
-        <SubgraphLinkIcon />
+        {text}
       </button>
+    ) : (
+      text
     );
-  if (context?.unverifiedByCaller.has(id)) {
-    const canCapture = context.canCaptureRelease.has(id);
-    return (
-      <span className="reference-coverage-note">
-        {canCapture ? 'Update this endpoint to track dependencies' : 'Dependencies unverified'}
-      </span>
-    );
-  }
-  return null;
+  // Unavailable dependencies still need diagnostics even though they are not
+  // counted as confirmed changes in the normal reference-count label.
+  const unavailableOnly = !status.referenceText && Boolean(context?.changedByCaller.get(id)?.length);
+  return (
+    <span className="publication-status-text">
+      {unavailableOnly ? referenceLink(status.text) : status.text}
+      {status.referenceText ? (
+        <>
+          {' '}
+          <span className="publication-status-reference">in {referenceLink(status.referenceText)}</span>
+        </>
+      ) : null}
+    </span>
+  );
 }
 
 export function WorkflowReferenceDetailsModal({
@@ -144,7 +161,7 @@ export function WorkflowReferenceDetailsModal({
     return () => controller.abort();
   }, [bundleId]);
   const context = useWorkflowPublicationReferences();
-  const title = 'bundle' in dialog ? 'External references' : 'Changed referenced projects';
+  const title = 'bundle' in dialog ? 'External references' : 'Changes in referenced projects';
   const callerUnverified = 'callerId' in dialog && context?.unverifiedByCaller.has(dialog.callerId);
   const changedDependencies =
     'callerId' in dialog

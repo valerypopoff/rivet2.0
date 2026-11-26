@@ -4,6 +4,7 @@ The project tree shows an external reference count for a bundle with saved
 references outside it. The count groups by target project. The details show
 the referring projects, graph calls and source revision save times.
 **Open project** uses the normal editable editor tab.
+The shared bundle icon is an outlined box with a plain top face and inherits the surrounding text color.
 
 [Published revision history](workflow-publication.md#published-revision-history)
 opens a history tree with the root and captured dependencies, including

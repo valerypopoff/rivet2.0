@@ -118,6 +118,12 @@ and production recompression are unchanged.
 
 ## Project context-menu follow-up (2026-11-22)
 
+The 2026-11-26 project-summary redesign supersedes the width, outline and status-row
+presentation below: menus now use a viewport-capped 274px width, a Settings strip
+with a separate reference-details link, and outlined contribution-only summaries.
+The [current publication rules](workflow-publication.md) describe the final behavior;
+the completed checklist below records the earlier extraction.
+
 - [x] Move project details into `WorkflowProjectSummary.tsx` at the top of the
       project context menu; remove the sidebar card and empty placeholder.
 - [x] Resolve the clicked project by its tree path, preserve its live status and
