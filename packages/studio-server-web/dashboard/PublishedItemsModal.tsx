@@ -5,26 +5,8 @@ import type { HostedRouteConfig, WorkflowProjectItem } from './types';
 import { getPublishedItems } from './publishedItems';
 import { useWorkflowPublicationReferences } from './WorkflowPublicationReferences';
 import { SegmentedControl, SegmentedControlButton } from './SegmentedControl';
+import { copyTextToClipboard } from './copyTextToClipboard';
 import './PublishedItemsModal.css';
-
-async function copyTextToClipboard(value: string): Promise<void> {
-  try {
-    await navigator.clipboard.writeText(value);
-    return;
-  } catch {
-    const input = document.createElement('textarea');
-    input.value = value;
-    input.style.position = 'fixed';
-    input.style.opacity = '0';
-    document.body.append(input);
-    input.select();
-    const copied = document.execCommand('copy');
-    input.remove();
-    if (!copied) {
-      throw new Error('Clipboard access was denied.');
-    }
-  }
-}
 
 export const PublishedItemsModal: FC<{
   isOpen: boolean;
@@ -58,7 +40,7 @@ const OpenPublishedItemsModal: FC<{
   const copiedResetTimeoutRef = useRef<number | null>(null);
 
   const references = useWorkflowPublicationReferences();
-  const items = getPublishedItems(projects, routeConfig, references);
+  const items = getPublishedItems(projects, routeConfig, references ?? undefined);
   const endpointItems = items.filter((item) => item.kind === 'endpoint');
   const webAppItems = items.filter((item) => item.kind === 'web-app');
   const visibleItems = activeKind === 'endpoint' ? endpointItems : webAppItems;
@@ -143,9 +125,9 @@ const OpenPublishedItemsModal: FC<{
                 id="published-items-panel"
                 className="published-items-empty"
                 role="tabpanel"
-                aria-labelledby={activeKind === 'endpoint'
-                  ? 'published-items-endpoints-tab'
-                  : 'published-items-web-apps-tab'}
+                aria-labelledby={
+                  activeKind === 'endpoint' ? 'published-items-endpoints-tab' : 'published-items-web-apps-tab'
+                }
               >
                 No {activeKind === 'endpoint' ? 'endpoints' : 'web apps'} are currently published.
               </div>
@@ -154,9 +136,9 @@ const OpenPublishedItemsModal: FC<{
                 id="published-items-panel"
                 className="published-items-list"
                 role="tabpanel"
-                aria-labelledby={activeKind === 'endpoint'
-                  ? 'published-items-endpoints-tab'
-                  : 'published-items-web-apps-tab'}
+                aria-labelledby={
+                  activeKind === 'endpoint' ? 'published-items-endpoints-tab' : 'published-items-web-apps-tab'
+                }
               >
                 {visibleItems.map((item) => (
                   <article className="published-item" key={item.id}>

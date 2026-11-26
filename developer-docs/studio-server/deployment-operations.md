@@ -96,6 +96,15 @@ Other startup options, including a configured search path and the driver's
 last-value precedence for repeated `options`, remain supported. These bounds
 belong to maintenance connections, outside application request handling.
 
+The transition inventory still scans both current recording keys and retained
+run-evidence manifests. It parses the final artifact envelope with text/array
+operations, checking the 64-character lowercase hexadecimal hash and both
+nonempty decimal size fields without numeric casts. Legacy keys require the
+identity reader; malformed envelopes and unknown encodings still block the
+transition. No rows, historical evidence or safety checks are skipped. The
+real PostgreSQL transition contract covers both sources, missing keys, repeated
+envelope markers, large/zero-padded sizes and malformed fields.
+
 Omit `proxy` for direct connectivity. Otherwise use a reviewed Cloud SQL Auth
 Proxy instance and binary appropriate to the runner. Hosted setup downloads
 `source` at its exact object generation, verifies SHA-256, and gives the binary

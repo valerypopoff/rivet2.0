@@ -1,11 +1,12 @@
 # Run recordings UI cleanup plan
 
-Status: complete. Recording-card presentation was completed on 2026-10-04; project navigation and terminology were completed on 2026-11-03. This plan covers the recordings UI, not storage migration or recording capture.
+Status: complete. The latest card layout and diagnostic actions were completed on 2026-11-26. Earlier sections retain their original validation history. This plan covers the recordings UI, not storage migration or recording capture.
 
 ## Completed scope
 
 - [x] Hide `Related run key` on primary recordings, including correlated roots with sub-runs.
-- [x] Keep the key on called-project Subgraph recordings for debugging.
+- [x] Keep the key on called-project Subgraph recordings for debugging (now
+      available through the Recording actions menu; see the follow-up below).
 - [x] Remove the selected-workflow `Recording scope` label and explanation.
 - [x] Preserve correlation metadata, family grouping, expansion, replay and deletion behavior.
 - [x] Select root cards by stable recording ID in browser tests instead of removed display text.
@@ -117,6 +118,12 @@ and production recompression are unchanged.
 
 ## Project context-menu follow-up (2026-11-22)
 
+The 2026-11-26 project-summary redesign supersedes the width, outline and status-row
+presentation below: menus now use a viewport-capped 274px width, a Settings strip
+with a separate reference-details link, and outlined contribution-only summaries.
+The [current publication rules](workflow-publication.md) describe the final behavior;
+the completed checklist below records the earlier extraction.
+
 - [x] Move project details into `WorkflowProjectSummary.tsx` at the top of the
       project context menu; remove the sidebar card and empty placeholder.
 - [x] Resolve the clicked project by its tree path, preserve its live status and
@@ -146,3 +153,69 @@ The CI inventory loads 394 tests in 42 files, and import boundaries, test style,
 documentation links and formatting pass. These results do not claim a cloud
 rollout or a complete CI run. Recording formats, database and production
 recompression remain unchanged.
+
+## Project details and sub-run sorting (2026-11-26)
+
+- [x] Split run and sub-run metadata into **Project name** and **Path**. Hide the
+      terminal project-file extension in cards and the sidebar; preserve the
+      recorded metadata and fallbacks for older records.
+- [x] Add independent **Chronological** (default) / **Project name (A–Z)** order
+      for each expanded family with multiple children. Equal names retain
+      chronological/recording-ID order; primary pagination is unchanged.
+- [x] Put **Sub-run sorting** in its own stable measured row above the children,
+      with its label beside the controls. Retain the choice across collapse and
+      virtual scrolling, without fetching metadata again or opening a replay.
+- [x] Draw the green connector only beside actual sub-runs, continuously across
+      their gaps, ending at the last card. Keep the sorting row free of that line.
+- [x] Declare the existing `@types/react-window` dependency in the web package so
+      focused compilation no longer needs a declaration-path workaround.
+
+The 19 hierarchy/presentation unit cases pass. The initial complete 95-case
+browser run passed before the header refinements; 32 affected cases passed after
+moving the header, then six final desktop/narrow and multi-page cases passed
+after compacting the controls and joining the connector. The final checks include
+label spacing, line continuity and its end position, alphabetical/chronological
+switching, keyboard use, retained selection, virtualization and request counts.
+Build, scoped TypeScript, runtime/browser lint, formatting and documentation links
+pass. These are local checks; recording storage and deployment are unchanged.
+
+## Recording card diagnostics and layout (2026-11-26)
+
+- [x] Keep the timestamp, project name and endpoint/called graph visible. Put the
+      formatted duration at the top right and omit the default **Succeeded**
+      pill, preserving failure, suspicious and nonterminal status indicators.
+- [x] Align the continuous green connector with primary cards' left edge. Keep
+      only the small connector gutter and remove the `Sub-run` timestamp prefix.
+- [x] Use a visible three-dot **Recording actions** menu at the bottom right.
+      **Show/Hide diagnostic details** comes first; a separated red **Delete**
+      action is last. Preserve keyboard navigation, Escape/outside dismissal,
+      focus return and deletion/playback locks.
+- [x] Position the menu trigger outside normal flow so it adds no card height or
+      bottom padding. Keep text, Copy and family controls clear of its hit area.
+- [x] Show **Path** and the Subgraph-only **Execution correlation ID** in the
+      requested diagnostic region. Preserve extension removal, legacy metadata
+      fallbacks and exact ID copying with success/failure feedback.
+- [x] Share clipboard copying with Published endpoints/apps. Keep the HTTP
+      fallback within the active dialog, clean up its temporary field and restore
+      focus, including after denied copying.
+- [x] Leave 32 px after the final expanded child before a following primary or
+      context row, and 8 px elsewhere. Stop the connector at the last child card.
+      Invalidate the preceding virtual offset when its successor changes while
+      retaining the base card measurement.
+- [x] Preserve grouping, sorting, pagination, confirmed-deletion reconciliation,
+      replay ownership, request cancellation and stored recording identities.
+
+The menu follows its anchor during automatic virtual-list scrolling. Enabling
+scroll dismissal closed it immediately in the narrow sorting journey; the normal
+Escape/outside-click behavior passes that regression without changing timeouts.
+Browser checks compare card height with and without the trigger and verify
+wrapped text, Copy and family controls remain unobstructed. The suite also covers
+menu-based deletion, pending-operation locks and all existing playback journeys.
+
+Final validation: the web package test command passes 292 unit tests and 39
+development/production runtime tests. All 96 headless browser cases pass against
+the built frontend: the complete 95-case recordings suite and the Published-items
+clipboard journey. Scoped TypeScript/lint, code formatting, import boundaries,
+test style, package-version consistency, documentation links and whitespace
+checks pass. The browser runner exits and releases its preview port normally.
+These are local checks; no deployment or hosted performance result is claimed.

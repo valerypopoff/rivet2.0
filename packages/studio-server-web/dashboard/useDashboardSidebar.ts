@@ -168,6 +168,7 @@ export function useDashboardSidebar(options: UseDashboardSidebarOptions) {
         event.isComposing ||
         isEditableElement(document.activeElement) ||
         document.activeElement?.closest('[role="textbox"], .monaco-editor') ||
+        document.activeElement?.closest('[role="menu"]') ||
         document.querySelector('[role="dialog"], [role="alertdialog"]')
       ) {
         return;

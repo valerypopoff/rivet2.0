@@ -36,7 +36,11 @@ import { useWorkflowBundleComparison } from './useWorkflowBundleComparison';
 import { WorkflowBundleComparisonTree } from './WorkflowBundleComparisonTree';
 import { WorkflowHistoryPreviewPanel } from './WorkflowHistoryPreviewPanel';
 import type { HistoryPreviewSession } from './useWorkflowHistoryPreview';
-import { useWorkflowReferenceOverview, WorkflowPublicationReferenceContext, WorkflowReferenceDetailsModal } from './WorkflowPublicationReferences';
+import {
+  useWorkflowReferenceOverview,
+  WorkflowPublicationReferenceContext,
+  WorkflowReferenceDetailsModal,
+} from './WorkflowPublicationReferences';
 
 interface WorkflowLibraryPanelProps {
   sendBundleComparison: BundleComparisonSend;
@@ -359,219 +363,224 @@ export const WorkflowLibraryPanel: FC<WorkflowLibraryPanelProps> = ({
   }
 
   const panelContentVisible = contentVisible && !collapsed;
-  const openedProjectDotStatus = openedWorkflowProject ? getWorkflowProjectDotStatus(openedWorkflowProject, references.value) : null;
+  const openedProjectDotStatus = openedWorkflowProject
+    ? getWorkflowProjectDotStatus(openedWorkflowProject, references.value)
+    : null;
 
   return (
     <WorkflowPublicationReferenceContext.Provider value={references.value}>
-    <div className="workflow-library-panel">
-      <div
-        className={`workflow-library-panel-content${panelContentVisible ? '' : ' workflow-library-panel-content-hidden'}`}
-        aria-hidden={panelContentVisible ? undefined : true}
-      >
-        <button
-          type="button"
-          className="header"
-          onClick={onToggleCollapse}
-          title="Collapse folders pane"
-          aria-label="Collapse folders pane"
-          aria-expanded={collapsed ? 'false' : 'true'}
-          tabIndex={panelContentVisible ? undefined : -1}
-        >
-          <span className="header-collapse-icon">
-            <SidebarOpenIcon />
-          </span>
-          <span className="header-title">Rivet Studio Server</span>
-        </button>
-
+      <div className="workflow-library-panel">
         <div
-          ref={bodyRef}
-          className={`body${dragOverRoot ? ' drag-over-root' : ''}`}
-          onDragOver={comparison.session || historyPreview ? undefined : handleRootDragOver}
-          onDragLeave={comparison.session || historyPreview ? undefined : handleRootDragLeave}
-          onDrop={comparison.session || historyPreview ? undefined : (event) => void handleRootDrop(event)}
+          className={`workflow-library-panel-content${panelContentVisible ? '' : ' workflow-library-panel-content-hidden'}`}
+          aria-hidden={panelContentVisible ? undefined : true}
         >
-          {comparison.session || comparison.pending ? (
-            <div className="bundle-comparison-toolbar">
-              <div className="bundle-comparison-title">
-                {comparison.session
-                  ? `Older · ${comparison.session.manifest.older.name} (saved) → Newer · ${comparison.session.manifest.newer.name} (editable)`
-                  : 'Opening bundle comparison…'}
-              </div>
-              <Button onClick={comparison.exit}>Exit comparison</Button>
-            </div>
-          ) : null}
-          {comparison.error ? (
-            <div className="workflow-project-bundle-error" role="alert">
-              {comparison.error}
-            </div>
-          ) : null}
-          {comparison.session && comparison.changeError ? (
-            <div className="workflow-project-bundle-error bundle-comparison-check-error" role="alert">
-              <span>{comparison.changeError}</span>
-              <Button onClick={comparison.retryChanges}>Retry check</Button>
-            </div>
-          ) : null}
-          {membershipChanged ? (
-            <div className="workflow-project-bundle-warning" role="status">
-              Bundle membership or locations changed. Exit comparison and start again to review the updated bundles.
-            </div>
-          ) : null}
-          {historyPreview ? (
-            <WorkflowHistoryPreviewPanel
-              key={historyPreview.id}
-              session={historyPreview}
-              openedPath={openedProjectPath}
-              bundleFolders={controller.bundleFolders}
-              onOpen={onOpenHistoryProject}
-              onExit={onExitHistoryPreview}
-            />
-          ) : bodyContent}
-          {controller.bundleAction ? (
-            <div className="bundle-action-status" role="status" title={controller.bundleAction.name}>
-              {controller.bundleAction.kind === 'duplication'
-                ? `Duplicating ${controller.bundleAction.name} from saved versions…`
-                : `Converting ${controller.bundleAction.name}…`}
-            </div>
-          ) : null}
-          {!comparison.session && !historyPreview ? (
-            <div className="body-actions">
-              <button
-                type="button"
-                className="link-button"
-                disabled={loading || !!error}
-                onClick={() => void handleCreateFolder()}
-              >
-                + New folder
-              </button>
-            </div>
-          ) : null}
-        </div>
-
-        <div className="panel-bottom-actions">
-          <div className={`panel-bottom-action-with-summary${runRecordingsRetained ? ' has-summary' : ''}`}>
-            <Button
-              appearance="subtle"
-              className="panel-bottom-button project-settings-secondary-button button-size-m"
-              onClick={openRunRecordingsModal}
-              title="Browse workflow run recordings and load them into the editor"
-            >
-              <span className="panel-bottom-button-icon" aria-hidden="true">
-                <RecordingIcon />
-              </span>
-              <span className="panel-bottom-button-label">Run recordings</span>
-            </Button>
-            {runRecordingsRetained ? (
-              <div className="panel-bottom-action-summary">
-                {runRecordingsFoundCount === null ? 'Found: —' : `Found: ${runRecordingsFoundCount}`}
-              </div>
-            ) : null}
-          </div>
-          <Button
-            appearance="subtle"
-            className="panel-bottom-button project-settings-secondary-button button-size-m"
-            onClick={() => openRunStatisticsModal()}
-            title="Compare recorded workflow and web app execution time"
+          <button
+            type="button"
+            className="header"
+            onClick={onToggleCollapse}
+            title="Collapse folders pane"
+            aria-label="Collapse folders pane"
+            aria-expanded={collapsed ? 'false' : 'true'}
+            tabIndex={panelContentVisible ? undefined : -1}
           >
-            <span className="panel-bottom-button-label">Run statistics</span>
-          </Button>
-          <Button
-            appearance="subtle"
-            className="panel-bottom-button project-settings-secondary-button button-size-m"
-            onClick={() => setPublishedItemsOpen(true)}
-            title="Browse published workflow endpoints and web apps"
-          >
-            <span className="panel-bottom-button-label">Published</span>
-          </Button>
-          <div className={`panel-bottom-action-with-summary${enabledScheduleCount ? ' has-summary' : ''}`}>
-            <Button
-              appearance="subtle"
-              className="panel-bottom-button project-settings-secondary-button button-size-m"
-              onClick={() => setScheduledRunsOpen(true)}
-              title="Schedule saved projects to run automatically"
-            >
-              <span className="panel-bottom-button-icon" aria-hidden="true">
-                <ScheduleIcon />
-              </span>
-              <span className="panel-bottom-button-label">Scheduled runs</span>
-            </Button>
-            {enabledScheduleCount ? (
-              <div
-                className="panel-bottom-action-summary"
-                aria-label={`${enabledScheduleCount} enabled scheduled runs`}
-              >
-                Enabled: {enabledScheduleCount}
-              </div>
-            ) : null}
-          </div>
-          <Button
-            appearance="subtle"
-            className="panel-bottom-button project-settings-secondary-button button-size-m"
-            onClick={() => setAppSettingsOpen(true)}
-            title="Open app settings"
-          >
-            <span className="panel-bottom-button-icon" aria-hidden="true">
-              <SettingsCogIcon />
+            <span className="header-collapse-icon">
+              <SidebarOpenIcon />
             </span>
-            <span className="panel-bottom-button-label">Settings</span>
-          </Button>
+            <span className="header-title">Rivet Studio Server</span>
+          </button>
+
+          <div
+            ref={bodyRef}
+            className={`body${dragOverRoot ? ' drag-over-root' : ''}`}
+            onDragOver={comparison.session || historyPreview ? undefined : handleRootDragOver}
+            onDragLeave={comparison.session || historyPreview ? undefined : handleRootDragLeave}
+            onDrop={comparison.session || historyPreview ? undefined : (event) => void handleRootDrop(event)}
+          >
+            {comparison.session || comparison.pending ? (
+              <div className="bundle-comparison-toolbar">
+                <div className="bundle-comparison-title">
+                  {comparison.session
+                    ? `Older · ${comparison.session.manifest.older.name} (saved) → Newer · ${comparison.session.manifest.newer.name} (editable)`
+                    : 'Opening bundle comparison…'}
+                </div>
+                <Button onClick={comparison.exit}>Exit comparison</Button>
+              </div>
+            ) : null}
+            {comparison.error ? (
+              <div className="workflow-project-bundle-error" role="alert">
+                {comparison.error}
+              </div>
+            ) : null}
+            {comparison.session && comparison.changeError ? (
+              <div className="workflow-project-bundle-error bundle-comparison-check-error" role="alert">
+                <span>{comparison.changeError}</span>
+                <Button onClick={comparison.retryChanges}>Retry check</Button>
+              </div>
+            ) : null}
+            {membershipChanged ? (
+              <div className="workflow-project-bundle-warning" role="status">
+                Bundle membership or locations changed. Exit comparison and start again to review the updated bundles.
+              </div>
+            ) : null}
+            {historyPreview ? (
+              <WorkflowHistoryPreviewPanel
+                key={historyPreview.id}
+                session={historyPreview}
+                openedPath={openedProjectPath}
+                bundleFolders={controller.bundleFolders}
+                onOpen={onOpenHistoryProject}
+                onExit={onExitHistoryPreview}
+              />
+            ) : (
+              bodyContent
+            )}
+            {controller.bundleAction ? (
+              <div className="bundle-action-status" role="status" title={controller.bundleAction.name}>
+                {controller.bundleAction.kind === 'duplication'
+                  ? `Duplicating ${controller.bundleAction.name} from saved versions…`
+                  : `Converting ${controller.bundleAction.name}…`}
+              </div>
+            ) : null}
+            {!comparison.session && !historyPreview ? (
+              <div className="body-actions">
+                <button
+                  type="button"
+                  className="link-button"
+                  disabled={loading || !!error}
+                  onClick={() => void handleCreateFolder()}
+                >
+                  + New folder
+                </button>
+              </div>
+            ) : null}
+          </div>
+
+          <div className="panel-bottom-actions">
+            <div className={`panel-bottom-action-with-summary${runRecordingsRetained ? ' has-summary' : ''}`}>
+              <Button
+                appearance="subtle"
+                className="panel-bottom-button project-settings-secondary-button button-size-m"
+                onClick={openRunRecordingsModal}
+                title="Browse workflow run recordings and load them into the editor"
+              >
+                <span className="panel-bottom-button-icon" aria-hidden="true">
+                  <RecordingIcon />
+                </span>
+                <span className="panel-bottom-button-label">Run recordings</span>
+              </Button>
+              {runRecordingsRetained ? (
+                <div className="panel-bottom-action-summary">
+                  {runRecordingsFoundCount === null ? 'Found: —' : `Found: ${runRecordingsFoundCount}`}
+                </div>
+              ) : null}
+            </div>
+            <Button
+              appearance="subtle"
+              className="panel-bottom-button project-settings-secondary-button button-size-m"
+              onClick={() => openRunStatisticsModal()}
+              title="Compare recorded workflow and web app execution time"
+            >
+              <span className="panel-bottom-button-label">Run statistics</span>
+            </Button>
+            <Button
+              appearance="subtle"
+              className="panel-bottom-button project-settings-secondary-button button-size-m"
+              onClick={() => setPublishedItemsOpen(true)}
+              title="Browse published workflow endpoints and web apps"
+            >
+              <span className="panel-bottom-button-label">Published</span>
+            </Button>
+            <div className={`panel-bottom-action-with-summary${enabledScheduleCount ? ' has-summary' : ''}`}>
+              <Button
+                appearance="subtle"
+                className="panel-bottom-button project-settings-secondary-button button-size-m"
+                onClick={() => setScheduledRunsOpen(true)}
+                title="Schedule saved projects to run automatically"
+              >
+                <span className="panel-bottom-button-icon" aria-hidden="true">
+                  <ScheduleIcon />
+                </span>
+                <span className="panel-bottom-button-label">Scheduled runs</span>
+              </Button>
+              {enabledScheduleCount ? (
+                <div
+                  className="panel-bottom-action-summary"
+                  aria-label={`${enabledScheduleCount} enabled scheduled runs`}
+                >
+                  Enabled: {enabledScheduleCount}
+                </div>
+              ) : null}
+            </div>
+            <Button
+              appearance="subtle"
+              className="panel-bottom-button project-settings-secondary-button button-size-m"
+              onClick={() => setAppSettingsOpen(true)}
+              title="Open app settings"
+            >
+              <span className="panel-bottom-button-icon" aria-hidden="true">
+                <SettingsCogIcon />
+              </span>
+              <span className="panel-bottom-button-label">Settings</span>
+            </Button>
+          </div>
+
+          <ModalTransition>
+            {references.dialog && (
+              <WorkflowReferenceDetailsModal
+                key={'bundle' in references.dialog ? references.dialog.bundle.bundleId : references.dialog.callerId}
+                dialog={references.dialog}
+                projects={controller.allProjects}
+                onOpen={onProjectPersistentOpen}
+                onClose={references.close}
+              />
+            )}
+          </ModalTransition>
+          <WorkflowLibraryContextMenus
+            controller={controller}
+            routeConfig={routeConfig}
+            openedProjectPath={openedProjectPath}
+            hasUnsavedChanges={activeProjectHasUnsavedChanges}
+            onSave={onSaveProject}
+            onCompareBundle={(bundleId, opener) => {
+              onExitHistoryPreview();
+              comparison.begin(bundleId, opener);
+            }}
+          />
+          <WorkflowBundleDragPreview preview={controller.dragPreview} />
+          <WorkflowLibraryModals
+            comparison={comparison}
+            scheduledRunsOpen={scheduledRunsOpen}
+            controller={controller}
+            getDirtyProjectIds={getDirtyProjectIds}
+            routeConfig={routeConfig}
+            onRouteConfigChange={onRouteConfigChange}
+          />
+          {scheduledRunsOpen ? (
+            <ScheduledRunsModal
+              projects={controller.allProjects}
+              onClose={() => setScheduledRunsOpen(false)}
+              onOpenRecording={onOpenRecording}
+              onEnabledCountChange={setEnabledScheduleCount}
+            />
+          ) : null}
         </div>
 
-        <ModalTransition>
-          {references.dialog && (
-            <WorkflowReferenceDetailsModal
-              key={'bundle' in references.dialog ? references.dialog.bundle.bundleId : references.dialog.callerId}
-              dialog={references.dialog}
-              projects={controller.allProjects}
-              onOpen={onProjectPersistentOpen}
-              onClose={references.close}
-            />
-          )}
-        </ModalTransition>
-        <WorkflowLibraryContextMenus
-          controller={controller}
-          openedProjectPath={openedProjectPath}
-          hasUnsavedChanges={activeProjectHasUnsavedChanges}
-          onSave={onSaveProject}
-          onCompareBundle={(bundleId, opener) => {
-            onExitHistoryPreview();
-            comparison.begin(bundleId, opener);
-          }}
-        />
-        <WorkflowBundleDragPreview preview={controller.dragPreview} />
-        <WorkflowLibraryModals
-          comparison={comparison}
-          scheduledRunsOpen={scheduledRunsOpen}
-          controller={controller}
-          getDirtyProjectIds={getDirtyProjectIds}
-          routeConfig={routeConfig}
-          onRouteConfigChange={onRouteConfigChange}
-        />
-        {scheduledRunsOpen ? (
-          <ScheduledRunsModal
-            projects={controller.allProjects}
-            onClose={() => setScheduledRunsOpen(false)}
-            onOpenRecording={onOpenRecording}
-            onEnabledCountChange={setEnabledScheduleCount}
-          />
+        {collapsed ? (
+          <button
+            type="button"
+            className="collapsed-strip-button"
+            onClick={onToggleCollapse}
+            title="Expand folders pane"
+            aria-label="Expand folders pane"
+            aria-expanded="false"
+          >
+            <SidebarExpandIcon />
+            {openedProjectDotStatus ? (
+              <span className={`collapsed-strip-status-dot ${openedProjectDotStatus}`} aria-hidden="true" />
+            ) : null}
+          </button>
         ) : null}
       </div>
-
-      {collapsed ? (
-        <button
-          type="button"
-          className="collapsed-strip-button"
-          onClick={onToggleCollapse}
-          title="Expand folders pane"
-          aria-label="Expand folders pane"
-          aria-expanded="false"
-        >
-          <SidebarExpandIcon />
-          {openedProjectDotStatus ? (
-            <span className={`collapsed-strip-status-dot ${openedProjectDotStatus}`} aria-hidden="true" />
-          ) : null}
-        </button>
-      ) : null}
-    </div>
     </WorkflowPublicationReferenceContext.Provider>
   );
 };

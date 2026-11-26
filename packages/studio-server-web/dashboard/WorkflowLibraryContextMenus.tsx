@@ -1,17 +1,19 @@
 import type { FC } from 'react';
+import type { HostedRouteConfig } from './types';
 import { WorkflowFolderContextMenu } from './WorkflowFolderContextMenu';
 import { WorkflowProjectContextMenu } from './WorkflowProjectContextMenu';
-import { useWorkflowLibraryController } from './useWorkflowLibraryController';
+import type { useWorkflowLibraryController } from './useWorkflowLibraryController';
 
 type WorkflowLibraryController = ReturnType<typeof useWorkflowLibraryController>;
 
 export const WorkflowLibraryContextMenus: FC<{
   controller: WorkflowLibraryController;
+  routeConfig: HostedRouteConfig;
   onCompareBundle?: (bundleId: string, opener?: HTMLElement) => void;
   openedProjectPath: string;
   hasUnsavedChanges: boolean;
   onSave: () => void;
-}> = ({ controller, onCompareBundle, openedProjectPath, hasUnsavedChanges, onSave }) => {
+}> = ({ controller, routeConfig, onCompareBundle, openedProjectPath, hasUnsavedChanges, onSave }) => {
   const {
     folderContextMenuState,
     projectContextMenuState,
@@ -98,6 +100,7 @@ export const WorkflowLibraryContextMenus: FC<{
           key={`${projectContextMenuState.project.relativePath}:${projectContextMenuState.x}:${projectContextMenuState.y}`}
           isOpen
           project={project}
+          routeConfig={routeConfig}
           x={projectContextMenuState.x}
           y={projectContextMenuState.y}
           onClose={closeProjectContextMenu}

@@ -12,6 +12,84 @@ import {
 } from './helpers/projectSettingsObserve';
 
 test.describe('Project settings modal', () => {
+  for (const state of [
+    { key: 'local', own: 'unpublished_changes', count: 0, unavailable: false, text: 'Unpublished changes' },
+    {
+      key: 'references',
+      own: 'published',
+      count: 1,
+      unavailable: false,
+      text: 'Unpublished changes in 1 referenced project',
+    },
+    {
+      key: 'both',
+      own: 'unpublished_changes',
+      count: 2,
+      unavailable: false,
+      text: 'Unpublished changes here and in 2 referenced projects',
+    },
+    { key: 'unavailable', own: 'published', count: 1, unavailable: true, text: 'Referenced project unavailable' },
+  ] as const) {
+    test(`publication status and reference details preserve drafts for ${state.key}`, async ({ page }) => {
+      const project = createProjectSettingsFixture(`status-${state.key}`);
+      project.settings.status = state.own;
+      project.settings.lastPublishedAt = '2026-11-26T00:00:00.000Z';
+      const dependencies = Array.from({ length: state.count }, (_, index) =>
+        createProjectSettingsFixture(`dependency-${index}`),
+      );
+      const trackers = createProjectSettingsRouteTrackers();
+      await installProjectSettingsRoutes(page, [project, ...dependencies], trackers);
+      await page.route('**/api/workflows/projects/reference-overview', (route) =>
+        route.fulfill({
+          json: {
+            complete: true,
+            bundles: [],
+            endpoints: [
+              {
+                projectId: project.projectMetadataId,
+                coverage: 'complete',
+                dependencies: dependencies.map((item) => ({
+                  projectId: item.projectMetadataId,
+                  name: item.name,
+                  relativePath: state.unavailable ? null : item.relativePath,
+                  changed: true,
+                  unavailable: state.unavailable,
+                })),
+              },
+            ],
+          },
+        }),
+      );
+      const { modal } = await openProjectSettingsModal(page, project, { activateProject: false });
+      const status = modal.locator('.active-project-status-row');
+      await expect(status.locator('.project-status-badge')).toHaveText(state.text);
+      await expect(status.locator('svg')).toHaveCount(0);
+      const endpoint = modal.getByLabel('Workflow endpoint path');
+      await endpoint.fill('edited-endpoint');
+      if (state.count) {
+        const link = status.getByRole('button', {
+          name: state.unavailable ? state.text : `${state.count} referenced project${state.count === 1 ? '' : 's'}`,
+          exact: true,
+        });
+        if (state.key === 'both') {
+          await link.focus();
+          await link.press('Enter');
+        } else {
+          await link.click();
+        }
+        const details = page.getByRole('dialog', { name: 'Changes in referenced projects', exact: true });
+        await expect(details).toBeVisible();
+        await expect(details.getByRole('heading', { level: 4 })).toHaveText(dependencies.map((item) => item.name));
+        await details.getByRole('button', { name: 'Close reference details' }).click();
+        await expect(endpoint).toHaveValue('edited-endpoint');
+      } else {
+        await expect(status.locator('.publication-reference-link')).toHaveCount(0);
+      }
+      expect(trackers.endpointPublishRequests).toHaveLength(0);
+      expect(trackers.endpointAccessRequests).toHaveLength(0);
+    });
+  }
+
   for (const publication of ['unpublished', 'published', 'unpublished_changes', 'web-app-only'] as const) {
     test(`Delete project opens the appropriate settings tab for ${publication}`, async ({ page }) => {
       const project = createProjectSettingsFixture(`delete-entry-${publication}`);

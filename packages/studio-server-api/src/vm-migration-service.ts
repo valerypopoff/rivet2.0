@@ -364,8 +364,15 @@ export async function freezeLocalStorageSource(migrationId?: string): Promise<vo
 }
 
 export async function getVmMigrationStatus() {
+  const activeJob = runningJob;
+  let job = await readJob();
+  if (activeJob && activeJob === runningJob && job && ['precopy_complete', 'verified', 'failed'].includes(job.phase)) {
+    // Rename makes the terminal record readable before its directory sync and
+    // owner cleanup finish. Do not advertise completion while actions are locked.
+    await activeJob;
+    job = await readJob();
+  }
   const maintenance = readVmMigrationMaintenance();
-  const job = await readJob();
   const unavailableReason = await migrationUnavailableReason();
   return {
     available: unavailableReason === null,

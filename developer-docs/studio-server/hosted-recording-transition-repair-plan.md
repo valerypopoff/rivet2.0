@@ -1,14 +1,39 @@
 # Hosted recording-storage deployment repair plan
 
-Status: implemented locally. A Windows proxy shutdown failure was reproduced
+November 24 implementation status: implemented locally. A Windows proxy shutdown failure was reproduced
 under contention and its `taskkill` dependency was replaced by the existing
 creation-time Job Object supervisor. Post-fix verification is recorded below.
 The original uninstrumented failure has no helper detail, so its exact trigger
 cannot be established retrospectively from that log. Baseline
 source: `6c923679e8817764fe5c9e5f00539404feb8c775`, 2026-11-24.
-Hosted production preflight and production activation remain unverified.
-No deployment, protected credentials, installation bundle or release pointer
-has been changed by this implementation.
+At that baseline, hosted production preflight and activation were unverified.
+The implementation had changed no deployment, protected credentials,
+installation bundle or release pointer. Subsequent activation findings follow.
+
+## November 26 activation findings
+
+Main `7d72a4cd1b7923eb90a398b5f972c7d33c58d29f` passed its builds and staging
+qualification `45720639752`, including cleanup. Protected production preflight
+`45724209096` stopped before invoking the CLI because the private installation
+bundle lacked `recordingTransition`. Updating that private bundle is separate
+from committing shared source; the user authorized its restricted handling.
+
+During preparation, the real guard twice reached its fixed 15-second statement
+timeout while inventorying approximately 419,000 recording rows and 50,000
+run-evidence rows. The production plan showed full scans with per-row regular
+expression replacement; other database sessions were idle during inspection.
+Read-only trials of equivalent envelope parsing completed in 4.7 and 4.4 seconds
+and returned `br` and `gzip`. These are observations on that dataset, not a
+general performance guarantee or a completed production preflight.
+
+The inventory now validates the final envelope with text/array operations. It
+retains both reference sources, unknown/malformed rejection, full inventory and
+the 15-second bound. Real PostgreSQL characterization passed before and after
+replacing the query. The full recording-durability lane, API build, typed lint,
+root source checks and live no-CLI storage guard also passed. Main image
+qualification and protected production
+preflight remain required for the changed maintenance source; the previous
+certificate does not cover this follow-up. No classifier exception is allowed.
 
 ## Implementation record
 

@@ -15,7 +15,7 @@ import {
 import { toast, type Id as ToastId } from 'react-toastify';
 import { isRecordingSnapshotPath } from '../utils/recordingPlayback.js';
 import { isPublishedHistoryInspection } from '../utils/projectComparisonDocument.js';
-import { rebindLoadedRecordingPathState } from '../state/execution.js';
+import { clearLoadedRecordingForTabState, rebindLoadedRecordingPathState } from '../state/execution.js';
 import { useIOProvider } from '../providers/ProvidersContext.js';
 import { useRivetAppHostCallbacks } from '../providers/HostCallbacksContext.js';
 import { cleanupNodeAtomFamilies, graphState, historicalGraphState, isReadOnlyGraphState } from '../state/graph.js';
@@ -250,15 +250,28 @@ export function useWorkspaceTransitions() {
             [targetProjectId]: (revisions[targetProjectId] ?? 0) + 1,
           }));
         }
-        if (projectInfo.markClean && targetProjectHasOpenTab) store.set(renewProjectBindingState, targetProjectId);
+        if (projectInfo.markClean) {
+          if (targetProjectHasOpenTab) store.set(renewProjectBindingState, targetProjectId);
+          // New content cannot inherit a recording selected for the old snapshot.
+          store.set(clearLoadedRecordingForTabState, {
+            projectId: targetProjectId,
+            projectPath: targetProjectHasOpenTab
+              ? store.get(projectsState).openedProjects[targetProjectId]?.fsPath ?? null
+              : currentProjectId === targetProjectId
+                ? store.get(loadedProjectState).path
+                : undefined,
+          });
+        }
         store.set(reconcileProjectFullscreenOutputState, {
           projectId: targetProjectId,
           graphId: fallbackGraphId,
           replace: projectInfo.markClean,
         });
         const previousProjectId = store.get(projectState).metadata.id;
-        if (previousProjectId !== targetProjectId &&
-            (isPublishedHistoryInspection(previousProjectId) || isPublishedHistoryInspection(targetProjectId))) {
+        if (
+          previousProjectId !== targetProjectId &&
+          (isPublishedHistoryInspection(previousProjectId) || isPublishedHistoryInspection(targetProjectId))
+        ) {
           store.set(referencedProjectsState, {});
         }
         setProject(transition.project);

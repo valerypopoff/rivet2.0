@@ -30,6 +30,13 @@
 .workflow-project-bundle-shell .project-settings-modal-header-row {
   flex: 0 0 auto;
 }
+.project-settings-modal-title.workflow-project-bundle-title {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
 .workflow-project-bundle-content {
   min-height: 0;
   overflow-y: auto;
@@ -77,11 +84,6 @@
 .workflow-bundle-delete-content [role='alert'] {
   color: #ff8f8f;
 }
-.workflow-project-bundle-progress {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
 .workflow-project-bundle-spinner {
   width: 20px;
   height: 20px;
@@ -109,6 +111,21 @@
   gap: 8px;
   font-size: var(--studio-modal-description-font-size);
 }
+.workflow-project-bundle-version .segmented-control {
+  box-sizing: border-box;
+  width: fit-content;
+}
+.workflow-project-bundle-version .segmented-control-button {
+  height: auto;
+  min-height: 32px;
+  padding: 8px 10px;
+  line-height: 1.4;
+  white-space: normal;
+}
+.workflow-project-bundle-version .segmented-control-button:first-child {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
 .workflow-project-bundle-error {
   padding: 12px;
   border: 1px solid rgba(255, 190, 70, 0.35);
@@ -126,6 +143,13 @@
   flex: 0 0 auto;
   padding: 16px 18px;
   border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+.workflow-project-bundle-footer .workflow-project-bundle-footer-help {
+  flex: 1 1 240px;
+  min-width: 0;
+  margin: 0;
+  padding-right: 0;
+  overflow-wrap: anywhere;
 }
 .workflow-project-bundle-action {
   background: rgba(255, 255, 255, 0.06) !important;

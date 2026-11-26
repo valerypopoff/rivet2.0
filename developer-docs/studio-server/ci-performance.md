@@ -1092,11 +1092,11 @@ promotion. It does not replace Yarn/Cargo audits or introduce a cloud rehearsal.
   speedup.
   The 2026-11-25 publication-review refactor adds the previously omitted Project
   Settings suite (initially 31 cases, including three new characterization cases;
-  30 after the duplicate-case cleanup). Current
+  30 after the duplicate-case cleanup). Initial
   collection was **533 cases in 46 files**. Two opening-read history race cases
-  brought it to 535; two adjacent manual-review cases bring the current selection
+  brought it to 535; two adjacent manual-review cases brought that selection
   to 537 cases in the same 46 files. Removing a duplicate publish-conflict case
-  brings the current selection to **536 cases in those 46 files**. Settings measured 94.4 seconds of local
+  left that selection at **536 cases in those 46 files**. Settings measured 94.4 seconds of local
   total case work with the actual CI configuration and failure-only artifacts,
   versus 102.9 seconds with observe artifacts. Its conservative initial hint is
   105 seconds. Five shards now allocate **1005/1005/1000/1010/1000 seconds**; the
@@ -1124,6 +1124,33 @@ promotion. It does not replace Yarn/Cargo audits or introduce a cloud rehearsal.
   also updates the inventory count and membership assertions in
   `ci-performance.test.mjs`; run its `balanced editor shards` and `editor shard work`
   cases before pushing.
+  The 2026-11-26 project-summary update also selects the complete
+  `workflow-library-layout.spec.ts` and `project-preview-mode.spec.ts` suites.
+  Previously they ran only through the local observation runner, leaving their
+  summary, reference-link and preview assertions outside the hosted selection.
+  CI collection lists 582 tests in 48 files; the existing five-shard balancing
+  and headroom checks cover the additions. Layout's initial local work was
+  51.9 seconds and the final run was 49.7 seconds; preview work was 7.2 seconds.
+  The conservative 55/10-second hints leave each shard at 1,015–1,020 seconds of
+  estimated case work, below the unchanged 1,080-second headroom limit. These
+  estimates must be refreshed from hosted results; they do not establish hosted
+  elapsed time or runner queueing.
+  Final local validation passed 95 headless browser cases in 3.2 minutes with no
+  retries or skips: layout, project settings, publication history, Published,
+  preview tabs, sidebar names, modal focus/sizing and the dirty-project Save
+  journey. The production web build, 336 web tests, scoped lint/runtime type
+  checks, root style/structure checks and documentation links also passed.
+  Collection of all 582 CI cases is not execution of that complete suite, and
+  neither hosted CI nor production was exercised for this UI commit.
+  [Develop run 45882953899](https://github.com/valerypopoff/rivet2.0/actions/runs/45882953899)
+  exposed two stale Run statistics assertions in editor
+  shard 5: they selected direct menu children, so the new summary/action grouping
+  returned zero items. Menu ordering now selects semantic `menuitem` and `separator`
+  descendants, preserving the nine-item count, order and actual navigation checks
+  without binding the test to its presentation wrapper. No timeout or application
+  behavior changed.
+  The correction passed both affected cases and the complete 89-case fifth
+  editor shard locally in 5.2 minutes, without retries or skips.
   Their inclusion is asserted by the shard regression. These weights balance work,
   not predict hosted wall time. Independently isolated recordings and local-upgrade
   panel cases can use both workers; other files preserve serial scenarios. Test-owned contexts,

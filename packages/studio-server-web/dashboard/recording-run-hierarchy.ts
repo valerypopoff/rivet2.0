@@ -1,4 +1,9 @@
 import type { WorkflowRecordingRunSummary } from './types';
+import { recordingProjectName } from './recording-project-presentation';
+
+export type RecordingSubRunOrder = 'chronological' | 'project';
+export const RECORDING_ROW_GAP = 8;
+const projectNameCollator = new Intl.Collator(undefined, { sensitivity: 'base' });
 
 export type RecordingRunFamily = {
   key: string;
@@ -9,20 +14,28 @@ export type RecordingRunFamily = {
 
 export type RecordingListRow = {
   id: string;
+  kind: 'recording' | 'context' | 'sub-run-sort';
   recording: WorkflowRecordingRunSummary | null;
   family: RecordingRunFamily | null;
   isChild: boolean;
   expanded: boolean;
 };
 
+/** Leave room between an expanded family and the next primary/context row. */
+export function recordingRowGap(rows: RecordingListRow[], index: number): number {
+  return rows[index]?.isChild && rows[index + 1] && !rows[index + 1]!.isChild ? 32 : RECORDING_ROW_GAP;
+}
+
 /** Group only actual results. Never invent an ancestor or treat a child as one.
  * Correlation identifies a root execution, not the immediate parent of a nested
  * Subgraph. Keep descendants at one level, oldest first, while preserving the
- * primary/context result order supplied by the paginated API.
+ * primary/context result order supplied by the paginated API. An explicit
+ * project-name order applies only within that family, with chronological ties.
  */
 export function groupRecordingRuns(
   recordings: WorkflowRecordingRunSummary[],
   childLoadStates?: Readonly<Record<string, RecordingRunFamily['childLoadState']>>,
+  subRunOrders?: Readonly<Record<string, RecordingSubRunOrder>>,
 ): RecordingRunFamily[] {
   const contextKeys = new Set(
     recordings.filter((run) => run.familyContext).map((run) => run.executionIdentity?.correlationId),
@@ -75,7 +88,13 @@ export function groupRecordingRuns(
   // Fetch pages are newest-first. Sort the complete display family once, not
   // individual pages or statuses, including context and input-search families.
   for (const family of families) {
-    family.children.sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt) || a.id.localeCompare(b.id));
+    const byProject = subRunOrders?.[family.key] === 'project';
+    family.children.sort(
+      (a, b) =>
+        (byProject ? projectNameCollator.compare(recordingProjectName(a), recordingProjectName(b)) : 0) ||
+        Date.parse(a.createdAt) - Date.parse(b.createdAt) ||
+        a.id.localeCompare(b.id),
+    );
   }
   return families;
 }
@@ -90,6 +109,7 @@ export function recordingHierarchyRows(
     const rows: RecordingListRow[] = [
       {
         id: family.root ? `recording:${family.root.id}` : `family:${family.key}`,
+        kind: family.root ? 'recording' : 'context',
         recording: family.root,
         family: family.children.length > 0 || family.childLoadState != null ? family : null,
         isChild: false,
@@ -97,9 +117,20 @@ export function recordingHierarchyRows(
       },
     ];
     if (expanded) {
+      if (family.children.length > 1) {
+        rows.push({
+          id: `sort:${family.key}`,
+          kind: 'sub-run-sort',
+          recording: null,
+          family,
+          isChild: false,
+          expanded: true,
+        });
+      }
       for (const recording of family.children) {
         rows.push({
           id: `recording:${recording.id}`,
+          kind: 'recording',
           recording,
           family: null,
           isChild: true,
@@ -133,7 +164,13 @@ export function refreshRecordingRowMeasurements(
         previous.family?.childLoadState !== next.family?.childLoadState ||
         previous.family?.children.length !== next.family?.children.length);
     if (heightChanged) heights.delete(next.id);
-    if (firstChanged == null && (previousRows[index]?.id !== next.id || heightChanged)) firstChanged = index;
+    if (
+      firstChanged == null &&
+      (previousRows[index]?.id !== next.id ||
+        heightChanged ||
+        recordingRowGap(previousRows, index) !== recordingRowGap(nextRows, index))
+    )
+      firstChanged = index;
   }
   if (firstChanged == null && previousRows.length > nextRows.length) firstChanged = nextRows.length;
   for (const id of heights.keys()) {

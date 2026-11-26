@@ -99,6 +99,20 @@ Unfinished capture is withheld even when durable metadata is disabled. Evaluatio
 runners also honor the session's withheld recorder, retaining their trial error
 without publishing a partial replay as complete.
 
+New traces optionally include `graphStart.subgraphTargets`, a string-only
+snapshot of external target names resolved for the caller graph. It is display
+evidence, not child-execution or access evidence. The existing version-1 trace
+envelope, codecs, artifact limits and shared replay-project identity remain
+unchanged. Metadata consumes the same capture budget; capacity rejection keeps
+its existing unavailable-recording behavior and cannot change a successful
+business result. Older traces remain playable with IDs when historical names
+are absent. See the [implementation record](recorded-subgraph-target-names-plan.md).
+
+Socket capture accepts explicit registered process-event names and the existing
+named-event prefixes. Non-object JSON frames and JavaScript prototype-property
+names are ignored as non-events. They cannot interrupt capture or fabricate
+recorded events; a subsequent valid terminal still settles normally.
+
 Evaluations keep their existing durable trial state and Evaluation recording
 store, retention and expiry. Their serialized artifact is frozen before writing;
 uncertain writes are read back and at most one identical retry is allowed.

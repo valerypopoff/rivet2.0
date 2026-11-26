@@ -15,6 +15,7 @@ import { isPlainObject } from 'lodash-es';
 import { stringifyJsonStream, type SerializableJsonValue, parseJsonStream, streamToIterable } from 'json-stream-es';
 import fnv1a from '../vendor/fnv1a.js';
 import { emitDetached } from '../utils/emitDetached.js';
+import { readSubgraphTargetDisplaySnapshots } from '../model/SubgraphProjectTarget.js';
 
 export type ExecutionRecorderEvents = {
   finish: { recording: Recording };
@@ -42,7 +43,17 @@ function withDuration<T extends object>(
 const toRecordedEventMap: {
   [P in keyof ProcessEvents]: (data: ProcessEvents[P]) => RecordedEvent<P>['data'];
 } = {
-  graphStart: ({ graph, inputs, execution }) => withExecution({ graphId: graph.metadata!.id!, inputs }, execution),
+  graphStart: ({ graph, inputs, execution, subgraphTargets }) => {
+    const snapshots = readSubgraphTargetDisplaySnapshots(subgraphTargets);
+    return withExecution(
+      {
+        graphId: graph.metadata!.id!,
+        inputs,
+        ...(snapshots ? { subgraphTargets: snapshots } : {}),
+      },
+      execution,
+    );
+  },
   graphFinish: ({ graph, outputs, execution }) => withExecution({ graphId: graph.metadata!.id!, outputs }, execution),
   graphOutputsReady: ({ graph, outputs, execution }) =>
     withExecution({ graphId: graph.metadata!.id!, outputs }, execution),
@@ -293,7 +304,9 @@ export type SocketRecordingChannel = Pick<EventTarget, 'addEventListener' | 'rem
 };
 
 function isRecordableProcessEvent(message: string): message is keyof ProcessEvents {
-  return message in toRecordedEventMap || isPrefix(message, 'globalSet:') || isPrefix(message, 'userEvent:');
+  return (
+    Object.hasOwn(toRecordedEventMap, message) || isPrefix(message, 'globalSet:') || isPrefix(message, 'userEvent:')
+  );
 }
 
 // WebSocket.OPEN/CLOSED are static browser constants. Core is also used by
@@ -475,20 +488,17 @@ export class ExecutionRecorder {
       const onOwnerDisposed = () => finish(false);
 
       const listener = (event: Event) => {
-        let payload: { message?: unknown; data?: unknown; requestId?: unknown };
+        let payload: unknown;
         try {
-          payload = JSON.parse((event as MessageEvent).data) as {
-            message?: unknown;
-            data?: unknown;
-            requestId?: unknown;
-          };
+          payload = JSON.parse((event as MessageEvent).data);
         } catch {
           // A debugger socket can carry control-plane payloads alongside graph
           // events. They are not part of a replayable graph recording.
           return;
         }
 
-        const { message, data, requestId } = payload;
+        if (payload === null || typeof payload !== 'object' || Array.isArray(payload)) return;
+        const { message, data, requestId } = payload as { message?: unknown; data?: unknown; requestId?: unknown };
         if (typeof message !== 'string' || !isRecordableProcessEvent(message)) {
           return;
         }

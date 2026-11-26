@@ -4,12 +4,26 @@ import {
   type WorkflowReleaseDependencyStatus,
 } from '../../studio-server-shared/workflow-types';
 import type { WorkflowProjectItem, WorkflowProjectStatus } from './types';
+import { getWorkflowProjectStatusLabel } from './projectSettingsForm';
 
 export type WorkflowPublicationReferenceChanges = {
   changedByCaller: ReadonlyMap<string, readonly WorkflowReleaseDependencyStatus[]>;
 };
 
 export const getWorkflowReferenceProjectId = (project: WorkflowProjectItem) => project.projectMetadataId ?? project.id;
+
+const CONTRIBUTION_STATUS_LABELS = {
+  published: 'Contributes to published',
+  changed: 'Contributes to unpublished changes',
+} as const;
+
+export function getWorkflowProjectContribution(
+  project: WorkflowProjectItem,
+  references?: { markerByProject: ReadonlyMap<string, keyof typeof CONTRIBUTION_STATUS_LABELS> } | null,
+) {
+  const status = references?.markerByProject.get(getWorkflowReferenceProjectId(project));
+  return status ? { status, label: CONTRIBUTION_STATUS_LABELS[status] } : null;
+}
 
 export function getWorkflowProjectEndpointStatus(
   project: WorkflowProjectItem,
@@ -27,9 +41,12 @@ export function getWorkflowProjectPublicationStatus(
 ): WorkflowProjectStatus {
   const endpointStatus = getWorkflowProjectEndpointStatus(project, references);
   if (endpointStatus !== project.settings.status) return endpointStatus;
-  return project.settings.publicationStatus ?? getAggregateWorkflowProjectStatus(
-    endpointStatus,
-    (project.settings.publishedWebApps ?? []).map((app) => app.status ?? 'published'),
+  return (
+    project.settings.publicationStatus ??
+    getAggregateWorkflowProjectStatus(
+      endpointStatus,
+      (project.settings.publishedWebApps ?? []).map((app) => app.status ?? 'published'),
+    )
   );
 }
 
@@ -79,5 +96,64 @@ export function buildWorkflowPublicationReferences(
     changedByCaller,
     unverifiedByCaller,
     canCaptureRelease,
+  };
+}
+
+export type WorkflowProjectSummaryStatus = {
+  tone: WorkflowProjectStatus;
+  text: string;
+  referenceText: string | null;
+  contributionOnly: boolean;
+  secondaryContribution: ReturnType<typeof getWorkflowProjectContribution>;
+  notice: string | null;
+};
+
+/** Describe saved changes here separately from changes in the captured dependencies. */
+export function getWorkflowProjectSummaryStatus(
+  project: WorkflowProjectItem,
+  references?: ReturnType<typeof buildWorkflowPublicationReferences> | null,
+  ownStatus: WorkflowProjectStatus = getWorkflowProjectPublicationStatus(project),
+): WorkflowProjectSummaryStatus {
+  const contribution = getWorkflowProjectContribution(project, references);
+  const id = getWorkflowReferenceProjectId(project);
+  const dependencies = references?.changedByCaller.get(id) ?? [];
+  const changedCount = new Set(
+    dependencies.filter((item) => item.changed && !item.unavailable).map((item) => item.projectId),
+  ).size;
+  const unavailableCount = new Set(dependencies.filter((item) => item.unavailable).map((item) => item.projectId)).size;
+  const ownChanges = ownStatus === 'unpublished_changes';
+  const contributionOnly = ownStatus === 'unpublished' && contribution !== null;
+  const notices: string[] = [];
+  if (references?.unverifiedByCaller.has(id)) {
+    notices.push(
+      references.canCaptureRelease.has(id) ? 'Update this endpoint to track dependencies' : 'Dependencies unverified',
+    );
+  }
+  if (unavailableCount > 0 && (ownChanges || changedCount > 0)) {
+    notices.push(`${unavailableCount} referenced project${unavailableCount === 1 ? ' is' : 's are'} unavailable`);
+  }
+
+  let tone = ownStatus;
+  let text = getWorkflowProjectStatusLabel(ownStatus);
+  let referenceText: string | null = null;
+  if (contributionOnly) {
+    tone = contribution.status === 'published' ? 'published' : 'unpublished_changes';
+    text = contribution.label;
+  } else if (ownStatus !== 'unpublished' && (ownChanges || changedCount > 0 || unavailableCount > 0)) {
+    tone = 'unpublished_changes';
+    if (changedCount > 0) {
+      text = ownChanges ? 'Unpublished changes here and' : 'Unpublished changes';
+      referenceText = `${changedCount} referenced project${changedCount === 1 ? '' : 's'}`;
+    } else if (!ownChanges) {
+      text = `Referenced project${unavailableCount === 1 ? '' : 's'} unavailable`;
+    }
+  }
+  return {
+    tone,
+    text,
+    referenceText,
+    contributionOnly,
+    secondaryContribution: contributionOnly ? null : contribution,
+    notice: notices.join('. ') || null,
   };
 }

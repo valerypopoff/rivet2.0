@@ -23,9 +23,15 @@ import {
   groupRecordingRuns,
   recordingHierarchyRows,
   refreshRecordingRowMeasurements,
+  recordingRowGap,
+  RECORDING_ROW_GAP,
   type RecordingListRow,
   type RecordingRunFamily,
+  type RecordingSubRunOrder,
 } from './recording-run-hierarchy';
+import { recordingProjectName, recordingProjectPath } from './recording-project-presentation';
+import { copyTextToClipboard } from './copyTextToClipboard';
+import { RecordingRunActions } from './RecordingRunActions';
 
 const INPUT_FILTER_OPERATOR_LABELS: Partial<Record<WorkflowRecordingInputFilterOperator, string>> = {
   not_exists: 'not exists',
@@ -38,7 +44,6 @@ const inputFilterOperatorOptions: Array<{ value: WorkflowRecordingInputFilterOpe
   }));
 
 const ESTIMATED_RECORDING_ROW_HEIGHT = 138;
-const RECORDING_ROW_GAP = 8;
 
 function RecordingRow({
   recording,
@@ -69,6 +74,20 @@ function RecordingRow({
   const playable = !recording.evidence || recording.evidence.availability === 'available';
   const availability = recording.evidence?.availability;
   const evidenceReason = recording.evidence?.reason;
+  const correlationId = isSubgraphRun ? recording.executionIdentity?.correlationId : undefined;
+  const [copyOutcome, setCopyOutcome] = useState<'copied' | 'failed' | null>(null);
+  const [diagnosticsVisible, setDiagnosticsVisible] = useState(false);
+
+  const copyCorrelationId = async () => {
+    if (!correlationId) return;
+    setCopyOutcome(null);
+    try {
+      await copyTextToClipboard(correlationId);
+      setCopyOutcome('copied');
+    } catch {
+      setCopyOutcome('failed');
+    }
+  };
 
   return (
     <div
@@ -88,7 +107,6 @@ function RecordingRow({
                 {recording.executionIdentity?.surface === 'scheduled' ? (
                   <span>Scheduled · {recording.executionIdentity.scheduleName ?? 'Scheduled run'} · </span>
                 ) : null}
-                {isChild ? <span className="run-recordings-sub-run-label">Sub-run · </span> : null}
                 {formatRecordingTimestamp(recording.createdAt)}
               </div>
               {isOpening ? (
@@ -110,10 +128,11 @@ function RecordingRow({
                 <span className="run-recordings-badge latest">Local editor</span>
               ) : null}
             </div>
+            <span className="run-recordings-run-duration">{formatRecordingDuration(recording.durationMs)}</span>
           </div>
           {detailText ? <div className={`run-recordings-run-detail ${recording.status}`}>{detailText}</div> : null}
         </div>
-        <div className="run-recordings-run-footer">
+        {recording.status !== 'succeeded' && (
           <div className="run-recordings-run-meta">
             <span className={`run-recordings-badge ${recording.status}`}>
               {recording.status === 'accepted'
@@ -124,9 +143,8 @@ function RecordingRow({
                     ? 'Running'
                     : RECORDING_STATUS_LABELS[recording.status]}
             </span>
-            <span className="run-recordings-run-duration">{formatRecordingDuration(recording.durationMs)}</span>
           </div>
-        </div>
+        )}
         {availability && availability !== 'available' && (
           <div className="run-recordings-run-detail" role="status">
             {availability === 'pending'
@@ -152,23 +170,16 @@ function RecordingRow({
           <div className="run-recordings-run-detail">Some called-project recordings could not be confirmed.</div>
         )}
         <div className="run-recordings-run-endpoint">
-          Project:{' '}
-          <span className="run-recordings-run-endpoint-value">
-            {recording.sourceProjectRelativePath || recording.sourceProjectName || recording.workflowId}
-          </span>
+          Project name: <span className="run-recordings-run-endpoint-value">{recordingProjectName(recording)}</span>
         </div>
-        <div className="run-recordings-run-endpoint">
+        <div
+          className={`run-recordings-run-endpoint${!family && !diagnosticsVisible ? ' run-recordings-corner-clearance' : ''}`}
+        >
           {isSubgraphRun ? 'Called graph' : 'Endpoint at execution'}:{' '}
           <span className="run-recordings-run-endpoint-value">
             {isSubgraphRun ? endpointNameAtExecution.replace(/^Subgraph:\s*/, '') : endpointNameAtExecution}
           </span>
         </div>
-        {isSubgraphRun && recording.executionIdentity?.correlationId && (
-          <div className="run-recordings-run-endpoint">
-            Related run key:{' '}
-            <span className="run-recordings-run-endpoint-value">{recording.executionIdentity.correlationId}</span>
-          </div>
-        )}
       </button>
       {family ? (
         <RecordingFamilyToggle
@@ -178,15 +189,51 @@ function RecordingRow({
           onToggle={onToggle}
         />
       ) : null}
-      <div className="run-recordings-run-actions">
-        <button
-          type="button"
-          className="run-recordings-run-delete-button"
-          onClick={() => onDelete(recording.id)}
-          disabled={isDeleting || isInteractionLocked}
+      {diagnosticsVisible ? (
+        <div
+          className="run-recordings-run-diagnostics run-recordings-corner-clearance"
+          role="region"
+          aria-label="Diagnostic details"
         >
-          Delete
-        </button>
+          <div className="run-recordings-run-diagnostic-fields">
+            <div className="run-recordings-run-endpoint">
+              Path:{' '}
+              <span className="run-recordings-run-endpoint-value">
+                {recordingProjectPath(recording.sourceProjectRelativePath) || 'Unknown'}
+              </span>
+            </div>
+            {correlationId ? (
+              <>
+                <div className="run-recordings-run-endpoint">
+                  Execution correlation ID: <span className="run-recordings-run-endpoint-value">{correlationId}</span>
+                  <button
+                    type="button"
+                    className="run-recordings-page-button run-recordings-diagnostic-copy"
+                    aria-label="Copy execution correlation ID"
+                    onClick={() => void copyCorrelationId()}
+                  >
+                    Copy
+                  </button>
+                </div>
+                <span role="status">
+                  {copyOutcome === 'copied'
+                    ? 'Copied'
+                    : copyOutcome === 'failed'
+                      ? 'Could not copy. Select and copy the ID manually.'
+                      : ''}
+                </span>
+              </>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
+      <div className="run-recordings-run-actions">
+        <RecordingRunActions
+          disabled={isDeleting || isInteractionLocked}
+          diagnosticsVisible={diagnosticsVisible}
+          onToggleDiagnostics={() => setDiagnosticsVisible((visible) => !visible)}
+          onDelete={() => onDelete(recording.id)}
+        />
       </div>
     </div>
   );
@@ -229,6 +276,40 @@ function RecordingFamilyToggle({
   );
 }
 
+function RecordingSubRunSort({
+  family,
+  disabled,
+  subRunOrder,
+  onSortSubRuns,
+}: {
+  family: RecordingRunFamily;
+  disabled: boolean;
+  subRunOrder: RecordingSubRunOrder;
+  onSortSubRuns: (key: string, order: RecordingSubRunOrder) => void;
+}) {
+  return (
+    <div className="run-recordings-sub-run-sort">
+      <span className="run-recordings-sub-run-sort-label">Sub-run sorting</span>
+      <SegmentedControl label="Sub-run sorting">
+        <SegmentedControlButton
+          selected={subRunOrder === 'chronological'}
+          disabled={disabled}
+          onClick={() => onSortSubRuns(family.key, 'chronological')}
+        >
+          Chronological
+        </SegmentedControlButton>
+        <SegmentedControlButton
+          selected={subRunOrder === 'project'}
+          disabled={disabled}
+          onClick={() => onSortSubRuns(family.key, 'project')}
+        >
+          Project name (A–Z)
+        </SegmentedControlButton>
+      </SegmentedControl>
+    </div>
+  );
+}
+
 type VirtualizedRecordingRowData = {
   recordings: RecordingListRow[];
   deletingRecordingId: string | null;
@@ -237,6 +318,8 @@ type VirtualizedRecordingRowData = {
   onOpen: (recordingId: string) => void;
   onHeightChange: (recordingId: string, height: number) => void;
   onToggle: (key: string) => void;
+  subRunOrders: Readonly<Record<string, RecordingSubRunOrder>>;
+  onSortSubRuns: (key: string, order: RecordingSubRunOrder) => void;
 };
 
 function MeasuredRecordingRow({
@@ -248,6 +331,8 @@ function MeasuredRecordingRow({
   onOpen,
   onHeightChange,
   onToggle,
+  subRunOrder,
+  onSortSubRuns,
 }: {
   row: RecordingListRow;
   isDeleting: boolean;
@@ -257,6 +342,8 @@ function MeasuredRecordingRow({
   onOpen: (recordingId: string) => void;
   onHeightChange: (recordingId: string, height: number) => void;
   onToggle: (key: string) => void;
+  subRunOrder: RecordingSubRunOrder;
+  onSortSubRuns: (key: string, order: RecordingSubRunOrder) => void;
 }) {
   const rowRef = useRef<HTMLDivElement | null>(null);
 
@@ -276,11 +363,19 @@ function MeasuredRecordingRow({
     row.isChild,
     row.family?.children.length,
     row.family?.childLoadState,
+    subRunOrder,
   ]);
 
   return (
-    <div ref={rowRef} className={row.isChild ? 'run-recordings-child-row' : undefined}>
-      {row.recording ? (
+    <div ref={rowRef} className={row.isChild || row.kind === 'sub-run-sort' ? 'run-recordings-child-row' : undefined}>
+      {row.kind === 'sub-run-sort' && row.family ? (
+        <RecordingSubRunSort
+          family={row.family}
+          disabled={isDeleting || isInteractionLocked}
+          subRunOrder={subRunOrder}
+          onSortSubRuns={onSortSubRuns}
+        />
+      ) : row.recording ? (
         <RecordingRow
           recording={row.recording}
           family={row.family}
@@ -317,6 +412,13 @@ function VirtualizedRecordingRow({ index, style, data }: ListChildComponentProps
 
   return (
     <div className="run-recordings-list-row" style={{ ...style, boxSizing: 'border-box' }}>
+      {recording.isChild ? (
+        <span
+          className="run-recordings-sub-run-connector"
+          aria-hidden="true"
+          style={{ bottom: data.recordings[index + 1]?.isChild ? 0 : recordingRowGap(data.recordings, index) }}
+        />
+      ) : null}
       <MeasuredRecordingRow
         row={recording}
         isDeleting={data.deletingRecordingId !== null}
@@ -326,6 +428,12 @@ function VirtualizedRecordingRow({ index, style, data }: ListChildComponentProps
         onOpen={data.onOpen}
         onHeightChange={data.onHeightChange}
         onToggle={data.onToggle}
+        subRunOrder={
+          recording.kind === 'sub-run-sort' && recording.family
+            ? data.subRunOrders[recording.family.key] ?? 'chronological'
+            : 'chronological'
+        }
+        onSortSubRuns={data.onSortSubRuns}
       />
     </div>
   );
@@ -350,7 +458,16 @@ function VirtualizedRecordingList({
   onDelete: (recordingId: string) => void;
   onOpen: (recordingId: string) => void;
 }) {
-  const families = useMemo(() => groupRecordingRuns(runs, childLoadStates), [runs, childLoadStates]);
+  const [subRunOrders, setSubRunOrders] = useState<Record<string, RecordingSubRunOrder>>({});
+  const onSortSubRuns = useCallback((key: string, order: RecordingSubRunOrder) => {
+    setSubRunOrders((current) =>
+      (current[key] ?? 'chronological') === order ? current : { ...current, [key]: order },
+    );
+  }, []);
+  const families = useMemo(
+    () => groupRecordingRuns(runs, childLoadStates, subRunOrders),
+    [runs, childLoadStates, subRunOrders],
+  );
   const recordings = useMemo(() => recordingHierarchyRows(families, expandedKeys), [families, expandedKeys]);
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const listRef = useRef<VariableSizeList | null>(null);
@@ -407,7 +524,10 @@ function VirtualizedRecordingList({
   }, []);
 
   const itemSize = useCallback(
-    (index: number) => rowHeightsRef.current.get(recordings[index]!.id) ?? ESTIMATED_RECORDING_ROW_HEIGHT,
+    (index: number) =>
+      (rowHeightsRef.current.get(recordings[index]!.id) ?? ESTIMATED_RECORDING_ROW_HEIGHT) +
+      recordingRowGap(recordings, index) -
+      RECORDING_ROW_GAP,
     [recordings],
   );
 
@@ -419,6 +539,8 @@ function VirtualizedRecordingList({
     onOpen,
     onHeightChange,
     onToggle,
+    subRunOrders,
+    onSortSubRuns,
   };
 
   return (
@@ -575,7 +697,7 @@ export const RecordingRunsTable: FC<RecordingRunsTableProps> = ({
               <div className="run-recordings-workflow-field">
                 <div className="run-recordings-field-label">Project path</div>
                 <div className="run-recordings-field-value run-recordings-field-code">
-                  {selectedWorkflow.project.relativePath}
+                  {recordingProjectPath(selectedWorkflow.project.relativePath)}
                 </div>
               </div>
             </div>

@@ -169,6 +169,7 @@ export const WorkflowFolderTree: FC<WorkflowFolderTreeProps> = ({
     const rowIsBusy = isEditing || isRenaming;
     const projectCount = countProjectsInFolder(folder);
     const external = folder.bundleId ? references?.byBundle.get(folder.bundleId) : undefined;
+    const visibleExternal = external && (external.count > 0 || !external.complete) && !rowIsBusy ? external : null;
     const rowClassName = [
       'folder-row',
       // Closed ancestors do not render their children, so only the outermost
@@ -186,7 +187,7 @@ export const WorkflowFolderTree: FC<WorkflowFolderTreeProps> = ({
 
     return (
       <div className="folder" key={folder.id}>
-        <div className="folder-row-with-references">
+        <div className={`folder-row-with-references${visibleExternal ? ' has-external-references' : ''}`}>
           <WorkflowFolderRow
             name={folder.name}
             expanded={expanded}
@@ -212,14 +213,14 @@ export const WorkflowFolderTree: FC<WorkflowFolderTreeProps> = ({
             onDrop={onFolderDrop(folder)}
           />
 
-          {external && (external.count > 0 || !external.complete) && !rowIsBusy ? (
+          {visibleExternal ? (
             <button
               className="bundle-external-references"
               type="button"
               onClick={() => references?.open({ bundle: folder })}
             >
-              {external.count > 0
-                ? `${external.count}${external.complete ? '' : '+'} external reference${external.count === 1 ? '' : 's'}`
+              {visibleExternal.count > 0
+                ? `${visibleExternal.count}${visibleExternal.complete ? '' : '+'} external reference${visibleExternal.count === 1 ? '' : 's'}`
                 : 'External references pending'}
             </button>
           ) : null}

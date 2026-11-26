@@ -5,8 +5,10 @@ import { JSDOM } from 'jsdom';
 import { createRoot } from 'react-dom/client';
 import { act } from 'react-dom/test-utils';
 import { Provider, createStore } from 'jotai';
+import { toast } from 'react-toastify';
 import { createEmptyEvaluationProjectData } from '@valerypopoff/rivet2-evaluations';
 import {
+  ExecutionRecorder,
   TextNodeImpl,
   getSubgraphProjectKey,
   type DataId,
@@ -49,6 +51,16 @@ import {
 import { createBlankProjectWithDefaultGraph } from '../utils/blankProject.js';
 import { addOpenedProject } from '../utils/openedProjects.js';
 import { useLoadProject } from './useLoadProject.js';
+import { useLoadRecording } from './useLoadRecording.js';
+import {
+  activateLoadedRecordingState,
+  currentProjectLoadedRecordingState,
+  isRecordingProjectState,
+  loadedRecordingState,
+  recordingPlaybackStartingState,
+  recordingTabIndicatorsState,
+  rebindLoadedRecordingPathState,
+} from '../state/execution.js';
 import { useWorkspaceTransitions } from './useWorkspaceTransitions.js';
 import { fullscreenOutputNodeState, fullscreenOutputSelectionState } from '../state/fullscreenOutput.js';
 import { useBundleExecutionRouting } from './useBundleExecutionRouting.js';
@@ -213,6 +225,8 @@ async function mount(
     loadProjectDataNoPrompt: load,
   };
   let activate!: ReturnType<typeof useLoadProject>;
+  let recordingActions!: ReturnType<typeof useLoadRecording>;
+  let otherRecordingActions!: ReturnType<typeof useLoadRecording>;
   let transitions!: ReturnType<typeof useWorkspaceTransitions>;
   let routeBundle!: ReturnType<typeof useBundleExecutionRouting>;
   let openFile!: ReturnType<typeof useLoadProjectWithFileBrowser>;
@@ -231,6 +245,8 @@ async function mount(
   const errors: unknown[] = [];
   function Harness() {
     activate = useLoadProject();
+    recordingActions = useLoadRecording();
+    otherRecordingActions = useLoadRecording();
     transitions = useWorkspaceTransitions();
     routeBundle = useBundleExecutionRouting();
     openFile = useLoadProjectWithFileBrowser();
@@ -269,6 +285,12 @@ async function mount(
     storage,
     errors,
     activate,
+    get recordingActions() {
+      return recordingActions;
+    },
+    get otherRecordingActions() {
+      return otherRecordingActions;
+    },
     get switchGraph() {
       return transitions.switchGraph;
     },
@@ -312,6 +334,394 @@ async function mount(
     },
   };
 }
+
+function holdRecordingPicker(io: PathBasedIOProvider) {
+  const picks: Array<{
+    complete(data: { recorder: ExecutionRecorder; path: string }): void;
+    fail(error: Error): void;
+    cancel(): void;
+  }> = [];
+  io.loadRecordingData = (callback) =>
+    new Promise<void>((resolve, reject) => {
+      picks.push({
+        complete(data) {
+          callback(data);
+          resolve();
+        },
+        fail: reject,
+        cancel: resolve,
+      });
+    });
+  return picks;
+}
+
+for (const replacement of ['snapshot', 'close/reopen', 'path'] as const) {
+  test(`recording picker cannot attach to an owner after ${replacement} replacement`, async () => {
+    const fixture = await mount(async (path) => ({
+      project: path === 'a.rivet-project' ? fixture.a : fixture.b,
+      evaluation,
+    }));
+    const picks = holdRecordingPicker(fixture.io);
+    try {
+      await act(async () => assert.equal(await fixture.activate(fixture.info(fixture.b.metadata.id)), true));
+      const loading = fixture.recordingActions.loadRecording();
+      await act(async () => assert.equal(await fixture.activate(fixture.info(fixture.a.metadata.id)), true));
+      await act(async () => {
+        if (replacement === 'close/reopen') {
+          assert.equal(await fixture.closeProject(fixture.b.metadata.id), true);
+          assert.equal(await fixture.open.openProjectSnapshot({ project: fixture.b, path: 'b.rivet-project' }), true);
+        } else {
+          assert.equal(
+            await fixture.replaceSnapshot(fixture.b.metadata.id, {
+              project: fixture.b,
+              path: replacement === 'path' ? 'replacement.rivet-project' : 'b.rivet-project',
+            }),
+            true,
+          );
+        }
+      });
+      await act(async () => {
+        picks[0]!.complete({ recorder: new ExecutionRecorder(), path: 'late.rivet-recording' });
+        await loading;
+      });
+      assert.equal(fixture.store.get(loadedRecordingState), null);
+    } finally {
+      picks.forEach((pick) => pick.cancel());
+      await fixture.cleanup();
+    }
+  });
+}
+
+test('recording picker preserves its owning tab across a switch and a verified path move', async () => {
+  const fixture = await mount(async (path) => ({
+    project: path === 'a.rivet-project' ? fixture.a : fixture.b,
+    evaluation,
+  }));
+  const picks = holdRecordingPicker(fixture.io);
+  try {
+    await act(async () => assert.equal(await fixture.activate(fixture.info(fixture.b.metadata.id)), true));
+    const loading = fixture.recordingActions.loadRecording();
+    await act(async () => {
+      assert.equal(await fixture.activate(fixture.info(fixture.a.metadata.id)), true);
+      fixture.metadata.moveProjectPaths([{ from: 'b.rivet-project', to: 'moved-b.rivet-project' }]);
+    });
+    const recorder = new ExecutionRecorder();
+    await act(async () => {
+      picks[0]!.complete({ recorder, path: 'picked.rivet-recording' });
+      await loading;
+    });
+    assert.equal(fixture.store.get(projectState).metadata.id, fixture.a.metadata.id);
+    assert.deepEqual(fixture.store.get(loadedRecordingState), {
+      recorder,
+      path: 'picked.rivet-recording',
+      projectId: fixture.b.metadata.id,
+      projectPath: 'moved-b.rivet-project',
+    });
+  } finally {
+    picks.forEach((pick) => pick.cancel());
+    await fixture.cleanup();
+  }
+});
+
+test('recording picker uses the current tab path while the global loaded path is stale', async () => {
+  const fixture = await mount(async () => assert.fail('Unexpected disk load'));
+  const picks = holdRecordingPicker(fixture.io);
+  try {
+    fixture.store.set(loadedProjectState, { loaded: true, path: 'stale.rivet-project' });
+    const loading = fixture.recordingActions.loadRecording();
+    await act(async () => {
+      picks[0]!.complete({ recorder: new ExecutionRecorder(), path: 'picked.rivet-recording' });
+      await loading;
+    });
+    assert.equal(fixture.store.get(loadedRecordingState)?.projectPath, 'a.rivet-project');
+    fixture.otherRecordingActions.unloadRecording();
+    assert.equal(fixture.store.get(loadedRecordingState), null);
+  } finally {
+    picks.forEach((pick) => pick.cancel());
+    await fixture.cleanup();
+  }
+});
+
+test('recording picker from an older menu command cannot replace a newer selection', async () => {
+  const fixture = await mount(async () => assert.fail('Unexpected disk load'));
+  const picks = holdRecordingPicker(fixture.io);
+  try {
+    const older = fixture.recordingActions.loadRecording();
+    const newer = fixture.otherRecordingActions.loadRecording();
+    const selected = new ExecutionRecorder();
+    await act(async () => {
+      picks[1]!.complete({ recorder: selected, path: 'newer.rivet-recording' });
+      await newer;
+      picks[0]!.complete({ recorder: new ExecutionRecorder(), path: 'older.rivet-recording' });
+      await older;
+    });
+    assert.equal(fixture.store.get(loadedRecordingState)?.recorder, selected);
+  } finally {
+    picks.forEach((pick) => pick.cancel());
+    await fixture.cleanup();
+  }
+});
+
+test('recording picker cannot attach while its inactive owner is running', async () => {
+  const fixture = await mount(async (path) => ({
+    project: path === 'a.rivet-project' ? fixture.a : fixture.b,
+    evaluation,
+  }));
+  const picks = holdRecordingPicker(fixture.io);
+  try {
+    await act(async () => assert.equal(await fixture.activate(fixture.info(fixture.b.metadata.id)), true));
+    const loading = fixture.recordingActions.loadRecording();
+    await act(async () => {
+      assert.equal(await fixture.activate(fixture.info(fixture.a.metadata.id)), true);
+      fixture.store.set(projectExecutionSnapshotsState, (snapshots) => ({
+        ...snapshots,
+        [fixture.b.metadata.id]: { ...createEmptyProjectExecutionSnapshot(), graphRunning: true },
+      }));
+      picks[0]!.complete({ recorder: new ExecutionRecorder(), path: 'late.rivet-recording' });
+      await loading;
+    });
+    assert.equal(fixture.store.get(loadedRecordingState), null);
+    assert.equal(fixture.store.get(projectExecutionSnapshotsState)[fixture.b.metadata.id]?.graphRunning, true);
+  } finally {
+    picks.forEach((pick) => pick.cancel());
+    await fixture.cleanup();
+  }
+});
+
+for (const owner of ['current', 'replaced', 'superseded'] as const) {
+  test(`recording picker reports only current failures and preserves the selection (${owner})`, async (t) => {
+    const fixture = await mount(async () => assert.fail('Unexpected disk load'));
+    const picks = holdRecordingPicker(fixture.io);
+    const notify = t.mock.method(toast, 'error', () => 'test-toast');
+    const log = t.mock.method(console, 'error', () => {});
+    try {
+      const original = {
+        recorder: new ExecutionRecorder(),
+        path: 'original.rivet-recording',
+        projectId: fixture.a.metadata.id,
+        projectPath: 'a.rivet-project',
+      };
+      if (owner !== 'replaced') fixture.store.set(activateLoadedRecordingState, original);
+      const loading = fixture.recordingActions.loadRecording();
+      if (owner === 'replaced') {
+        await act(async () =>
+          assert.equal(
+            await fixture.replaceSnapshot(fixture.a.metadata.id, { project: fixture.a, path: 'a.rivet-project' }),
+            true,
+          ),
+        );
+        assert.equal(fixture.store.get(loadedRecordingState), null);
+      } else if (owner === 'superseded') {
+        const newer = fixture.otherRecordingActions.loadRecording();
+        await act(async () => {
+          picks[1]!.complete({ recorder: new ExecutionRecorder(), path: 'newer.rivet-recording' });
+          await newer;
+        });
+        assert.equal(fixture.store.get(loadedRecordingState)?.path, 'newer.rivet-recording');
+      }
+      const expected = fixture.store.get(loadedRecordingState);
+      picks[0]!.fail(new Error(`Recording read failed for ${owner} owner`));
+      await loading;
+      assert.equal(fixture.store.get(loadedRecordingState), expected);
+      assert.deepEqual(
+        notify.mock.calls.map(({ arguments: args }) => args[0]),
+        owner === 'current' ? ['Failed to load recording: Recording read failed for current owner'] : [],
+      );
+      assert.equal(log.mock.callCount(), owner === 'current' ? 1 : 0);
+    } finally {
+      picks.forEach((pick) => pick.cancel());
+      await fixture.cleanup();
+    }
+  });
+}
+
+test('recording picker cancellation leaves a newer request alive and supports standalone sessions', async () => {
+  const fixture = await mount(async () => assert.fail('Unexpected disk load'));
+  const picks = holdRecordingPicker(fixture.io);
+  try {
+    fixture.store.set(projectsState, { openedProjects: {}, openedProjectsSortedIds: [] });
+    const older = fixture.recordingActions.loadRecording();
+    const newer = fixture.otherRecordingActions.loadRecording();
+    picks[0]!.cancel();
+    await older;
+    const recorder = new ExecutionRecorder();
+    await act(async () => {
+      picks[1]!.complete({ recorder, path: 'standalone.rivet-recording' });
+      await newer;
+    });
+    assert.equal(fixture.store.get(loadedRecordingState)?.recorder, recorder);
+    assert.equal(fixture.store.get(loadedRecordingState)?.projectPath, 'a.rivet-project');
+  } finally {
+    picks.forEach((pick) => pick.cancel());
+    await fixture.cleanup();
+  }
+});
+
+test('unloading a recording cancels a pending replacement from another menu entry point', async () => {
+  const fixture = await mount(async () => assert.fail('Unexpected disk load'));
+  const picks = holdRecordingPicker(fixture.io);
+  try {
+    fixture.store.set(activateLoadedRecordingState, {
+      recorder: new ExecutionRecorder(),
+      path: 'original.rivet-recording',
+      projectId: fixture.a.metadata.id,
+      projectPath: 'a.rivet-project',
+    });
+    const loading = fixture.recordingActions.loadRecording();
+    fixture.otherRecordingActions.unloadRecording();
+    await act(async () => {
+      picks[0]!.complete({ recorder: new ExecutionRecorder(), path: 'late.rivet-recording' });
+      await loading;
+    });
+    assert.equal(fixture.store.get(loadedRecordingState), null);
+  } finally {
+    picks.forEach((pick) => pick.cancel());
+    await fixture.cleanup();
+  }
+});
+
+for (const owner of ['active', 'inactive'] as const) {
+  for (const selected of ['replaced', 'neighbor'] as const) {
+    test(`committed ${owner} project replacement clears only its own recording (${selected} selected)`, async () => {
+      const fixture = await mount(async () => assert.fail('Replacement must not read disk'));
+      try {
+        const target = owner === 'active' ? fixture.a : fixture.b;
+        const neighbor = owner === 'active' ? fixture.b : fixture.a;
+        const recordingFor = (project: typeof target) => ({
+          recorder: new ExecutionRecorder(),
+          path: `${project.metadata.id}.rivet-recording`,
+          projectId: project.metadata.id,
+          projectPath: project === fixture.a ? 'a.rivet-project' : 'b.rivet-project',
+        });
+        const replacedRecording = recordingFor(target);
+        const neighborRecording = recordingFor(neighbor);
+        fixture.store.set(activateLoadedRecordingState, replacedRecording);
+        fixture.store.set(activateLoadedRecordingState, neighborRecording);
+        if (selected === 'replaced') fixture.store.set(activateLoadedRecordingState, replacedRecording);
+        fixture.store.set(recordingPlaybackStartingState, true);
+        const replacement = createBlankProjectWithDefaultGraph();
+        replacement.metadata.id = target.metadata.id;
+        await act(async () =>
+          assert.equal(
+            await fixture.replaceSnapshot(target.metadata.id, {
+              project: replacement,
+              path: replacedRecording.projectPath,
+            }),
+            true,
+          ),
+        );
+        assert.equal(fixture.store.get(loadedRecordingState), selected === 'replaced' ? null : neighborRecording);
+        assert.equal(fixture.store.get(recordingPlaybackStartingState), selected === 'neighbor');
+        assert.equal(fixture.store.get(recordingTabIndicatorsState)[target.metadata.id], undefined);
+        assert.ok(fixture.store.get(recordingTabIndicatorsState)[neighbor.metadata.id]);
+        assert.equal(fixture.store.get(isRecordingProjectState), owner === 'inactive' && selected === 'neighbor');
+        assert.equal(fixture.store.get(projectState).metadata.id, fixture.a.metadata.id);
+      } finally {
+        await fixture.cleanup();
+      }
+    });
+  }
+}
+
+test('rejected and cancelled project replacements retain the recording and its indicators', async () => {
+  const fixture = await mount(async (path) => ({
+    project: path === 'a.rivet-project' ? fixture.a : fixture.b,
+    evaluation,
+  }));
+  try {
+    const recording = {
+      recorder: new ExecutionRecorder(),
+      path: 'selected.rivet-recording',
+      projectId: fixture.a.metadata.id,
+      projectPath: 'a.rivet-project',
+    };
+    fixture.store.set(activateLoadedRecordingState, recording);
+    const indicators = fixture.store.get(recordingTabIndicatorsState);
+    await act(async () =>
+      assert.equal(
+        await fixture.replaceSnapshot(fixture.a.metadata.id, {
+          project: fixture.b,
+          path: 'a.rivet-project',
+        }),
+        false,
+      ),
+    );
+    assert.equal(fixture.store.get(currentProjectLoadedRecordingState), recording);
+    const replacement = createBlankProjectWithDefaultGraph();
+    replacement.metadata.id = fixture.a.metadata.id;
+    await act(async () => {
+      const cancelled = fixture.replaceSnapshot(fixture.a.metadata.id, {
+        project: replacement,
+        path: 'a.rivet-project',
+      });
+      const switchTab = fixture.activate(fixture.info(fixture.b.metadata.id));
+      assert.deepEqual(await Promise.all([cancelled, switchTab]), [false, true]);
+    });
+    assert.equal(fixture.store.get(loadedRecordingState), recording);
+    assert.equal(fixture.store.get(recordingTabIndicatorsState), indicators);
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+test('tab switching and a verified move preserve an already loaded recording', async () => {
+  const fixture = await mount(async (path) => ({
+    project: path === 'b.rivet-project' ? fixture.b : fixture.a,
+    evaluation,
+  }));
+  try {
+    const recording = {
+      recorder: new ExecutionRecorder(),
+      path: 'selected.rivet-recording',
+      projectId: fixture.a.metadata.id,
+      projectPath: 'a.rivet-project',
+    };
+    fixture.store.set(activateLoadedRecordingState, recording);
+    await act(async () => assert.equal(await fixture.activate(fixture.info(fixture.b.metadata.id)), true));
+    assert.equal(fixture.store.get(loadedRecordingState), recording);
+    assert.equal(fixture.store.get(isRecordingProjectState), false);
+    await act(async () => {
+      // The hosted move command updates both the tab metadata and its recording.
+      fixture.metadata.moveProjectPaths([{ from: 'a.rivet-project', to: 'moved-a.rivet-project' }]);
+      fixture.store.set(rebindLoadedRecordingPathState, {
+        fromPath: 'a.rivet-project',
+        toPath: 'moved-a.rivet-project',
+      });
+    });
+    await act(async () => assert.equal(await fixture.activate(fixture.info(fixture.a.metadata.id)), true));
+    assert.equal(fixture.store.get(currentProjectLoadedRecordingState)?.recorder, recording.recorder);
+    assert.equal(fixture.store.get(currentProjectLoadedRecordingState)?.projectPath, 'moved-a.rivet-project');
+    assert.equal(
+      fixture.store.get(recordingTabIndicatorsState)[fixture.a.metadata.id]?.projectPath,
+      'moved-a.rivet-project',
+    );
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+test('explicit standalone project replacement clears its previously loaded recording', async () => {
+  const fixture = await mount(async () => assert.fail('Replacement must not read disk'));
+  try {
+    fixture.store.set(projectsState, { openedProjects: {}, openedProjectsSortedIds: [] });
+    fixture.store.set(activateLoadedRecordingState, {
+      recorder: new ExecutionRecorder(),
+      path: 'standalone.rivet-recording',
+      projectId: fixture.a.metadata.id,
+      projectPath: 'a.rivet-project',
+    });
+    const replacement = createBlankProjectWithDefaultGraph();
+    replacement.metadata.id = fixture.a.metadata.id;
+    await act(async () =>
+      assert.equal(await fixture.open.replaceCurrent({ project: replacement, path: 'a.rivet-project' }), true),
+    );
+    assert.equal(fixture.store.get(loadedRecordingState), null);
+    assert.equal(fixture.store.get(isRecordingProjectState), false);
+    assert.equal(fixture.store.get(recordingTabIndicatorsState)[fixture.a.metadata.id], undefined);
+  } finally {
+    await fixture.cleanup();
+  }
+});
 
 test('tab close retains context while explicit project deletion clears only its durable local context', async () => {
   const fixture = await mount(async () => {

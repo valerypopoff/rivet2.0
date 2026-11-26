@@ -28,9 +28,13 @@ const weightedSpecs = [
   // Includes admission races and error-recovery regressions.
   ['project-bundle.spec.ts', 120],
   ['project-bundle-upload.spec.ts', 15],
+  // Local 2026-11-26 case work; refresh with hosted evidence, not a speed claim.
+  ['workflow-library-layout.spec.ts', 55],
   ['sidebar-name-wrapping.spec.ts', 30],
   ['streaming-nodes.spec.ts', 25],
   ['project-tree-activation.spec.ts', 230],
+  // Initial local preview case work was 7.2s; refresh with hosted evidence.
+  ['project-preview-mode.spec.ts', 10],
   ['port-connection-warnings.spec.ts', 25],
   ['cross-project-subgraph-loading.spec.ts', 180],
   ['subgraph-bundle-scope.spec.ts', 20],

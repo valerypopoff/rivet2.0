@@ -162,7 +162,12 @@ import {
 } from './ConnectedToolContinuationHost.js';
 import { resolveProjectGlobalVariables } from './GlobalVariables.js';
 import { loadProjectReferenceTree } from './ProjectReferenceLoader.js';
-import { getSubgraphProjectKey, isSubgraphProjectKey, type SubgraphProjectTarget } from './SubgraphProjectTarget.js';
+import {
+  getSubgraphProjectKey,
+  isSubgraphProjectKey,
+  type SubgraphProjectTarget,
+  type SubgraphTargetDisplaySnapshot,
+} from './SubgraphProjectTarget.js';
 import type { SubGraphNode } from './nodes/SubGraphNode.js';
 import { MAX_CAUGHT_STREAMING_CHUNKS, type CatchStreamingChunksNode } from './nodes/CatchStreamingChunksNode.js';
 import { isEqual } from 'lodash-es';
@@ -220,7 +225,11 @@ export type ProcessEvents = {
   }>;
 
   /** Called when a graph or subgraph has started. */
-  graphStart: WithExecution<{ graph: NodeGraph; inputs: GraphInputs }>;
+  graphStart: WithExecution<{
+    graph: NodeGraph;
+    inputs: GraphInputs;
+    subgraphTargets?: readonly SubgraphTargetDisplaySnapshot[];
+  }>;
 
   /** Called when a graph or subgraph has errored. */
   graphError: WithExecution<{ graph: NodeGraph; error: Error | string }>;
@@ -548,6 +557,16 @@ const FAST_ACYCLIC_UNSUPPORTED_NODE_TYPES = new Set<string>([
   'userInput',
   'waitForEvent',
 ]);
+
+/** Optional labels must not invoke user accessors or alter graph execution. */
+function readRecordingDisplayName(metadata: object | undefined, field: 'title' | 'name'): string | undefined {
+  try {
+    const value: unknown = metadata ? Object.getOwnPropertyDescriptor(metadata, field)?.value : undefined;
+    return typeof value === 'string' && value.trim() ? value : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 function getMonotonicTimeMs(): number {
   return globalThis.performance?.now?.() ?? Date.now();
@@ -1728,7 +1747,14 @@ export class GraphProcessor {
       );
     }
 
-    await this.#emitter.emit('graphStart', this.#withExecution({ graph: this.#graph, inputs: this.#run.graphInputs }));
+    await this.#emitter.emit(
+      'graphStart',
+      this.#withExecution({
+        graph: this.#graph,
+        inputs: this.#run.graphInputs,
+        ...(this.#run.subgraphTargets ? { subgraphTargets: this.#run.subgraphTargets } : {}),
+      }),
+    );
   }
 
   async #emitInitialProjectGlobalVariables(): Promise<void> {
@@ -2087,6 +2113,7 @@ export class GraphProcessor {
   async #loadSubgraphProjectTargets(): Promise<void> {
     const visited = new WeakMap<Project, Set<GraphId>>();
     const active = new WeakMap<Project, Set<GraphId>>();
+    let subgraphTargets: SubgraphTargetDisplaySnapshot[] | undefined;
     const visit = async (
       owner: Project,
       graphId: GraphId,
@@ -2153,6 +2180,20 @@ export class GraphProcessor {
               value: childOwner,
               writable: true,
             });
+            if (owner === this.#project && graphId === this.#graph.metadata?.id) {
+              const projectName = readRecordingDisplayName(childOwner.metadata, 'title');
+              const graphName = readRecordingDisplayName(childOwner.graphs[node.data.graphId]?.metadata, 'name');
+              if (projectName || graphName) {
+                (subgraphTargets ??= []).push({
+                  nodeId: node.id,
+                  targetProjectId: target.projectId,
+                  targetVersion: target.version,
+                  targetGraphId: node.data.graphId,
+                  ...(projectName ? { projectName } : {}),
+                  ...(graphName ? { graphName } : {}),
+                });
+              }
+            }
           }
           await visit(childOwner, node.data.graphId, depth + 1, Boolean(node.data.targetProjectId));
         }
@@ -2161,6 +2202,7 @@ export class GraphProcessor {
       }
     };
     await visit(this.#project, this.#graph.metadata!.id!, 0);
+    this.#run.subgraphTargets = subgraphTargets;
     // Streaming topology may visit any resolved target, including a version of
     // a project with the same metadata ID as another selected target.
     for (const [key, resolved] of this.#shared.subgraphTargetCache) {

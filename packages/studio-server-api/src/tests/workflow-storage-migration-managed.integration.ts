@@ -8,6 +8,7 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { DatabaseSync } from 'node:sqlite';
+import type { AddressInfo } from 'node:net';
 
 import { createEmptyEvaluationLibrary, normalizeEvaluationRun } from '@valerypopoff/rivet2-evaluations';
 import { loadProjectFromFile, loadProjectAndAttachedDataFromString, serializeProject } from '@valerypopoff/rivet2-node';
@@ -1334,7 +1335,7 @@ fixture: try {
   try {
     await fs.mkdir(paths.operationalRoot, { recursive: true });
     catalog.initialize();
-    sourceBackend.initialize();
+    await sourceBackend.initialize();
     await sourceSettings.initialize();
     const importFolders = (folders: Awaited<ReturnType<typeof listWorkflowFolders>>) => {
       for (const folder of folders) {
@@ -1410,7 +1411,7 @@ fixture: try {
       selected = journal.selectSqliteForValidation(verified.revision, proof);
     const validated = journal.recordRuntimeValidation(selected.revision, 'sqlite', proof.id, '5'.repeat(64));
     const live = journal.resumeWrites(validated.revision, proof);
-    sourceBackend.close();
+    await sourceBackend.close();
     catalog.close();
     await sourceSettings.dispose();
     journal.close();
@@ -1506,15 +1507,56 @@ fixture: try {
         startVmMigration({ ...uiTarget, runtimePlatformCompatible: false }),
         /platform compatibility/,
       );
-      await startVmMigration(uiTarget);
-      const deadline = Date.now() + 120_000;
+      // A renamed terminal journal is visible before its directory sync has
+      // settled. Hold that exact window so status cannot unlock the next action.
+      let resolveTerminalRenamed!: () => void;
+      let rejectTerminalRenamed!: (error: Error) => void;
+      const terminalRenamed = new Promise<void>((resolve, reject) => {
+        resolveTerminalRenamed = resolve;
+        rejectTerminalRenamed = reject;
+      });
+      let finishTerminalWrite!: () => void;
+      const terminalWriteHeld = new Promise<void>((resolve) => {
+        finishTerminalWrite = resolve;
+      });
+      const originalRename = fs.rename.bind(fs);
+      let heldTerminalWrite = false;
+      const rename = mock.method(fs, 'rename', async (...args: Parameters<typeof fs.rename>) => {
+        await originalRename(...args);
+        if (
+          !heldTerminalWrite &&
+          args[1] === path.join(appDataRoot, 'vm-migration-job.json') &&
+          JSON.parse(await fs.readFile(args[1], 'utf8')).phase === 'verified'
+        ) {
+          heldTerminalWrite = true;
+          resolveTerminalRenamed();
+          await terminalWriteHeld;
+        }
+      });
+      const deadline = setTimeout(
+        () => rejectTerminalRenamed(new Error('UI SQLite migration did not finish')),
+        120_000,
+      );
+      let statusRead: ReturnType<typeof getVmMigrationStatus> | undefined;
       let result;
-      do {
-        result = await getVmMigrationStatus();
-        if (result.job?.phase === 'failed') throw new Error(result.job.message ?? 'UI SQLite migration failed');
-        if (Date.now() > deadline) throw new Error('UI SQLite migration did not finish');
-        if (result.job?.phase !== 'verified') await delay(100);
-      } while (result.job?.phase !== 'verified');
+      try {
+        await startVmMigration(uiTarget);
+        await terminalRenamed;
+        statusRead = getVmMigrationStatus();
+        assert.equal(
+          await Promise.race([statusRead.then(() => 'completed'), delay(200).then(() => 'pending')]),
+          'pending',
+          'Terminal migration status must wait for durable completion and release of the running job',
+        );
+        finishTerminalWrite();
+        result = await statusRead;
+        assert.equal(result.job?.phase, 'verified');
+      } finally {
+        clearTimeout(deadline);
+        finishTerminalWrite();
+        rename.mock.restore();
+        await statusRead;
+      }
       assert.equal(result.job.report?.recordings, 1);
       assert.equal(result.job.sourceIdentity, SqliteMigrationSource.identity(controlRoot, 'native-live', sourceRoots));
       const review = await reviewVmMigrationDeployment(uiTarget, {
@@ -1573,7 +1615,7 @@ fixture: try {
       }
     }
   } finally {
-    sourceBackend.close();
+    await sourceBackend.close();
     catalog.close();
     await sourceSettings.dispose();
     journal.close();
@@ -1685,7 +1727,7 @@ fixture: try {
     const http = createServer(app);
     http.listen(0, '127.0.0.1');
     await once(http, 'listening');
-    const url = `http://127.0.0.1:${(http.address() as import('node:net').AddressInfo).port}/api/legacy-restore`;
+    const url = `http://127.0.0.1:${(http.address() as AddressInfo).port}/api/legacy-restore`;
     const headers = {
       'x-rivet-proxy-auth': getExpectedProxyAuthToken(),
       cookie: `rivet_ui_token=${getExpectedUiSessionToken()}`,

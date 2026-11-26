@@ -171,7 +171,56 @@ async function verifySharedReplayProjects(
     assert.equal(await readFromApi(legacy), legacyText);
     assert.deepEqual((await pool.query(checkpointSql)).rows, checkpoint);
 
-    const [first, second] = await Promise.all([persist(), persist(peer)]);
+    const target = {
+      nodeId: 'call',
+      targetProjectId: 'child',
+      targetVersion: 'published',
+      targetGraphId: 'child-graph',
+      projectName: 'Original child',
+      graphName: 'folder/Original graph',
+    };
+    const trace = (named: boolean) =>
+      JSON.stringify({
+        version: 1,
+        assets: {},
+        strings: {},
+        recording: {
+          recordingId: 'shared-target-names',
+          startTs: 1,
+          finishTs: 1,
+          events: [
+            {
+              type: 'graphStart',
+              ts: 1,
+              data: {
+                graphId: 'main',
+                inputs: {},
+                execution: { projectId: workflowId },
+                ...(named ? { subgraphTargets: [target] } : {}),
+              },
+            },
+          ],
+        },
+      });
+    const [first, second] = await Promise.all([
+      persist(evidence, { ...capture, recordingSerialized: trace(true) }),
+      persist(peer, { ...capture, recordingSerialized: trace(false) }),
+    ]);
+    for (const [id, named] of [
+      [first, true],
+      [second, false],
+    ] as const) {
+      const response = await fetch(`${baseUrl}/api/workflows/recordings/${id}/recording`, {
+        headers: proxyHeaders,
+        signal: AbortSignal.timeout(5000),
+      });
+      assert.equal(response.status, 200);
+      const restored = ExecutionRecorder.deserializeFromString(await response.text());
+      assert.deepEqual(
+        restored.events.find((event) => event.type === 'graphStart')?.data.subgraphTargets,
+        named ? [target] : undefined,
+      );
+    }
     const key = await keyFor(first);
     assert.ok(isRecordingProjectSnapshotKey(key));
     assert.equal(await keyFor(second), key);

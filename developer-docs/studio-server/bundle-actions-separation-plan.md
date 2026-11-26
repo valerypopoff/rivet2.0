@@ -54,7 +54,9 @@ Keep these invariants when extending the hook.
   when supplied, otherwise by bundle ID. Flatten the returned tree once and
   expand its current ancestors, including a concurrent move.
 - Download target and visibility stay independent. Closing hides the retained
-  job; reopening the same bundle preserves its preparation state.
+  job and clears pending automatic file delivery; reopening the same bundle
+  preserves its background-job identity. The download interaction follow-up
+  below records the later change to a persistent form.
 - Upload keeps the ancestor-bundle and mutation guards. Its modal owns obsolete
   completion handling; successful imports use existing tree reconciliation.
 - Deletion completion always forwards the returned project IDs. Its modal
@@ -163,3 +165,38 @@ separate harness issue remains unresolved and is outside these results.
 
 This change preserves execution code and request counts. No production latency
 benchmark, cloud test, image qualification or deployment was performed here.
+
+## Completed download interaction follow-up — 2026-11-26
+
+The requested download UI changes are implemented and locally verified. They
+extend the modal's existing job ownership; the project-tree hook, archive format,
+source selection, authentication and backend storage owners are unchanged.
+The [portable bundle contract](project-bundles.md#portable-project-bundles)
+describes the current behavior.
+
+- [x] Keep a single form before, during and after download: quoted bundle name,
+      compact Saved latest / Published if available choices and one Download
+      bundle button. Remove the enclosing card and preparation-management UI.
+- [x] Capture fresh saved content on every explicit Download click. Dispose the
+      previous job only after HTTP 204/404 confirmation, reserve a new identity,
+      then download the completed archive through the native browser link.
+- [x] Preserve single admission across cleanup and start, lost-acknowledgement
+      recovery, stale-response rejection, the 20-second request timeout and
+      existing polling cadence. Closing or switching bundles clears automatic
+      file delivery without forgetting accepted background work.
+- [x] Centralize adoption of a replacement job so its identity, status and error
+      change together. A controlled pre-fix browser case reproduced an old
+      archive's missing-status error leaking into the new job; both retained
+      and replacement modal instances now clear it before admission completes.
+- [x] Update the operating guide and retain the existing CI registration in
+      `scripts/ci/editor-test-shards.mjs`.
+
+Validation: all 12 cases in `playwright-observe/project-bundle.spec.ts` passed
+headlessly against the completed web build. The journey creates and executes
+real archives for original, edited, published and repaired snapshots. Controlled
+cases cover invalid responses, failed cleanup, duplicate clicks, delayed replies,
+reopening and bundle switching. Desktop and narrow screenshots were inspected.
+Scoped TypeScript, typed lint, test-style, formatting and documentation-link
+checks passed. Evidence stays in the ignored
+`artifacts/bundle-download-ui-20261126/` directory. These are local results;
+hosted CI and production rollout remain separate delivery steps.

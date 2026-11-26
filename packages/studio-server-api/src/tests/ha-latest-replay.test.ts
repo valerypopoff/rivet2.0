@@ -73,7 +73,11 @@ async function fixture() {
   const observe = async () => {
     const client = new WebSocket(`ws://127.0.0.1:${(http.address() as { port: number }).port}/ws/latest-debugger`);
     clients.push(client);
-    const messages: { message: string; rivetEventId?: string; data?: { code?: string; marker?: string } }[] = [];
+    const messages: {
+      message: string;
+      rivetEventId?: string;
+      data?: { code?: string; marker?: string; execution?: unknown; subgraphTargets?: unknown };
+    }[] = [];
     client.on('message', (raw) => {
       const m = JSON.parse(raw.toString());
       delete m.data?.padding;
@@ -105,6 +109,40 @@ async function fixture() {
     },
   };
 }
+
+test('HA replay retains captured target labels and their source scope across observers', async () => {
+  const f = await fixture();
+  try {
+    const execution = {
+      projectId: 'source',
+      projectScope: 'source-version',
+      graphId: 'caller',
+      rootRunId: 'root',
+      graphRunId: 'run',
+    };
+    const subgraphTargets = [
+      {
+        nodeId: 'call',
+        targetProjectId: 'child',
+        targetVersion: 'latest',
+        targetGraphId: 'graph',
+        projectName: 'Recorded project',
+        graphName: 'folder/Recorded graph',
+      },
+    ];
+    const id = f.broadcast('labels', 0, { execution, subgraphTargets }, 'graphStart');
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const { client, messages } = await f.observe();
+      await waitFor(() => messages.some((message) => message.rivetEventId === id));
+      const event = messages.find((message) => message.rivetEventId === id)!;
+      assert.deepEqual(event.data?.subgraphTargets, subgraphTargets);
+      assert.deepEqual(event.data?.execution, execution);
+      client.terminate();
+    }
+  } finally {
+    await f.close();
+  }
+});
 
 for (const size of [12, 40])
   test(`HA replay delivers ${size} MiB history without disconnect and orders live events afterwards`, async () => {

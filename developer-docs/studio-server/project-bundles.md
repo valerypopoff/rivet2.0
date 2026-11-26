@@ -4,6 +4,7 @@ The project tree shows an external reference count for a bundle with saved
 references outside it. The count groups by target project. The details show
 the referring projects, graph calls and source revision save times.
 **Open project** uses the normal editable editor tab.
+The shared bundle icon is an outlined box with a plain top face and inherits the surrounding text color.
 
 [Published revision history](workflow-publication.md#published-revision-history)
 opens a history tree with the root and captured dependencies, including
@@ -1416,96 +1417,96 @@ Projects and ordinary folders do not offer **Download bundle**. A bundle folder
 uses the existing two downward arrows, with the right arrow slightly lower.
 Project menus retain the single downward arrow for **Download project**.
 Icons are decorative; menu labels provide accessible names. The
-bundle dialog also uses the **Download bundle** title.
+bundle dialog title is **Download bundle "\<bundle name>"**. Long names wrap to
+at most two lines, with the complete title available on hover and to assistive
+technology.
+The dialog always retains the same version choices and **Download bundle**
+button, including after a successful download or a failed attempt. It does not
+show a preparation screen, ready summary, or separate prepare/retry/cancel actions.
+Version controls sit directly in the body without an enclosing card or repeated
+bundle-name heading. The footer places **Includes bundle members and dependencies
+outside the bundle.** beside the download button, wrapping above it on narrow
+screens. The body alone scrolls, keeping the title, close control and footer
+visible on short viewports.
+
+The choices are **Saved latest** (the default) and **Published if available (saved
+latest if no published version)**. Published selects a snapshot separately for
+each project in the bundle and its dependency closure, falling back only when
+that project has no publication. A broken or unreadable publication still fails
+the export. The segmented control fits its contents rather than stretching
+across the modal, and its longer label wraps within narrow screens.
 The single-project version chooser retains its **Download** title and version
-buttons; `workflow-project-version-modal.spec.ts` exercises that flow through
-the **Download project** menu item, separately from the bundle chooser.
+buttons; `workflow-project-version-modal.spec.ts` exercises that separate flow.
 
-Failed, cancelled and interrupted jobs offer **Retry export** directly: disposal
-must succeed before creating a fresh job with the selected bundle-wide version.
-Ready jobs offer **Download bundle** and **Prepare another bundle**. The latter
-disposes the old export before returning to the version chooser, where the user
-can retain the current policy or switch between Published and Saved latest, then
-explicitly prepare a fresh snapshot of the saved content. Closing and reopening
-retains the current archive until that action is chosen. Failed disposal keeps
-the existing job identity and download link; it cannot unlock preparation or start
-another export. Cleanup is confirmed only by HTTP 204, or HTTP 404 when the job
-is already absent. Other responses, including HTTP 200 HTML and HTTP 202 JSON,
-retain the identity instead of treating a generic success status as completed
-cleanup. The action is disabled while the original start acknowledgement is still
-pending, and the download link is disabled during disposal. Job status
-includes the optional durable `versionPolicy`; reopening or retrying a new-format
-job restores its actual choice. New bundle downloads default to Saved latest.
-The session-storage key is the explicit bundle ID, not a project's metadata ID.
-Status responses and polling errors are fenced by the current job ID, so late replies
-from a disposed job cannot overwrite the retry's progress or download link.
-Late start acknowledgements cannot regress packaging back to collection, or
-replace a terminal result with active progress.
-Action admission uses a synchronous in-flight guard as well as disabled buttons,
-so rapid repeated clicks cannot start competing POST/DELETE operations. Progress
-polls may reconcile a lost start acknowledgement but never erase an independent
-cancellation failure. The
-dialog uses the shared API response parser, retaining HTTP status and gateway
-guidance without showing HTML bodies or malformed structured error values.
+Each click on **Download bundle** captures fresh saved content using the chosen
+version policy. The system disposes any previous job, creates the replacement,
+and follows its authenticated archive link when ready. The button retains its
+label with a decorative spinner while work is pending; the button and version
+choices are temporarily disabled. Reduced-motion preferences disable rotation.
+After downloading, both choices and the same button remain available, so another
+click can capture newly saved changes or a different version policy.
+An error appears beside the existing controls. Retrying also uses **Download
+bundle**, including after a failed status read. Closing clears the pending
+automatic download without cancelling work already requested. Reopening or
+reloading a completed job does not automatically download it.
 
-Start acknowledgements and progress reads share a job-status validator. A reply
-must match the requested job ID and contain a known phase, non-negative integer
-counts, a valid expiry and correctly typed optional policy/error/archive fields.
-The phase map covers the shared phase union at compile time. Unknown extra fields
-remain available, and older replies may omit `versionPolicy`.
-Malformed status never replaces the last validated job or its reserved identity.
-The dialog reports the error and keeps the existing five-second read-retry path;
-it never starts a replacement export automatically. This also prevents an object
-error from reaching React or an unknown phase from silently stopping polling.
+Cleanup must be confirmed by HTTP 204, or HTTP 404 when the previous job is already
+absent, before a replacement POST. Other responses, including HTTP 200 HTML and
+HTTP 202 JSON, retain the previous identity and report an error. A later explicit
+Download click retries cleanup; uncertain starts are never replayed automatically.
+The old archive remains owned until the next click, preserving the server's
+active-reader protections. Downloads use a hidden native anchor rather than
+buffering the archive as a blob, retaining streaming, range requests and browser
+download handling.
 
-The client reserves the export ID before sending its start request. A status
-poll issued while that start is still unacknowledged can legitimately return
-404 before the server registers the job; the dialog keeps showing preparation
-and polls again without a warning. This applies only to that pending start,
-not to missing/expired exports reopened later or other HTTP errors. A newer
-start acknowledgement supersedes older polling errors. Genuine start failures
-remain visible until successful status readback, and cancellation errors keep
-their existing precedence.
+Job status includes optional durable `versionPolicy`. Reopening a new-format job
+restores its actual choice, but a delayed status read cannot overwrite a choice
+the user has edited. The session-storage key is the explicit bundle ID, not a
+project's metadata ID. The client reserves the new job ID before POST so a lost
+acknowledgement can be reconciled by exact identity. Status responses and polling
+errors are fenced by that identity, preventing late replies from an old job from
+overwriting the replacement. Adopting a replacement ID also clears the old status
+and error together. This includes a reopened modal that observed the previous
+archive disappear while cleanup acknowledgement was still pending; that error
+must not persist through the new job's normal pre-admission 404. The old ID is
+replaced directly after confirmed cleanup, without an intermediate empty identity.
+Late start acknowledgements cannot regress packaging
+back to collection or replace a terminal result with active progress.
 
-In-flight starts are tracked by export ID for the lifetime of their request,
-outside the modal instance. Switching to another bundle and reopening the first
-therefore preserves pending admission and keeps cancellation disabled until
-that request settles. Completed, failed and timed-out starts remove their entry;
-the dialog subscribes to these changes so **Retry export** becomes available
-even if it has already observed a terminal failure and stopped polling.
-Recovery does not depend on unrelated page refreshes. This is page-local
-request tracking, not persisted job state.
+One synchronous request owner per bundle spans cleanup and start admission,
+including modal closure or switching to another bundle. A replacement modal
+follows the same reserved ID if cleanup finishes after the original instance
+unmounts. Buttons remain disabled until that request settles, even when a terminal
+status has already stopped polling. Request tracking is page-local and subscribes
+the modal to settlement; it is not persisted job state. Rapid repeated clicks
+cannot admit competing DELETE/POST operations.
 
-The real-export browser journey checks changed saved content by downloading and
-executing the original and rebuilt ZIPs. It also switches to Published, executes
-that distinct snapshot, reloads and reselects Saved latest. It uses the visible
-rebuild action rather than clearing session storage to escape a completed job.
-Unconfirmed cleanup must retain the old job identity and admit no new POST. The
-same journey checks HTML success pages, accepted-but-unsettled JSON replies and
-the rebuild control's visibility on a narrow viewport.
-The controlled invalid-response case alternates malformed replies with visible
-valid progress, advancing the normal and error polling cadences explicitly. It
-checks a genuine JSON-null body, mismatched IDs, unknown phases, malformed fields
-and a malformed start acknowledgement, retaining the job and admitting another
-POST only after an explicit rebuild action.
+Requests retain their 20-second timeout. Active work is polled one second after
+the previous read completes; failed reads retry after five seconds. A 404 during
+an unacknowledged start may precede server admission and is retried without a
+warning. Missing or expired jobs reopened later still report their genuine error.
+A newer start acknowledgement supersedes an older polling failure, while polling
+can reconcile a lost start acknowledgement but cannot erase a cleanup failure.
+The shared API parser retains HTTP status and gateway guidance without displaying
+HTML bodies or malformed structured error values.
 
-The bundle dialog uses the shared responsive modal dimensions, black backdrop,
-dark surface and header/close styling. Project details and export progress use
-bordered cards with the shared 14px/1.5 description typography.
-Its introductory text is “Includes bundle members and dependencies outside the
-bundle. Unsaved editor changes are excluded.” The extended version-selection and
-ZIP-opening instructions are omitted. The notice that closing the dialog does
-not cancel preparation appears only while preparing, including initial status
-loading and collection/packaging; it is hidden for terminal jobs.
-The progress card shows an indeterminate spinner while loading initial status,
-collecting snapshots or packaging, including after reopening an active export.
-Terminal states remove the spinner; reduced-motion preferences disable rotation.
-The existing live status text announces progress without exposing a decorative icon.
-Bundle-wide version selection uses `SegmentedControl`, not an OS-native select. Atlaskit actions live
-in a non-scrolling footer; Prepare/Download are blue primary actions on the right.
-The body alone scrolls, keeping the title, close control and actions visible on
-short viewports. Download remains a real anchor with the authenticated archive
-URL, preserving native browser downloads and resume rather than buffering a blob.
+Start acknowledgements and status reads share a validator: replies must match the
+requested ID and contain a known phase, non-negative integer counts, valid expiry
+and correctly typed optional policy/error/archive fields. The phase map covers
+the shared union at compile time. Unknown extra fields are tolerated and older
+replies may omit `versionPolicy`. Malformed status never replaces the last
+validated job or its reserved ID and never initiates another POST automatically.
+
+The real-export browser journey downloads and executes original, edited, published
+and repaired ZIPs through the same Download button. It checks unchanged form
+structure after success and failure, fresh contents, restored policy after reload,
+lost acknowledgements, failed cleanup, long names and narrow layouts. Controlled
+cases cover malformed replies at both polling cadences, rejected admission,
+duplicate clicks, stale acknowledgements, edited version preservation, and modal
+closure or replacement during cleanup/start. Failed cleanup admits no new POST;
+closing or switching does not arm an unexpected download on reopening. The cleanup
+cases also hold replacement admission and verify that an error about the old job
+is cleared before the new job returns a successful status.
 
 ## Ownership and snapshots
 

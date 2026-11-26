@@ -16,6 +16,12 @@ import { mockHostedEditorBootstrap, waitForDashboardReady } from './helpers/host
 import type { WorkflowRecordingRunSummary } from '../../studio-server-shared/workflow-recording-types';
 import { bindSharedReplayProjectId, serializeSharedReplayProject } from '@valerypopoff/rivet2-core/serialization';
 
+function serializeReplayProject(project: Project): string {
+  const serialized = serializeProject(project);
+  if (typeof serialized !== 'string') throw new Error('Replay fixture must serialize to text');
+  return serialized;
+}
+
 test('full output stays with its recording tab across playback, switching and close/reopen', async ({ page }) => {
   const ids = ['A', 'B', 'C'] as const;
   const replayTitle = (id: (typeof ids)[number]) => (id === 'A' ? 'Replay A' : 'Replay shared');
@@ -66,7 +72,7 @@ test('full output stays with its recording tab across playback, switching and cl
         ),
         legacyProject:
           id === 'A'
-            ? serializeProject({ ...project, metadata: { ...project.metadata, id: 'legacy-id' as ProjectId } })
+            ? serializeReplayProject({ ...project, metadata: { ...project.metadata, id: 'legacy-id' as ProjectId } })
             : undefined,
         recording: recorder.serialize(),
       };
@@ -201,9 +207,13 @@ for (const kind of ['child', 'nested child', 'legacy child', 'root', 'prompt chi
   test(`Run recordings: repeated ${kind} playback replaces display history without changing the artifact`, async ({
     page,
   }) => {
+    const errors: string[] = [];
+    page.on('pageerror', (error) => errors.push(error.message));
+    const recordedGraphName = kind === 'root' ? `Folder/${'Readable graph name '.repeat(8).trim()}` : 'Child main';
     const fixture = await createChildPlaybackFixture(
       kind === 'nested child' ? 2 : 0,
       kind === 'prompt child' ? 'prompt' : 'complete',
+      { graphName: recordedGraphName },
     );
     expect(fixture.recording.events.some((event) => event.type === 'start')).toBe(false);
     let recorder = kind === 'root' ? fixture.rootRecording : fixture.recording;
@@ -285,6 +295,12 @@ for (const kind of ['child', 'nested child', 'legacy child', 'root', 'prompt chi
       },
     };
     const serializedRecording = recorder.serialize();
+    const legacyRecording = JSON.parse(serializedRecording);
+    for (const event of legacyRecording.recording.events) {
+      if (event.type === 'graphStart') delete event.data.subgraphTargets;
+    }
+    let useLegacyRecording = false;
+    let traceGate: Promise<void> | undefined;
     await page.addInitScript(() => {
       localStorage.setItem(
         'recoil-persist',
@@ -328,15 +344,16 @@ for (const kind of ['child', 'nested child', 'legacy child', 'root', 'prompt chi
         json: {
           root: '/workflows',
           projects:
-            kind === 'child'
+            kind === 'child' || kind === 'root'
               ? [
                   {
                     id: 'neighbor',
-                    projectMetadataId: 'neighbor',
-                    name: 'Neighbor',
-                    fileName: 'Neighbor.rivet-project',
-                    absolutePath: '/workflows/Neighbor.rivet-project',
-                    relativePath: 'Neighbor.rivet-project',
+                    projectMetadataId: kind === 'root' ? 'playback-child' : 'neighbor',
+                    name: kind === 'root' ? 'Current child' : 'Neighbor',
+                    fileName: kind === 'root' ? 'Current child.rivet-project' : 'Neighbor.rivet-project',
+                    absolutePath:
+                      kind === 'root' ? '/workflows/Current child.rivet-project' : '/workflows/Neighbor.rivet-project',
+                    relativePath: kind === 'root' ? 'Current child.rivet-project' : 'Neighbor.rivet-project',
                     updatedAt: '2026-10-19T00:00:00Z',
                     settings: { status: 'unpublished', endpointName: '', lastPublishedAt: null, publishedWebApps: [] },
                   },
@@ -347,8 +364,17 @@ for (const kind of ['child', 'nested child', 'legacy child', 'root', 'prompt chi
         },
       }),
     );
+    const currentChild = structuredClone(fixture.child);
+    currentChild.metadata.title = 'Current child';
+    currentChild.graphs['main' as GraphId]!.metadata!.name = 'Renamed live graph';
     await page.route('**/api/projects/load', (route) =>
-      route.fulfill({ json: { contents: serializeProject(neighbor), datasetsContents: null, revisionId: null } }),
+      route.fulfill({
+        json: {
+          contents: serializeReplayProject(kind === 'root' ? currentChild : neighbor),
+          datasetsContents: null,
+          revisionId: null,
+        },
+      }),
     );
     await page.route(/\/api\/workflows\/recordings\/workflows(?:\?.*)?$/, (route) =>
       route.fulfill({ json: { workflows: [], totals: { totalRuns: 2, failedRuns: 0, suspiciousRuns: 0 } } }),
@@ -384,7 +410,7 @@ for (const kind of ['child', 'nested child', 'legacy child', 'root', 'prompt chi
       errorMessage:
         kind === 'nested child' ? `Historical run failure: ${'long-unbroken-detail'.repeat(30)}` : undefined,
     };
-    await page.route('**/api/workflows/recordings/**', (route) => {
+    await page.route('**/api/workflows/recordings/**', async (route) => {
       const url = new URL(route.request().url());
       if (url.pathname.endsWith('/summary'))
         return kind === 'root'
@@ -419,18 +445,24 @@ for (const kind of ['child', 'nested child', 'legacy child', 'root', 'prompt chi
             runs: [child],
           },
         });
-      if (url.pathname.endsWith('/recording'))
+      if (url.pathname.endsWith('/recording')) {
+        await traceGate;
         return route.fulfill({
           contentType: 'text/plain',
           body:
             kind === 'child' && url.pathname.includes('/parent-run/')
               ? fixture.rootRecording.serialize()
-              : serializedRecording,
+              : useLegacyRecording
+                ? JSON.stringify(legacyRecording)
+                : serializedRecording,
         });
+      }
       if (url.pathname.endsWith('/replay-project'))
         return route.fulfill({
           contentType: 'text/plain',
-          body: serializeProject(kind === 'child' && url.pathname.includes('/parent-run/') ? fixture.parent : project),
+          body: serializeReplayProject(
+            kind === 'child' && url.pathname.includes('/parent-run/') ? fixture.parent : project,
+          ),
         });
       if (url.pathname.endsWith('/replay-dataset'))
         return route.fulfill({ status: 404, json: { error: 'No replay dataset' } });
@@ -446,6 +478,10 @@ for (const kind of ['child', 'nested child', 'legacy child', 'root', 'prompt chi
       await expect(editor.locator('.node[data-nodeid="child-text"] .node-output')).toContainText(
         'neighbor live evidence',
       );
+    }
+    if (kind === 'root') {
+      await page.locator('.project-row', { hasText: 'Current child' }).dblclick();
+      await expect(editor.locator('.node[data-nodeid="child-text"]')).toBeVisible();
     }
     await page.getByRole('button', { name: 'Run recordings', exact: true }).click();
     const modal = page.getByTestId('run-recordings-modal');
@@ -469,7 +505,15 @@ for (const kind of ['child', 'nested child', 'legacy child', 'root', 'prompt chi
       await expect(warning).toBeHidden();
     }
     if (kind === 'root') {
-      await expect(editor.locator('.node [data-recorded-target]')).toContainText('playback-child / main');
+      const label = editor.locator('.node [data-recorded-target]');
+      await expect(label).toHaveText(`Child replay / ${recordedGraphName}`);
+      await expect(label).toHaveAttribute('title', new RegExp('Readable graph name'));
+      await expect(label).not.toContainText('Current child');
+      expect(
+        await label.evaluate(
+          (element) => element.getBoundingClientRect().width <= element.closest('.node')!.getBoundingClientRect().width,
+        ),
+      ).toBe(true);
       await expect(editor.locator('.node .target-error')).toHaveCount(0);
       await expect(editor.getByRole('combobox', { name: 'Subgraph graph', exact: true })).toHaveCount(0);
     }
@@ -591,9 +635,21 @@ for (const kind of ['child', 'nested child', 'legacy child', 'root', 'prompt chi
       await recordingInfo.screenshot({ path: `../../artifacts/playwright/loaded-recording-${child.status}.png` });
     const play = editor.getByRole('button', { name: 'Play Recording', exact: true });
     const output = editor.locator('.node[data-nodeid="child-text"] .node-output');
+    let previousActivityKey: string | undefined;
     for (let iteration = 0; iteration < 3; iteration++) {
       await expect(play).toBeEnabled();
       await play.click();
+      // A re-enabled button and unchanged output can both belong to the
+      // previous replay. Require fresh, completed activity for every click.
+      await editor.getByRole('button', { name: 'Open Run Activity', exact: true }).click();
+      const activity = editor.locator('[aria-label="Run Activity"]');
+      const firstActivity = activity.locator('[data-activity-key]').first();
+      await expect(firstActivity).toHaveAttribute('data-activity-key', /.+/);
+      if (previousActivityKey !== undefined)
+        await expect(firstActivity).not.toHaveAttribute('data-activity-key', previousActivityKey);
+      await expect(activity.locator('.run-activity-status')).toHaveClass(/status-completed/);
+      previousActivityKey = (await firstActivity.getAttribute('data-activity-key'))!;
+      await activity.getByRole('button', { name: 'Close Run Activity', exact: true }).click();
       await expect(editor.getByRole('button', { name: 'Abort', exact: true })).toHaveCount(0);
       await expect(play).toBeEnabled();
       if (kind === 'nested child' && iteration > 0) {
@@ -844,6 +900,7 @@ for (const kind of ['child', 'nested child', 'legacy child', 'root', 'prompt chi
       await call.locator('.edit-button').click();
       const settings = editor.locator('.panel-container');
       await expect(settings.locator('[data-recorded-target]')).toBeVisible();
+      await expect(settings.locator('[data-recorded-target]')).toHaveText(`Child replay / ${recordedGraphName}`);
       await expect(settings).toContainText('Recorded graph');
       await expect(settings.getByRole('group', { name: 'Subgraph graph source', exact: true })).toHaveCount(0);
       await expect(
@@ -855,7 +912,42 @@ for (const kind of ['child', 'nested child', 'legacy child', 'root', 'prompt chi
       await expect(call.locator('[data-recorded-target]')).toBeVisible();
       await expect(call.locator('.target-error')).toHaveCount(0);
       await expect(editor.locator('.projects-container .project.active')).not.toHaveClass(/has-unsaved-changes/);
+
+      let releaseTrace!: () => void;
+      traceGate = new Promise<void>((resolve) => {
+        releaseTrace = resolve;
+      });
+      try {
+        await page.reload({ waitUntil: 'domcontentloaded' });
+        await waitForDashboardReady(page);
+        const label = editor.locator('.node [data-recorded-target]');
+        await expect(label).toContainText('playback-child / main');
+        await expect(label).not.toHaveAttribute('title', /not captured/);
+        releaseTrace();
+        await expect(label).toHaveText(`Child replay / ${recordedGraphName}`);
+        await page.screenshot({ path: test.info().outputPath('recorded-subgraph-names.png') });
+      } finally {
+        releaseTrace();
+        traceGate = undefined;
+      }
+
+      useLegacyRecording = true;
+      const active = editor.locator('.projects-container .project.active');
+      await active.hover();
+      await active.locator('.close-project').click();
+      await page.getByRole('button', { name: 'Run recordings', exact: true }).click();
+      await expect(modal).toBeVisible();
+      await modal.getByRole('button', { name: 'Show sub-runs', exact: true }).click();
+      await modal
+        .locator('.run-recordings-run')
+        .filter({ hasText: 'Called graph: Child main' })
+        .locator('.run-recordings-run-open-button')
+        .click();
+      const legacyLabel = editor.locator('.node [data-recorded-target]');
+      await expect(legacyLabel).toHaveText('playback-child / main');
+      await expect(legacyLabel).toHaveAttribute('title', /Original names were not captured or are unavailable/);
     }
     expect(liveTargetReads).toEqual([]);
+    expect(errors).toEqual([]);
   });
 }

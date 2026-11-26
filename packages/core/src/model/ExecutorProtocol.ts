@@ -22,6 +22,7 @@ import type {
 import type { GraphProgress } from './GraphProgress.js';
 import type { StreamingOutputWatchHistorySummary } from './StreamingOutputWatchHistory.js';
 import type { RivetWebAppStorage } from './UiGraphWebAppStorage.js';
+import type { SubgraphTargetDisplaySnapshot } from './SubgraphProjectTarget.js';
 import type { CombinedDataset } from '../utils/index.js';
 
 export type GraphInputs = Record<string, DataValue>;
@@ -47,7 +48,11 @@ export type SerializedProcessEventMap = {
     inputs: GraphInputs;
     contextValues: Record<string, DataValue>;
   }>;
-  graphStart: WithExecution<{ graph: NodeGraph; inputs: GraphInputs }>;
+  graphStart: WithExecution<{
+    graph: NodeGraph;
+    inputs: GraphInputs;
+    subgraphTargets?: readonly SubgraphTargetDisplaySnapshot[];
+  }>;
   graphError: WithExecution<{ graph: NodeGraph; error: Error | string }>;
   webAppStoragePatch: { storagePatch: RivetWebAppStorage };
   graphFinish: WithExecution<{ graph: NodeGraph; outputs: GraphOutputs }>;

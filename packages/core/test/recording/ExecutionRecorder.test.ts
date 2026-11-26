@@ -4,14 +4,15 @@ import { strict as assert } from 'node:assert';
 
 import type { GraphId, NodeGraph } from '../../src/model/NodeGraph.js';
 import type { GraphProcessor, NodeResultOrigin, Outputs, ProcessEvents } from '../../src/model/GraphProcessor.js';
+import type { ProjectId } from '../../src/model/Project.js';
+import type { DataValue } from '../../src/model/DataValue.js';
+import type { RecordedEvents } from '../../src/recording/RecordedEvents.js';
 import type { SerializedProcessEventMap } from '../../src/model/ExecutorProtocol.js';
 import { replayExecutionRecording } from '../../src/model/RecordingPlayer.js';
 import type { GraphExecutionMetadata, GraphRunId, ProcessId, RootRunId } from '../../src/model/ProcessContext.js';
 import { ExecutionRecorder } from '../../src/recording/ExecutionRecorder.js';
 import type { ChartNode, NodeId, PortId } from '../../src/model/NodeBase.js';
 import type { UserInputNode } from '../../src/model/nodes/UserInputNode.js';
-import { text } from 'node:stream/consumers';
-import { Readable } from 'node:stream';
 
 const userInputPort = 'user-input-a' as PortId;
 const nodeId = 'node-id' as NodeId;
@@ -33,6 +34,74 @@ const graph: NodeGraph = {
   nodes: [node],
   connections: [],
 };
+
+type ReplayOptions = Parameters<typeof replayExecutionRecording>[0];
+
+// Each replay gets fresh mutable state. Tests keep their meaningful overrides
+// (event observers, graph topology, identity and running-state assertions) local.
+function replayFixture(
+  recorder: ExecutionRecorder,
+  options: Pick<ReplayOptions, 'emitter'> & Partial<Omit<ReplayOptions, 'emitter' | 'recorder'>>,
+) {
+  return replayExecutionRecording({
+    erroredNodes: new Map(),
+    graphInputs: {},
+    graphOutputs: {},
+    isAborted: () => false,
+    nodeResults: new Map(),
+    project: {
+      metadata: { id: 'project-id' as ProjectId, title: 'Project', description: '', mainGraphId: graph.metadata!.id! },
+      graphs: { [graph.metadata!.id!]: graph },
+    },
+    recordingPlaybackChatLatency: 0,
+    setContextValues: () => {},
+    setGraphInputs: () => {},
+    setGraphOutputs: () => {},
+    setRunning: () => {},
+    visitedNodes: new Set(),
+    waitUntilUnpaused: async () => {},
+    ...options,
+    recorder,
+  });
+}
+
+void it('direct and socket recorders retain detached target labels within the existing request and project scope', async () => {
+  const snapshots = [
+    {
+      nodeId,
+      targetProjectId: 'target-project' as ProjectId,
+      targetGraphId: 'target-graph' as GraphId,
+      targetVersion: 'published' as const,
+      projectName: 'Original project',
+      graphName: 'folder/Original graph',
+    },
+  ];
+  const emitter = new Emittery<ProcessEvents>();
+  const direct = new ExecutionRecorder();
+  direct.record(emitter as unknown as GraphProcessor);
+  const source = { graph, inputs: {}, execution, subgraphTargets: snapshots };
+  await emitter.emit('graphStart', source as ProcessEvents['graphStart']);
+  await emitter.emit('done', { results: {} });
+  snapshots[0]!.projectName = 'Changed after emission';
+  const saved = direct.events.find((event) => event.type === 'graphStart')!.data.subgraphTargets;
+  assert.equal(saved?.[0]?.projectName, 'Original project');
+
+  const socket = new FakeSocket();
+  const remote = new ExecutionRecorder();
+  const done = remote.recordSocket(socket as unknown as WebSocket, { requestId: 'owned' });
+  socket.emit({ message: 'graphStart', requestId: 'other', data: source });
+  socket.emit({
+    message: 'graphStart',
+    requestId: 'owned',
+    data: { ...source, execution: { ...execution, projectScope: 'child' } },
+  });
+  socket.emit({ message: 'graphStart', requestId: 'owned', data: { ...source, subgraphTargets: saved } });
+  socket.emit({ message: 'done', requestId: 'owned', data: { results: {} } });
+  await done;
+  assert.equal(remote.events.filter((event) => event.type === 'graphStart').length, 1);
+  assert.deepEqual(remote.events.find((event) => event.type === 'graphStart')!.data.subgraphTargets, saved);
+  assert.equal(socket.listenerCount, 0);
+});
 
 class FakeSocket {
   #closeListeners = new Set<() => void>();
@@ -60,7 +129,11 @@ class FakeSocket {
   }
 
   emit(message: unknown) {
-    const event = { data: JSON.stringify(message) } as MessageEvent;
+    this.emitRaw(JSON.stringify(message));
+  }
+
+  emitRaw(data: string) {
+    const event = { data } as MessageEvent;
     for (const listener of this.#messageListeners) {
       listener(event);
     }
@@ -166,7 +239,7 @@ async function addEvents(recorder: ExecutionRecorder, options: { includeIntermed
 
     await emitter.emit('partialOutput', {
       node,
-      outputs: { output: { type: 'string', value: 'partial' } },
+      outputs: { ['output' as PortId]: { type: 'string', value: 'partial' } },
       index: 0,
       processId,
       execution,
@@ -187,7 +260,7 @@ async function addEvents(recorder: ExecutionRecorder, options: { includeIntermed
 
     await emitter.emit('graphFinish', {
       graph,
-      outputs: { output: { type: 'string', value: 'final' } },
+      outputs: { ['output' as PortId]: { type: 'string', value: 'final' } },
       execution,
     });
   }
@@ -211,25 +284,8 @@ async function replayNodeFinishTiming(
     splitRunDurationMs = data.splitRunDurationMs;
   });
 
-  await replayExecutionRecording({
+  await replayFixture(recorder, {
     emitter: replayEmitter,
-    erroredNodes: new Map(),
-    graphInputs: {},
-    graphOutputs: {},
-    isAborted: () => false,
-    nodeResults: new Map(),
-    project: {
-      metadata: { id: 'project-id', title: 'Project', description: '', mainGraphId: graph.metadata!.id! },
-      graphs: { [graph.metadata!.id!]: graph },
-    } as any,
-    recorder,
-    recordingPlaybackChatLatency: 0,
-    setContextValues: () => {},
-    setGraphInputs: () => {},
-    setGraphOutputs: () => {},
-    setRunning: () => {},
-    visitedNodes: new Set(),
-    waitUntilUnpaused: async () => {},
   });
 
   return { durationMs, splitRunDurationMs };
@@ -252,35 +308,22 @@ async function replayNodeResultOrigins(recorder: ExecutionRecorder): Promise<
   }> = [];
 
   for (const type of ['nodeStart', 'partialOutput', 'nodeFinish', 'nodeError', 'nodeExcluded'] as const) {
-    replayEmitter.on(type, (data) =>
-      replayed.push({
-        type,
-        resultOrigin: data.resultOrigin,
-        ...(type === 'nodeError' && data.outputs !== undefined ? { outputs: data.outputs } : {}),
-        ...(type === 'nodeError' && data.splitOutputs !== undefined ? { splitOutputs: data.splitOutputs } : {}),
-      }),
+    replayEmitter.on(
+      type,
+      (data) =>
+        void replayed.push({
+          type,
+          resultOrigin: data.resultOrigin,
+          ...(type === 'nodeError' && 'outputs' in data && data.outputs !== undefined ? { outputs: data.outputs } : {}),
+          ...(type === 'nodeError' && 'splitOutputs' in data && data.splitOutputs !== undefined
+            ? { splitOutputs: data.splitOutputs }
+            : {}),
+        }),
     );
   }
 
-  await replayExecutionRecording({
+  await replayFixture(recorder, {
     emitter: replayEmitter,
-    erroredNodes: new Map(),
-    graphInputs: {},
-    graphOutputs: {},
-    isAborted: () => false,
-    nodeResults: new Map(),
-    project: {
-      metadata: { id: 'project-id', title: 'Project', description: '', mainGraphId: graph.metadata!.id! },
-      graphs: { [graph.metadata!.id!]: graph },
-    } as any,
-    recorder,
-    recordingPlaybackChatLatency: 0,
-    setContextValues: () => {},
-    setGraphInputs: () => {},
-    setGraphOutputs: () => {},
-    setRunning: () => {},
-    visitedNodes: new Set(),
-    waitUntilUnpaused: async () => {},
   });
 
   return replayed;
@@ -290,12 +333,26 @@ void describe('ExecutionRecorder', () => {
   void it('should serialize an instance of ExecutionRecorder', async () => {
     // Simulate storage in string form
     const recordingToString = (recorder: ExecutionRecorder) => recorder.serialize();
-    const recordingStreamToString = async (recorder: ExecutionRecorder) =>
-      text(Readable.fromWeb(recorder.serializeStream() as any)); // cast needed due to incompatible Readable version types
+    const recordingStreamToString = async (recorder: ExecutionRecorder) => {
+      const reader = recorder.serializeStream().getReader();
+      let result = '';
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) return result;
+        result += value;
+      }
+    };
 
     const stringToRecording = ExecutionRecorder.deserializeFromString;
     const streamToRecording = (str: string) =>
-      ExecutionRecorder.deserializeFromStream(Readable.toWeb(Readable.from([str]))); // ReadableStream.from is only added in Node v20.6.0
+      ExecutionRecorder.deserializeFromStream(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(str);
+            controller.close();
+          },
+        }),
+      );
 
     // Test each pair of string/stream serializer and deserializer
     for (const [serialize, deserialize] of [
@@ -391,25 +448,8 @@ void describe('ExecutionRecorder', () => {
       replayedEvents.push({ type: 'graphFinish', execution: data.execution });
     });
 
-    await replayExecutionRecording({
+    await replayFixture(recorder, {
       emitter: replayEmitter,
-      erroredNodes: new Map(),
-      graphInputs: {},
-      graphOutputs: {},
-      isAborted: () => false,
-      nodeResults: new Map(),
-      project: {
-        metadata: { id: 'project-id', title: 'Project', description: '', mainGraphId: graph.metadata!.id! },
-        graphs: { [graph.metadata!.id!]: graph },
-      } as any,
-      recorder,
-      recordingPlaybackChatLatency: 0,
-      setContextValues: () => {},
-      setGraphInputs: () => {},
-      setGraphOutputs: () => {},
-      setRunning: () => {},
-      visitedNodes: new Set(),
-      waitUntilUnpaused: async () => {},
     });
 
     assert.deepEqual(
@@ -470,7 +510,7 @@ void describe('ExecutionRecorder', () => {
     await sourceEmitter.emit('graphStart', { graph, inputs: {}, execution });
     await sourceEmitter.emit('nodeFinish', {
       node,
-      outputs: { output: { type: 'string', value: 'selected watch output' } },
+      outputs: { ['output' as PortId]: { type: 'string', value: 'selected watch output' } },
       processId,
       execution: selectedIterationExecution,
     });
@@ -494,25 +534,8 @@ void describe('ExecutionRecorder', () => {
       replayedSelectedIterationExecution = event.execution;
     });
 
-    await replayExecutionRecording({
+    await replayFixture(recorder, {
       emitter: replayEmitter,
-      erroredNodes: new Map(),
-      graphInputs: {},
-      graphOutputs: {},
-      isAborted: () => false,
-      nodeResults: new Map(),
-      project: {
-        metadata: { id: 'project-id', title: 'Project', description: '', mainGraphId: graph.metadata!.id! },
-        graphs: { [graph.metadata!.id!]: graph },
-      } as any,
-      recorder,
-      recordingPlaybackChatLatency: 0,
-      setContextValues: () => {},
-      setGraphInputs: () => {},
-      setGraphOutputs: () => {},
-      setRunning: () => {},
-      visitedNodes: new Set(),
-      waitUntilUnpaused: async () => {},
     });
     await new Promise<void>((resolve) => setImmediate(resolve));
 
@@ -536,7 +559,7 @@ void describe('ExecutionRecorder', () => {
     await sourceEmitter.emit('graphStart', { graph, inputs: {}, execution });
     await sourceEmitter.emit('nodeFinish', {
       node,
-      outputs: { value: { type: 'string', value: 'accepted result' } },
+      outputs: { ['value' as PortId]: { type: 'string', value: 'accepted result' } },
       processId,
       streamingWatchTerminal: true,
       execution,
@@ -554,25 +577,8 @@ void describe('ExecutionRecorder', () => {
     replayEmitter.on('nodeFinish', (event) => {
       replayedTerminal = event.streamingWatchTerminal === true;
     });
-    await replayExecutionRecording({
+    await replayFixture(ExecutionRecorder.deserializeFromString(recorder.serialize()), {
       emitter: replayEmitter,
-      erroredNodes: new Map(),
-      graphInputs: {},
-      graphOutputs: {},
-      isAborted: () => false,
-      nodeResults: new Map(),
-      project: {
-        metadata: { id: 'project-id', title: 'Project', description: '', mainGraphId: graph.metadata!.id! },
-        graphs: { [graph.metadata!.id!]: graph },
-      } as any,
-      recorder: ExecutionRecorder.deserializeFromString(recorder.serialize()),
-      recordingPlaybackChatLatency: 0,
-      setContextValues: () => {},
-      setGraphInputs: () => {},
-      setGraphOutputs: () => {},
-      setRunning: () => {},
-      visitedNodes: new Set(),
-      waitUntilUnpaused: async () => {},
     });
 
     assert.equal(replayedTerminal, true);
@@ -592,12 +598,12 @@ void describe('ExecutionRecorder', () => {
       splitIndex: 0,
       kind: 'model-round',
       outcome: 'tool-calls',
-      outputs: { response: { type: 'string', value: 'I will call a tool.' } },
+      outputs: { ['response' as PortId]: { type: 'string', value: 'I will call a tool.' } },
       execution,
     });
     await sourceEmitter.emit('nodeFinish', {
       node,
-      outputs: { response: { type: 'string', value: 'final answer' } },
+      outputs: { ['response' as PortId]: { type: 'string', value: 'final answer' } },
       processId,
       execution,
     });
@@ -611,29 +617,12 @@ void describe('ExecutionRecorder', () => {
     const replayEmitter = new Emittery<ProcessEvents>();
     const replayedSnapshots: ProcessEvents['llmChatOutputSnapshot'][] = [];
     let replayedNodeStarts = 0;
-    replayEmitter.on('llmChatOutputSnapshot', (data) => replayedSnapshots.push(data));
+    replayEmitter.on('llmChatOutputSnapshot', (data) => void replayedSnapshots.push(data));
     replayEmitter.on('nodeStart', () => {
       replayedNodeStarts += 1;
     });
-    await replayExecutionRecording({
+    await replayFixture(ExecutionRecorder.deserializeFromString(recorder.serialize()), {
       emitter: replayEmitter,
-      erroredNodes: new Map(),
-      graphInputs: {},
-      graphOutputs: {},
-      isAborted: () => false,
-      nodeResults: new Map(),
-      project: {
-        metadata: { id: 'project-id', title: 'Project', description: '', mainGraphId: graph.metadata!.id! },
-        graphs: { [graph.metadata!.id!]: graph },
-      } as any,
-      recorder: ExecutionRecorder.deserializeFromString(recorder.serialize()),
-      recordingPlaybackChatLatency: 0,
-      setContextValues: () => {},
-      setGraphInputs: () => {},
-      setGraphOutputs: () => {},
-      setRunning: () => {},
-      visitedNodes: new Set(),
-      waitUntilUnpaused: async () => {},
     });
 
     assert.equal(replayedNodeStarts, 1);
@@ -653,7 +642,7 @@ void describe('ExecutionRecorder', () => {
           splitIndex: 0,
           kind: 'model-round',
           outcome: 'tool-calls',
-          outputs: { response: { type: 'string', value: 'I will call a tool.' } },
+          outputs: { ['response' as PortId]: { type: 'string', value: 'I will call a tool.' } },
         },
       ],
     );
@@ -714,27 +703,19 @@ void describe('ExecutionRecorder', () => {
       const replayEmitter = new Emittery<ProcessEvents>();
       const replayedGraphExecutions: GraphExecutionMetadata[] = [];
       const replayedNodeExecutions: GraphExecutionMetadata[] = [];
-      replayEmitter.on('graphStart', (data) => replayedGraphExecutions.push(data.execution));
-      replayEmitter.on('nodeFinish', (data) => replayedNodeExecutions.push(data.execution));
-      await replayExecutionRecording({
+      replayEmitter.on('graphStart', (data) => void replayedGraphExecutions.push(data.execution));
+      replayEmitter.on('nodeFinish', (data) => void replayedNodeExecutions.push(data.execution));
+      await replayFixture(recorder, {
         emitter: replayEmitter,
-        erroredNodes: new Map(),
-        graphInputs: {},
-        graphOutputs: {},
-        isAborted: () => false,
-        nodeResults: new Map(),
         project: {
-          metadata: { id: 'project-id', title: 'Project', description: '', mainGraphId: rootGraph.metadata!.id! },
+          metadata: {
+            id: 'project-id' as ProjectId,
+            title: 'Project',
+            description: '',
+            mainGraphId: rootGraph.metadata!.id!,
+          },
           graphs: { [rootGraph.metadata!.id!]: rootGraph, [subgraphId]: subgraph },
-        } as any,
-        recorder,
-        recordingPlaybackChatLatency: 0,
-        setContextValues: () => {},
-        setGraphInputs: () => {},
-        setGraphOutputs: () => {},
-        setRunning: () => {},
-        visitedNodes: new Set(),
-        waitUntilUnpaused: async () => {},
+        },
       });
       return { replayedGraphExecutions, replayedNodeExecutions };
     };
@@ -795,27 +776,10 @@ void describe('ExecutionRecorder', () => {
 
     const replayEmitter = new Emittery<ProcessEvents>();
     const replayedExecutions: GraphExecutionMetadata[] = [];
-    replayEmitter.on('graphStart', (data) => replayedExecutions.push(data.execution));
-    replayEmitter.on('nodeFinish', (data) => replayedExecutions.push(data.execution));
-    await replayExecutionRecording({
+    replayEmitter.on('graphStart', (data) => void replayedExecutions.push(data.execution));
+    replayEmitter.on('nodeFinish', (data) => void replayedExecutions.push(data.execution));
+    await replayFixture(recorder, {
       emitter: replayEmitter,
-      erroredNodes: new Map(),
-      graphInputs: {},
-      graphOutputs: {},
-      isAborted: () => false,
-      nodeResults: new Map(),
-      project: {
-        metadata: { id: 'project-id', title: 'Project', description: '', mainGraphId: graph.metadata!.id! },
-        graphs: { [graph.metadata!.id!]: graph },
-      } as any,
-      recorder,
-      recordingPlaybackChatLatency: 0,
-      setContextValues: () => {},
-      setGraphInputs: () => {},
-      setGraphOutputs: () => {},
-      setRunning: () => {},
-      visitedNodes: new Set(),
-      waitUntilUnpaused: async () => {},
     });
 
     const [replayedRoot, replayedWatchChild] = replayedExecutions;
@@ -842,29 +806,12 @@ void describe('ExecutionRecorder', () => {
     };
     const replayEmitter = new Emittery<ProcessEvents>();
     const replayedExecutions: GraphExecutionMetadata[] = [];
-    replayEmitter.on('graphStart', (data) => replayedExecutions.push(data.execution));
-    replayEmitter.on('nodeFinish', (data) => replayedExecutions.push(data.execution));
+    replayEmitter.on('graphStart', (data) => void replayedExecutions.push(data.execution));
+    replayEmitter.on('nodeFinish', (data) => void replayedExecutions.push(data.execution));
 
-    await replayExecutionRecording({
+    await replayFixture(recorder, {
       emitter: replayEmitter,
-      erroredNodes: new Map(),
-      graphInputs: {},
-      graphOutputs: {},
       initialReplayExecution,
-      isAborted: () => false,
-      nodeResults: new Map(),
-      project: {
-        metadata: { id: 'project-id', title: 'Project', description: '', mainGraphId: graph.metadata!.id! },
-        graphs: { [graph.metadata!.id!]: graph },
-      } as any,
-      recorder,
-      recordingPlaybackChatLatency: 0,
-      setContextValues: () => {},
-      setGraphInputs: () => {},
-      setGraphOutputs: () => {},
-      setRunning: () => {},
-      visitedNodes: new Set(),
-      waitUntilUnpaused: async () => {},
     });
 
     assert.deepEqual(replayedExecutions, [initialReplayExecution, initialReplayExecution]);
@@ -891,7 +838,7 @@ void describe('ExecutionRecorder', () => {
         message: 'partialOutput',
         data: {
           node,
-          outputs: { output: { type: 'string', value: 'partial' } },
+          outputs: { ['output' as PortId]: { type: 'string', value: 'partial' } },
           index: 0,
           processId,
           resultOrigin: 'executed',
@@ -902,7 +849,7 @@ void describe('ExecutionRecorder', () => {
         message: 'nodeFinish',
         data: {
           node,
-          outputs: { output: { type: 'string', value: 'finished' } },
+          outputs: { ['output' as PortId]: { type: 'string', value: 'finished' } },
           processId,
           eventOccurredAt: 10_070,
           resultOrigin: 'frozen',
@@ -915,8 +862,8 @@ void describe('ExecutionRecorder', () => {
           node,
           error: 'failed',
           processId,
-          outputs: { requestBody: { type: 'string', value: 'preserved request' } },
-          splitOutputs: { 1: { response: { type: 'string', value: 'preserved split response' } } },
+          outputs: { ['requestBody' as PortId]: { type: 'string', value: 'preserved request' } },
+          splitOutputs: { 1: { ['response' as PortId]: { type: 'string', value: 'preserved split response' } } },
           resultOrigin: 'preloaded',
           execution,
         } satisfies SerializedProcessEventMap['nodeError'],
@@ -943,7 +890,9 @@ void describe('ExecutionRecorder', () => {
 
     assert.deepEqual(
       recorder.events
-        .filter((event) => events.some((expected) => expected.message === event.type))
+        .filter((event): event is Extract<RecordedEvents, { type: (typeof events)[number]['message'] }> =>
+          events.some((expected) => expected.message === event.type),
+        )
         .map((event) => ({
           type: event.type,
           resultOrigin: event.data.resultOrigin,
@@ -957,8 +906,8 @@ void describe('ExecutionRecorder', () => {
         {
           type: 'nodeError',
           resultOrigin: 'preloaded',
-          outputs: { requestBody: { type: 'string', value: 'preserved request' } },
-          splitOutputs: { 1: { response: { type: 'string', value: 'preserved split response' } } },
+          outputs: { ['requestBody' as PortId]: { type: 'string', value: 'preserved request' } },
+          splitOutputs: { 1: { ['response' as PortId]: { type: 'string', value: 'preserved split response' } } },
         },
         { type: 'nodeExcluded', resultOrigin: 'unknown' },
       ],
@@ -981,8 +930,8 @@ void describe('ExecutionRecorder', () => {
       {
         type: 'nodeError',
         resultOrigin: 'preloaded',
-        outputs: { requestBody: { type: 'string', value: 'preserved request' } },
-        splitOutputs: { 1: { response: { type: 'string', value: 'preserved split response' } } },
+        outputs: { ['requestBody' as PortId]: { type: 'string', value: 'preserved request' } },
+        splitOutputs: { 1: { ['response' as PortId]: { type: 'string', value: 'preserved split response' } } },
       },
       { type: 'nodeExcluded', resultOrigin: 'unknown' },
     ]);
@@ -1065,29 +1014,12 @@ void describe('ExecutionRecorder', () => {
 
     const replayEmitter = new Emittery<ProcessEvents>();
     const replayed: unknown[] = [];
-    replayEmitter.on('llmCallFinished', (event) => replayed.push(event));
-    replayEmitter.on('llmProfileAttempt', (event) => replayed.push(event));
-    replayEmitter.on('toolCallFinished', (event) => replayed.push(event));
+    replayEmitter.on('llmCallFinished', (event) => void replayed.push(event));
+    replayEmitter.on('llmProfileAttempt', (event) => void replayed.push(event));
+    replayEmitter.on('toolCallFinished', (event) => void replayed.push(event));
 
-    await replayExecutionRecording({
+    await replayFixture(recorder, {
       emitter: replayEmitter,
-      erroredNodes: new Map(),
-      graphInputs: {},
-      graphOutputs: {},
-      isAborted: () => false,
-      nodeResults: new Map(),
-      project: {
-        metadata: { id: 'project-id', title: 'Project', description: '', mainGraphId: graph.metadata!.id! },
-        graphs: { [graph.metadata!.id!]: graph },
-      } as any,
-      recorder,
-      recordingPlaybackChatLatency: 0,
-      setContextValues: () => {},
-      setGraphInputs: () => {},
-      setGraphOutputs: () => {},
-      setRunning: () => {},
-      visitedNodes: new Set(),
-      waitUntilUnpaused: async () => {},
     });
 
     assert.equal(replayed.length, 3);
@@ -1166,33 +1098,16 @@ void describe('ExecutionRecorder', () => {
     const replayEmitter = new Emittery<ProcessEvents>();
     const replayed: Array<{ type: string; replayRecordedAt?: number }> = [];
     for (const type of ['graphStart', 'nodeStart', 'nodeFinish', 'graphFinish', 'done'] as const) {
-      replayEmitter.on(type, (data) => replayed.push({ type, replayRecordedAt: data.replayRecordedAt }));
+      replayEmitter.on(type, (data) => void replayed.push({ type, replayRecordedAt: data.replayRecordedAt }));
     }
 
-    await replayExecutionRecording({
+    await replayFixture(recorder, {
       emitter: replayEmitter,
-      erroredNodes: new Map(),
-      graphInputs: {},
-      graphOutputs: {},
-      isAborted: () => false,
-      nodeResults: new Map(),
-      project: {
-        metadata: { id: 'project-id', title: 'Project', description: '', mainGraphId: graph.metadata!.id! },
-        graphs: { [graph.metadata!.id!]: graph },
-      } as any,
-      recorder,
-      recordingPlaybackChatLatency: 0,
-      setContextValues: () => {},
-      setGraphInputs: () => {},
-      setGraphOutputs: () => {},
-      setRunning: () => {},
-      visitedNodes: new Set(),
-      waitUntilUnpaused: async () => {},
     });
 
     assert.deepEqual(
       replayed,
-      ['graphStart', 'nodeStart', 'nodeFinish', 'graphFinish', 'done'].map((type) => ({
+      (['graphStart', 'nodeStart', 'nodeFinish', 'graphFinish', 'done'] as const).map((type) => ({
         type,
         replayRecordedAt: timestamps.get(type),
       })),
@@ -1228,32 +1143,17 @@ void describe('ExecutionRecorder', () => {
 
     const replayEmitter = new Emittery<ProcessEvents>();
     const replayed: Array<{ type: string; replayRecordedAt?: number }> = [];
-    replayEmitter.on('nodeStart', (data) =>
-      replayed.push({ type: 'nodeStart', replayRecordedAt: data.replayRecordedAt }),
+    replayEmitter.on(
+      'nodeStart',
+      (data) => void replayed.push({ type: 'nodeStart', replayRecordedAt: data.replayRecordedAt }),
     );
-    replayEmitter.on('nodeFinish', (data) =>
-      replayed.push({ type: 'nodeFinish', replayRecordedAt: data.replayRecordedAt }),
+    replayEmitter.on(
+      'nodeFinish',
+      (data) => void replayed.push({ type: 'nodeFinish', replayRecordedAt: data.replayRecordedAt }),
     );
 
-    await replayExecutionRecording({
+    await replayFixture(recorder, {
       emitter: replayEmitter,
-      erroredNodes: new Map(),
-      graphInputs: {},
-      graphOutputs: {},
-      isAborted: () => false,
-      nodeResults: new Map(),
-      project: {
-        metadata: { id: 'project-id', title: 'Project', description: '', mainGraphId: graph.metadata!.id! },
-        graphs: { [graph.metadata!.id!]: graph },
-      } as any,
-      recorder,
-      recordingPlaybackChatLatency: 0,
-      setContextValues: () => {},
-      setGraphInputs: () => {},
-      setGraphOutputs: () => {},
-      setRunning: () => {},
-      visitedNodes: new Set(),
-      waitUntilUnpaused: async () => {},
     });
 
     assert.deepEqual(replayed, [
@@ -1276,8 +1176,11 @@ void describe('ExecutionRecorder', () => {
     });
     await emitter.emit('done', { results: {}, replayRecordedAt: 12_678 });
 
-    assert.equal('replayRecordedAt' in (recorder.events[0]?.data ?? {}), false);
-    assert.equal('replayRecordedAt' in (recorder.events[1]?.data ?? {}), false);
+    assert.equal(
+      'replayRecordedAt' in (recorder.events.find((event) => event.type === 'nodeStart')?.data ?? {}),
+      false,
+    );
+    assert.equal('replayRecordedAt' in (recorder.events.find((event) => event.type === 'done')?.data ?? {}), false);
   });
 
   void it('preserves value-free node-start wiring snapshots during replay', async () => {
@@ -1305,25 +1208,8 @@ void describe('ExecutionRecorder', () => {
     replayEmitter.on('nodeStart', (data) => {
       replayedConnections = data.inputConnections;
     });
-    await replayExecutionRecording({
+    await replayFixture(recorder, {
       emitter: replayEmitter,
-      erroredNodes: new Map(),
-      graphInputs: {},
-      graphOutputs: {},
-      isAborted: () => false,
-      nodeResults: new Map(),
-      project: {
-        metadata: { id: 'project-id', title: 'Project', description: '', mainGraphId: graph.metadata!.id! },
-        graphs: { [graph.metadata!.id!]: graph },
-      } as any,
-      recorder,
-      recordingPlaybackChatLatency: 0,
-      setContextValues: () => {},
-      setGraphInputs: () => {},
-      setGraphOutputs: () => {},
-      setRunning: () => {},
-      visitedNodes: new Set(),
-      waitUntilUnpaused: async () => {},
     });
     assert.deepEqual(replayedConnections, inputConnections);
   });
@@ -1341,7 +1227,7 @@ void describe('ExecutionRecorder', () => {
     const replayedLifecycle: string[] = [];
     const replayedPauseData: ProcessEvents['pause'][] = [];
     const replayedResumeData: ProcessEvents['resume'][] = [];
-    replayEmitter.on('graphStart', () => replayedLifecycle.push('graphStart'));
+    replayEmitter.on('graphStart', () => void replayedLifecycle.push('graphStart'));
     replayEmitter.on('pause', (data) => {
       replayedLifecycle.push('pause');
       replayedPauseData.push(data);
@@ -1350,27 +1236,10 @@ void describe('ExecutionRecorder', () => {
       replayedLifecycle.push('resume');
       replayedResumeData.push(data);
     });
-    replayEmitter.on('done', () => replayedLifecycle.push('done'));
+    replayEmitter.on('done', () => void replayedLifecycle.push('done'));
 
-    await replayExecutionRecording({
+    await replayFixture(recorder, {
       emitter: replayEmitter,
-      erroredNodes: new Map(),
-      graphInputs: {},
-      graphOutputs: {},
-      isAborted: () => false,
-      nodeResults: new Map(),
-      project: {
-        metadata: { id: 'project-id', title: 'Project', description: '', mainGraphId: graph.metadata!.id! },
-        graphs: { [graph.metadata!.id!]: graph },
-      } as any,
-      recorder,
-      recordingPlaybackChatLatency: 0,
-      setContextValues: () => {},
-      setGraphInputs: () => {},
-      setGraphOutputs: () => {},
-      setRunning: () => {},
-      visitedNodes: new Set(),
-      waitUntilUnpaused: async () => {},
     });
 
     assert.deepEqual(replayedLifecycle, ['graphStart', 'pause', 'resume', 'done']);
@@ -1416,7 +1285,7 @@ void describe('ExecutionRecorder', () => {
     await emitter.emit('abort', { successful: true });
     await emitter.emit('nodeFinish', {
       node,
-      outputs: { output: { type: 'string', value: 'late' } },
+      outputs: { ['output' as PortId]: { type: 'string', value: 'late' } },
       processId,
       execution,
     });
@@ -1447,7 +1316,7 @@ void describe('ExecutionRecorder', () => {
     await emitter.emit('nodeError', {
       node,
       error: new Error('cleanup failure'),
-      outputs: { requestBody: { type: 'string', value: 'preserved request' } },
+      outputs: { ['requestBody' as PortId]: { type: 'string', value: 'preserved request' } },
       processId,
       execution,
     });
@@ -1466,33 +1335,46 @@ void describe('ExecutionRecorder', () => {
     assert.deepEqual(nodeError?.data.outputs, { requestBody: { type: 'string', value: 'preserved request' } });
   });
 
-  void it('ignores app-executor Code console messages when recording remote sockets', async () => {
+  void it('ignores non-event frames and prototype names while recording remote sockets', async () => {
     const recorder = new ExecutionRecorder();
     const socket = new FakeSocket();
     const recordingFinished = recorder.recordSocket(socket as unknown as WebSocket);
 
-    socket.emit({
-      message: 'codeConsole',
-      data: {
-        level: 'log',
-        args: ['debug-only'],
-      },
-    });
-    socket.emit({
-      message: 'done',
-      data: {
-        results: {
-          output: { type: 'string', value: 'output' },
-        },
-      },
-    });
+    try {
+      assert.doesNotThrow(() => socket.emitRaw('{invalid JSON'));
+      for (const frame of [
+        null,
+        42,
+        'control frame',
+        [],
+        {},
+        { message: 42 },
+        { message: '__proto__', data: {} },
+        { message: 'constructor', data: {} },
+        { message: 'toString', data: {} },
+        { message: 'codeConsole', data: { level: 'log', args: ['debug-only'] } },
+      ]) {
+        assert.doesNotThrow(() => socket.emit(frame), `Rejected frame: ${JSON.stringify(frame)}`);
+      }
+      const value = { type: 'string', value: 'preserved named event' };
+      socket.emit({ message: 'globalSet:counter', data: value });
+      socket.emit({ message: 'userEvent:constructor', data: value });
+      socket.emit({ message: 'done', data: { results: { output: value } } });
+      await recordingFinished;
 
-    await recordingFinished;
-
-    assert.deepEqual(
-      recorder.events.map((event) => event.type),
-      ['done'],
-    );
+      assert.deepEqual(
+        recorder.events.map(({ type, data }) => ({ type, data })),
+        [
+          { type: 'globalSet:counter', data: value },
+          { type: 'userEvent:constructor', data: value },
+          { type: 'done', data: { results: { output: value } } },
+        ],
+      );
+      assert.equal(socket.listenerCount, 0);
+    } finally {
+      socket.close();
+      await recordingFinished;
+    }
   });
 
   void it('records only replayable events from its scoped remote request', async () => {
@@ -1571,7 +1453,7 @@ void describe('ExecutionRecorder', () => {
       message: 'nodeFinish',
       data: {
         node,
-        outputs: { output: { type: 'string', value: 'late' } },
+        outputs: { ['output' as PortId]: { type: 'string', value: 'late' } },
         processId,
         execution,
       },
@@ -1611,7 +1493,7 @@ void describe('ExecutionRecorder', () => {
       data: {
         node,
         error: 'Error: cleanup failure',
-        outputs: { requestBody: { type: 'string', value: 'preserved request' } },
+        outputs: { ['requestBody' as PortId]: { type: 'string', value: 'preserved request' } },
         processId,
         execution,
       },
@@ -1715,31 +1597,15 @@ void describe('ExecutionRecorder', () => {
     const replayEmitter = new Emittery<ProcessEvents>();
     const graphErrors: ProcessEvents['graphError'][] = [];
     const errors: ProcessEvents['error'][] = [];
-    replayEmitter.on('graphError', (data) => graphErrors.push(data));
-    replayEmitter.on('error', (data) => errors.push(data));
+    replayEmitter.on('graphError', (data) => void graphErrors.push(data));
+    replayEmitter.on('error', (data) => void errors.push(data));
     let running = true;
 
-    await replayExecutionRecording({
+    await replayFixture(recorder, {
       emitter: replayEmitter,
-      erroredNodes: new Map(),
-      graphInputs: {},
-      graphOutputs: {},
-      isAborted: () => false,
-      nodeResults: new Map(),
-      project: {
-        metadata: { id: 'project-id', title: 'Project', description: '', mainGraphId: graph.metadata!.id! },
-        graphs: { [graph.metadata!.id!]: graph },
-      } as any,
-      recorder,
-      recordingPlaybackChatLatency: 0,
-      setContextValues: () => {},
-      setGraphInputs: () => {},
-      setGraphOutputs: () => {},
       setRunning: (nextRunning) => {
         running = nextRunning;
       },
-      visitedNodes: new Set(),
-      waitUntilUnpaused: async () => {},
     });
     await Promise.resolve();
 
@@ -1813,32 +1679,25 @@ void describe('ExecutionRecorder', () => {
         terminalGraphId = event.graph.metadata?.id;
         terminalError = event.error;
       });
-      replayEmitter.on('done', () => lifecycleEvents.push('done'));
-      replayEmitter.on('error', () => lifecycleEvents.push('error'));
-      replayEmitter.on('abort', () => lifecycleEvents.push('abort'));
+      replayEmitter.on('done', () => void lifecycleEvents.push('done'));
+      replayEmitter.on('error', () => void lifecycleEvents.push('error'));
+      replayEmitter.on('abort', () => void lifecycleEvents.push('abort'));
 
-      await replayExecutionRecording({
+      await replayFixture(recorder, {
         emitter: replayEmitter,
-        erroredNodes: new Map(),
-        graphInputs: {},
-        graphOutputs: {},
         fallbackGraphId: replayTargetGraph.metadata!.id!,
-        isAborted: () => false,
-        nodeResults: new Map(),
         project: {
-          metadata: { id: 'project-id', title: 'Project', description: '', mainGraphId: graph.metadata!.id! },
+          metadata: {
+            id: 'project-id' as ProjectId,
+            title: 'Project',
+            description: '',
+            mainGraphId: graph.metadata!.id!,
+          },
           graphs: { [graph.metadata!.id!]: graph, [replayTargetGraph.metadata!.id!]: replayTargetGraph },
-        } as any,
-        recorder,
-        recordingPlaybackChatLatency: 0,
-        setContextValues: () => {},
-        setGraphInputs: () => {},
-        setGraphOutputs: () => {},
+        },
         setRunning: (nextRunning) => {
           running = nextRunning;
         },
-        visitedNodes: new Set(),
-        waitUntilUnpaused: async () => {},
       });
       await Promise.resolve();
 

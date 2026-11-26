@@ -1,9 +1,10 @@
 import { atom } from 'jotai';
 import { executionSnapshotField } from './projectExecutionStore.js';
 import { type ExecutionRecorder, type ProjectId } from '@valerypopoff/rivet2-core';
-import { loadedProjectState, projectState } from './savedGraphs.js';
+import { loadedProjectState, projectsState, projectState } from './savedGraphs.js';
 import { getRecordingPresentation, type RecordingRunDetails } from '../utils/recordingPresentation.js';
 import { isRecordingSnapshotPath } from '../utils/recordingPlayback.js';
+import { buildRecordedSubgraphTargetIndex } from '../utils/recordedSubgraphTargets.js';
 
 /** Transient render tick for the runtime-owned executor/debugger session. */
 export const executorSessionRevisionState = atom(0);
@@ -18,6 +19,8 @@ export type LoadedRecording = {
 };
 
 export const loadedRecordingState = atom<LoadedRecording | null>(null);
+/** Shared across menu entry points so a late picker cannot supersede a newer command. */
+export const pendingRecordingLoadState = atom<symbol | null>(null);
 
 /** Small, transient tab decorations; never retain a second copy of recording events. */
 type RecordingTabIndicator = Pick<ReturnType<typeof getRecordingPresentation>, 'status' | 'color' | 'label'> &
@@ -58,10 +61,23 @@ export function getLoadedRecordingForTab(
   return isLoadedRecordingOwnedByTab(loadedRecording, projectId, projectPath) ? loadedRecording : undefined;
 }
 
+export const currentRecordingTabPathState = atom((get) => {
+  const projectId = get(projectState).metadata.id;
+  const opened = get(projectsState).openedProjects[projectId];
+  // Project and last-loaded-path hydration/activation can settle separately.
+  // All recording selectors must agree on the current tab's own path.
+  return opened ? opened.fsPath ?? null : get(loadedProjectState).path;
+});
+
 /** The recording mode visible to the current editor tab, if any. */
 export const currentProjectLoadedRecordingState = atom((get) =>
-  getLoadedRecordingForTab(get(loadedRecordingState), get(projectState).metadata.id, get(loadedProjectState).path),
+  getLoadedRecordingForTab(get(loadedRecordingState), get(projectState).metadata.id, get(currentRecordingTabPathState)),
 );
+
+export const recordedSubgraphTargetsState = atom((get) => {
+  const recording = get(currentProjectLoadedRecordingState);
+  return recording ? buildRecordedSubgraphTargetIndex(recording.recorder.events) : undefined;
+});
 
 /** Standalone replay tabs have no live project mode to return to; close the tab instead. */
 export const canUnloadCurrentProjectRecordingState = atom((get) => {
@@ -76,7 +92,7 @@ export const canUnloadCurrentProjectRecordingState = atom((get) => {
  * to access a live project or infer bundle membership.
  */
 export const isRecordingProjectState = atom(
-  (get) => !!get(currentProjectLoadedRecordingState) || isRecordingSnapshotPath(get(loadedProjectState).path),
+  (get) => !!get(currentProjectLoadedRecordingState) || isRecordingSnapshotPath(get(currentRecordingTabPathState)),
 );
 
 /**
@@ -114,6 +130,7 @@ export const activateLoadedRecordingState = atom(null, (_get, set, loadedRecordi
     [loadedRecording.projectId]: { projectPath: loadedRecording.projectPath, status, color, label },
   }));
   set(loadedRecordingState, loadedRecording);
+  set(pendingRecordingLoadState, null);
   set(recordingPlaybackStartingState, false);
 });
 
@@ -140,7 +157,10 @@ export const rebindLoadedRecordingPathState = atom(
       return false;
     }
 
-    set(activateLoadedRecordingState, { ...loadedRecording, projectPath: move.toPath });
+    // A verified move keeps the same selection and any pending picker alive.
+    // The tab indicators were already rebound above.
+    set(loadedRecordingState, { ...loadedRecording, projectPath: move.toPath });
+    set(recordingPlaybackStartingState, false);
     return true;
   },
 );

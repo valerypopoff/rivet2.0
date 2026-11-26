@@ -297,8 +297,12 @@ available.
   This applies to direct and transitive dependencies. Changes to the caller
   or another dependency leave a matching dependency green. Yellow wins when
   the dependency differs in another active release. A project may have its
-  own solid dot and a separate hollow circle. Give the circles meaningful
-  accessible labels and tooltips. Unknown coverage alone earns neither
+  own solid dot and a separate hollow circle. The green circle is labeled
+  **Contributes to published** and yellow **Contributes to unpublished changes**,
+  with matching context-menu status strips (or a secondary contribution line
+  when the project also has its own publication) and Project Settings pills.
+  The dependency detail modal is titled **Changes in referenced projects**.
+  Unknown coverage alone earns neither
   hollow marker.
 - Deliver a small, batched reference status projection alongside the ordinary
   tree. Keep the last accepted projection visible while the current generation

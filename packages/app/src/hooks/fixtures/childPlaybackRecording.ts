@@ -15,6 +15,7 @@ import {
 export async function createChildPlaybackFixture(
   nestedCalls = 0,
   outcome: 'complete' | 'fail' | 'abort' | 'prompt' = 'complete',
+  names: { projectTitle?: string; graphName?: string } = {},
 ) {
   const registry = createBuiltInRegistry();
   const text = registry.createDynamic('text');
@@ -62,12 +63,16 @@ export async function createChildPlaybackFixture(
   const child: Project = {
     metadata: {
       id: 'playback-child' as ProjectId,
-      title: 'Child replay',
+      title: names.projectTitle ?? 'Child replay',
       description: '',
       mainGraphId: 'main' as GraphId,
     },
     graphs: {
-      ['main' as GraphId]: { metadata: { id: 'main' as GraphId, name: 'Child main' }, nodes, connections },
+      ['main' as GraphId]: {
+        metadata: { id: 'main' as GraphId, name: names.graphName ?? 'Child main' },
+        nodes,
+        connections,
+      },
       ['leaf' as GraphId]: {
         metadata: { id: 'leaf' as GraphId, name: 'Repeated leaf' },
         nodes: [{ ...text, id: 'leaf-text' as NodeId }, leafInput],

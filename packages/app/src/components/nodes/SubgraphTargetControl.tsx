@@ -25,7 +25,12 @@ import { OpenFolderIcon } from '../graphList/OpenFolderIcon';
 import { graphMetadataState, graphState } from '../../state/graph';
 import { useNodeEditorSessionContext } from '../nodeEditor/NodeEditorSessionContext';
 import { filterSubgraphProjectTree, subgraphSourceScope } from '../../utils/subgraphBundleScope.js';
-import { isRecordingProjectState } from '../../state/execution.js';
+import {
+  currentProjectLoadedRecordingState,
+  isRecordingProjectState,
+  recordedSubgraphTargetsState,
+} from '../../state/execution.js';
+import { getRecordedSubgraphTarget } from '../../utils/recordedSubgraphTargets.js';
 import { useSelectResizeDismissal } from '../../hooks/useSelectResizeDismissal.js';
 
 const SUBGRAPH_MENU_MAX_HEIGHT = 800;
@@ -213,29 +218,39 @@ export function SubgraphTargetLabel({ node, isRecording }: { node: SubGraphNode;
   const ownProject = useAtomValue(projectState);
   const openedProjects = useAtomValue(projectsState).openedProjects;
   const referencedProjects = useAtomValue(referencedProjectsState);
-  const target = node.data.targetProjectId
-    ? referencedProjects[
-        getSubgraphProjectKey({
-          projectId: node.data.targetProjectId,
-          version: node.data.targetVersion ?? 'latest',
-        })
-      ]
-    : ownProject;
+  const graphId = useAtomValue(graphMetadataState)?.id;
+  const recording = useAtomValue(currentProjectLoadedRecordingState);
+  const recordedTargets = useAtomValue(recordedSubgraphTargetsState);
+  const recordedTarget = isRecording ? getRecordedSubgraphTarget(recordedTargets, graphId, node) : undefined;
+  const targetProjectId = node.data.targetProjectId;
+  let projectName: string | undefined;
+  let graphName: string | undefined;
+  if (!targetProjectId) {
+    graphName = ownProject.graphs[node.data.graphId]?.metadata?.name;
+  } else if (isRecording) {
+    projectName = recordedTarget?.projectName;
+    graphName = recordedTarget?.graphName;
+  } else {
+    const target =
+      referencedProjects[
+        getSubgraphProjectKey({ projectId: targetProjectId, version: node.data.targetVersion ?? 'latest' })
+      ];
+    projectName = target?.metadata.title || openedProjects[targetProjectId]?.title;
+    graphName = target?.graphs[node.data.graphId]?.metadata?.name;
+  }
+  const label = `${targetProjectId ? `${projectName || targetProjectId} / ` : ''}${graphName || node.data.graphId || 'No graph selected'}`;
+  const missingNames = recording && targetProjectId && (!recordedTarget?.projectName || !recordedTarget?.graphName);
   return (
     <div
       css={controlCss}
       data-recorded-target={isRecording || undefined}
-      title={isRecording ? 'Recorded target. Playback uses saved events, not the live project.' : undefined}
+      title={
+        isRecording
+          ? `${label}\nRecorded target. Playback uses saved events, not the live project.${missingNames ? '\nOriginal names were not captured or are unavailable.' : ''}`
+          : undefined
+      }
     >
-      <span className="target-label">
-        {node.data.targetProjectId && (
-          <>
-            {target?.metadata.title || openedProjects[node.data.targetProjectId]?.title || node.data.targetProjectId}
-            {' / '}
-          </>
-        )}
-        {target?.graphs[node.data.graphId]?.metadata?.name || node.data.graphId || 'No graph selected'}
-      </span>
+      <span className="target-label">{label}</span>
     </div>
   );
 }
@@ -259,7 +274,14 @@ export const HistoricalSubgraphTarget: FC<{ node: SubGraphNode }> = ({ node }) =
   const request = useMemo(
     () =>
       targetProjectId && targetGraphId
-        ? { projectId: targetProjectId, version: targetVersion, callerProjectId, sourceGraphId, sourceNodeId, targetGraphId }
+        ? {
+            projectId: targetProjectId,
+            version: targetVersion,
+            callerProjectId,
+            sourceGraphId,
+            sourceNodeId,
+            targetGraphId,
+          }
         : null,
     [callerProjectId, sourceGraphId, sourceNodeId, targetProjectId, targetVersion, targetGraphId],
   );

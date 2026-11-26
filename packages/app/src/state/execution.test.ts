@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import type { ExecutionRecorder, ProjectId } from '@valerypopoff/rivet2-core';
+import type { ExecutionRecorder, ProjectId, RecordedEvents, SubGraphNode } from '@valerypopoff/rivet2-core';
 import { createStore } from 'jotai/vanilla';
 import {
   activateLoadedRecordingState,
@@ -14,12 +14,15 @@ import {
   isLoadedRecordingOwnedByTab,
   isRecordingProjectState,
   loadedRecordingState,
+  pendingRecordingLoadState,
+  recordedSubgraphTargetsState,
   recordingPlaybackStartingState,
   recordingTabIndicatorsState,
   rebindLoadedRecordingPathState,
   type LoadedRecording,
 } from './execution.js';
-import { loadedProjectState, projectState } from './savedGraphs.js';
+import { loadedProjectState, projectsState, projectState } from './savedGraphs.js';
+import { getRecordedSubgraphTarget } from '../utils/recordedSubgraphTargets.js';
 
 const projectA = 'project-a' as ProjectId;
 const projectB = 'project-b' as ProjectId;
@@ -29,6 +32,53 @@ const recording: LoadedRecording = {
   projectPath: 'recording://project-a/replay.rivet-project',
   recorder: { events: [] } as unknown as ExecutionRecorder,
 };
+
+test('recorded target names follow the owning tab and are replaced or released with its trace', () => {
+  const store = createStore();
+  const base = store.get(projectState);
+  const node = { id: 'call', data: { targetProjectId: 'child', graphId: 'child-graph' } } as SubGraphNode;
+  const withNames = (projectName: string): LoadedRecording => ({
+    ...recording,
+    recorder: {
+      events: [
+        {
+          type: 'graphStart',
+          data: {
+            graphId: 'caller',
+            inputs: {},
+            execution: { projectId: 'original-source' },
+            subgraphTargets: [
+              {
+                nodeId: 'call',
+                targetProjectId: 'child',
+                targetVersion: 'latest',
+                targetGraphId: 'child-graph',
+                projectName,
+              },
+            ],
+          },
+        },
+      ] as unknown as RecordedEvents[],
+    } as ExecutionRecorder,
+  });
+  const read = () => getRecordedSubgraphTarget(store.get(recordedSubgraphTargetsState), 'caller', node)?.projectName;
+  store.set(projectState, { ...base, metadata: { ...base.metadata, id: projectA } });
+  store.set(loadedProjectState, { loaded: true, path: recording.projectPath });
+  assert.equal(read(), undefined);
+  store.set(activateLoadedRecordingState, withNames('Original target'));
+  assert.equal(read(), 'Original target');
+  const firstIndex = store.get(recordedSubgraphTargetsState);
+  assert.equal(store.get(recordedSubgraphTargetsState), firstIndex);
+  store.set(projectState, { ...base, metadata: { ...base.metadata, id: projectB } });
+  assert.equal(read(), undefined);
+  store.set(projectState, { ...base, metadata: { ...base.metadata, id: projectA } });
+  assert.equal(read(), 'Original target');
+  store.set(activateLoadedRecordingState, withNames('Replacement target'));
+  assert.equal(read(), 'Replacement target');
+  assert.equal(getRecordedSubgraphTarget(firstIndex, 'caller', node)?.projectName, 'Original target');
+  store.set(clearLoadedRecordingForPathState, recording.projectPath!);
+  assert.equal(read(), undefined);
+});
 
 test('only recordings layered onto an ordinary owning project can be unloaded', () => {
   const store = createStore();
@@ -46,6 +96,7 @@ test('only recordings layered onto an ordinary owning project can be unloaded', 
 });
 
 test('loaded recordings are visible only to their owning editor tab', () => {
+  assert.equal(getLoadedRecordingForTab(null, projectA, recording.projectPath), undefined);
   assert.equal(getLoadedRecordingForTab(recording, projectA, recording.projectPath), recording);
   assert.equal(getLoadedRecordingForTab(recording, projectA, 'C:/projects/project-a.rivet-project'), undefined);
   assert.equal(getLoadedRecordingForTab(recording, projectB, recording.projectPath), undefined);
@@ -84,10 +135,6 @@ test('recording tab indicators retain original outcomes across selection, rebind
   assert.equal(store.get(recordingTabIndicatorsState)[projectA]?.color, 'var(--warning)');
   store.set(clearLoadedRecordingForPathState, a.projectPath);
   assert.deepEqual(store.get(recordingTabIndicatorsState), {});
-});
-
-test('missing recordings remain absent for every project', () => {
-  assert.equal(getLoadedRecordingForTab(null, projectA, recording.projectPath), undefined);
 });
 
 test('saving a pathless recording tab rebinds only that project, not another pathless tab', () => {
@@ -132,11 +179,13 @@ test('activating a replacement recording resets a stale pre-start playback state
   };
   store.set(loadedRecordingState, recording);
   store.set(recordingPlaybackStartingState, true);
+  store.set(pendingRecordingLoadState, Symbol('pending-load'));
 
   store.set(activateLoadedRecordingState, replacement);
 
   assert.equal(store.get(loadedRecordingState), replacement);
   assert.equal(store.get(recordingPlaybackStartingState), false);
+  assert.equal(store.get(pendingRecordingLoadState), null);
 });
 
 test('moving an owner tab rebinds its recording path and clears a stale pre-start playback state', () => {
@@ -149,6 +198,8 @@ test('moving an owner tab rebinds its recording path and clears a stale pre-star
   };
   store.set(loadedRecordingState, localRecording);
   store.set(recordingPlaybackStartingState, true);
+  const pendingLoad = Symbol('pending-load');
+  store.set(pendingRecordingLoadState, pendingLoad);
 
   assert.equal(
     store.set(rebindLoadedRecordingPathState, {
@@ -168,6 +219,7 @@ test('moving an owner tab rebinds its recording path and clears a stale pre-star
   );
   assert.deepEqual(store.get(loadedRecordingState), { ...localRecording, projectPath: movedPath });
   assert.equal(store.get(recordingPlaybackStartingState), false);
+  assert.equal(store.get(pendingRecordingLoadState), pendingLoad);
 });
 
 test('closing a recording owner clears the selection and pre-start playback state only for that owner', () => {
@@ -242,5 +294,42 @@ test('recording target display covers detached replay startup and unload without
   store.set(loadedProjectState, { loaded: true, path: recording.projectPath });
   assert.equal(store.get(isRecordingProjectState), true); // Before activation, and after unload.
   store.set(loadedProjectState, { loaded: true, path: localPath });
+  assert.equal(store.get(isRecordingProjectState), false);
+});
+
+test('recording mode follows the current tab while restored project and loaded path settle separately', () => {
+  const store = createStore();
+  const livePath = 'C:/projects/live.rivet-project';
+  store.set(projectsState, {
+    openedProjectsSortedIds: [projectA, projectB],
+    openedProjects: {
+      [projectA]: { projectId: projectA, title: 'Replay', fsPath: recording.projectPath },
+      [projectB]: { projectId: projectB, title: 'Live', fsPath: livePath },
+    },
+  });
+  store.set(projectState, (current) => ({ ...current, metadata: { ...current.metadata, id: projectA } }));
+  store.set(loadedProjectState, { loaded: true, path: livePath });
+  assert.equal(store.get(isRecordingProjectState), true);
+  assert.equal(store.get(currentProjectLoadedRecordingState), undefined);
+  store.set(loadedRecordingState, recording);
+  assert.equal(store.get(currentProjectLoadedRecordingState), recording);
+  assert.equal(store.get(isRecordingProjectState), true);
+  store.set(loadedProjectState, { loaded: true, path: recording.projectPath });
+  assert.equal(store.get(isRecordingProjectState), true);
+
+  // A path replacement can keep the project ID while the global path is stale.
+  store.set(projectsState, (current) => ({
+    ...current,
+    openedProjects: {
+      ...current.openedProjects,
+      [projectA]: { ...current.openedProjects[projectA]!, fsPath: livePath },
+    },
+  }));
+  assert.equal(store.get(currentProjectLoadedRecordingState), undefined);
+  assert.equal(store.get(recordedSubgraphTargetsState), undefined);
+  assert.equal(store.get(isRecordingProjectState), false);
+  store.set(projectState, (current) => ({ ...current, metadata: { ...current.metadata, id: projectB } }));
+  assert.equal(store.get(isRecordingProjectState), false);
+  store.set(loadedProjectState, { loaded: true, path: livePath });
   assert.equal(store.get(isRecordingProjectState), false);
 });

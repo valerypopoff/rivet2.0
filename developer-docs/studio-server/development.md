@@ -722,10 +722,10 @@ It never targets a deployment URL. Browser regressions use headless `studio-serv
 evaluation-history-paging.spec.ts run-recordings-modal.spec.ts` against a fresh
 local frontend build. These checks establish correctness, not a production VM
 latency claim; measure identical workloads before/after deployment separately.
-The linked-child deletion browser scenario focuses the action before clicking:
-auto-scrolling a partially visible row can invalidate a prior row hover. Keep
-this data-membership regression on the supported focus path, without forced
-clicks; separate row-action tests cover hover visibility.
+Linked-child deletion uses the card's Recording actions menu. Keep those
+data-membership regressions on the supported menu path, without forced clicks;
+menu tests cover keyboard navigation, dismissal, focus return and disabled
+actions during mutation/playback.
 
 Migration 15 leaves released migration SQL/checksums untouched. Its running header
 representation is not backward-readable by schema-14 code. The release's minimum
@@ -1023,10 +1023,26 @@ at 55 seconds. Single-phase runtime fixtures retain their shorter limits.
 
 `recording-run-hierarchy.ts` groups the current recording results by exact
 `executionIdentity.correlationId`. A unique non-Subgraph row is the primary;
-children start folded and expand into individually virtualized, indented rows.
-Sub-runs within every family are displayed oldest-to-newest by the shown
-`createdAt` timestamp, with recording ID ascending as the deterministic tie-breaker.
-Success, failure and suspicious status never influence this order. Sort the
+children start folded and expand into individually virtualized rows. Their green
+connector aligns with the primary cards' left edge; the cards retain only the
+small gutter beside that line, without an additional family indent. Child card
+titles start with the timestamp, without a `Sub-run` prefix.
+Sub-runs default to oldest-to-newest by the shown `createdAt` timestamp, with
+recording ID ascending as the deterministic tie-breaker. An expanded family with
+more than one child offers **Chronological** and **Project name (A–Z)** controls
+in a labeled **Sub-run sorting** row above the children, aligned with the child
+cards. This header is its own measured virtual row, outside the parent card.
+Its label sits beside the controls, without a connector line. The child connector
+spans the gaps between virtual rows and ends at the final sub-run card.
+The last child has a 32 px gap before the next primary/context row, while ordinary
+rows and the trailing end of the list retain their 8 px gap. `recordingRowGap`
+drives both virtual offsets and connector cutoff. A changed successor invalidates
+the preceding offset even if that child is offscreen; its base card measurement
+remains reusable. Spacing never changes grouping, sort order or page membership.
+Alphabetical order uses the displayed recorded project name, ignoring case, then
+uses the same chronological/ID tie-breakers. Each family's choice is independent,
+survives collapsing or virtualizing its rows and resets with a replacement query.
+Success, failure and suspicious status never influence either order. Sort the
 combined family after all child pages arrive, not each newest-first API page
 individually. The same rule applies to input-search and Related sub-runs groups;
 the top-level family/page order remains unchanged (newest-first in normal browsing).
@@ -1196,13 +1212,84 @@ replay remains visible through Core's finite `replayRecordedAt` provenance.
 `executionIdentity`, `remoteExecutorHelpers`, and `projectExecutionSnapshotEvents`
 tests cover the active/inactive projection boundary and replay compatibility.
 
+New recordings retain external Subgraph project/graph names in optional
+`graphStart.subgraphTargets` metadata. The existing target-preparation walk
+captures plain string values for the current graph, including effective prefab
+instance IDs, after target resolution. Display capture invokes no title getters,
+adds no target reads and does not change execution or its access checks.
+
+The node body and **Recorded graph** settings field read a recording-owned index
+keyed by source graph, node and exact target/version. It verifies the recorded
+source project and execution scope, independently of the replay tab's rebound ID.
+Conflicting entries cannot overwrite one another into apparent certainty. Live
+project caches never supply recording labels; older, incomplete or unresolved
+metadata retains the ID fallback and an explanatory tooltip. These labels do not
+establish that a child ran or authorize navigation.
+
+During restoration/activation, the current tab's registered path controls both
+recording selection and display mode before the global last-loaded path catches up. This keeps replay
+nodes from briefly starting live preview requests, and keeps live tabs out of a
+previous replay's mode. A same-ID tab at a different path cannot retain the old
+recording selection. Both selectors share the same path owner rather than
+independently deciding which path is current.
+Manual recording loads capture the owning tab's runtime binding before opening
+the file picker. A late result cannot attach to a closed, reopened, replaced or
+rebound tab; a verified same-document move keeps the binding and uses its new
+path. One pending-load identity is shared by menu entry points, so an older
+picker cannot overwrite a newer selection or undo an explicit unload. Completion
+rechecks both the active execution guard and the owning tab's execution state,
+including inactive tabs. I/O errors from retired owners are ignored; current
+errors retain the previous recording and use the normal error notification.
+The hosted native picker suppresses cancellation only while choosing a file.
+Other picker errors, read/parse failures and callback failures reach the normal
+error handler; an aborted read after selection is still reported. Cancelling
+the picker or failing to import leaves the current recording intact.
+Committed project-content replacement clears only that owner's loaded recording
+and tab indicator, including same-ID/same-path replacements and standalone
+sessions. Ordinary tab switching, rejected/cancelled replacement and verified
+moves keep their existing recording ownership. Clearing happens at the existing
+content commit point, rather than when replacement is merely requested.
+The [recorded Subgraph target names implementation record](recorded-subgraph-target-names-plan.md)
+documents compatibility, coverage and local performance evidence.
+
+Recording tests divide responsibility between Core (capture, field validation,
+serialization and transport), App (exact label lookup and editor ownership), and
+the hosted browser (visible playback and navigation). Reuse the real workspace
+fixture for delayed file-picker cases. Assert both current error notifications
+and suppression after replacement or a newer selection; checking console output
+alone does not establish what the user sees. The browser replay loop must observe
+a new completed Run Activity entry after every Play command, since unchanged
+output and an enabled Play button can still describe the previous replay.
+Core's recording test fixture supplies fresh maps and sets for each playback;
+scenario-specific topology, identities and callbacks remain explicit. Run a
+scoped TypeScript check when changing these tests: `tsx --test` executes them
+without typechecking their fixtures.
+
 Run `yarn workspace @valerypopoff/rivet-studio-server-web test` for hierarchy
 invariants (duplicates, ambiguous/absent roots, exact keys, incremental search,
 large families), and `yarn studio-server:ui:observe run-recordings-modal.spec.ts`
-in headless mode for keyboard expand/collapse, indentation, child replay, filters,
-page-split families and deletion/failed-refresh regression coverage.
+in headless mode for keyboard expand/collapse, connector alignment, child replay,
+filters, page-split families and deletion/failed-refresh regression coverage.
 
 ## Recording duration display
+
+Run and Subgraph cards show duration in the header's top-right corner. Successful
+runs omit the default **Succeeded** pill; failure, suspicious and nonterminal
+status badges remain visible. A visible three-dot **Recording actions** button
+sits at the bottom right. Its menu offers **Show diagnostic details** (or **Hide
+diagnostic details**) followed by a separated red **Delete** action at the bottom.
+The trigger is absolutely positioned and adds no row or vertical padding to the
+card. Only the final content block reserves horizontal clearance; family controls
+and revealed diagnostic fields stay clear of its hit area. Browser checks compare
+card height with and without the trigger and check long wrapped content on narrow
+cards, including expanded diagnostic fields.
+It uses the existing Floating UI library for positioning and keyboard navigation;
+the popup stays inside the dialog's focus boundary and outside the virtual list's
+clipping. Escape and outside clicks dismiss the menu; position updates follow
+scrolling, and disposing the row removes its popup. Virtual-list focus can adjust
+scroll while opening a menu, so scroll itself must not dismiss this popup. Deletion
+and playback locks disable its trigger and close any open menu. The actions keep
+their existing request and deletion safeguards.
 
 `RecordingRunsTable.tsx` formats recording durations to two decimal places in
 milliseconds or seconds (including the seconds component of minute durations).
@@ -1213,7 +1300,9 @@ presenting a misleading zero.
 This is presentation-only: stored `durationMs`, replay timings and statistics
 retain their original precision. App's `recordingPresentation.test.ts` covers
 fractional milliseconds, seconds, minute-boundary rounding and missing/invalid
-values. One recordings-modal case verifies the rendered saved duration.
+values. The recordings-modal cases verify the saved duration, missing success
+pills, desktop/narrow header placement, child-card layout and accessible menu
+actions. Status filtering and stored status values are unchanged.
 
 ## Called-project recordings in the caller browse scope
 
@@ -1222,8 +1311,25 @@ workflow. Its scope includes direct recordings plus `subgraph_project` recording
 sharing a nonempty correlation ID with a retained, non-Subgraph recording owned by
 that workflow. This includes nested called projects, but does not treat an inbound
 child recording as an anchor that pulls in the caller's other children. Each row
-shows the replay-owning project path; only Subgraph rows show the related run key. Any remains
-the deduplicated all-recordings scope.
+keeps the project name and endpoint/called graph visible. Its replay-owning project
+path (without `.rivet-project`) is hidden until **Show diagnostic details** is
+chosen from the card menu; there is no inline disclosure control. Subgraph rows
+also show **Execution correlation ID** in the revealed region, with a **Copy**
+button that copies the exact `executionIdentity.correlationId`. This is the shared
+execution-family identifier, not the recording ID or immediate parent ID. Neither
+the menu action nor Copy opens playback or changes subrun grouping. Clipboard
+success/failure is announced inside the details; the ID remains selectable if
+copying is denied. The clipboard helper is shared with Published endpoints and
+apps, including the fallback for HTTP deployments. The temporary fallback field
+stays within the active modal's focus boundary and is removed before restoring
+the Copy button's focus. Any remains the deduplicated all-recordings scope.
+
+`run-recordings-modal.spec.ts` checks initially hidden diagnostics, keyboard
+menu activation, exact ID copying, denied clipboard recovery, HTTP fallback and
+focus restoration. Family and sorting cases also exercise resized diagnostic
+rows and narrow layouts. Clipboard substitutes are page-local so parallel tests do not
+share the operating system clipboard; the Published-items browser case retains
+its real clipboard check for the shared helper.
 
 Filesystem, authoritative SQLite, and managed PostgreSQL apply the same
 metadata-only scope to ordinary counts, status filters and offset pages. Bounded
@@ -1385,6 +1491,13 @@ pins its iframe to the same generation. Failed builds retain the previous bundle
 Status travels over authenticated, unbuffered `/__rivet_dev/events` SSE. Connection
 loss reconnects without reloading or discarding the workspace.
 Initial connection failure is visible even before the first status arrives.
+
+For a UI or icon edit, wait for `/__rivet_dev/status` to report `ready`, then
+verify the actual page has adopted that generation before calling the change
+visible. A source-only SVG preview does not verify the running frontend. Edits
+made during compilation can supersede that build and leave the previous icon
+visible until the next generation is published. Use the existing safe-refresh
+flow rather than forcing a reload over unsaved work.
 
 The development notice shows building/failure/update status, horizontally centered
 at the bottom of the full browser viewport. Build errors, reconnect notices,
@@ -3185,12 +3298,13 @@ When adding new code, keep the post-refactor ownership seams explicit instead of
   - `useWorkflowLibraryController.ts`, `useRunRecordingsController.ts`, `useProjectSettingsActions.ts`, `useDashboardSidebar.ts`, and `useEditorBridgeEvents.ts` are composition/orchestration seams; tree fetching, selection/preview debounce, drag/drop, project/folder mutations, version actions, and retained recording-modal state stay in their focused hooks instead of returning to the workflow controller
   - `AppSettingsModal.tsx` stays a tab-composition shell; each settings domain owns its form hook under `packages/studio-server-web/dashboard/app-settings/`, and all forms use `useSettingsFormResource.ts` for revision-aware load/save/conflict handling. A tab save must send only its scoped draft and must not reset unsaved fields in another tab
   - keep the workflow-library header block at `37px` high without a bottom divider; the whole open-state header row is the collapse control with square hover corners and the sidebar icon before the `Rivet Studio Server` title; collapsed mode should be a persistent full-height `30px` rail button with a centered `>` chevron rather than a small header button, show the opened project's larger status dot in the former header slot only when its aggregate endpoint/web-app publication status is `Published` or `Unpublished changes`, keep the workflow tree mounted while folded, reveal the contents only after the reopen width animation completes, and keep resize behavior pointer-captured with a forgiving splitter hit target, no width transition while dragging, and fold/unfold thresholding at half the minimum sidebar width
-  - single-clicking a project row should open it through the bridge as a preview tab; double-clicking, editing, running, saving, activating Remote Debugger on the active preview, or any unsafe replacement condition promotes that tab to persistent. For a not-yet-open workflow project, the dashboard should send the tree display title with `open-project`, and the iframe should call `RivetWorkspaceHost.startOpeningProjectTab(...)` before loading the file so Rivet owns the immediate tab/preloader UI. Finish that same tab with `finishOpeningProjectTab(...)` after `HostedIOProvider` returns the real snapshot, or cancel it on load/duplicate-id failure; never fake a temporary project snapshot or write upstream tab state directly. Preview replacement belongs in `usePreviewProjectLifecycle.ts` plus the serialized open handler in `useEditorCommandBridge.ts`, where the bridge can read Rivet's dirty/run/session state and close only clean known preview tabs through `RivetWorkspaceHost.closeProject(...)`. A single-click on an already-open persistent project should only activate that tab and should not close the current preview slot; the slot is replaced only when another not-yet-open project opens as preview. Keep the single-click preview debounce in `useWorkflowLibrarySelection.ts`, not per project row, so clicking a different row cancels any older pending preview open before it can reselect the previous project. When the active editor tab is the clean preview being replaced, use `replaceCurrent` through `RivetWorkspaceHost` instead of closing it first, so the dashboard does not blink back to a persistent tab while the next preview loads. When replacing an inactive preview, keep `DashboardPage.tsx`'s pending-open guard intact so intermediate active-project callbacks from closing the old preview do not briefly select the persistent project before the new preview opens. Pass `tabUi: { preview: true }` for preview opens/replaces and clear it with `setProjectTabUiState(..., { preview: false })` when promoting, so upstream Rivet owns the italic editor-tab rendering. Remote Debugger promotion should observe only Rivet's `external-debugger` executor-session target, not hosted internal executor reconnects. The active project card should not reintroduce a separate `Edit` button; row click/double-click owns open intent, empty workflow-library body clicks clear only the selected card, and the 166px minimum-height card keeps the project name above endpoint/web-app status lines, then the graph/node/web-app count line. Long project, graph, and folder names wrap in their respective left-panel rows instead of being ellipsized, including unbroken strings; the active project card instead clips its name to one line and retains the full name in its hover title. The endpoint line and web-app line should always render for selected projects with the same status-row height whether the row contains a pill or plain text; projects with no current web apps show `Web app: none`, while projects with web apps load status from the existing project web-app summary endpoint only for the selected project. The tree project dots and collapsed rail dot should use the same aggregate status as the summary card: grey means no dot, green means green dot, and yellow means yellow dot. The card keeps a clear vertical gap before the visibly button-like `Settings` action and conditional `Save` button, and must reserve at least its default height when no project is selected so the project tree below it does not jump. `Save` is shown only when the selected workflow is the active editor project and Rivet reports unsaved changes through the editor bridge.
+  - single-clicking a project row should open it through the bridge as a preview tab; double-clicking, editing, running, saving, activating Remote Debugger on the active preview, or any unsafe replacement condition promotes that tab to persistent. For a not-yet-open workflow project, the dashboard should send the tree display title with `open-project`, and the iframe should call `RivetWorkspaceHost.startOpeningProjectTab(...)` before loading the file so Rivet owns the immediate tab/preloader UI. Finish that same tab with `finishOpeningProjectTab(...)` after `HostedIOProvider` returns the real snapshot, or cancel it on load/duplicate-id failure; never fake a temporary project snapshot or write upstream tab state directly. Preview replacement belongs in `usePreviewProjectLifecycle.ts` plus the serialized open handler in `useEditorCommandBridge.ts`, where the bridge can read Rivet's dirty/run/session state and close only clean known preview tabs through `RivetWorkspaceHost.closeProject(...)`. A single-click on an already-open persistent project should only activate that tab and should not close the current preview slot; the slot is replaced only when another not-yet-open project opens as preview. Keep the single-click preview debounce in `useWorkflowLibrarySelection.ts`, not per project row, so clicking a different row cancels any older pending preview open before it can reselect the previous project. When the active editor tab is the clean preview being replaced, use `replaceCurrent` through `RivetWorkspaceHost` instead of closing it first, so the dashboard does not blink back to a persistent tab while the next preview loads. When replacing an inactive preview, keep `DashboardPage.tsx`'s pending-open guard intact so intermediate active-project callbacks from closing the old preview do not briefly select the persistent project before the new preview opens. Pass `tabUi: { preview: true }` for preview opens/replaces and clear it with `setProjectTabUiState(..., { preview: false })` when promoting, so upstream Rivet owns the italic editor-tab rendering. Remote Debugger promotion should observe only Rivet's `external-debugger` executor-session target, not hosted internal executor reconnects. Project context-menu summaries do not switch editor tabs; row click/double-click owns open intent. Keep long project, graph and folder names wrapping in their rows. Tree project dots and the collapsed rail dot use aggregate publication status. The summary renders only published endpoint/app links, and `Save` appears only for the currently open dirty project. The summary layout and freshness rules are described below.
   - keep bottom panel actions in the mounted workflow-library panel, ordered as `Run recordings`, `Run statistics`, and `Settings`; the app-level `Settings` modal uses a left vertical tab rail, shows general runtime config, owns the Run recordings retention form and Runtime libraries administration, and owns the Node executor proxy form plus websocket URL override fields
   - App settings navigation uses four groups separated by the shared project-settings divider: `General`; `Endpoints`, `Web apps`, `Environment variables`; `Run recordings`, `Shell execution`, `Node executor proxy`, `Runtime libraries`, `OAuth`; `Rivet Server UI access`, `Storage`, `Docker`, `Deployment`, `CPU and RAM monitoring`. Conditional `Local storage upgrade` and `Migration` tabs follow `Storage` only while their existing eligibility checks allow them. Tab IDs remain stable when display labels change.
   - `deployment-status.spec.ts` verifies the settings tab labels, order and divider positions, including mouse access to the last tab in a 1280×720 viewport. Update label-based consumers in `workflow-library-layout.spec.ts` when renaming tabs, while preserving their stable IDs and conditional migration controls.
   - Settings navigation tabs use natural height, a 34px minimum and symmetric vertical padding, so wrapped labels such as `CPU and RAM monitoring` remain inside the selected background. The desktop navigation scrolls independently; narrow layouts retain the shared layout scroller. Keep the scoped tab selector stronger than the shared project-tab styles so lazy stylesheet order cannot restore a fixed height.
-  - Project context menus own `WorkflowProjectSummary.tsx`: use the clicked project, preserve Settings and dirty-open-project Save, and keep the normal sidebar free of summary/placeholder cards. The header keeps its original gray fill for fully unpublished projects and uses green/yellow aggregate publication fills without a colored border. Bound its intrinsic menu width to 75% of `--workflow-library-max-width` from the same sidebar limit; wrap long names, constrain height to the viewport and update floating geometry after metadata/viewport changes. Show endpoint/web-app lines only for live publications (including unpublished draft changes), prefer the published endpoint name, and exclude draft-only web apps. Reference-detail navigation closes the menu before opening its modal.
+  - Project context menus own `WorkflowProjectSummary.tsx`: render the clicked project and keep the sidebar free of summary cards. A full-width status strip opens Settings through its body and cog, while its underlined reference count opens Changes in referenced projects directly. Keep these as separate native buttons, not nested interactive controls. The Settings button is anchored to the cog with an extended background hit area so its default activation point never overlaps the link. Tab navigates focused menu controls; the global sidebar Tab shortcut applies again outside the menu. `WorkflowPublicationStatusText` owns the shared wording and reference link in both surfaces; closing reference details from Project Settings preserves its edited drafts. The body shows the project name and compact API/APP route badges, plus Save only for the currently open dirty project. Use the existing route builders, copy helper and toast notifications; display same-origin paths without a leading slash, retain foreign hosts, and open APP links with `noopener noreferrer`. Keep fresh web-app reads tied to the requested path, catalog/immutable identity, saved revision and publication metadata. Retain live apps after draft-graph removal and exclude draft-only apps. Compute summary wording from raw own publication state and distinct changed references separately: "Unpublished changes", "Unpublished changes in N referenced projects", or "Unpublished changes here and in N referenced projects". Unavailable references do not count as confirmed edits, and unverified coverage stays visible. Contribution-only headers use green/yellow outlines; dual-status projects keep a secondary contribution line. Keep the full-summary cursor anchor, viewport clamping, scrolling and header resize observation. `workflow-library-layout.spec.ts` covers the status matrix, strip hit targets, routes, replacement/late-response rejection and geometry; `published-revision-history.spec.ts` covers fresh reference changes and both entry points to **Changes in referenced projects**. The Settings Endpoint tab retains its endpoint-only status and action scope even if an independent web app is published.
+  - Project summary menus use a 274px width, capped by the viewport, with wrapping names/routes and vertical scrolling. The status strip uses the approved summary palette (#6ad775 / #fad478 with #2d3631 / #39352d bodies), independently of tree-marker colors. Its solid cog inherits black on filled strips and the matching green/yellow on contribution-only strips. Keep "in N referenced projects" together when it fits so the combined status wraps after "here and". `workflow-library-layout.spec.ts` checks width, palette, icon fill, wrapping and click behavior.
   - keep project-settings validation and labels in `projectSettingsForm.ts`
   - keep run-recordings modal shell logic in `RunRecordingsModal.tsx` and its focused UI slices in `RecordingWorkflowSelect.tsx` and `RecordingRunsTable.tsx`
   - Run statistics targets are a catalog of every retained endpoint or web-app action for the selected surface. Period, published/latest version, and outcome checkboxes apply only to the selected target's query; when they match no runs, preserve the target selection and state that result directly below the filters.

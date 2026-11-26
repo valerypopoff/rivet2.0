@@ -432,9 +432,9 @@ test.describe('Published revision history', () => {
     const active = page.locator('.active-project-section');
     await openProjectContextMenu(page);
     await expect(active.getByText('Published', { exact: true })).toBeVisible();
-    await expect(active.getByRole('button', { name: 'Changed referenced projects (1)', exact: true })).toHaveCount(0);
+    await expect(active.locator('.publication-reference-link')).toHaveCount(0);
     const targetRow = page.locator('.project-row', { hasText: target.name });
-    await expect(targetRow.getByRole('img', { name: 'Used by a published endpoint' })).toBeVisible();
+    await expect(targetRow.getByRole('img', { name: 'Contributes to published' })).toBeVisible();
   });
 
   test('saved dependency changes update endpoint markers and bundle reference details open the project', async ({
@@ -473,9 +473,12 @@ test.describe('Published revision history', () => {
       if (isOwnerWebAppRead(request.url())) ownerWebAppReads++;
     });
     const helper = inBundle('bundle-helper');
+    helper.settings.endpointName = 'helper';
     const external = createProjectSettingsFixture('shared-library');
     external.relativePath = `Library/${external.fileName}`;
     external.absolutePath = `/managed/workflows/${external.relativePath}`;
+    external.settings.status = 'published';
+    external.settings.endpointName = 'shared-library';
     const secondary = createProjectSettingsFixture('tools-library');
     secondary.relativePath = `Library/${secondary.fileName}`;
     secondary.absolutePath = `/managed/workflows/${secondary.relativePath}`;
@@ -571,12 +574,35 @@ test.describe('Published revision history', () => {
     const folder = page.getByRole('button', { name: 'Expand Test bundle bundle', exact: true });
     const label = page.getByRole('button', { name: '2 external references', exact: true });
     await expect(label).toBeVisible();
-    const rowBounds = await folder.boundingBox();
-    const iconBounds = await folder.getByRole('img', { name: 'Bundle', exact: true }).boundingBox();
+    const rowLayout = await folder.evaluate((element) => {
+      const text = element.querySelector('.label')!.lastChild!;
+      const range = document.createRange();
+      range.selectNodeContents(text);
+      const name = range.getClientRects()[0]!;
+      const arrow = element.querySelector('.folder-toggle')!.getBoundingClientRect();
+      const count = element.querySelector('.folder-project-count')!.getBoundingClientRect();
+      return {
+        nameLeft: name.left,
+        nameBottom: name.bottom,
+        nameCenter: name.top + name.height / 2,
+        arrowCenter: arrow.top + arrow.height / 2,
+        countCenter: count.top + count.height / 2,
+      };
+    });
     const labelBounds = await label.boundingBox();
-    expect(labelBounds!.x).toBeCloseTo(iconBounds!.x);
-    expect(labelBounds!.y).toBeGreaterThanOrEqual(rowBounds!.y + rowBounds!.height);
+    expect(labelBounds!.x).toBeCloseTo(rowLayout.nameLeft);
+    expect(labelBounds!.y - rowLayout.nameBottom).toBeGreaterThanOrEqual(0);
+    expect(labelBounds!.y - rowLayout.nameBottom).toBeLessThan(5);
+    expect(Math.abs(rowLayout.arrowCenter - rowLayout.nameCenter)).toBeLessThan(3);
+    expect(Math.abs(rowLayout.countCenter - rowLayout.nameCenter)).toBeLessThan(3);
+    const bundleItem = folder.locator('..');
+    await folder.hover();
+    await expect(bundleItem).toHaveCSS('background-color', 'rgba(255, 255, 255, 0.08)');
+    await expect(folder).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
+    await label.hover();
+    await expect(bundleItem).toHaveCSS('background-color', 'rgba(255, 255, 255, 0.08)');
     await label.click();
+    await expect(folder).toHaveAttribute('aria-expanded', 'false');
     const details = page.getByRole('dialog', { name: 'External references' });
     await expect(page.getByTestId('workflow-reference-details-modal--blanket')).toHaveCSS(
       'background-color',
@@ -600,8 +626,13 @@ test.describe('Published revision history', () => {
     const openTarget = target.getByRole('button', { name: 'Open project', exact: true });
     await expect(targetPath).toBeVisible();
     await expect(openTarget).toBeVisible();
-    const pathBounds = (await targetPath.boundingBox())!;
-    expect((await openTarget.boundingBox())!.y).toBeGreaterThanOrEqual(pathBounds.y + pathBounds.height);
+    // Measure both elements in one frame: the opening dialog moves as a unit.
+    const gap = await target.evaluate((element) => {
+      const pathBounds = element.querySelector('.project-settings-help')!.getBoundingClientRect();
+      const buttonBounds = element.querySelector('button')!.getBoundingClientRect();
+      return buttonBounds.top - pathBounds.bottom;
+    });
+    expect(gap).toBeGreaterThanOrEqual(0);
     await openTarget.click();
     await expect(details).toHaveCount(0);
     await expect
@@ -611,11 +642,28 @@ test.describe('Published revision history', () => {
     await folder.click();
     const helperRow = page.locator('.project-row', { hasText: helper.name });
     const helperLabel = helperRow.locator('.label');
-    const green = page.getByRole('img', { name: 'Used by a published endpoint' });
+    const green = page.getByRole('img', { name: 'Contributes to published' });
     await expect(green).toHaveCount(2);
     await expect(green.first()).toHaveCSS('border-top-color', 'rgb(126, 226, 148)');
     await expect(green.first()).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
     await expect(helperLabel).toHaveCSS('color', 'rgb(126, 226, 148)');
+    await openProjectContextMenu(page, external.name);
+    await page.locator('.active-project-section').getByRole('button', { name: 'Settings', exact: true }).click();
+    const projectSettings = page.getByTestId('workflow-project-settings-modal');
+    const projectStatus = projectSettings.locator('.active-project-status-row');
+    await expect(projectStatus.locator('.project-status-badge')).toHaveText(['Published', 'Contributes to published']);
+    await projectSettings.getByRole('button', { name: 'Close project settings' }).click();
+    await openProjectContextMenu(page, helper.name);
+    await expect(page.locator('.project-summary-status-text')).toHaveText('Contributes to published');
+    await expect(page.locator('.active-project-section')).not.toContainText('Endpoint:');
+    await page.locator('.active-project-section').getByRole('button', { name: 'Settings', exact: true }).click();
+    await expect(projectStatus.locator('.project-status-badge')).toHaveText('Contributes to published');
+    await expect(projectStatus.locator('.contribution')).toHaveCSS('color', 'rgb(126, 226, 148)');
+    await expect(projectStatus.locator('.contribution')).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
+    await expect(projectStatus.locator('.contribution')).toHaveCSS('border-color', 'rgb(126, 226, 148)');
+    await expect(projectStatus).toContainText('Workflow is not published as endpoint.');
+    await expect(projectSettings.getByRole('button', { name: 'Publish', exact: true })).toBeEnabled();
+    await projectSettings.getByRole('button', { name: 'Close project settings' }).click();
     const rootRow = page.locator('.project-row', { hasText: root.name });
     await rootRow.dblclick();
     const active = page.locator('.active-project-section');
@@ -653,14 +701,25 @@ test.describe('Published revision history', () => {
 
     helper.revisionId = 'saved-dependency-id';
     await reportSave(helper.absolutePath);
-    await expect(active.getByText('Unpublished changes', { exact: true })).toBeVisible();
-    const yellow = helperRow.getByRole('img', { name: 'Changes affect a published endpoint' });
+    await expect(active.locator('.project-summary-status-text')).toHaveText(
+      'Unpublished changes in 1 referenced project',
+    );
+    const yellow = helperRow.getByRole('img', { name: 'Contributes to unpublished changes' });
     await expect(yellow).toHaveCSS('border-top-color', 'rgb(255, 215, 106)');
     await expect(yellow).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
     await expect(helperLabel).toHaveCSS('color', 'rgb(255, 215, 106)');
     await expect(page.locator('.project-row', { hasText: external.name }).locator(green)).toBeVisible();
     await expect(green).toHaveCount(1);
     expect(ownerWebAppReads).toBe(readsBeforeDependencySave);
+    await openProjectContextMenu(page, helper.name);
+    await expect(page.locator('.project-summary-status-text')).toHaveText('Contributes to unpublished changes');
+    await page.locator('.active-project-section').getByRole('button', { name: 'Settings', exact: true }).click();
+    await expect(projectStatus.locator('.project-status-badge')).toHaveText('Contributes to unpublished changes');
+    await expect(projectStatus.locator('.contribution')).toHaveCSS('color', 'rgb(255, 215, 106)');
+    await expect(projectStatus.locator('.contribution')).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
+    await expect(projectStatus.locator('.contribution')).toHaveCSS('border-color', 'rgb(255, 215, 106)');
+    await expect(projectSettings.getByRole('button', { name: 'Publish', exact: true })).toBeEnabled();
+    await projectSettings.getByRole('button', { name: 'Close project settings' }).click();
 
     // Both tab changes refresh the catalog while the published references are still current.
     const frame = page.frameLocator('iframe.dashboard-editor-frame');
@@ -695,8 +754,12 @@ test.describe('Published revision history', () => {
     }
 
     await openProjectContextMenu(page, root.name);
-    await active.getByRole('button', { name: 'Changed referenced projects (1)', exact: true }).click();
-    const changed = page.getByRole('dialog', { name: 'Changed referenced projects' });
+    await active.getByRole('button', { name: 'Settings', exact: true }).click();
+    await expect(projectStatus.locator('.project-status-badge')).toHaveText(
+      'Unpublished changes in 1 referenced project',
+    );
+    await projectSettings.getByRole('button', { name: '1 referenced project', exact: true }).click();
+    const changed = page.getByRole('dialog', { name: 'Changes in referenced projects' });
     const inBundleGroup = changed.getByRole('heading', { name: 'In this bundle', exact: true }).locator('..');
     const externalHeading = changed.getByRole('heading', { name: 'External references', exact: true });
     await expect(inBundleGroup.getByRole('heading', { level: 4 })).toHaveText(helper.name);
@@ -713,6 +776,7 @@ test.describe('Published revision history', () => {
     await inBundleGroup.getByRole('button', { name: 'Open project', exact: true }).click();
     await expect(changed).toHaveCount(0);
     await expect.poll(() => trackers.projectLoadRequests.map((request) => request.path)).toContain(helper.absolutePath);
+    await projectSettings.getByRole('button', { name: 'Close project settings' }).click();
 
     await page.locator('.project-row', { hasText: omitted.name }).click();
     await openProjectContextMenu(page, omitted.name);

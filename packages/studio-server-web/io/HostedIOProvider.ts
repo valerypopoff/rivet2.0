@@ -25,7 +25,6 @@ import type { EvaluationStore } from '@valerypopoff/rivet2-evaluations';
 import { getDefaultStore } from 'jotai';
 import { RIVET_API_BASE_URL } from '../../studio-server-shared/hosted-env';
 import { requestStructuralMutation } from '../dashboard/workflowNamespaceMutations';
-import { fetchWorkflowTree } from '../dashboard/workflowApi';
 import { apiReadBinary, apiReadText } from '../../studio-server-shared/api';
 import {
   getWorkflowPublishedVersionPreviewFromVirtualProjectPath,
@@ -37,6 +36,7 @@ import { loadedProjectState } from '../../app/src/state/savedGraphs.js';
 import { evaluationLibraryState } from '../../app/src/state/evaluations.js';
 import type { AppDatasetProvider } from '../../app/src/host';
 import {
+  fetchWorkflowTree,
   fetchWorkflowPublishedVersionPreview,
   fetchWorkflowRecordingArtifactText,
   getWorkflowTreeMutationHeaders,
@@ -632,16 +632,20 @@ export class HostedIOProvider implements IOProvider {
 
   async loadRecordingData(callback: (data: { recorder: ExecutionRecorder; path: string }) => void): Promise<void> {
     if ('showOpenFilePicker' in window) {
+      let handles: FileSystemFileHandle[];
       try {
         // Chromium rejects custom extensions like ".rivet-recording" in picker type filters.
-        const [fileHandle] = await (window as any).showOpenFilePicker();
-        const file = await fileHandle.getFile();
-        const text = await file.text();
-        callback({ recorder: ExecutionRecorder.deserializeFromString(text), path: fileHandle.name });
-        return;
-      } catch {
-        return;
+        handles = await (window as any).showOpenFilePicker();
+      } catch (error) {
+        if (isAbortError(error)) return;
+        throw error;
       }
+      const [fileHandle] = handles;
+      if (!fileHandle) return;
+      const file = await fileHandle.getFile();
+      const text = await file.text();
+      callback({ recorder: ExecutionRecorder.deserializeFromString(text), path: fileHandle.name });
+      return;
     }
 
     const file = await pickSingleFile({ accept: '.rivet-recording' });

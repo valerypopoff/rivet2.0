@@ -16,7 +16,7 @@ import type { NodeProcessContextBase } from './ProcessContextBuilder.js';
 import type { GraphOutputSelection } from './GraphOutputSelection.js';
 import type { RivetStoredValueController } from './StoredValueStore.js';
 import type { KnowledgeStoreController } from '../integrations/KnowledgeStoreProvider.js';
-import type { ResolvedSubgraphProject } from './SubgraphProjectTarget.js';
+import type { ResolvedSubgraphProject, SubgraphTargetDisplaySnapshot } from './SubgraphProjectTarget.js';
 import type { GraphCostBreakdown } from './GraphBoundaryEffects.js';
 import { RunCostLedger } from './RunCostLedger.js';
 
@@ -49,6 +49,7 @@ export class GraphInvocationState {
   ignoreNodes: Set<NodeId> = undefined!;
   hasPreloadedData = false;
   loadedProjects: Record<ProjectId, Project> = undefined!;
+  subgraphTargets: readonly SubgraphTargetDisplaySnapshot[] | undefined;
   nodeProcessContextBase: NodeProcessContextBase = undefined!;
   runToRelevantNodeIds: Set<NodeId> | undefined;
   graphOutputSelection: GraphOutputSelection | undefined;
@@ -93,6 +94,7 @@ export class GraphInvocationState {
     this.costLedger = options.costLedger ?? new RunCostLedger();
     this.nodeAbortControllers = new Map();
     this.loadedProjects = options.loadedProjects;
+    this.subgraphTargets = undefined;
     this.graphInputNodeValues = options.sharedOverride?.graphInputNodeValues ?? {};
     // Execution identity, context and inputs are rebound by initializeGraphRun.
   }
