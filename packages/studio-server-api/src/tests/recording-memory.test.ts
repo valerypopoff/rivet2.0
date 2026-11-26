@@ -41,6 +41,9 @@ function capture(budget?: RecordingMemoryBudget) {
   } as unknown as GraphProcessor);
   return {
     recorder,
+    emitGraph(subgraphTargets?: unknown) {
+      listener('graphStart', { graph: { metadata: { id: 'graph' } }, inputs: {}, subgraphTargets });
+    },
     emit(value: unknown) {
       listener('nodeFinish', {
         node: { id: 'node' },
@@ -51,6 +54,30 @@ function capture(budget?: RecordingMemoryBudget) {
     finish: () => finish(),
   };
 }
+
+void test('optional target labels use the existing capture budget without changing terminal handling', () => {
+  const budget = new RecordingMemoryBudget({ bytes: 6000, captureBytes: 4500 });
+  const legacy = capture(budget);
+  legacy.emitGraph();
+  assert.equal(legacy.recorder.captureDiscarded, false);
+  const named = capture(budget);
+  named.emitGraph([
+    {
+      nodeId: 'node',
+      targetProjectId: 'target',
+      targetVersion: 'latest',
+      targetGraphId: 'graph',
+      projectName: 'x'.repeat(2500),
+    },
+  ]);
+  assert.equal(named.recorder.captureDiscarded, true);
+  assert.deepEqual(named.recorder.events, []);
+  assert.doesNotThrow(() => named.finish());
+  assert.equal(legacy.recorder.captureDiscarded, false);
+  budget.discard(legacy.recorder);
+  assert.equal(budget.snapshot().estimatedBytes, 0);
+  assert.equal(budget.snapshot().captures, 0);
+});
 
 void test('capture limits discard only replay data, keep terminal handling and share capacity across roots', () => {
   const budget = new RecordingMemoryBudget({ bytes: 5000, captureBytes: 4500 });

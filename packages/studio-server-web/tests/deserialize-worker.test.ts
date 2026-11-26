@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { serializeProject, type Project } from '@valerypopoff/rivet2-core';
+import { ExecutionRecorder, serializeProject, type Project } from '@valerypopoff/rivet2-core';
 import { parseHostedProjectPayload } from '../overrides/utils/hostedProjectPayload.js';
 
-test('worker preparation parses the sidecar once and retains datasets and legacy Evaluation attachments', (t) => {
+void test('worker preparation parses the sidecar once and retains datasets and legacy Evaluation attachments', (t) => {
   const contents = serializeProject({ metadata: { id: 'worker', title: 'Worker' }, graphs: {} } as Project);
   const datasets = [
     { meta: { id: 'data', projectId: 'worker' }, data: { id: 'data', rows: [{ id: 'row', data: ['value'] }] } },
@@ -44,7 +44,7 @@ class TestWorker extends EventTarget {
 Object.defineProperty(globalThis, 'Worker', { value: TestWorker, configurable: true });
 const { deserializeProjectAsync } = await import('../overrides/utils/deserializeProject.js');
 
-test('desktop deserialization actually dispatches to its own worker and settles the returned project', async () => {
+void test('desktop deserialization actually dispatches to its own worker and settles the returned project', async () => {
   const desktop = await import('../../app/src/utils/deserializeProject.js');
   const pending = desktop.deserializeProjectAsync('desktop', 'desktop.rivet-project');
   const worker = TestWorker.instances.at(-1)!;
@@ -53,7 +53,7 @@ test('desktop deserialization actually dispatches to its own worker and settles 
   assert.equal((await pending).metadata.id, 'desktop');
 });
 
-test('worker failure rejects all accepted requests once without replay and ignores stale results', async () => {
+void test('worker failure rejects all accepted requests once without replay and ignores stale results', async () => {
   const a = deserializeProjectAsync('a');
   const b = deserializeProjectAsync('b');
   const settled = Promise.allSettled([a, b]);
@@ -69,7 +69,7 @@ test('worker failure rejects all accepted requests once without replay and ignor
   assert.equal((await next).metadata.id, 'fresh');
 });
 
-test('cancelling deserialization terminates obsolete work and a new request can complete', async () => {
+void test('cancelling deserialization terminates obsolete work and a new request can complete', async () => {
   const controller = new AbortController();
   const request = deserializeProjectAsync('old', undefined, { signal: controller.signal });
   const obsolete = TestWorker.instances.at(-1)!;
@@ -82,7 +82,7 @@ test('cancelling deserialization terminates obsolete work and a new request can 
   assert.equal((await next).metadata.id, 'new');
 });
 
-test('a stalled worker is replaced on its deadline and subsequent requests remain usable', async () => {
+void test('a stalled worker is replaced on its deadline and subsequent requests remain usable', async () => {
   const request = deserializeProjectAsync('stalled', undefined, { timeoutMs: 5 });
   const stalled = TestWorker.instances.at(-1)!;
   await assert.rejects(request, /parsing timed out/);
@@ -92,7 +92,7 @@ test('a stalled worker is replaced on its deadline and subsequent requests remai
   assert.equal((await next).metadata.id, 'next');
 });
 
-test('cancelling one parse preserves another request sharing the worker', async () => {
+void test('cancelling one parse preserves another request sharing the worker', async () => {
   const controller = new AbortController();
   const cancelled = deserializeProjectAsync('cancelled', undefined, { signal: controller.signal });
   const worker = TestWorker.instances.at(-1)!;
@@ -104,7 +104,7 @@ test('cancelling one parse preserves another request sharing the worker', async 
   assert.equal((await next).metadata.id, 'next');
 });
 
-test('cancelled queued parsing is retired once the remaining accepted request settles', async () => {
+void test('cancelled queued parsing is retired once the remaining accepted request settles', async () => {
   const live = deserializeProjectAsync('live');
   const worker = TestWorker.instances.at(-1)!;
   const liveRequest = worker.request!;
@@ -118,7 +118,7 @@ test('cancelled queued parsing is retired once the remaining accepted request se
   assert.equal(worker.terminated, true, 'obsolete queued parsing must not block the next project selection');
 });
 
-test('hosted preparation and deferred import share one configurable deadline', async (t) => {
+void test('hosted preparation and deferred import share one configurable deadline', async (t) => {
   const { HostedIOProvider } = await import('../io/HostedIOProvider.js');
   t.mock.timers.enable({ apis: ['Date'], now: 1_000 });
   t.mock.method(
@@ -133,7 +133,7 @@ test('hosted preparation and deferred import share one configurable deadline', a
       importDatasetsForProject: async () => {
         imports++;
       },
-    } as ConstructorParameters<typeof HostedIOProvider>[0],
+    } as unknown as ConstructorParameters<typeof HostedIOProvider>[0],
     {} as ConstructorParameters<typeof HostedIOProvider>[1],
     { loadTimeoutMs: 1_000 },
   );
@@ -155,7 +155,7 @@ test('hosted preparation and deferred import share one configurable deadline', a
   assert.equal(imports, 0);
 });
 
-test('a pre-cancelled hosted load performs no fetch, parsing or dataset work', async (t) => {
+void test('a pre-cancelled hosted load performs no fetch, parsing or dataset work', async (t) => {
   const { HostedIOProvider } = await import('../io/HostedIOProvider.js');
   const fetch = t.mock.method(globalThis, 'fetch', async () => {
     throw new Error('must not fetch');
@@ -173,7 +173,7 @@ test('a pre-cancelled hosted load performs no fetch, parsing or dataset work', a
   assert.equal(fetch.mock.callCount(), 0);
 });
 
-test('hosted loading sends the sidecar to its worker and commits exactly the prepared datasets', async (t) => {
+void test('hosted loading sends the sidecar to its worker and commits exactly the prepared datasets', async (t) => {
   const { HostedIOProvider } = await import('../io/HostedIOProvider.js');
   const sidecar = '{"datasets":[]}';
   t.mock.method(
@@ -203,4 +203,81 @@ test('hosted loading sends the sidecar to its worker and commits exactly the pre
   });
   await loading;
   assert.deepEqual(imported, datasets);
+});
+
+void test('hosted recording imports preserve cancellation and deliver a valid selection once', async (t) => {
+  const { HostedIOProvider } = await import('../io/HostedIOProvider.js');
+  const originalWindow = Object.getOwnPropertyDescriptor(globalThis, 'window');
+  t.after(() => {
+    if (originalWindow) Object.defineProperty(globalThis, 'window', originalWindow);
+    else Reflect.deleteProperty(globalThis, 'window');
+  });
+  const provider = new HostedIOProvider({} as never, {} as never);
+  const serialized = new ExecutionRecorder().serialize();
+  const selected: string[] = [];
+  for (const mode of ['cancel', 'empty', 'valid'] as const) {
+    Object.defineProperty(globalThis, 'window', {
+      configurable: true,
+      value: {
+        showOpenFilePicker: async () => {
+          if (mode === 'cancel') throw new DOMException('User cancelled', 'AbortError');
+          return mode === 'empty'
+            ? []
+            : [{ name: 'valid.rivet-recording', getFile: async () => ({ text: async () => serialized }) }];
+        },
+      },
+    });
+    await provider.loadRecordingData(({ recorder, path }) => {
+      assert.equal(recorder.serialize(), serialized);
+      selected.push(path);
+    });
+    assert.deepEqual(selected, mode === 'valid' ? ['valid.rivet-recording'] : []);
+  }
+});
+
+void test('hosted recording imports propagate picker, read, parse and callback failures', async (t) => {
+  const { HostedIOProvider } = await import('../io/HostedIOProvider.js');
+  const originalWindow = Object.getOwnPropertyDescriptor(globalThis, 'window');
+  t.after(() => {
+    if (originalWindow) Object.defineProperty(globalThis, 'window', originalWindow);
+    else Reflect.deleteProperty(globalThis, 'window');
+  });
+  const provider = new HostedIOProvider({} as never, {} as never);
+  const serialized = new ExecutionRecorder().serialize();
+  for (const phase of ['picker', 'file', 'text', 'text-abort', 'parse', 'callback'] as const) {
+    const failure =
+      phase === 'text-abort' ? new DOMException('Read aborted', 'AbortError') : new Error(`${phase} failed`);
+    let callbacks = 0;
+    Object.defineProperty(globalThis, 'window', {
+      configurable: true,
+      value: {
+        showOpenFilePicker: async () => {
+          if (phase === 'picker') throw failure;
+          return [
+            {
+              name: 'input.rivet-recording',
+              getFile: async () => {
+                if (phase === 'file') throw failure;
+                return {
+                  text: async () => {
+                    if (phase === 'text' || phase === 'text-abort') throw failure;
+                    return phase === 'parse' ? '{invalid JSON' : serialized;
+                  },
+                };
+              },
+            },
+          ];
+        },
+      },
+    });
+    await assert.rejects(
+      provider.loadRecordingData(() => {
+        callbacks++;
+        if (phase === 'callback') throw failure;
+      }),
+      (error) => (phase === 'parse' ? error instanceof SyntaxError : error === failure),
+      phase,
+    );
+    assert.equal(callbacks, phase === 'callback' ? 1 : 0);
+  }
 });

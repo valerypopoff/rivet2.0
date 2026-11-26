@@ -8,6 +8,7 @@ import { normalizeProjectSnapshot } from './projectSnapshot.js';
 import { useWorkspaceHostCleanBaseline } from './useWorkspaceHostCleanBaseline.js';
 import { renewProjectBindingState } from '../../state/projectBindings.js';
 import { clearProjectFullscreenOutputState } from '../../state/fullscreenOutput.js';
+import { clearLoadedRecordingForTabState } from '../../state/execution.js';
 import type { RivetProjectSnapshotInput } from './types.js';
 
 /**
@@ -47,6 +48,10 @@ export function useWorkspaceHostReplaceProjectSnapshot(
           ? existingOpenedProject.openedGraph
           : fallbackGraph;
     store.set(renewProjectBindingState, projectId);
+    store.set(clearLoadedRecordingForTabState, {
+      projectId,
+      projectPath: existingOpenedProject.fsPath ?? null,
+    });
     store.set(clearProjectFullscreenOutputState, projectId);
     setOpenedProjectSnapshots((previousSnapshots) => ({
       ...previousSnapshots,

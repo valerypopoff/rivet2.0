@@ -1,4 +1,5 @@
 import type { Opaque, OverrideProperties } from 'type-fest';
+import type { SubgraphTargetDisplaySnapshot } from '../model/SubgraphProjectTarget.js';
 import {
   type GraphExecutionMetadata,
   type ProcessEvents,
@@ -32,7 +33,11 @@ export type RecordedEventsMap = OverrideProperties<
     }>;
 
     /** Called when a graph or subgraph has started. */
-    graphStart: WithOptionalExecution<{ graphId: GraphId; inputs: GraphInputs }>;
+    graphStart: WithOptionalExecution<{
+      graphId: GraphId;
+      inputs: GraphInputs;
+      subgraphTargets?: readonly SubgraphTargetDisplaySnapshot[];
+    }>;
 
     /** Called when a graph or subgraph has errored. */
     graphError: WithOptionalExecution<{ graphId: GraphId; error: Error | string }>;

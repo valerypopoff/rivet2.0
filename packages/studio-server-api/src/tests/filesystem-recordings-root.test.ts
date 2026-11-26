@@ -7,7 +7,7 @@ import { createReviewedFilesystemMutationFixtures } from './helpers/reviewed-pub
 import { observeFileReads } from './helpers/file-reads.js';
 import { createWorkflowTestRoots, resetWorkflowTestRoots } from './helpers/workflow-fixtures.js';
 
-// test-style: fixture-read: Reads only generated project-index cache fixtures to exercise missing, stale and malformed metadata.
+// test-style: fixture-read: Reads generated index/project fixtures to exercise metadata errors and verify capture leaves source files unchanged.
 
 const envKeys = [
   'RIVET_WORKSPACE_ROOT',
@@ -81,6 +81,62 @@ test('workflow and recordings roots initialize separately', async () => {
   assert.equal(await workflowFs.pathExists(path.join(workflowsRoot, '.published')), true);
   assert.equal(await workflowFs.pathExists(path.join(workflowsRoot, '.recordings')), false);
   assert.equal(await workflowFs.pathExists(recordingsRoot), true);
+});
+
+test('filesystem recordings preserve optional target names and legacy traces without modifying the source project', async () => {
+  const created = await workflowMutations.createWorkflowProjectItem('', 'RecordedTargetNames');
+  const [project, attachedData] = await rivetNode.loadProjectAndAttachedDataFromFile(created.absolutePath);
+  const before = await fs.readFile(created.absolutePath, 'utf8');
+  const target = {
+    nodeId: 'node',
+    targetProjectId: 'child',
+    targetVersion: 'latest',
+    targetGraphId: 'graph',
+    projectName: 'Original child',
+    graphName: 'folder/Graph',
+  };
+  for (const named of [false, true]) {
+    const serialized = JSON.stringify({
+      version: 1,
+      assets: {},
+      strings: {},
+      recording: {
+        recordingId: 'fixture',
+        startTs: 1,
+        finishTs: 1,
+        events: [
+          {
+            type: 'graphStart',
+            ts: 1,
+            data: {
+              graphId: 'main',
+              inputs: {},
+              execution: { projectId: project.metadata.id },
+              ...(named ? { subgraphTargets: [target] } : {}),
+            },
+          },
+        ],
+      },
+    });
+    const id = await workflowRecordings.persistWorkflowExecutionRecording({
+      workflowsRoot,
+      sourceProject: project,
+      sourceProjectPath: created.absolutePath,
+      executedProject: project,
+      executedAttachedData: attachedData,
+      executedDatasets: [],
+      endpointName: 'names',
+      recordingSerialized: serialized,
+      runKind: 'latest',
+      status: 'succeeded',
+      durationMs: 1,
+    });
+    assert.ok(id);
+    const restored = await workflowRecordings.readWorkflowRecordingArtifact(workflowsRoot, id, 'recording');
+    assert.equal(restored, serialized);
+    assert.deepEqual(JSON.parse(restored).recording.events[0].data.subgraphTargets, named ? [target] : undefined);
+  }
+  assert.equal(await fs.readFile(created.absolutePath, 'utf8'), before);
 });
 
 test('filesystem run statistics exclude editor recordings without relying on execution surface', async () => {

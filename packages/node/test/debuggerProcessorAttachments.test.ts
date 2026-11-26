@@ -14,6 +14,7 @@ import type {
   ProjectId,
 } from '../src/index.js';
 import { createDebuggerProcessorAttachments } from '../src/debuggerProcessorAttachments.js';
+import { stringifyDebuggerPayloadForTransport } from '../src/debuggerPayloadSanitizer.js';
 
 void describe('debugger processor attachments', () => {
   void it('identifies terminal frames and throttles cloned node IDs independently per invocation', async () => {
@@ -33,6 +34,28 @@ void describe('debugger processor attachments', () => {
       rootRunId: 'root' as RootRunId,
     };
     await emitter.emit('start', { execution: root } as ProcessEvents['start']);
+    const graphStart: ProcessEvents['graphStart'] = {
+      graph: { metadata: { id: root.graphId }, nodes: [], connections: [] },
+      inputs: {},
+      execution: root,
+      subgraphTargets: [
+        {
+          nodeId: 'call' as NodeId,
+          targetProjectId: 'child' as ProjectId,
+          targetVersion: 'published',
+          targetGraphId: 'graph' as GraphId,
+          projectName: 'Captured project',
+          graphName: 'Captured graph',
+        },
+      ],
+    };
+    await emitter.emit('graphStart', graphStart);
+    const startFrame = broadcasts.find((event) => event.message === 'graphStart');
+    assert.deepEqual(JSON.parse(stringifyDebuggerPayloadForTransport({ ...startFrame, requestId: 'owner' })), {
+      message: 'graphStart',
+      data: graphStart,
+      requestId: 'owner',
+    });
     const node = { id: 'cloned' as NodeId } as ChartNode;
     const partial = (projectId: string) => ({
       execution: { ...root, projectId: projectId as ProjectId, graphRunId: `${projectId}-run` as GraphRunId },

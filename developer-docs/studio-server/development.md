@@ -1204,6 +1204,59 @@ replay remains visible through Core's finite `replayRecordedAt` provenance.
 `executionIdentity`, `remoteExecutorHelpers`, and `projectExecutionSnapshotEvents`
 tests cover the active/inactive projection boundary and replay compatibility.
 
+New recordings retain external Subgraph project/graph names in optional
+`graphStart.subgraphTargets` metadata. The existing target-preparation walk
+captures plain string values for the current graph, including effective prefab
+instance IDs, after target resolution. Display capture invokes no title getters,
+adds no target reads and does not change execution or its access checks.
+
+The node body and **Recorded graph** settings field read a recording-owned index
+keyed by source graph, node and exact target/version. It verifies the recorded
+source project and execution scope, independently of the replay tab's rebound ID.
+Conflicting entries cannot overwrite one another into apparent certainty. Live
+project caches never supply recording labels; older, incomplete or unresolved
+metadata retains the ID fallback and an explanatory tooltip. These labels do not
+establish that a child ran or authorize navigation.
+
+During restoration/activation, the current tab's registered path controls both
+recording selection and display mode before the global last-loaded path catches up. This keeps replay
+nodes from briefly starting live preview requests, and keeps live tabs out of a
+previous replay's mode. A same-ID tab at a different path cannot retain the old
+recording selection. Both selectors share the same path owner rather than
+independently deciding which path is current.
+Manual recording loads capture the owning tab's runtime binding before opening
+the file picker. A late result cannot attach to a closed, reopened, replaced or
+rebound tab; a verified same-document move keeps the binding and uses its new
+path. One pending-load identity is shared by menu entry points, so an older
+picker cannot overwrite a newer selection or undo an explicit unload. Completion
+rechecks both the active execution guard and the owning tab's execution state,
+including inactive tabs. I/O errors from retired owners are ignored; current
+errors retain the previous recording and use the normal error notification.
+The hosted native picker suppresses cancellation only while choosing a file.
+Other picker errors, read/parse failures and callback failures reach the normal
+error handler; an aborted read after selection is still reported. Cancelling
+the picker or failing to import leaves the current recording intact.
+Committed project-content replacement clears only that owner's loaded recording
+and tab indicator, including same-ID/same-path replacements and standalone
+sessions. Ordinary tab switching, rejected/cancelled replacement and verified
+moves keep their existing recording ownership. Clearing happens at the existing
+content commit point, rather than when replacement is merely requested.
+The [recorded Subgraph target names implementation record](recorded-subgraph-target-names-plan.md)
+documents compatibility, coverage and local performance evidence.
+
+Recording tests divide responsibility between Core (capture, field validation,
+serialization and transport), App (exact label lookup and editor ownership), and
+the hosted browser (visible playback and navigation). Reuse the real workspace
+fixture for delayed file-picker cases. Assert both current error notifications
+and suppression after replacement or a newer selection; checking console output
+alone does not establish what the user sees. The browser replay loop must observe
+a new completed Run Activity entry after every Play command, since unchanged
+output and an enabled Play button can still describe the previous replay.
+Core's recording test fixture supplies fresh maps and sets for each playback;
+scenario-specific topology, identities and callbacks remain explicit. Run a
+scoped TypeScript check when changing these tests: `tsx --test` executes them
+without typechecking their fixtures.
+
 Run `yarn workspace @valerypopoff/rivet-studio-server-web test` for hierarchy
 invariants (duplicates, ambiguous/absent roots, exact keys, incremental search,
 large families), and `yarn studio-server:ui:observe run-recordings-modal.spec.ts`

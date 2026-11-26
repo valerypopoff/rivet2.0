@@ -3615,7 +3615,41 @@ test.describe('Run recordings modal', () => {
     await editorFrame.getByRole('button', { name: 'Load Recording', exact: true }).click();
     const unload = editorFrame.getByRole('button', { name: 'Unload Recording', exact: true });
     await expect(unload).toBeVisible();
+    for (const failure of ['read', 'parse', 'cancel'] as const) {
+      for (const frame of page.frames()) {
+        await frame.evaluate((mode) => {
+          Object.defineProperty(window, 'showOpenFilePicker', {
+            configurable: true,
+            value: async () => {
+              if (mode === 'cancel') throw new DOMException('User cancelled', 'AbortError');
+              return [
+                {
+                  name: 'failed.rivet-recording',
+                  getFile: async () => {
+                    if (mode === 'read') throw new Error('Could not read selected recording');
+                    return new File(['{invalid recording JSON'], 'failed.rivet-recording');
+                  },
+                },
+              ];
+            },
+          });
+        }, failure);
+      }
+      await editorFrame.locator('.more-menu').click();
+      await editorFrame.getByRole('button', { name: 'Load Recording', exact: true }).click();
+      if (failure !== 'cancel') {
+        const notification = editorFrame
+          .locator('.Toastify__toast--error')
+          .filter({ hasText: 'Failed to load recording' });
+        await expect(notification).toBeVisible();
+        if (failure === 'read') await expect(notification).toContainText('Could not read selected recording');
+        await notification.locator('.Toastify__close-button').click();
+        await expect(notification).toHaveCount(0);
+      }
+      await expect(unload).toBeVisible();
+    }
     await unload.click();
+    await expect(editorFrame.locator('.Toastify__toast--error')).toHaveCount(0);
     await expect(unload).toHaveCount(0);
     await expect(editorFrame.getByRole('button', { name: 'Play Recording', exact: true })).toHaveCount(0);
     await expect(ordinaryProjectTab).toHaveClass(/active/);

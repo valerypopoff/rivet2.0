@@ -4,6 +4,32 @@ This document records intentional architecture and cleanup changes that future m
 
 It is not a changelog. Keep entries focused on why a refactor happened, which ownership boundary changed, and which verification paths should be kept alive.
 
+## 2026-11-26 - Recording Display Evidence and Playback Ownership
+
+External Subgraph labels now come from optional display snapshots captured in
+the existing target-resolution walk and stored on `graphStart`. Core owns field
+validation; App owns one lookup for the selected recording, keyed by source
+graph/node and the complete target/version tuple. Live project caches cannot
+supply historical labels. The trace remains version 1, and the metadata neither
+authorizes access nor changes execution, replay-project sharing or storage codecs.
+Older recordings retain their ID fallback.
+
+Recording selection now shares the current tab's path owner with display mode.
+Manual file loads capture the existing runtime binding and one shared pending
+request identity. Replaced/reopened owners and superseded requests cannot accept
+late results; verified moves keep ownership. Explicit content replacement clears
+only the old owner's recording and indicator at commit. Hosted native file
+selection suppresses picker cancellation, while real read/parse failures reach
+the ordinary error handler and preserve the current selection.
+
+Keep the real-processor and socket capture tests, exact-owner workspace tests,
+filesystem and managed artifact round trips, and the headless playback/history
+and manual-import journeys. Browser repetitions require fresh completed Run
+Activity identities, not merely unchanged output. Core replay fixtures share
+setup but allocate fresh mutable state per call. The
+[implementation and validation plan](recorded-subgraph-target-names-plan.md)
+records compatibility, measured local overhead and the limits of local evidence.
+
 ## 2026-11-26 - Bundle Download Job Ownership
 
 The bundle download modal now retains one version form and Download action.
