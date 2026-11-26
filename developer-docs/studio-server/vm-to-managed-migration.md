@@ -7,6 +7,19 @@ parser. Connection checks, maintenance, copying and recovery still belong to
 `vm-migration-service.ts`. This is the same operation contract, not a separate
 migration controller. See the [HTTP separation record](app-settings-http-separation-plan.md).
 
+Terminal status (`precopy_complete`, `verified` or `failed`) is returned only
+after the same background operation finishes its durable journal write and
+releases its process-local ownership. A rename can expose the new record before
+the directory sync finishes; that intermediate record must not enable review,
+retry or resume while the owner still rejects those actions. Status reads wait
+only when they observe a terminal record for the background operation that was
+already running when the read began; they do not wait for the full copy or
+verification while its recorded phase remains active. The managed integration
+suite holds the terminal rename open to exercise this boundary with real
+PostgreSQL import and verification. Its fixture awaits storage-backend
+initialization and closure before advancing or cleaning up. Journal durability,
+importer locks, target fencing and the existing migration deadlines remain unchanged.
+
 ## Restore a downloaded legacy backup into initialized Kubernetes
 
 For a disposable destination, use **Settings → Storage → Restore legacy backup**.
