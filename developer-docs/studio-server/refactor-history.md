@@ -4,6 +4,28 @@ This document records intentional architecture and cleanup changes that future m
 
 It is not a changelog. Keep entries focused on why a refactor happened, which ownership boundary changed, and which verification paths should be kept alive.
 
+## 2026-11-26 - Bundle Download Job Ownership
+
+The bundle download modal now retains one version form and Download action.
+The modal owns cleanup, replacement admission and native file delivery; users
+no longer coordinate separate preparation and retry screens. Each explicit
+download captures fresh saved content through the existing backend job owner.
+
+A synchronous per-bundle request owner spans cleanup and start even when the
+modal is replaced. Job adoption changes the reserved identity, status and error
+together. This fixes a reproduced race where reopening during cleanup let an
+old archive's missing-status error remain visible during replacement admission.
+Repeated adoption of the same identity preserves newer progress. Closing clears
+automatic file delivery while retaining accepted background work.
+
+Keep confirmed HTTP 204/404 cleanup, exact-ID status validation, late-response
+rejection, request timeouts and the native download reader lease. The existing
+12-case browser suite exercises real archive contents and controlled request
+ordering, including the stale-error reproduction for retained and replacement
+modal instances. The [completed delivery plan](bundle-actions-separation-plan.md#completed-download-interaction-follow-up--2026-11-26)
+records scope and local validation; the archive format and backend selection
+policy are unchanged.
+
 ## 2026-11-25 - Bundle Merge Review Controller Ownership
 
 `WorkflowBundleMergeModal.tsx` previously combined preview and mutation lifetimes
