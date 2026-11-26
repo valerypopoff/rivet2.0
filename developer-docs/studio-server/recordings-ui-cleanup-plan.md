@@ -1,11 +1,12 @@
 # Run recordings UI cleanup plan
 
-Status: complete. Recording-card presentation was completed on 2026-10-04; project navigation and terminology were completed on 2026-11-03. This plan covers the recordings UI, not storage migration or recording capture.
+Status: complete. The latest card layout and diagnostic actions were completed on 2026-11-26. Earlier sections retain their original validation history. This plan covers the recordings UI, not storage migration or recording capture.
 
 ## Completed scope
 
 - [x] Hide `Related run key` on primary recordings, including correlated roots with sub-runs.
-- [x] Keep the key on called-project Subgraph recordings for debugging.
+- [x] Keep the key on called-project Subgraph recordings for debugging (now
+      available through the Recording actions menu; see the follow-up below).
 - [x] Remove the selected-workflow `Recording scope` label and explanation.
 - [x] Preserve correlation metadata, family grouping, expansion, replay and deletion behavior.
 - [x] Select root cards by stable recording ID in browser tests instead of removed display text.
@@ -171,3 +172,44 @@ label spacing, line continuity and its end position, alphabetical/chronological
 switching, keyboard use, retained selection, virtualization and request counts.
 Build, scoped TypeScript, runtime/browser lint, formatting and documentation links
 pass. These are local checks; recording storage and deployment are unchanged.
+
+## Recording card diagnostics and layout (2026-11-26)
+
+- [x] Keep the timestamp, project name and endpoint/called graph visible. Put the
+      formatted duration at the top right and omit the default **Succeeded**
+      pill, preserving failure, suspicious and nonterminal status indicators.
+- [x] Align the continuous green connector with primary cards' left edge. Keep
+      only the small connector gutter and remove the `Sub-run` timestamp prefix.
+- [x] Use a visible three-dot **Recording actions** menu at the bottom right.
+      **Show/Hide diagnostic details** comes first; a separated red **Delete**
+      action is last. Preserve keyboard navigation, Escape/outside dismissal,
+      focus return and deletion/playback locks.
+- [x] Position the menu trigger outside normal flow so it adds no card height or
+      bottom padding. Keep text, Copy and family controls clear of its hit area.
+- [x] Show **Path** and the Subgraph-only **Execution correlation ID** in the
+      requested diagnostic region. Preserve extension removal, legacy metadata
+      fallbacks and exact ID copying with success/failure feedback.
+- [x] Share clipboard copying with Published endpoints/apps. Keep the HTTP
+      fallback within the active dialog, clean up its temporary field and restore
+      focus, including after denied copying.
+- [x] Leave 32 px after the final expanded child before a following primary or
+      context row, and 8 px elsewhere. Stop the connector at the last child card.
+      Invalidate the preceding virtual offset when its successor changes while
+      retaining the base card measurement.
+- [x] Preserve grouping, sorting, pagination, confirmed-deletion reconciliation,
+      replay ownership, request cancellation and stored recording identities.
+
+The menu follows its anchor during automatic virtual-list scrolling. Enabling
+scroll dismissal closed it immediately in the narrow sorting journey; the normal
+Escape/outside-click behavior passes that regression without changing timeouts.
+Browser checks compare card height with and without the trigger and verify
+wrapped text, Copy and family controls remain unobstructed. The suite also covers
+menu-based deletion, pending-operation locks and all existing playback journeys.
+
+Final validation: the web package test command passes 292 unit tests and 39
+development/production runtime tests. All 96 headless browser cases pass against
+the built frontend: the complete 95-case recordings suite and the Published-items
+clipboard journey. Scoped TypeScript/lint, code formatting, import boundaries,
+test style, package-version consistency, documentation links and whitespace
+checks pass. The browser runner exits and releases its preview port normally.
+These are local checks; no deployment or hosted performance result is claimed.

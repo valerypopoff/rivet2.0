@@ -2,6 +2,7 @@ import type { WorkflowRecordingRunSummary } from './types';
 import { recordingProjectName } from './recording-project-presentation';
 
 export type RecordingSubRunOrder = 'chronological' | 'project';
+export const RECORDING_ROW_GAP = 8;
 const projectNameCollator = new Intl.Collator(undefined, { sensitivity: 'base' });
 
 export type RecordingRunFamily = {
@@ -19,6 +20,11 @@ export type RecordingListRow = {
   isChild: boolean;
   expanded: boolean;
 };
+
+/** Leave room between an expanded family and the next primary/context row. */
+export function recordingRowGap(rows: RecordingListRow[], index: number): number {
+  return rows[index]?.isChild && rows[index + 1] && !rows[index + 1]!.isChild ? 32 : RECORDING_ROW_GAP;
+}
 
 /** Group only actual results. Never invent an ancestor or treat a child as one.
  * Correlation identifies a root execution, not the immediate parent of a nested
@@ -158,7 +164,13 @@ export function refreshRecordingRowMeasurements(
         previous.family?.childLoadState !== next.family?.childLoadState ||
         previous.family?.children.length !== next.family?.children.length);
     if (heightChanged) heights.delete(next.id);
-    if (firstChanged == null && (previousRows[index]?.id !== next.id || heightChanged)) firstChanged = index;
+    if (
+      firstChanged == null &&
+      (previousRows[index]?.id !== next.id ||
+        heightChanged ||
+        recordingRowGap(previousRows, index) !== recordingRowGap(nextRows, index))
+    )
+      firstChanged = index;
   }
   if (firstChanged == null && previousRows.length > nextRows.length) firstChanged = nextRows.length;
   for (const id of heights.keys()) {

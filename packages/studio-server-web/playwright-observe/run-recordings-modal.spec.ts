@@ -952,10 +952,86 @@ async function selectPublishedFlow(page: Page, modal: Locator) {
 
 async function deleteFirstRun(page: Page, modal: Locator) {
   const first = modal.locator('.run-recordings-run').first();
-  await first.hover();
   const started = page.waitForRequest((request) => request.method() === 'DELETE');
-  await first.getByRole('button', { name: 'Delete', exact: true }).click();
+  await deleteRecording(page, first);
   return started;
+}
+
+async function openRecordingActions(page: Page, card: Locator) {
+  await card.getByRole('button', { name: 'Recording actions', exact: true }).click();
+  const menu = page.getByRole('menu', { name: 'Recording actions', exact: true });
+  await expect(menu).toBeVisible();
+  return menu;
+}
+
+async function deleteRecording(page: Page, card: Locator) {
+  const menu = await openRecordingActions(page, card);
+  await menu.getByRole('menuitem', { name: 'Delete', exact: true }).click();
+}
+
+async function showRecordingDiagnostics(page: Page, card: Locator) {
+  const menu = await openRecordingActions(page, card);
+  await menu.getByRole('menuitem', { name: 'Show diagnostic details', exact: true }).click();
+}
+
+async function expectRecordingActionsDisabled(modal: Locator) {
+  const triggers = modal.getByRole('button', { name: 'Recording actions', exact: true });
+  await expect(triggers.first()).toBeDisabled();
+  for (const trigger of await triggers.all()) await expect(trigger).toBeDisabled();
+}
+
+async function expectRecordingHeaderLayout(card: Locator) {
+  await expect
+    .poll(() =>
+      card.evaluate((element) => {
+        const header = element.querySelector('.run-recordings-run-header')!.getBoundingClientRect();
+        const title = element.querySelector('.run-recordings-run-title')!.getBoundingClientRect();
+        const duration = element.querySelector('.run-recordings-run-duration')!.getBoundingClientRect();
+        const actions = element.querySelector('.run-recordings-actions-trigger')!.getBoundingClientRect();
+        const card = element.getBoundingClientRect();
+        const style = getComputedStyle(element);
+        const actionsContainer = element.querySelector<HTMLElement>('.run-recordings-run-actions')!;
+        const previousDisplay = actionsContainer.style.display;
+        actionsContainer.style.display = 'none';
+        const heightWithoutActions = element.getBoundingClientRect().height;
+        actionsContainer.style.display = previousDisplay;
+        const intersectsActions = (rect: DOMRect) =>
+          rect.left < actions.right &&
+          rect.right > actions.left &&
+          rect.top < actions.bottom &&
+          rect.bottom > actions.top;
+        const values = Array.from(element.querySelectorAll('.run-recordings-run-endpoint-value'));
+        const controls = Array.from(
+          element.querySelectorAll('.run-recordings-family-toggle, .run-recordings-diagnostic-copy'),
+        );
+        return {
+          topRight: Math.abs(duration.top - header.top) <= 1 && Math.abs(duration.right - header.right) <= 1,
+          besideTitle: title.right <= duration.left,
+          actionsBelowHeader: actions.top >= header.bottom,
+          actionsBottomRight:
+            actions.right <= card.right &&
+            card.right - actions.right <= parseFloat(style.paddingRight) + 1 &&
+            actions.bottom <= card.bottom &&
+            card.bottom - actions.bottom <= parseFloat(style.paddingBottom) + 1,
+          noAddedHeight: Math.abs(card.height - heightWithoutActions) <= 1,
+          contentClear: values.every((value) =>
+            Array.from(value.getClientRects()).every((rect) => !intersectsActions(rect)),
+          ),
+          controlsClear: controls.every((control) => !intersectsActions(control.getBoundingClientRect())),
+          fitsCard: element.scrollWidth <= element.clientWidth,
+        };
+      }),
+    )
+    .toEqual({
+      topRight: true,
+      besideTitle: true,
+      actionsBelowHeader: true,
+      actionsBottomRight: true,
+      noAddedHeight: true,
+      contentClear: true,
+      controlsClear: true,
+      fitsCard: true,
+    });
 }
 
 test.describe('Run recordings modal', () => {
@@ -977,7 +1053,9 @@ test.describe('Run recordings modal', () => {
       await expect(modal.getByText(statusLabel, { exact: true })).toBeVisible();
       const unavailable = modal.locator('.run-recordings-run').filter({ hasText: 'Replay serialization failed' });
       await expect(unavailable.locator('.run-recordings-run-open-button')).toBeDisabled();
-      await expect(unavailable.getByRole('button', { name: 'Delete', exact: true })).toBeEnabled();
+      const menu = await openRecordingActions(page, unavailable);
+      await expect(menu.getByRole('menuitem', { name: 'Delete', exact: true })).toBeEnabled();
+      await menu.press('Escape');
       await expect(unavailable.getByText('Some called-project recordings could not be confirmed.')).toBeVisible();
       expect(recordingFetches).toHaveLength(0);
     });
@@ -1530,10 +1608,54 @@ test.describe('Run recordings modal', () => {
     await expect(option).not.toContainText('renamed-draft');
   });
 
-  test('shows the formatted saved recording duration', async ({ page }) => {
-    await installRunRecordingRoutes(page, { latestFlowDurationMs: 95432.1 });
+  test('shows saved duration at the top right with compact keyboard-accessible recording actions', async ({ page }) => {
+    const { recordingFetches } = await installRunRecordingRoutes(page, {
+      latestFlowDurationMs: 95432.1,
+      transformRunsPage: (response) => ({
+        ...response,
+        runs: response.runs.map((run) => ({
+          ...run,
+          endpointNameAtExecution: 'a-long-workflow-endpoint-name-that-wraps-on-narrow-cards-without-obscuring-actions',
+        })),
+      }),
+    });
     const modal = await openLatestFlowRecordings(page);
-    await expect(modal.locator('.run-recordings-run-duration').first()).toHaveText('1m 35.43s');
+    const card = modal.locator('.run-recordings-run').first();
+    await expect(card).toHaveClass(/\bsucceeded\b/);
+    await expect(modal.locator('.run-recordings-badge.succeeded')).toHaveCount(0);
+    await expect(modal.locator('.run-recordings-badge.failed').first()).toBeVisible();
+    await expect(card.locator('.run-recordings-run-duration')).toHaveText('1m 35.43s');
+    await expectRecordingHeaderLayout(card);
+    const actions = card.getByRole('button', { name: 'Recording actions', exact: true });
+    await expect(actions).toBeVisible();
+    await expect(card.getByText('Diagnostic details', { exact: true })).toHaveCount(0);
+    await actions.focus();
+    await actions.press('Enter');
+    const menu = page.getByRole('menu', { name: 'Recording actions', exact: true });
+    const items = menu.getByRole('menuitem');
+    await expect(items).toHaveText(['Show diagnostic details', 'Delete']);
+    await expect(items.first()).toBeFocused();
+    await items.first().press('ArrowDown');
+    await expect(items.last()).toBeFocused();
+    await expect(items.last()).toHaveCSS('color', 'rgb(255, 155, 165)');
+    await items.last().press('Escape');
+    await expect(menu).toBeHidden();
+    await expect(actions).toBeFocused();
+    await expect(modal).toBeVisible();
+    await actions.click();
+    await modal.locator('.run-recordings-runs-title').click();
+    await expect(menu).toBeHidden();
+    await page.setViewportSize({ width: 390, height: 720 });
+    await card.locator('.run-recordings-run-duration').scrollIntoViewIfNeeded();
+    await expect(card.locator('.run-recordings-run-duration')).toBeInViewport();
+    await expectRecordingHeaderLayout(card);
+    await actions.scrollIntoViewIfNeeded();
+    await actions.click();
+    await expect(items.first()).toBeInViewport();
+    await expect(items.last()).toBeInViewport();
+    await menu.press('Escape');
+    await page.screenshot({ path: test.info().outputPath('run-duration-narrow.png') });
+    expect(recordingFetches).toEqual([]);
   });
 
   test('a fresh session defaults to Any after closing a workflow-specific view', async ({ page }) => {
@@ -2095,8 +2217,19 @@ test.describe('Run recordings modal', () => {
     }
   });
 
-  test('labels a called-project recording as a Subgraph run', async ({ page }) => {
-    await installRunRecordingRoutes(page, { subgraphRun: true });
+  test('called-project diagnostics are collapsed and copy the execution correlation ID without opening playback', async ({
+    page,
+  }) => {
+    const { recordingFetches } = await installRunRecordingRoutes(page, {
+      subgraphRun: true,
+      transformSubRunPage: (response) => ({
+        ...response,
+        runs: response.runs.map((run) => ({
+          ...run,
+          sourceProjectRelativePath: 'Folder/Called project.rivet-project',
+        })),
+      }),
+    });
     const modal = await openLatestFlowRecordings(page);
     await selectPublishedFlow(page, modal);
     await expect(modal.locator('.run-recordings-family-context')).toContainText('Primary run is not identified');
@@ -2106,7 +2239,75 @@ test.describe('Run recordings modal', () => {
     await expect(run.locator('.run-recordings-run-endpoint').filter({ hasText: 'Called graph:' })).toContainText(
       'Called graph: Extract facts',
     );
-    await expect(run).toContainText('Related run key: rvt-related-example-12345');
+    const details = run.getByRole('region', { name: 'Diagnostic details', exact: true });
+    const path = details.getByText('Path: Folder/Called project', { exact: true });
+    const correlation = details.getByText('rvt-related-example-12345', { exact: true });
+    const copy = details.getByRole('button', { name: 'Copy execution correlation ID', exact: true });
+    await expect(details).toHaveCount(0);
+    await expect(path).toBeHidden();
+    await expect(correlation).toBeHidden();
+    await expect(copy).toBeHidden();
+    await showRecordingDiagnostics(page, run);
+    await expect(path).toBeVisible();
+    await expect(correlation).toBeVisible();
+    await expect(details).toContainText('Execution correlation ID: rvt-related-example-12345');
+    await expect(copy).toHaveText('Copy');
+
+    // Keep clipboard ownership within this page so parallel browser tests do
+    // not race over the operating system's clipboard.
+    await page.evaluate(() => {
+      let copied = '';
+      Object.defineProperty(navigator, 'clipboard', {
+        configurable: true,
+        value: {
+          writeText: async (value: string) => {
+            copied = value;
+          },
+          readText: async () => copied,
+        },
+      });
+    });
+    await copy.click();
+    await expect(details.getByRole('status')).toHaveText('Copied');
+    expect(await page.evaluate(() => navigator.clipboard.readText())).toBe('rvt-related-example-12345');
+
+    // Denied Clipboard API access must be recoverable, including on HTTP
+    // deployments where the API is absent altogether.
+    await page.evaluate(() => {
+      Object.defineProperty(navigator, 'clipboard', {
+        configurable: true,
+        value: {
+          writeText: async () => {
+            throw new Error('Clipboard denied');
+          },
+        },
+      });
+      document.execCommand = () => false;
+    });
+    await copy.click();
+    await expect(details.getByRole('status')).toHaveText('Could not copy. Select and copy the ID manually.');
+    await expect(copy).toBeFocused();
+    await expect(page.locator('textarea')).toHaveCount(0);
+    await page.evaluate(() => {
+      Object.defineProperty(navigator, 'clipboard', { configurable: true, value: undefined });
+      document.execCommand = (command: string) => {
+        const input = document.activeElement;
+        return (
+          command === 'copy' && input instanceof HTMLTextAreaElement && input.value === 'rvt-related-example-12345'
+        );
+      };
+    });
+    await copy.press('Space');
+    await expect(details.getByRole('status')).toHaveText('Copied');
+    await expect(copy).toBeFocused();
+    await expect(page.locator('textarea')).toHaveCount(0);
+    const menu = await openRecordingActions(page, run);
+    await menu.getByRole('menuitem', { name: 'Hide diagnostic details', exact: true }).click();
+    await expect(details).toHaveCount(0);
+    await expect(path).toBeHidden();
+    await expect(copy).toBeHidden();
+    await expect(run).toBeVisible();
+    expect(recordingFetches).toEqual([]);
   });
 
   test('a context group uses its child anchor even when one ambiguous primary shares the page', async ({ page }) => {
@@ -2206,13 +2407,18 @@ test.describe('Run recordings modal', () => {
     await expect(root.locator('.run-recordings-run-open-button')).toBeEnabled();
   });
 
-  test('root recordings unfold indented sub-runs without opening the primary replay', async ({ page }) => {
+  test('root recordings unfold linked sub-runs without opening the primary replay', async ({ page }) => {
     const { recordingFetches } = await installRunRecordingRoutes(page, { relatedSubgraphRuns: true });
     const modal = await openLatestFlowRecordings(page);
     await selectPublishedFlow(page, modal);
     const root = modal.locator('[data-recording-id="recording-a-1"]');
     const child = modal.locator('[data-recording-id="recording-b-1"]');
-    await expect(root).not.toContainText('Related run key:');
+    await expect(root).not.toContainText('Execution correlation ID:');
+    await expect(root.getByRole('button', { name: 'Copy execution correlation ID', includeHidden: true })).toHaveCount(
+      0,
+    );
+    const rootDetails = root.getByRole('region', { name: 'Diagnostic details', exact: true });
+    await expect(rootDetails.getByText('Path: Unknown', { exact: true })).toBeHidden();
     await expect(modal).not.toContainText('Recording scope');
     await expect(modal).not.toContainText('This project and related called-project Subgraph runs');
     const toggle = root.getByRole('button', { name: 'Show sub-runs', exact: true });
@@ -2222,13 +2428,36 @@ test.describe('Run recordings modal', () => {
     await toggle.press('Enter');
     await expect(root.getByRole('button', { name: 'Hide 1 sub-run' })).toHaveAttribute('aria-expanded', 'true');
     await expect(child).toHaveClass(/run-recordings-sub-run/);
-    await expect(child.locator('.run-recordings-run-title')).toContainText('Sub-run ·');
+    await expect(child.locator('.run-recordings-run-title')).not.toContainText('Sub-run');
     await expect(modal.getByRole('group', { name: 'Sub-run sorting' })).toHaveCount(0);
-    await expect(child).toContainText('Related run key: rvt-root-caller-12345');
-    const rootBox = await root.boundingBox();
-    const childBox = await child.boundingBox();
-    expect(childBox!.x).toBeGreaterThan(rootBox!.x + 20);
-    expect(childBox!.y).toBeGreaterThan(rootBox!.y + rootBox!.height);
+    await expect(child.getByText('rvt-root-caller-12345', { exact: true })).toBeHidden();
+    await showRecordingDiagnostics(page, root);
+    await expect(rootDetails.getByText('Path: Unknown', { exact: true })).toBeVisible();
+    await showRecordingDiagnostics(page, child);
+    await expect(child.getByText('rvt-root-caller-12345', { exact: true })).toBeVisible();
+    await expect
+      .poll(() =>
+        modal.evaluate((element) => {
+          const rootBox = element.querySelector('[data-recording-id="recording-a-1"]')!.getBoundingClientRect();
+          const childBox = element.querySelector('[data-recording-id="recording-b-1"]')!.getBoundingClientRect();
+          const line = element.querySelector('.run-recordings-sub-run-connector')!.getBoundingClientRect();
+          const nextPrimary = element.querySelector('[data-recording-id="recording-a-2"]')!.getBoundingClientRect();
+          return {
+            lineAlignedToParent: Math.abs(line.left - rootBox.left) <= 1,
+            onlyConnectorGutter: Math.abs(childBox.left - line.left - 14) <= 1,
+            belowRoot: childBox.y > rootBox.bottom,
+            familyGap: Math.abs(nextPrimary.top - childBox.bottom - 32) <= 1,
+            lineEndsAtCard: Math.abs(line.bottom - childBox.bottom) <= 1,
+          };
+        }),
+      )
+      .toEqual({
+        lineAlignedToParent: true,
+        onlyConnectorGutter: true,
+        belowRoot: true,
+        familyGap: true,
+        lineEndsAtCard: true,
+      });
     expect(recordingFetches).toEqual([]);
     await root.getByRole('button', { name: 'Hide 1 sub-run' }).press('Space');
     await expect(child).toHaveCount(0);
@@ -2277,7 +2506,7 @@ test.describe('Run recordings modal', () => {
     await selectPublishedFlow(page, modal);
     const root = modal.locator('[data-recording-id="recording-a-1"]');
     await expect(root).toContainText('Project name: Root display title');
-    await expect(root).toContainText('Path: Folder/Root file');
+    await expect(root.getByText('Path: Folder/Root file', { exact: true })).toBeHidden();
     await expect(root).not.toContainText('.rivet-project');
     await expect(modal.locator('.run-recordings-workflow-summary')).not.toContainText('.rivet-project');
     await expect(modal.getByRole('group', { name: 'Sub-run sorting' })).toHaveCount(0);
@@ -2306,6 +2535,7 @@ test.describe('Run recordings modal', () => {
             outsideParent: header.top >= parent.bottom,
             aboveChildren: header.bottom <= child.top,
             aligned: Math.abs(header.left - child.left) <= 1,
+            lineAlignedToParent: Math.abs(firstLine.left - parent.left) <= 1,
             compactLabel: control.left - label.right >= 0 && control.left - label.right <= 9,
             noHeaderLine: !element
               .closest('.run-recordings-list-row')!
@@ -2319,6 +2549,7 @@ test.describe('Run recordings modal', () => {
         outsideParent: true,
         aboveChildren: true,
         aligned: true,
+        lineAlignedToParent: true,
         compactLabel: true,
         noHeaderLine: true,
         continuousLine: true,
@@ -2327,13 +2558,15 @@ test.describe('Run recordings modal', () => {
     await expect(chronological).toHaveAttribute('aria-pressed', 'true');
     await expect(firstChild).toHaveAttribute('data-recording-id', 'related-child-102');
     await expect(firstChild).toContainText('Project name: Zulu project');
-    await expect(firstChild).toContainText('Path: a/Other');
+    await expectRecordingHeaderLayout(firstChild);
+    await showRecordingDiagnostics(page, firstChild);
+    await expect(firstChild.getByText('Path: a/Other', { exact: true })).toBeVisible();
     await expect(firstChild).not.toContainText('.rivet-project');
     await alphabetical.click();
     await expect(alphabetical).toHaveAttribute('aria-pressed', 'true');
     await expect(firstChild).toHaveAttribute('data-recording-id', 'recording-b-1');
     await expect(firstChild).toContainText('Project name: Alpha project');
-    await expect(firstChild).toContainText('Path: z/First');
+    await expect(firstChild.getByText('Path: z/First', { exact: true })).toBeHidden();
     await page.screenshot({ path: test.info().outputPath('sub-run-project-sort.png') });
     const viewport = modal.locator('.run-recordings-list');
     await expect
@@ -2373,7 +2606,11 @@ test.describe('Run recordings modal', () => {
     await expect(alphabetical).toBeInViewport();
     await alphabetical.click();
     await expect(alphabetical).toHaveAttribute('aria-pressed', 'true');
+    await showRecordingDiagnostics(page, firstChild);
+    await expect(firstChild.getByText('Path: z/First', { exact: true })).toBeVisible();
+    await expectRecordingHeaderLayout(firstChild);
     expect(await root.evaluate((card) => card.scrollWidth <= card.clientWidth)).toBe(true);
+    expect(await firstChild.evaluate((card) => card.scrollWidth <= card.clientWidth)).toBe(true);
     await page.screenshot({ path: test.info().outputPath('sub-run-project-sort-narrow.png') });
     expect(runFetches.filter((url) => url.includes('/sub-runs?'))).toHaveLength(2);
     expect(recordingFetches).toEqual([]);
@@ -2420,9 +2657,9 @@ test.describe('Run recordings modal', () => {
           (await children.evaluateAll((rows) => rows.map((row) => row.getAttribute('data-recording-id')))).slice(0, 3),
         )
         .toEqual(['related-child-102', 'related-child-101', 'related-child-100']);
-      await expect(children.nth(0)).toContainText('Succeeded');
+      await expect(children.nth(0)).toHaveClass(/\bsucceeded\b/);
       await expect(children.nth(1)).toContainText('Failed');
-      await expect(children.nth(2)).toContainText('Succeeded');
+      await expect(children.nth(2)).toHaveClass(/\bsucceeded\b/);
       const childRequests = runFetches.filter((url) => url.includes('/sub-runs?'));
       expect(childRequests).toHaveLength(2);
       expect(childRequests.every((url) => !new URL(url).searchParams.has('statusFilter'))).toBe(true);
@@ -2462,7 +2699,7 @@ test.describe('Run recordings modal', () => {
     await expect(modal.locator('.run-recordings-input-search-status')).toContainText('Search complete, 1 match found');
     await modal.getByRole('button', { name: 'Show sub-runs', exact: true }).click();
     await expect(modal.getByRole('button', { name: 'Hide 103 sub-runs', exact: true })).toBeVisible();
-    await expect(modal.locator('[data-recording-id="recording-b-1"]')).toContainText('Succeeded');
+    await expect(modal.locator('[data-recording-id="recording-b-1"]')).toHaveClass(/\bsucceeded\b/);
     await expect(modal.locator('.run-recordings-input-search-status')).toContainText('Search complete, 1 match found');
     expect(runFetches.filter((url) => url.includes('/sub-runs?')).length).toBe(2);
   });
@@ -2750,10 +2987,11 @@ test.describe('Run recordings modal', () => {
     await modal.getByRole('button', { name: 'Show sub-runs', exact: true }).click();
     await expect(child).toHaveCount(1);
     await expect(child).toContainText('Project name: Latest Flow');
+    await showRecordingDiagnostics(page, child);
     await expect(child).toContainText('Path: Latest Flow');
     await expect(child).not.toContainText('.rivet-project');
     await expect(child).toContainText('Subgraph · Latest');
-    await expect(child).toContainText('Related run key: rvt-root-caller-12345');
+    await expect(child).toContainText('Execution correlation ID: rvt-root-caller-12345');
     expect(runFetches.some((url) => url.includes('workflow-a/runs') && url.includes('includeSubgraphRuns=true'))).toBe(
       true,
     );
@@ -2777,12 +3015,8 @@ test.describe('Run recordings modal', () => {
     await modal.getByRole('button', { name: 'Show sub-runs', exact: true }).click();
     await expect(modal.locator('.run-recordings-run')).toHaveCount(2);
     await expect(child).toBeVisible();
-    // Scrolling this partially visible row can move it away from the mouse.
-    // Use its supported keyboard-focus path to keep actions active during the
-    // click; this scenario tests family membership/deletion, not hover styling.
-    const deleteChild = child.getByRole('button', { name: 'Delete', exact: true });
-    await deleteChild.focus();
-    await deleteChild.click();
+    // The menu action stays usable when the trigger scrolls into view.
+    await deleteRecording(page, child);
     await expect(modal.locator('.run-recordings-runs-title')).toHaveText('2 Runs');
     await expect(modal.getByRole('button', { name: 'Bad only (1)', exact: true })).toBeVisible();
     await expect(child).toHaveCount(0);
@@ -2813,8 +3047,7 @@ test.describe('Run recordings modal', () => {
     const child = modal.locator('.run-recordings-run').filter({ hasText: 'Called graph: Extract facts' });
     await expect(child).toHaveCount(1);
     const root = modal.locator('[data-recording-id="recording-a-1"]');
-    await root.hover();
-    await root.getByRole('button', { name: 'Delete', exact: true }).click();
+    await deleteRecording(page, root);
     await expect(modal.locator('.run-recordings-input-search-status')).toContainText('Search complete, 1 match found');
     await expect(modal.locator('.run-recordings-runs-title')).toHaveText('1 Run');
     await expect(modal.locator('.run-recordings-run')).toHaveCount(1);
@@ -2843,8 +3076,7 @@ test.describe('Run recordings modal', () => {
       route.fulfill({ status: 503, json: { error: 'Catalog refresh unavailable' } }),
     );
     const root = modal.locator('[data-recording-id="recording-a-1"]');
-    await root.hover();
-    await root.getByRole('button', { name: 'Delete', exact: true }).click();
+    await deleteRecording(page, root);
     await expect(modal).toContainText('Recording deleted, but refreshing the list failed: Catalog refresh unavailable');
     await expect(root).toHaveCount(0);
     await expect(child).toHaveCount(0);
@@ -2870,9 +3102,7 @@ test.describe('Run recordings modal', () => {
     await page.route(recordingCatalogRoute, (route) =>
       route.fulfill({ status: 503, json: { error: 'Scope refresh unavailable' } }),
     );
-    const deleteChild = child.getByRole('button', { name: 'Delete', exact: true });
-    await deleteChild.focus();
-    await deleteChild.click();
+    await deleteRecording(page, child);
     await expect(child).toHaveCount(0);
     await expect(modal.locator('.run-recordings-run')).toHaveCount(1);
     await expect(modal).toContainText('Recording deleted, but refreshing the list failed: Scope refresh unavailable');
@@ -2919,9 +3149,7 @@ test.describe('Run recordings modal', () => {
     const modal = await openLatestFlowRecordings(page);
     await deleteFirstRun(page, modal);
     try {
-      for (const button of await modal.getByRole('button', { name: 'Delete', exact: true }).all()) {
-        await expect(button).toBeDisabled();
-      }
+      await expectRecordingActionsDisabled(modal);
       expect(deletions).toHaveLength(1);
       await expect(modal.getByRole('button', { name: 'Refresh run recordings', exact: true })).toBeDisabled();
       await selectPublishedFlow(page, modal);
@@ -2933,12 +3161,10 @@ test.describe('Run recordings modal', () => {
       oldDeletion.release();
       await oldResponse;
       await delay(200);
-      for (const button of await modal.getByRole('button', { name: 'Delete', exact: true }).all()) {
-        await expect(button).toBeDisabled();
-      }
+      await expectRecordingActionsDisabled(modal);
       newDeletion.release();
       await expect(modal.locator('.run-recordings-run')).toHaveCount(1);
-      await expect(modal.getByRole('button', { name: 'Delete', exact: true })).toBeEnabled();
+      await expect(modal.getByRole('button', { name: 'Recording actions', exact: true })).toBeEnabled();
       expect(deletions).toHaveLength(2);
     } finally {
       oldDeletion.release();
@@ -3027,15 +3253,13 @@ test.describe('Run recordings modal', () => {
         await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())));
         await expect(modal.locator('.run-recordings-error')).toHaveCount(0);
         await expect(modal.locator('.run-recordings-run')).toHaveCount(2);
-        for (const button of await modal.getByRole('button', { name: 'Delete', exact: true }).all()) {
-          await expect(button).toBeDisabled();
-        }
+        await expectRecordingActionsDisabled(modal);
         expect(runFetches.filter((url) => new URL(url).pathname.endsWith('/workflow-b/runs'))).toHaveLength(
           oldScopeReads,
         );
         newDeletion.release();
         await expect(modal.locator('.run-recordings-run')).toHaveCount(1);
-        await expect(modal.getByRole('button', { name: 'Delete', exact: true })).toBeEnabled();
+        await expect(modal.getByRole('button', { name: 'Recording actions', exact: true })).toBeEnabled();
         await expect(modal.locator('.run-recordings-error')).toHaveCount(0);
       } finally {
         oldCatalog.release();
@@ -3081,8 +3305,7 @@ test.describe('Run recordings modal', () => {
       runFetches.filter((url) => new URL(url).searchParams.get('page') === '2').length;
     const before = precedingPageRequests();
     const lastRun = modal.locator('.run-recordings-run');
-    await lastRun.hover();
-    await lastRun.getByRole('button', { name: 'Delete', exact: true }).click();
+    await deleteRecording(page, lastRun);
     await expect(modal.locator('.run-recordings-page-status')).toHaveText('Page 2 of 2');
     await expect(modal.locator('.run-recordings-run').first()).toBeVisible();
     expect(precedingPageRequests() - before).toBe(1);
@@ -3116,9 +3339,8 @@ test.describe('Run recordings modal', () => {
       await modal.getByRole('button', { name: 'Apply' }).click();
       await expect(modal.getByRole('button', { name: 'Stop search' })).toBeVisible();
       const first = modal.locator('.run-recordings-run').first();
-      await first.hover();
       const deletionStarted = page.waitForRequest((request) => request.method() === 'DELETE');
-      await first.getByRole('button', { name: 'Delete' }).click();
+      await deleteRecording(page, first);
       await deletionStarted;
       try {
         await modal.getByRole('button', { name: 'Clear', exact: true }).click();
@@ -3192,8 +3414,7 @@ test.describe('Run recordings modal', () => {
       await expect(modal.locator('.run-recordings-run')).toHaveCount(2);
       await page.setViewportSize({ width: 1100, height: 850 });
       await expect(modal.locator('.run-recordings-run').last()).toBeVisible();
-      await modal.locator('.run-recordings-run').first().hover();
-      await modal.locator('.run-recordings-run').first().getByRole('button', { name: 'Delete' }).click();
+      await deleteRecording(page, modal.locator('.run-recordings-run').first());
       await expect(modal.locator('.run-recordings-run')).toHaveCount(1);
     } finally {
       firstPage.release();
@@ -3276,7 +3497,7 @@ test.describe('Run recordings modal', () => {
             })
           : null;
         const refreshedCatalog = page.waitForResponse((response) => recordingCatalogRoute.test(response.url()));
-        await child.getByRole('button', { name: 'Delete', exact: true }).click();
+        await deleteRecording(page, child);
         if (aborted) await aborted;
         await (await refreshedCatalog).finished();
         await expect(child).toHaveCount(0);
@@ -3550,8 +3771,7 @@ test.describe('Run recordings modal', () => {
     await choosePageSizeTen(modal);
 
     const firstRun = modal.locator('.run-recordings-run').first();
-    await firstRun.hover();
-    await firstRun.locator('.run-recordings-run-delete-button').click();
+    await deleteRecording(page, firstRun);
     await expect(modal.locator('.run-recordings-page-status')).toHaveText('Page 1 of 2');
     await expect(modal.locator('.run-recordings-run').first()).toBeVisible();
 
@@ -3683,11 +3903,11 @@ test.describe('Run recordings modal', () => {
     await expect(modal.locator('.run-recordings-shell')).toHaveAttribute('aria-busy', 'true');
     await expect(modal.getByRole('button', { name: 'Refresh run recordings', exact: true })).toBeDisabled();
     await expect(run.locator('.run-recordings-run-open-button')).toBeDisabled();
-    await expect(run.locator('.run-recordings-run-delete-button')).toBeDisabled();
+    await expect(run.getByRole('button', { name: 'Recording actions', exact: true })).toBeDisabled();
     await expect(run.getByRole('status')).toHaveText('Opening…');
     await expect(otherRun.getByText('Opening…', { exact: true })).toHaveCount(0);
     await expect(otherRun.locator('.run-recordings-run-open-button')).toBeDisabled();
-    await expect(otherRun.locator('.run-recordings-run-delete-button')).toBeDisabled();
+    await expect(otherRun.getByRole('button', { name: 'Recording actions', exact: true })).toBeDisabled();
 
     recordingGate.release();
     await expect.poll(() => replayProjectFetches).toEqual(['recording-b-1']);
@@ -3710,7 +3930,7 @@ test.describe('Run recordings modal', () => {
     await expect(modal.locator('.run-recordings-error')).toContainText('The recording is no longer available.');
     await expect(modal.locator('.run-recordings-shell')).toHaveAttribute('aria-busy', 'false');
     await expect(run.locator('.run-recordings-run-open-button')).toBeEnabled();
-    await expect(run.locator('.run-recordings-run-delete-button')).toBeEnabled();
+    await expect(run.getByRole('button', { name: 'Recording actions', exact: true })).toBeEnabled();
   });
 
   test('shows recorded LLM response duration instead of accelerated replay time', async ({ page }) => {

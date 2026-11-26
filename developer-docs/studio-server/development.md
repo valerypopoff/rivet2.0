@@ -722,10 +722,10 @@ It never targets a deployment URL. Browser regressions use headless `studio-serv
 evaluation-history-paging.spec.ts run-recordings-modal.spec.ts` against a fresh
 local frontend build. These checks establish correctness, not a production VM
 latency claim; measure identical workloads before/after deployment separately.
-The linked-child deletion browser scenario focuses the action before clicking:
-auto-scrolling a partially visible row can invalidate a prior row hover. Keep
-this data-membership regression on the supported focus path, without forced
-clicks; separate row-action tests cover hover visibility.
+Linked-child deletion uses the card's Recording actions menu. Keep those
+data-membership regressions on the supported menu path, without forced clicks;
+menu tests cover keyboard navigation, dismissal, focus return and disabled
+actions during mutation/playback.
 
 Migration 15 leaves released migration SQL/checksums untouched. Its running header
 representation is not backward-readable by schema-14 code. The release's minimum
@@ -1023,14 +1023,22 @@ at 55 seconds. Single-phase runtime fixtures retain their shorter limits.
 
 `recording-run-hierarchy.ts` groups the current recording results by exact
 `executionIdentity.correlationId`. A unique non-Subgraph row is the primary;
-children start folded and expand into individually virtualized, indented rows.
+children start folded and expand into individually virtualized rows. Their green
+connector aligns with the primary cards' left edge; the cards retain only the
+small gutter beside that line, without an additional family indent. Child card
+titles start with the timestamp, without a `Sub-run` prefix.
 Sub-runs default to oldest-to-newest by the shown `createdAt` timestamp, with
 recording ID ascending as the deterministic tie-breaker. An expanded family with
 more than one child offers **Chronological** and **Project name (A–Z)** controls
-in a labeled **Sub-run sorting** row above the children, aligned with their
-indentation. This header is its own measured virtual row, outside the parent card.
+in a labeled **Sub-run sorting** row above the children, aligned with the child
+cards. This header is its own measured virtual row, outside the parent card.
 Its label sits beside the controls, without a connector line. The child connector
 spans the gaps between virtual rows and ends at the final sub-run card.
+The last child has a 32 px gap before the next primary/context row, while ordinary
+rows and the trailing end of the list retain their 8 px gap. `recordingRowGap`
+drives both virtual offsets and connector cutoff. A changed successor invalidates
+the preceding offset even if that child is offscreen; its base card measurement
+remains reusable. Spacing never changes grouping, sort order or page membership.
 Alphabetical order uses the displayed recorded project name, ignoring case, then
 uses the same chronological/ID tie-breakers. Each family's choice is independent,
 survives collapsing or virtualizing its rows and resets with a replacement query.
@@ -1260,10 +1268,28 @@ without typechecking their fixtures.
 Run `yarn workspace @valerypopoff/rivet-studio-server-web test` for hierarchy
 invariants (duplicates, ambiguous/absent roots, exact keys, incremental search,
 large families), and `yarn studio-server:ui:observe run-recordings-modal.spec.ts`
-in headless mode for keyboard expand/collapse, indentation, child replay, filters,
-page-split families and deletion/failed-refresh regression coverage.
+in headless mode for keyboard expand/collapse, connector alignment, child replay,
+filters, page-split families and deletion/failed-refresh regression coverage.
 
 ## Recording duration display
+
+Run and Subgraph cards show duration in the header's top-right corner. Successful
+runs omit the default **Succeeded** pill; failure, suspicious and nonterminal
+status badges remain visible. A visible three-dot **Recording actions** button
+sits at the bottom right. Its menu offers **Show diagnostic details** (or **Hide
+diagnostic details**) followed by a separated red **Delete** action at the bottom.
+The trigger is absolutely positioned and adds no row or vertical padding to the
+card. Only the final content block reserves horizontal clearance; family controls
+and revealed diagnostic fields stay clear of its hit area. Browser checks compare
+card height with and without the trigger and check long wrapped content on narrow
+cards, including expanded diagnostic fields.
+It uses the existing Floating UI library for positioning and keyboard navigation;
+the popup stays inside the dialog's focus boundary and outside the virtual list's
+clipping. Escape and outside clicks dismiss the menu; position updates follow
+scrolling, and disposing the row removes its popup. Virtual-list focus can adjust
+scroll while opening a menu, so scroll itself must not dismiss this popup. Deletion
+and playback locks disable its trigger and close any open menu. The actions keep
+their existing request and deletion safeguards.
 
 `RecordingRunsTable.tsx` formats recording durations to two decimal places in
 milliseconds or seconds (including the seconds component of minute durations).
@@ -1274,7 +1300,9 @@ presenting a misleading zero.
 This is presentation-only: stored `durationMs`, replay timings and statistics
 retain their original precision. App's `recordingPresentation.test.ts` covers
 fractional milliseconds, seconds, minute-boundary rounding and missing/invalid
-values. One recordings-modal case verifies the rendered saved duration.
+values. The recordings-modal cases verify the saved duration, missing success
+pills, desktop/narrow header placement, child-card layout and accessible menu
+actions. Status filtering and stored status values are unchanged.
 
 ## Called-project recordings in the caller browse scope
 
@@ -1283,8 +1311,25 @@ workflow. Its scope includes direct recordings plus `subgraph_project` recording
 sharing a nonempty correlation ID with a retained, non-Subgraph recording owned by
 that workflow. This includes nested called projects, but does not treat an inbound
 child recording as an anchor that pulls in the caller's other children. Each row
-shows the replay-owning project path; only Subgraph rows show the related run key. Any remains
-the deduplicated all-recordings scope.
+keeps the project name and endpoint/called graph visible. Its replay-owning project
+path (without `.rivet-project`) is hidden until **Show diagnostic details** is
+chosen from the card menu; there is no inline disclosure control. Subgraph rows
+also show **Execution correlation ID** in the revealed region, with a **Copy**
+button that copies the exact `executionIdentity.correlationId`. This is the shared
+execution-family identifier, not the recording ID or immediate parent ID. Neither
+the menu action nor Copy opens playback or changes subrun grouping. Clipboard
+success/failure is announced inside the details; the ID remains selectable if
+copying is denied. The clipboard helper is shared with Published endpoints and
+apps, including the fallback for HTTP deployments. The temporary fallback field
+stays within the active modal's focus boundary and is removed before restoring
+the Copy button's focus. Any remains the deduplicated all-recordings scope.
+
+`run-recordings-modal.spec.ts` checks initially hidden diagnostics, keyboard
+menu activation, exact ID copying, denied clipboard recovery, HTTP fallback and
+focus restoration. Family and sorting cases also exercise resized diagnostic
+rows and narrow layouts. Clipboard substitutes are page-local so parallel tests do not
+share the operating system clipboard; the Published-items browser case retains
+its real clipboard check for the shared helper.
 
 Filesystem, authoritative SQLite, and managed PostgreSQL apply the same
 metadata-only scope to ordinary counts, status filters and offset pages. Bounded

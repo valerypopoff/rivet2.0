@@ -4,6 +4,7 @@ import {
   groupRecordingRuns,
   recordingHierarchyRows,
   refreshRecordingRowMeasurements,
+  recordingRowGap,
 } from '../dashboard/recording-run-hierarchy';
 import type { WorkflowRecordingRunSummary } from '../dashboard/types';
 import { recordingProjectName, recordingProjectPath } from '../dashboard/recording-project-presentation';
@@ -28,7 +29,7 @@ function run(id: string, correlationId?: string, child = false): WorkflowRecordi
   };
 }
 
-test('context groups lazily load children without treating their representative as a root', () => {
+void test('context groups lazily load children without treating their representative as a root', () => {
   const representative = run('anchor', 'orphan-key', true);
   const other = run('newer-child', 'orphan-key', true);
   const initial = groupRecordingRuns([representative], {});
@@ -42,7 +43,7 @@ test('context groups lazily load children without treating their representative 
   assert.equal(rows[1]!.kind, 'sub-run-sort');
 });
 
-test('a paginated context anchor never attaches to one visible member of an ambiguous root key', () => {
+void test('a paginated context anchor never attaches to one visible member of an ambiguous root key', () => {
   const root = run('one-of-two-primaries', 'ambiguous');
   const child = { ...run('context-anchor', 'ambiguous', true), familyContext: true as const };
   // The unmarked duplicate models the same child returned by its browse endpoint.
@@ -54,7 +55,7 @@ test('a paginated context anchor never attaches to one visible member of an ambi
   assert.equal(groups[1]!.childLoadState, 'unloaded');
 });
 
-test('input matches offer child discovery before any children are loaded, preserving expansion and status', () => {
+void test('input matches offer child discovery before any children are loaded, preserving expansion and status', () => {
   const root = run('root', 'execution');
   const initial = groupRecordingRuns([root], {});
   assert.equal(initial[0]!.childLoadState, 'unloaded');
@@ -67,7 +68,7 @@ test('input matches offer child discovery before any children are loaded, preser
   assert.equal(recordingHierarchyRows(empty, new Set())[0]!.family, null);
 });
 
-test('roots without retained sub-runs have no disclosure, while unknown and positive presence remain discoverable', () => {
+void test('roots without retained sub-runs have no disclosure, while unknown and positive presence remain discoverable', () => {
   for (const hasSubRuns of [false, true, undefined]) {
     const root = { ...run('root', 'execution'), hasSubRuns };
     const [row] = recordingHierarchyRows(groupRecordingRuns([root], {}), new Set());
@@ -81,7 +82,7 @@ test('roots without retained sub-runs have no disclosure, while unknown and posi
   }
 });
 
-test('children preceding their root are folded beneath it without duplicating recordings', () => {
+void test('children preceding their root are folded beneath it without duplicating recordings', () => {
   const child = run('child', 'execution', true);
   const root = run('root', 'execution');
   const unrelated = run('other', 'another');
@@ -104,7 +105,7 @@ test('children preceding their root are folded beneath it without duplicating re
 });
 
 for (const context of ['primary', 'related', 'loaded related'] as const) {
-  test(`sub-runs are chronological regardless of status and arrival order in ${context} families`, () => {
+  void test(`sub-runs are chronological regardless of status and arrival order in ${context} families`, () => {
     const root = run('root', 'execution');
     const children = [
       { ...run('latest-failed', 'execution', true), createdAt: '2026-10-03T00:00:03Z', status: 'failed' as const },
@@ -137,7 +138,7 @@ for (const context of ['primary', 'related', 'loaded related'] as const) {
   });
 }
 
-test('sorting descendants does not reorder primary recording families', () => {
+void test('sorting descendants does not reorder primary recording families', () => {
   const newest = run('newest-root', 'new');
   const older = { ...run('older-root', 'old'), createdAt: '2026-10-02T00:00:00Z' };
   const groups = groupRecordingRuns([newest, older, run('new-child', 'new', true), run('old-child', 'old', true)]);
@@ -147,7 +148,7 @@ test('sorting descendants does not reorder primary recording families', () => {
   );
 });
 
-test('project names and paths omit only the terminal project extension and retain legacy fallbacks', () => {
+void test('project names and paths omit only the terminal project extension and retain legacy fallbacks', () => {
   const recording = {
     ...run('metadata'),
     sourceProjectName: 'Display title',
@@ -166,7 +167,7 @@ test('project names and paths omit only the terminal project extension and retai
   assert.equal(recording.sourceProjectRelativePath, 'Folder.rivet-project/Different file.RIVET-PROJECT');
 });
 
-test('alphabetical order is per family, follows display names and breaks name ties chronologically', () => {
+void test('alphabetical order is per family, follows display names and breaks name ties chronologically', () => {
   const root = run('root', 'one');
   const otherRoot = run('other-root', 'two');
   const children = [
@@ -223,7 +224,7 @@ test('alphabetical order is per family, follows display names and breaks name ti
   assert.deepEqual(input, before);
 });
 
-test('filtered, page-split and retained orphan children get context, never a fake root', () => {
+void test('filtered, page-split and retained orphan children get context, never a fake root', () => {
   const families = groupRecordingRuns([run('child-a', 'execution', true), run('child-b', 'execution', true)]);
   assert.equal(families.length, 1);
   assert.equal(families[0]!.root, null);
@@ -236,7 +237,7 @@ test('filtered, page-split and retained orphan children get context, never a fak
   );
 });
 
-test('legacy children without execution keys remain individually discoverable', () => {
+void test('legacy children without execution keys remain individually discoverable', () => {
   const families = groupRecordingRuns([run('child-a', undefined, true), run('child-b', ' ', true), run('root')]);
   assert.equal(families.length, 3);
   assert.deepEqual(
@@ -251,7 +252,7 @@ test('legacy children without execution keys remain individually discoverable', 
   );
 });
 
-test('ambiguous primary keys do not assign children to an arbitrary primary', () => {
+void test('ambiguous primary keys do not assign children to an arbitrary primary', () => {
   const families = groupRecordingRuns([run('root-a', 'same'), run('child', 'same', true), run('root-b', 'same')]);
   assert.deepEqual(
     families.map((family) => family.root?.id ?? null),
@@ -260,14 +261,14 @@ test('ambiguous primary keys do not assign children to an arbitrary primary', ()
   assert.equal(families[1]!.children[0]!.id, 'child');
 });
 
-test('correlation keys are exact and never inferred from workflow or graph names', () => {
+void test('correlation keys are exact and never inferred from workflow or graph names', () => {
   const families = groupRecordingRuns([run('root', 'A'), run('child', 'a', true)]);
   assert.equal(families.length, 2);
   assert.deepEqual(families[0]!.children, []);
   assert.equal(families[1]!.root, null);
 });
 
-test('descendants remain individually virtualized even for a large family', () => {
+void test('descendants remain individually virtualized even for a large family', () => {
   const root = run('root', 'execution');
   const children = Array.from({ length: 5000 }, (_, i) => run(`child-${i}`, 'execution', true));
   const families = groupRecordingRuns([...children, root]);
@@ -275,7 +276,7 @@ test('descendants remain individually virtualized even for a large family', () =
   assert.equal(recordingHierarchyRows(families, new Set([families[0]!.key])).length, 5002);
 });
 
-test('appending an older primary preserves an expanded filtered family identity', () => {
+void test('appending an older primary preserves an expanded filtered family identity', () => {
   const child = run('child', 'execution', true);
   const before = groupRecordingRuns([child]);
   const after = groupRecordingRuns([child, run('root', 'execution')]);
@@ -283,7 +284,7 @@ test('appending an older primary preserves an expanded filtered family identity'
   assert.equal(before[0]!.key, after[0]!.key);
 });
 
-test('regrouping invalidates a changed offscreen row even when it moves to another index', () => {
+void test('regrouping invalidates a changed offscreen row even when it moves to another index', () => {
   const root = run('root', 'execution');
   const other = run('other');
   const before = recordingHierarchyRows(groupRecordingRuns([other, root]), new Set());
@@ -299,7 +300,7 @@ test('regrouping invalidates a changed offscreen row even when it moves to anoth
   assert.equal(heights.has('recording:deleted'), false);
 });
 
-test('measurement refresh preserves stable rows and handles collapse and removal offsets', () => {
+void test('measurement refresh preserves stable rows and handles collapse and removal offsets', () => {
   const families = groupRecordingRuns([run('root', 'execution'), run('child', 'execution', true), run('other')]);
   const expanded = recordingHierarchyRows(families, new Set([families[0]!.key]));
   const heights = new Map(expanded.map((row) => [row.id, 100]));
@@ -313,4 +314,25 @@ test('measurement refresh preserves stable rows and handles collapse and removal
   assert.equal(heights.get('recording:other'), 100);
   assert.equal(refreshRecordingRowMeasurements(expanded, [], heights), 0);
   assert.equal(heights.size, 0);
+});
+
+void test('family spacing resets predecessor offsets when a following primary arrives or leaves', () => {
+  const families = groupRecordingRuns([run('root', 'execution'), run('child', 'execution', true)]);
+  const expandedKeys = new Set([families[0]!.key]);
+  const before = recordingHierarchyRows(families, expandedKeys);
+  const after = recordingHierarchyRows(
+    groupRecordingRuns([run('root', 'execution'), run('child', 'execution', true), run('other')]),
+    expandedKeys,
+  );
+  // Retain object identity: adding a following root changes spacing alone.
+  after[0] = before[0]!;
+  after[1] = before[1]!;
+  const heights = new Map(before.map((row) => [row.id, 100]));
+  assert.equal(recordingRowGap(before, 1), 8);
+  assert.equal(recordingRowGap(after, 1), 32);
+  assert.equal(recordingRowGap(after, 0), 8);
+  assert.equal(recordingRowGap(after, 2), 8);
+  assert.equal(refreshRecordingRowMeasurements(before, after, heights), 1);
+  assert.equal(heights.get('recording:child'), 100, 'the card measurement itself remains reusable');
+  assert.equal(refreshRecordingRowMeasurements(after, before, heights), 1);
 });

@@ -23,11 +23,15 @@ import {
   groupRecordingRuns,
   recordingHierarchyRows,
   refreshRecordingRowMeasurements,
+  recordingRowGap,
+  RECORDING_ROW_GAP,
   type RecordingListRow,
   type RecordingRunFamily,
   type RecordingSubRunOrder,
 } from './recording-run-hierarchy';
 import { recordingProjectName, recordingProjectPath } from './recording-project-presentation';
+import { copyTextToClipboard } from './copyTextToClipboard';
+import { RecordingRunActions } from './RecordingRunActions';
 
 const INPUT_FILTER_OPERATOR_LABELS: Partial<Record<WorkflowRecordingInputFilterOperator, string>> = {
   not_exists: 'not exists',
@@ -40,7 +44,6 @@ const inputFilterOperatorOptions: Array<{ value: WorkflowRecordingInputFilterOpe
   }));
 
 const ESTIMATED_RECORDING_ROW_HEIGHT = 138;
-const RECORDING_ROW_GAP = 8;
 
 function RecordingRow({
   recording,
@@ -71,6 +74,20 @@ function RecordingRow({
   const playable = !recording.evidence || recording.evidence.availability === 'available';
   const availability = recording.evidence?.availability;
   const evidenceReason = recording.evidence?.reason;
+  const correlationId = isSubgraphRun ? recording.executionIdentity?.correlationId : undefined;
+  const [copyOutcome, setCopyOutcome] = useState<'copied' | 'failed' | null>(null);
+  const [diagnosticsVisible, setDiagnosticsVisible] = useState(false);
+
+  const copyCorrelationId = async () => {
+    if (!correlationId) return;
+    setCopyOutcome(null);
+    try {
+      await copyTextToClipboard(correlationId);
+      setCopyOutcome('copied');
+    } catch {
+      setCopyOutcome('failed');
+    }
+  };
 
   return (
     <div
@@ -90,7 +107,6 @@ function RecordingRow({
                 {recording.executionIdentity?.surface === 'scheduled' ? (
                   <span>Scheduled · {recording.executionIdentity.scheduleName ?? 'Scheduled run'} · </span>
                 ) : null}
-                {isChild ? <span className="run-recordings-sub-run-label">Sub-run · </span> : null}
                 {formatRecordingTimestamp(recording.createdAt)}
               </div>
               {isOpening ? (
@@ -112,10 +128,11 @@ function RecordingRow({
                 <span className="run-recordings-badge latest">Local editor</span>
               ) : null}
             </div>
+            <span className="run-recordings-run-duration">{formatRecordingDuration(recording.durationMs)}</span>
           </div>
           {detailText ? <div className={`run-recordings-run-detail ${recording.status}`}>{detailText}</div> : null}
         </div>
-        <div className="run-recordings-run-footer">
+        {recording.status !== 'succeeded' && (
           <div className="run-recordings-run-meta">
             <span className={`run-recordings-badge ${recording.status}`}>
               {recording.status === 'accepted'
@@ -126,9 +143,8 @@ function RecordingRow({
                     ? 'Running'
                     : RECORDING_STATUS_LABELS[recording.status]}
             </span>
-            <span className="run-recordings-run-duration">{formatRecordingDuration(recording.durationMs)}</span>
           </div>
-        </div>
+        )}
         {availability && availability !== 'available' && (
           <div className="run-recordings-run-detail" role="status">
             {availability === 'pending'
@@ -156,24 +172,14 @@ function RecordingRow({
         <div className="run-recordings-run-endpoint">
           Project name: <span className="run-recordings-run-endpoint-value">{recordingProjectName(recording)}</span>
         </div>
-        <div className="run-recordings-run-endpoint">
-          Path:{' '}
-          <span className="run-recordings-run-endpoint-value">
-            {recordingProjectPath(recording.sourceProjectRelativePath) || 'Unknown'}
-          </span>
-        </div>
-        <div className="run-recordings-run-endpoint">
+        <div
+          className={`run-recordings-run-endpoint${!family && !diagnosticsVisible ? ' run-recordings-corner-clearance' : ''}`}
+        >
           {isSubgraphRun ? 'Called graph' : 'Endpoint at execution'}:{' '}
           <span className="run-recordings-run-endpoint-value">
             {isSubgraphRun ? endpointNameAtExecution.replace(/^Subgraph:\s*/, '') : endpointNameAtExecution}
           </span>
         </div>
-        {isSubgraphRun && recording.executionIdentity?.correlationId && (
-          <div className="run-recordings-run-endpoint">
-            Related run key:{' '}
-            <span className="run-recordings-run-endpoint-value">{recording.executionIdentity.correlationId}</span>
-          </div>
-        )}
       </button>
       {family ? (
         <RecordingFamilyToggle
@@ -183,15 +189,51 @@ function RecordingRow({
           onToggle={onToggle}
         />
       ) : null}
-      <div className="run-recordings-run-actions">
-        <button
-          type="button"
-          className="run-recordings-run-delete-button"
-          onClick={() => onDelete(recording.id)}
-          disabled={isDeleting || isInteractionLocked}
+      {diagnosticsVisible ? (
+        <div
+          className="run-recordings-run-diagnostics run-recordings-corner-clearance"
+          role="region"
+          aria-label="Diagnostic details"
         >
-          Delete
-        </button>
+          <div className="run-recordings-run-diagnostic-fields">
+            <div className="run-recordings-run-endpoint">
+              Path:{' '}
+              <span className="run-recordings-run-endpoint-value">
+                {recordingProjectPath(recording.sourceProjectRelativePath) || 'Unknown'}
+              </span>
+            </div>
+            {correlationId ? (
+              <>
+                <div className="run-recordings-run-endpoint">
+                  Execution correlation ID: <span className="run-recordings-run-endpoint-value">{correlationId}</span>
+                  <button
+                    type="button"
+                    className="run-recordings-page-button run-recordings-diagnostic-copy"
+                    aria-label="Copy execution correlation ID"
+                    onClick={() => void copyCorrelationId()}
+                  >
+                    Copy
+                  </button>
+                </div>
+                <span role="status">
+                  {copyOutcome === 'copied'
+                    ? 'Copied'
+                    : copyOutcome === 'failed'
+                      ? 'Could not copy. Select and copy the ID manually.'
+                      : ''}
+                </span>
+              </>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
+      <div className="run-recordings-run-actions">
+        <RecordingRunActions
+          disabled={isDeleting || isInteractionLocked}
+          diagnosticsVisible={diagnosticsVisible}
+          onToggleDiagnostics={() => setDiagnosticsVisible((visible) => !visible)}
+          onDelete={() => onDelete(recording.id)}
+        />
       </div>
     </div>
   );
@@ -374,7 +416,7 @@ function VirtualizedRecordingRow({ index, style, data }: ListChildComponentProps
         <span
           className="run-recordings-sub-run-connector"
           aria-hidden="true"
-          style={{ bottom: data.recordings[index + 1]?.isChild ? 0 : RECORDING_ROW_GAP }}
+          style={{ bottom: data.recordings[index + 1]?.isChild ? 0 : recordingRowGap(data.recordings, index) }}
         />
       ) : null}
       <MeasuredRecordingRow
@@ -482,7 +524,10 @@ function VirtualizedRecordingList({
   }, []);
 
   const itemSize = useCallback(
-    (index: number) => rowHeightsRef.current.get(recordings[index]!.id) ?? ESTIMATED_RECORDING_ROW_HEIGHT,
+    (index: number) =>
+      (rowHeightsRef.current.get(recordings[index]!.id) ?? ESTIMATED_RECORDING_ROW_HEIGHT) +
+      recordingRowGap(recordings, index) -
+      RECORDING_ROW_GAP,
     [recordings],
   );
 
