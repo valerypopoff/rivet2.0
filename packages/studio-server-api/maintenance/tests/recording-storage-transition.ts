@@ -180,15 +180,55 @@ export async function verifyRecordingStorageTransition(pool: Pool, storage: Mana
       );
       assert.deepEqual(await recordingStorageRequiredEncodings(inventory), []);
       const encoded = (codec: string) => `trace.artifact-v1.${'a'.repeat(64)}.10.20.${codec}`;
+      await inventory.query(`INSERT INTO workflow_run_evidence VALUES
+        (NULL),('{}'),('{"row":{}}'),('{"row":{"recordingBlobKey":null}}')`);
+      assert.deepEqual(await recordingStorageRequiredEncodings(inventory), []);
+      const valid: Array<[string | null, string[]]> = [
+        [null, []],
+        ['', ['identity']],
+        ['legacy-trace', ['identity']],
+        [encoded('identity'), ['identity']],
+        [encoded('gzip'), ['gzip']],
+        [encoded('br'), ['br']],
+        [`path.artifact-v1.invalid/${encoded('br')}`, ['br']],
+        [`${encoded('br')}/${encoded('gzip')}`, ['gzip']],
+        [encoded('br').replace('.10.20.', '.0.000.'), ['br']],
+        [encoded('gzip').replace('.10.20.', `.${'9'.repeat(40)}.20.`), ['gzip']],
+      ];
+      const invalid = [
+        encoded('unknown'),
+        encoded(''),
+        `${encoded('br')}.extra`,
+        `${encoded('br')}.artifact-v1.invalid`,
+        ...[63, 65].map((length) => encoded('br').replace('a'.repeat(64), 'a'.repeat(length))),
+        ...['A', 'g'].map((digit) => encoded('br').replace('a'.repeat(64), digit.repeat(64))),
+        ...['', '-1', '1e2', ' 1', '1\n'].map((size) => encoded('br').replace('.10.20.', `.${size}.20.`)),
+        encoded('br').replace('.10.20.', '.10..'),
+      ];
+      for (const source of ['recording', 'evidence'] as const) {
+        for (const [key, expected] of [...valid, ...invalid.map((key): [string, null] => [key, null])]) {
+          await inventory.query('SAVEPOINT encoding_case');
+          try {
+            if (source === 'recording') await inventory.query('INSERT INTO workflow_recordings VALUES ($1)', [key]);
+            else
+              await inventory.query('INSERT INTO workflow_run_evidence VALUES ($1::jsonb)', [
+                JSON.stringify({ row: { recordingBlobKey: key } }),
+              ]);
+            if (expected)
+              assert.deepEqual(await recordingStorageRequiredEncodings(inventory), expected, `${source}: ${key}`);
+            else
+              await assert.rejects(recordingStorageRequiredEncodings(inventory), /unknown stored recording encoding/);
+          } finally {
+            await inventory.query('ROLLBACK TO SAVEPOINT encoding_case');
+            await inventory.query('RELEASE SAVEPOINT encoding_case');
+          }
+        }
+      }
       await inventory.query('INSERT INTO workflow_recordings VALUES ($1),($2)', ['legacy-trace', encoded('gzip')]);
       await inventory.query('INSERT INTO workflow_run_evidence VALUES ($1::jsonb)', [
         JSON.stringify({ row: { recordingBlobKey: encoded('br') } }),
       ]);
       assert.deepEqual(await recordingStorageRequiredEncodings(inventory), ['br', 'gzip', 'identity']);
-      await inventory.query('INSERT INTO workflow_run_evidence VALUES ($1::jsonb)', [
-        JSON.stringify({ row: { recordingBlobKey: encoded('unknown') } }),
-      ]);
-      await assert.rejects(recordingStorageRequiredEncodings(inventory), /unknown stored recording encoding/);
     } finally {
       await inventory.query('ROLLBACK');
       inventory.release();

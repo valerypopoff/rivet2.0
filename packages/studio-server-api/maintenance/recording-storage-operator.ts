@@ -136,11 +136,19 @@ export function recordingStorageIdentity(config: ManagedWorkflowStorageConfig): 
 }
 
 export async function recordingStorageRequiredEncodings(pool: Pick<Pool, 'query'>): Promise<string[]> {
+  // Parse the final envelope once per key. Regex replacement across the full
+  // historical inventory can exceed the operator's fixed statement deadline.
+  // Keep malformed envelopes as unknown encodings; never omit their rows.
   const result = await pool.query<{ encoding: string }>(`SELECT DISTINCT
     CASE WHEN key NOT LIKE '%.artifact-v1.%' THEN 'identity'
-      ELSE regexp_replace(key,'^.*[.]artifact-v1[.][a-f0-9]{64}[.][0-9]+[.][0-9]+[.]','') END AS encoding
+      WHEN array_length(parts,1)=4
+        AND length(parts[1])=64 AND translate(parts[1],'0123456789abcdef','')=''
+        AND parts[2]<>'' AND translate(parts[2],'0123456789','')=''
+        AND parts[3]<>'' AND translate(parts[3],'0123456789','')=''
+      THEN parts[4] ELSE key END AS encoding
     FROM (SELECT recording_blob_key AS key FROM workflow_recordings
       UNION ALL SELECT manifest_json->'row'->>'recordingBlobKey' FROM workflow_run_evidence WHERE manifest_json IS NOT NULL) artifacts
+    CROSS JOIN LATERAL string_to_array(split_part(key,'.artifact-v1.',-1),'.') AS parsed(parts)
     WHERE key IS NOT NULL ORDER BY 1`);
   const encodings = result.rows.map((row) => row.encoding);
   if (encodings.some((encoding) => !['identity', 'gzip', 'br'].includes(encoding)))
