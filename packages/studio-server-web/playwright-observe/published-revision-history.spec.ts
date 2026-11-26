@@ -600,8 +600,13 @@ test.describe('Published revision history', () => {
     const openTarget = target.getByRole('button', { name: 'Open project', exact: true });
     await expect(targetPath).toBeVisible();
     await expect(openTarget).toBeVisible();
-    const pathBounds = (await targetPath.boundingBox())!;
-    expect((await openTarget.boundingBox())!.y).toBeGreaterThanOrEqual(pathBounds.y + pathBounds.height);
+    // Measure both elements in one frame: the opening dialog moves as a unit.
+    const gap = await target.evaluate((element) => {
+      const pathBounds = element.querySelector('.project-settings-help')!.getBoundingClientRect();
+      const buttonBounds = element.querySelector('button')!.getBoundingClientRect();
+      return buttonBounds.top - pathBounds.bottom;
+    });
+    expect(gap).toBeGreaterThanOrEqual(0);
     await openTarget.click();
     await expect(details).toHaveCount(0);
     await expect

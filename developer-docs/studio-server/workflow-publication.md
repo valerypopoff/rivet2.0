@@ -1007,6 +1007,12 @@ project and each Subgraph's graph and node path. Each target shows its name,
 path and **Open project** action in order. The source heading's tooltip shows
 the bundle member path and saved revision time. **Open project** uses catalog
 identity and the normal persistent editor tab action.
+
+The `published-revision-history.spec.ts` browser check measures the target path
+and action together in one browser frame. Separate bounding-box reads can span
+the opening dialog's animation and report an overlap even when both elements
+move together. The check retains the no-overlap assertion and normal timeouts.
+
 A missing saved revision keeps the member in its bundle and marks coverage
 incomplete. A published project whose dependency check is unavailable displays
 **Dependencies unverified**. When Update can capture a legacy endpoint, the
