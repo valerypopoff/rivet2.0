@@ -1142,6 +1142,15 @@ promotion. It does not replace Yarn/Cargo audits or introduce a cloud rehearsal.
   checks, root style/structure checks and documentation links also passed.
   Collection of all 582 CI cases is not execution of that complete suite, and
   neither hosted CI nor production was exercised for this UI commit.
+  [Develop run 45882953899](https://github.com/valerypopoff/rivet2.0/actions/runs/45882953899)
+  exposed two stale Run statistics assertions in editor
+  shard 5: they selected direct menu children, so the new summary/action grouping
+  returned zero items. Menu ordering now selects semantic `menuitem` and `separator`
+  descendants, preserving the nine-item count, order and actual navigation checks
+  without binding the test to its presentation wrapper. No timeout or application
+  behavior changed.
+  The correction passed both affected cases and the complete 89-case fifth
+  editor shard locally in 5.2 minutes, without retries or skips.
   Their inclusion is asserted by the shard regression. These weights balance work,
   not predict hosted wall time. Independently isolated recordings and local-upgrade
   panel cases can use both workers; other files preserve serial scenarios. Test-owned contexts,

@@ -215,8 +215,9 @@ test.describe('Run statistics modal', () => {
       await waitForDashboardReady(page);
       await page.locator('.project-row').filter({ hasText: name }).click({ button: 'right' });
       const menu = page.getByRole('menu', { name: `Actions for ${name}` });
-      await expect(menu.locator(':scope > button, :scope > [role="separator"]')).toHaveCount(9);
-      expect(await menu.locator(':scope > button, :scope > [role="separator"]').evaluateAll((items) => items.map((item) =>
+      const menuActions = menu.locator('[role="menuitem"], [role="separator"]');
+      await expect(menuActions).toHaveCount(9);
+      expect(await menuActions.evaluateAll((items) => items.map((item) =>
         item.getAttribute('role') === 'separator' ? '---' : item.textContent?.trim(),
       ))).toEqual([
         'Rename project', '---', 'Download project', 'Duplicate', '---',
